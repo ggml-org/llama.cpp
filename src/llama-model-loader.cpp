@@ -377,6 +377,8 @@ namespace GGUFMeta {
     }
 
     template bool llama_model_loader::get_arr<std::vector<std::string>>(enum llm_kv kid, std::vector<std::string> & result, bool required);
+    template bool llama_model_loader::get_arr<std::vector<unsigned char>>(enum llm_kv kid, std::vector<unsigned char> & result, bool required);
+    template bool llama_model_loader::get_arr<std::vector<int32_t>>(enum llm_kv kid, std::vector<int32_t> & result, bool required);
 
     template<typename T>
     bool llama_model_loader::get_key(const std::string & key, T & result, bool required) {

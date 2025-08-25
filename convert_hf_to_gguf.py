@@ -456,7 +456,7 @@ class ModelBase:
         try:
             # for security reason, we don't allow loading remote code by default
             # if a model need remote code, we will fallback to config.json
-            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
+            config = AutoConfig.from_pretrained(dir_model, trust_remote_code=True).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")
@@ -7905,15 +7905,18 @@ class NemotronHModel(Mamba2Model):
         self._transformer_model_class = LlamaModel
         
         # Nemotron-H specific parameters
-        self.n_group = self.find_hparam(["n_groups"])
-        self.d_inner = self.find_hparam(["mamba_num_heads"]) * self.find_hparam(["mamba_head_dim"])
-        self.d_head = self.find_hparam(["mamba_head_dim"])
-        
-        # Store hybrid pattern for layer type determination
-        self.hybrid_pattern = self.find_hparam(["hybrid_override_pattern"])
-        
+        self.n_group = self.find_hparam(["n_groups"], optional=True) or self.find_hparam(["num_groups"], optional=True) or 8
+        # Prefer explicit inner dims if present, else derive from heads
+        self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or (
+            self.find_hparam(["mamba_num_heads"]) * self.find_hparam(["mamba_head_dim"]) )
+        self.d_head = self.find_hparam(["mamba_head_dim"], optional=True) or (self.d_inner // max(1, self.find_hparam(["mamba_num_heads"], optional=True) or 1))
+        self.d_state = self.find_hparam(["state_size", "d_state"], optional=True) or 128
+
         # Initialize hybrid model attributes
         self.has_attention = True
+
+        # Determine attention layers
+        self._attn_layers = self._get_attn_layers()
 
     def set_gguf_parameters(self):
         """Override to skip Mamba2 parameter validation that doesn't apply to hybrid architecture"""
@@ -7939,6 +7942,14 @@ class NemotronHModel(Mamba2Model):
         self.gguf_writer.add_file_type(self.ftype)
         self.has_mamba = True
         self.has_mlp = True
+
+        # Emit layer schedule: 0=SSM, 1=ATTN, 2=FFN (default FFN none here)
+        layer_types = np.zeros((self.block_count,), dtype=np.uint8)
+        for i in self._attn_layers:
+            if 0 <= i < self.block_count:
+                layer_types[i] = 1
+        # store schedule array
+        self.gguf_writer.add_array(f"{gguf.MODEL_ARCH_NAMES[self.model_arch]}.layer_types", layer_types)
 
     def set_vocab(self):
         self._set_vocab_gpt2()
@@ -7971,6 +7982,51 @@ class NemotronHModel(Mamba2Model):
                     # Special handling for conv1d: reshape from 3D to 2D
                     if "conv1d.weight" in layer_component and len(data_torch.shape) == 3:
                         data_torch = data_torch.squeeze(1)  # Remove middle dimension: {4,1,12288} -> {4,12288}
+                    # A_log -> A = -exp(A_log) and reshape from [128,1,1,1] to [1,128]
+                    if layer_component.endswith("A_log"):
+                        data_torch = -torch.exp(data_torch)
+                        if len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
+                            data_torch = data_torch.reshape(1, data_torch.shape[0])  # [128,1,1,1] -> [1,128]
+                    # D tensor also needs reshaping from [128,1,1,1] to [1,128]
+                    if layer_component.endswith("D"):
+                        if len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
+                            data_torch = data_torch.reshape(1, data_torch.shape[0])  # [128,1,1,1] -> [1,128]
+                    # Grouped RMSNorm reshape to [actual_size/n_group, n_group]
+                    if layer_component == "mixer.norm.weight":
+                        actual_size = data_torch.numel()
+                        data_torch = data_torch.reshape(actual_size // self.n_group, self.n_group)
+                    # in_proj needs split order expected by llama.cpp mamba2 builder: [z, xBC, dt]
+                    if layer_component == "mixer.in_proj.weight":
+                        W = data_torch
+                        # Expected logical sizes
+                        d_x_part = self.d_inner + 2 * self.n_group * self.d_state
+                        n_head = max(1, self.d_inner // max(1, self.d_head))
+                        exp_d_in_proj = 2 * self.d_inner + 2 * self.n_group * self.d_state + n_head
+                        # Detect orientation: [n_embd, d_in_proj] or [d_in_proj, n_embd]
+                        if W.shape[1] == self.d_model and W.shape[0] == exp_d_in_proj:
+                            W = W.t().contiguous()
+                        n_embd, d_in_proj = W.shape
+                        # Validate
+                        if d_in_proj < (self.d_inner + d_x_part + n_head):
+                            # Can't reliably repack; keep original mapping
+                            return [(self._map_mamba_tensor(layer_component, bid), data_torch)]
+                        # Assume dt at the end
+                        dt = W[:, -n_head:]
+                        body = W[:, : d_in_proj - n_head]
+                        # Two common packings: [z, xBC] or [xBC, z]
+                        # Prefer moving z to the front: [z, xBC, dt]
+                        # Heuristic: pick the split that yields xBC width == d_x_part
+                        z_first = False
+                        # Try xBC first
+                        xbc = body[:, : d_x_part]
+                        z = body[:, d_x_part: d_x_part + self.d_inner]
+                        if z.shape[1] != self.d_inner:
+                            # Try z first
+                            z_first = True
+                            z = body[:, : self.d_inner]
+                            xbc = body[:, self.d_inner: self.d_inner + d_x_part]
+                        repacked = torch.cat([z, xbc, dt], dim=1)
+                        data_torch = repacked
                 elif any(x in layer_component for x in ["q_proj", "k_proj", "v_proj", "o_proj"]):
                     # Attention layer tensors
                     new_name = self._map_attention_tensor(layer_component, bid)
@@ -7999,6 +8055,36 @@ class NemotronHModel(Mamba2Model):
             "mixer.out_proj.weight": f"blk.{bid}.ssm_out.weight",
         }
         return mapping.get(component, f"blk.{bid}.{component}")
+
+    def _get_attn_layers(self) -> list[int]:
+        # 1) explicit layer types list
+        lt = self.hparams.get("layer_types")
+        if isinstance(lt, list):
+            # support string or int types
+            attn = []
+            for i, t in enumerate(lt):
+                if isinstance(t, str) and t.lower().startswith("attn"):
+                    attn.append(i)
+                elif isinstance(t, (int, np.integer)) and int(t) == 1:
+                    attn.append(i)
+            return attn
+        # 2) indices list
+        if (idx := self.hparams.get("attn_layer_indices")):
+            return list(map(int, idx))
+        # 3) periodic schedule
+        period = self.hparams.get("attn_layer_period")
+        if period:
+            offset = int(self.hparams.get("attn_layer_offset", 0))
+            return [i for i in range(self.block_count) if i % int(period) == offset]
+        # 4) fallback: Nemotron-H 9B default or evenly spaced ~8%
+        if self.block_count == 56:
+            return [14, 21, 30, 39]
+        # evenly spaced n ~ max(1, round(0.08 * L))
+        n = max(1, round(0.08 * self.block_count))
+        if n >= self.block_count:
+            return list(range(self.block_count))
+        step = self.block_count / n
+        return sorted({int(round(k*step)) for k in range(n)} - {self.block_count})
     
     def _map_attention_tensor(self, component, bid):
         """Map attention layer tensor names to standard llama.cpp names"""

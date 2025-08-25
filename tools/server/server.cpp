@@ -3662,6 +3662,7 @@ struct server_context {
                 completion_token_output result;
                 result.tok          = id;
                 result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+                fprintf(stderr, "[DETOKENIZE] Token ID: %d -> Text: '%s' (length: %zu)\n", result.tok, result.text_to_send.c_str(), result.text_to_send.length());
                 result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
                 if (slot.params.sampling.n_probs > 0) {

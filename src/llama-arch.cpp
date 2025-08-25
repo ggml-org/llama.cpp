@@ -201,6 +201,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
 
+    // Nemotron-H specific
+    { LLM_KV_LAYER_TYPES, "%s.layer_types" },
+
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },

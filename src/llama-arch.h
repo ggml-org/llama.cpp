@@ -240,6 +240,9 @@ enum llm_kv {
 
     LLM_KV_CLASSIFIER_OUTPUT_LABELS,
 
+    // Nemotron-H specific
+    LLM_KV_LAYER_TYPES,
+
     LLM_KV_SHORTCONV_L_CACHE,
 
     // deprecated:
