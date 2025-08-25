@@ -93,35 +93,37 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
     if (ctx->mtl_device == nil) {
         ctx->mtl_device = MTLCreateSystemDefaultDevice();
 
-        ctx->has_simdgroup_reduction  = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
-        ctx->has_simdgroup_reduction |= [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+        if (ctx->mtl_device) {
+            ctx->has_simdgroup_reduction  = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
+            ctx->has_simdgroup_reduction |= [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
-        ctx->has_simdgroup_mm = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
+            ctx->has_simdgroup_mm = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
-        ctx->has_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
+            ctx->has_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
 #endif
 
-        ctx->has_bfloat  = [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
-        ctx->has_bfloat |= [ctx->mtl_device supportsFamily:MTLGPUFamilyApple6];
+            ctx->has_bfloat  = [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+            ctx->has_bfloat |= [ctx->mtl_device supportsFamily:MTLGPUFamilyApple6];
 
 #if defined(GGML_METAL_USE_BF16)
-        ctx->use_bfloat = ctx->has_bfloat;
+            ctx->use_bfloat = ctx->has_bfloat;
 #else
-        ctx->use_bfloat = false;
+            ctx->use_bfloat = false;
 #endif
-        ctx->use_fusion = getenv("GGML_METAL_FUSION_DISABLE") == nil;
+            ctx->use_fusion = getenv("GGML_METAL_FUSION_DISABLE") == nil;
 
-        {
-            const char * val = getenv("GGML_METAL_FUSION_DEBUG");
-            ctx->debug_fusion = val ? atoi(val) : 0;
+            {
+                const char * val = getenv("GGML_METAL_FUSION_DEBUG");
+                ctx->debug_fusion = val ? atoi(val) : 0;
+            }
+
+            memset(ctx->fuse_cnt, 0, sizeof(ctx->fuse_cnt));
+
+            ctx->max_size = ctx->mtl_device.maxBufferLength;
+
+            strncpy(ctx->name, [[ctx->mtl_device name] UTF8String], sizeof(ctx->name) - 1);
         }
-
-        memset(ctx->fuse_cnt, 0, sizeof(ctx->fuse_cnt));
-
-        ctx->max_size = ctx->mtl_device.maxBufferLength;
-
-        strncpy(ctx->name, [[ctx->mtl_device name] UTF8String], sizeof(ctx->name) - 1);
     }
 
     ctx->mtl_device_ref_count++;
