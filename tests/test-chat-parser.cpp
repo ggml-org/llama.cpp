@@ -210,17 +210,17 @@ static void test_deepseek_v3_1_tool_calls() {
         /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
         /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ true,
+        /* .thinking_forced_open = */ false,
         /* .parse_tool_calls = */ true,
     };
     const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-    common_chat_msg_parser builder(input, false, syntax);
-    assert_equals(1u, builder.result().tool_calls.size());
-    assert_equals(std::string("get_time"), builder.result().tool_calls[0].name);
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(static_cast<std::size_t>(1), msg.tool_calls.size());
+    assert_equals(std::string("get_time"), msg.tool_calls[0].name);
     // JSON arguments are dumped without spaces
-    assert_equals(std::string("{\"city\":\"Tokyo\"}"), builder.result().tool_calls[0].arguments);
-    assert_equals(std::string(""), builder.result().content);
-    assert_equals(std::string(""), builder.result().reasoning_content);
+    assert_equals(std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
+    assert_equals(std::string(""), msg.content);
+    assert_equals(std::string(""), msg.reasoning_content);
 }
 
 static void test_with_args(const std::string & input, const std::string & expected, bool parse_as_partial = true, bool is_partial = true) {
