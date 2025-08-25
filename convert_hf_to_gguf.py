@@ -7981,10 +7981,17 @@ class NemotronHModel(Mamba2Model):
                     new_name = self._map_mamba_tensor(layer_component, bid)
                     # NVIDIA GROUND TRUTH TENSOR TRANSFORMATIONS
                     
-                    # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288]
+                    # Conv1d: NVIDIA [12288, 4] -> llama.cpp [4, 12288]
                     if "conv1d.weight" in layer_component:
+                        print(f"DEBUG: Processing {layer_component}, shape before: {data_torch.shape}")
                         if len(data_torch.shape) == 3:  # [12288, 1, 4]
                             data_torch = data_torch.squeeze(1).t().contiguous()  # [12288, 4] -> [4, 12288]
+                            print(f"DEBUG: 3D transpose applied, shape after: {data_torch.shape}")
+                        elif len(data_torch.shape) == 2:  # [12288, 4]
+                            data_torch = data_torch.t().contiguous()  # [12288, 4] -> [4, 12288]
+                            print(f"DEBUG: 2D transpose applied, shape after: {data_torch.shape}")
+                        else:
+                            print(f"DEBUG: Unexpected shape dimensions: {len(data_torch.shape)}")
                         
                     # A_log: NVIDIA [128] -> llama.cpp [1, 128] with -exp transform
                     if layer_component.endswith("A_log"):

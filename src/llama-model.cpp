@@ -3794,7 +3794,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             // depthwise conv: GGUF has {12288, 4} due to conversion - adapt to ground truth
                             // NVIDIA ground truth: [12288, 1, 4] -> GGUF: {12288, 4} 
                             const int64_t nemotron_conv_dim = 12288;
-                            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {nemotron_conv_dim, d_conv}, 0);
+                            // Try expected shape first, fallback to transposed if metadata is wrong
+                            struct ggml_tensor * conv_tensor = nullptr;
+                            try {
+                                conv_tensor = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, nemotron_conv_dim}, 0);
+                            } catch (...) {
+                                // GGUF metadata may show {12288, 4} instead of {4, 12288}
+                                conv_tensor = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {nemotron_conv_dim, d_conv}, 0);
+                            }
+                            layer.ssm_conv1d = conv_tensor;
                             layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias", i),   {nemotron_conv_dim}, 0);
 
                             // time step bias for low-rank delta
