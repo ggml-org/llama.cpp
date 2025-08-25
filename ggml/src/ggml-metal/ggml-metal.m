@@ -4731,7 +4731,6 @@ static int ggml_metal_encode_node(
             } break;
         case GGML_OP_IM2COL:
             {
-                GGML_ASSERT(ggml_is_contiguous(src0));
                 GGML_ASSERT(ggml_is_contiguous(src1));
                 GGML_ASSERT(src1->type == GGML_TYPE_F32);
                 GGML_ASSERT( dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
