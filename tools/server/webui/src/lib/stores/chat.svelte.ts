@@ -160,6 +160,8 @@ class ChatStore {
 			// Generation parameters
 			temperature: Number(currentConfig.temperature) || 0.8,
 			max_tokens: Number(currentConfig.max_tokens) || 2048,
+			// Timing parameters
+			timings_per_token: currentConfig.showTokensPerSecond || false,
 			// Sampling parameters
 			dynatemp_range: Number(currentConfig.dynatemp_range) || 0.0,
 			dynatemp_exponent: Number(currentConfig.dynatemp_exponent) || 1.0,

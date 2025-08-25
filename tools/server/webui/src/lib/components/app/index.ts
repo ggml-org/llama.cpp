@@ -34,3 +34,4 @@ export { default as ServerStatus } from './ServerStatus.svelte';
 export { default as ServerErrorSplash } from './ServerErrorSplash.svelte';
 export { default as ServerLoadingSplash } from './ServerLoadingSplash.svelte';
 export { default as ServerInfo } from './ServerInfo.svelte';
+export { default as SlotsInfo } from './SlotsInfo.svelte';

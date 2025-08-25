@@ -1,5 +1,6 @@
 import { slotsService } from '$lib/services/slots';
 import type { ApiProcessingState } from '$lib/types/api';
+import { config } from '$lib/stores/settings.svelte';
 
 export function useProcessingState() {
 	let processingState = $state<ApiProcessingState | null>(null);
@@ -63,10 +64,15 @@ export function useProcessingState() {
 		}
 
 		const details: string[] = [];
+		const currentConfig = config(); // Get fresh config each time
 
 		if (processingState.contextUsed > 0) {
 			const contextPercent = Math.round((processingState.contextUsed / processingState.contextTotal) * 100);
 			details.push(`Context: ${processingState.contextUsed}/${processingState.contextTotal} (${contextPercent}%)`);
+		}
+		
+		if (currentConfig.showTokensPerSecond && processingState.tokensPerSecond && processingState.tokensPerSecond > 0) {
+			details.push(`${processingState.tokensPerSecond.toFixed(1)} tokens/sec`);
 		}
 
 		if (processingState.temperature !== 0.8) {

@@ -5,7 +5,7 @@
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
 	import { supportsVision, supportsAudio, serverError, serverLoading } from '$lib/stores/server.svelte';
-	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash } from '$lib/components/app';
+	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash, SlotsInfo } from '$lib/components/app';
 	import {
 		activeMessages,
 		activeConversation,
@@ -22,7 +22,6 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { deleteConversation } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
-
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -251,6 +250,8 @@
 		<ChatMessages class="mb-16 md:mb-24" messages={activeMessages()} />
 
 		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
+			<SlotsInfo />
+
 			<div class="conversation-chat-form rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}

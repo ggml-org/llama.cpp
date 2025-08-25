@@ -7,6 +7,8 @@ export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
 	private slotsAvailable: boolean | null = null;
 	private slotsEndpointSupported: boolean | null = null;
+	private lastTokenCount: number = 0;
+	private lastTimestamp: number = 0;
 
 	constructor(pollingInterval = 500) {
 		this.pollingInterval = pollingInterval;
@@ -141,7 +143,8 @@ export class SlotsService {
 				temperature: 0.8,
 				topP: 0.95,
 				speculative: false,
-				hasNextToken: false
+				hasNextToken: false,
+				tokensPerSecond: 0
 			};
 		}
 
@@ -159,6 +162,29 @@ export class SlotsService {
 		const promptTokens = Math.floor(activeSlot.prompt.length / 4); // Rough estimate
 		const contextUsed = promptTokens + activeSlot.next_token.n_decoded;
 
+		// Calculate tokens per second
+		let tokensPerSecond = 0;
+		const currentTime = Date.now();
+		const currentTokens = activeSlot.next_token.n_decoded;
+		
+		if (status === 'generating' && this.lastTimestamp > 0 && currentTokens > this.lastTokenCount) {
+			const timeDiff = (currentTime - this.lastTimestamp) / 1000; // Convert to seconds
+			const tokenDiff = currentTokens - this.lastTokenCount;
+			if (timeDiff > 0) {
+				tokensPerSecond = tokenDiff / timeDiff;
+			}
+		}
+		
+		// Update tracking for next calculation
+		if (status === 'generating') {
+			this.lastTokenCount = currentTokens;
+			this.lastTimestamp = currentTime;
+		} else if (status === 'idle') {
+			// Reset when idle
+			this.lastTokenCount = 0;
+			this.lastTimestamp = 0;
+		}
+
 		return {
 			status,
 			tokensDecoded: activeSlot.next_token.n_decoded,
@@ -168,7 +194,8 @@ export class SlotsService {
 			temperature: activeSlot.params.temperature,
 			topP: activeSlot.params.top_p,
 			speculative: activeSlot.speculative,
-			hasNextToken: activeSlot.next_token.has_next_token
+			hasNextToken: activeSlot.next_token.has_next_token,
+			tokensPerSecond
 		};
 	}
 

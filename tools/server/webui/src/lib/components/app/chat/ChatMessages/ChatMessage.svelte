@@ -211,20 +211,12 @@
 			/>
 		{/if}
 
-		{#if message?.role === 'assistant' && !message.content && isLoading()}
+		{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
 			<div class="w-full max-w-[48rem] mt-6" in:fade>
 				<div class="processing-container">
 					<span class="processing-text">
 						{processingState.getProcessingMessage()}
 					</span>
-					
-					{#if processingState.shouldShowDetails()}
-						<div class="processing-details">
-							{#each processingState.getProcessingDetails() as detail}
-								<span class="processing-detail">{detail}</span>
-							{/each}
-						</div>
-					{/if}
 				</div>
 			</div>
 		{/if}

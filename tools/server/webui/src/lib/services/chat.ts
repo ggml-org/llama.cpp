@@ -31,7 +31,7 @@ export class ChatService {
 			repeat_last_n, repeat_penalty, presence_penalty, frequency_penalty,
 			dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
 			// Other parameters
-			samplers, custom
+			samplers, custom, timings_per_token
 		} = options;
 
 		// Cancel any ongoing request and create a new abort controller
@@ -77,6 +77,9 @@ export class ChatService {
 		if (samplers !== undefined) {
 			requestBody.samplers = typeof samplers === 'string' ? samplers.split(';').filter((s: string) => s.trim()) : samplers;
 		}
+
+		// Add timing parameters if provided
+		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 
 		// Add custom parameters if provided
 		if (custom) {

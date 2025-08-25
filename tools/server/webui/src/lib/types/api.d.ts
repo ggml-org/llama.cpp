@@ -229,4 +229,5 @@ export interface ApiProcessingState {
 	topP: number;
 	speculative: boolean;
 	hasNextToken: boolean;
+	tokensPerSecond?: number;
 }
