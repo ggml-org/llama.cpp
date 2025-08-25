@@ -7602,6 +7602,14 @@ class NemotronHModel(GraniteHybridModel):
             n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
         ])
 
+    def set_vocab(self):
+        super().set_vocab()
+
+        # The tokenizer _does_ add a BOS token (via post_processor type
+        # TemplateProcessing) but does not set add_bos_token to true in the
+        # config, so we need to explicitly override it here.
+        self.gguf_writer.add_add_bos_token(True)
+
 
 @ModelBase.register("BailingMoeForCausalLM")
 class BailingMoeModel(TextModel):
