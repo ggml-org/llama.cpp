@@ -1405,13 +1405,38 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
         tool_calls_end);
 }
 
+static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & builder) {
+    static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?(?:function<｜tool▁sep｜>)?([^\\n<]+)(?:\\n```json\\n|<｜tool▁sep｜>)");
+
+    static const common_regex close_regex("(?:[\\n]*```[\\s\\r\\n]*)?<｜tool▁call▁end｜>");
+    static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
+    static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
+
+    if (!builder.syntax().parse_tool_calls) {
+        LOG_DBG("%s: not parse_tool_calls\n", __func__);
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    LOG_DBG("%s: parse_tool_calls\n", __func__);
+
+    parse_json_tool_calls(
+        builder,
+        /* block_open= */ tool_calls_begin,
+        /* function_regex_start_only= */ std::nullopt,
+        function_regex,
+        close_regex,
+        tool_calls_end);
+}
+
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
     // First try to parse using the standard reasoning parsing method
     if (builder.try_parse_reasoning("<think>", "</think>")) {
         // If reasoning was parsed successfully, the remaining content is regular content
         LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
-        builder.add_content(builder.consume_rest());
+        // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
+        common_chat_parse_deepseek_v3_1_content(builder);
     } else {
         // If no reasoning tags found, check if we should treat everything as reasoning
         if (builder.syntax().thinking_forced_open) {
@@ -1419,28 +1444,8 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
             builder.add_reasoning_content(builder.consume_rest());
         } else {
-            // Tool calls are support in non-thinking mode
-            if (!builder.syntax().parse_tool_calls) {
-                LOG_DBG("%s: not parse_tool_calls\n", __func__);
-                builder.add_content(builder.consume_rest());
-                return;
-            }
-
             // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
-            static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?(?:function<｜tool▁sep｜>)?([^\\n<]+)(?:\\n```json\\n|<｜tool▁sep｜>)");
-
-            static const common_regex close_regex("(?:[\\n]*```[\\s\\r\\n]*)?<｜tool▁call▁end｜>");
-            static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
-            static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
-            LOG_DBG("%s: parse_tool_calls\n", __func__);
-
-            parse_json_tool_calls(
-                builder,
-                /* block_open= */ tool_calls_begin,
-                /* function_regex_start_only= */ std::nullopt,
-                function_regex,
-                close_regex,
-                tool_calls_end);
+            common_chat_parse_deepseek_v3_1_content(builder);
         }
     }
 }

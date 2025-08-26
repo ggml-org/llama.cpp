@@ -242,6 +242,25 @@ static void test_deepseek_v3_1_tool_calls() {
         assert_equals(variant, std::string(""), m.content);
         assert_equals(variant, std::string(""), m.reasoning_content);
     }
+
+    // variant: function + fenced JSON + thinking open
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const char* variant = "fenced_thinking";
+        const std::string in = "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string(""), m.content);
+        assert_equals(variant, std::string("REASONING"), m.reasoning_content);
+    }
 }
 
 static void test_with_args(const std::string & input, const std::string & expected, bool parse_as_partial = true, bool is_partial = true) {
