@@ -68,15 +68,27 @@ This section will elaborate on the functions and structures mentioned above, as 
 NOTE: There are many types with the formats [.codebit]#`typename_t`# and [.codebit]#`typename_ptr`#. In most, if not all cases, [.codebit]#`typename_t`# is a [.codebit]#`typedef`# that stands for [.codebit]#`typename*`#, while [.codebit]#`typename_ptr`# stands for [.codebit]#`std::unique_ptr<typename, optional_typename_deleter>`#.
 
 include::documentation/common.h.adoc[]
+
 include::documentation/common.cpp.adoc[]
+
 include::documentation/llama-context.h.adoc[]
+
 include::documentation/llama.cpp.adoc[]
+
 include::documentation/ggml-impl.h.adoc[]
+
 include::documentation/ggml-backend-reg.cpp.adoc[]
+
 include::documentation/ggml-cuda.cu.adoc[]
+
 include::documentation/ggml-cpu.cpp.adoc[]
+
 include::documentation/ggml-cpu.c.adoc[]
+
 include::documentation/ggml-backend.cpp.adoc[]
+
 include::documentation/ggml-backend-impl.h.adoc[]
+
 include::documentation/ggml.h.adoc[]
+
 include::documentation/ggml.c.adoc[]
