@@ -7906,9 +7906,8 @@ class NemotronHModel(Mamba2Model):
         
         # Nemotron-H specific parameters
         self.n_group = self.find_hparam(["n_groups"], optional=True) or self.find_hparam(["num_groups"], optional=True) or 8
-        # Prefer explicit inner dims if present, else derive from heads
-        self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or (
-            self.find_hparam(["mamba_num_heads"]) * self.find_hparam(["mamba_head_dim"]) )
+        # Use actual conv1d tensor dimension for Nemotron-H (12288 not 15680)
+        self.d_inner = 12288  # Fixed: matches actual conv1d tensor dimensions
         self.d_head = self.find_hparam(["mamba_head_dim"], optional=True) or (self.d_inner // max(1, self.find_hparam(["mamba_num_heads"], optional=True) or 1))
         self.d_state = self.find_hparam(["state_size", "d_state"], optional=True) or 128
 
@@ -7981,28 +7980,28 @@ class NemotronHModel(Mamba2Model):
                     new_name = self._map_mamba_tensor(layer_component, bid)
                     # NVIDIA GROUND TRUTH TENSOR TRANSFORMATIONS
                     
-                    # Conv1d: NVIDIA [12288, 4] -> llama.cpp [4, 12288]
+                    # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288]
                     if "conv1d.weight" in layer_component:
-                        print(f"DEBUG: Processing {layer_component}, shape before: {data_torch.shape}")
+                        original_shape = data_torch.shape
                         if len(data_torch.shape) == 3:  # [12288, 1, 4]
-                            data_torch = data_torch.squeeze(1).t().contiguous()  # [12288, 4] -> [4, 12288]
-                            print(f"DEBUG: 3D transpose applied, shape after: {data_torch.shape}")
+                            # Remove middle dimension and transpose: [12288, 1, 4] -> [12288, 4] -> [4, 12288]
+                            data_torch = data_torch.squeeze(1).t().contiguous()  # -> [4, 12288]
                         elif len(data_torch.shape) == 2:  # [12288, 4]
                             data_torch = data_torch.t().contiguous()  # [12288, 4] -> [4, 12288]
-                            print(f"DEBUG: 2D transpose applied, shape after: {data_torch.shape}")
-                        else:
-                            print(f"DEBUG: Unexpected shape dimensions: {len(data_torch.shape)}")
+                        # Ensure final shape is exactly [4, 12288]
+                        assert data_torch.shape == (4, 12288), f"Conv1d wrong final shape: {data_torch.shape}"
+                        print(f"DEBUG: Conv1d {layer_component} {original_shape} -> {data_torch.shape}")
                         
-                    # A_log: NVIDIA [128] -> llama.cpp [1, 128] with -exp transform
+                    # A_log: NVIDIA [128] -> llama.cpp [128, 1] with -exp transform
                     if layer_component.endswith("A_log"):
                         data_torch = -torch.exp(data_torch)  # Apply -exp transformation
                         if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.unsqueeze(0)  # -> [1, 128]
+                            data_torch = data_torch.reshape(128, 1)  # -> [128, 1] explicitly
                             
-                    # D: NVIDIA [128] -> llama.cpp [1, 128] 
+                    # D: NVIDIA [128] -> llama.cpp [128, 1] 
                     if layer_component.endswith("D"):
                         if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.unsqueeze(0)  # -> [1, 128]
+                            data_torch = data_torch.reshape(128, 1)  # -> [128, 1] explicitly
                             
                     # Grouped RMSNorm: NVIDIA [10240] -> llama.cpp [1280, 8]
                     if layer_component == "mixer.norm.weight":

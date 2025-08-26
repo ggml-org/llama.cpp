@@ -3751,7 +3751,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_NEMOTRON_H:
                 {
                     const int64_t d_conv  = hparams.ssm_d_conv;
-                    const int64_t d_inner = hparams.ssm_d_inner;
+                    // Nemotron-H uses 12288 for conv1d tensors, not the standard 15680
+                    const int64_t d_inner = 12288; // Override: actual conv1d tensor dimension
                     const int64_t d_state = hparams.ssm_d_state;
                     const int64_t n_head  = hparams.ssm_dt_rank;
                     const int64_t n_group = hparams.ssm_n_group;
