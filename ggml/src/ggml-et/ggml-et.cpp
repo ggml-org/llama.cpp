@@ -295,24 +295,34 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     snprintf(shape_str, sizeof(shape_str), "[%lld,%lld,%lld,%lld]",
              (long long)op->ne[0], (long long)op->ne[1], (long long)op->ne[2], (long long)op->ne[3]);
 
-    // Get source tensor types and shapes if available
-    char src_info[1024] = "";
+    // Get source tensor types, shapes, strides, and contiguity info
+    char src_info[2048] = "";
     if (op->src[0]) {
-        char src_str[256];
-        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]", 
+        char src_str[512];
+        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s", 
                 ggml_type_name(op->src[0]->type),
                 (long long)op->src[0]->ne[0], (long long)op->src[0]->ne[1], 
-                (long long)op->src[0]->ne[2], (long long)op->src[0]->ne[3]);
+                (long long)op->src[0]->ne[2], (long long)op->src[0]->ne[3],
+                op->src[0]->nb[0], op->src[0]->nb[1], op->src[0]->nb[2], op->src[0]->nb[3],
+                ggml_is_contiguous(op->src[0]) ? "C" : "NC");
         strcat(src_info, src_str);
     }
     if (op->src[1]) {
-        char src_str[256];
-        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]", 
+        char src_str[512];
+        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s", 
                 ggml_type_name(op->src[1]->type),
                 (long long)op->src[1]->ne[0], (long long)op->src[1]->ne[1], 
-                (long long)op->src[1]->ne[2], (long long)op->src[1]->ne[3]);
+                (long long)op->src[1]->ne[2], (long long)op->src[1]->ne[3],
+                op->src[1]->nb[0], op->src[1]->nb[1], op->src[1]->nb[2], op->src[1]->nb[3],
+                ggml_is_contiguous(op->src[1]) ? "C" : "NC");
         strcat(src_info, src_str);
     }
+    
+    // Add output tensor contiguity info
+    char output_contiguity[32];
+    snprintf(output_contiguity, sizeof(output_contiguity), " out_nb[%zu,%zu,%zu,%zu]%s",
+            op->nb[0], op->nb[1], op->nb[2], op->nb[3],
+            ggml_is_contiguous(op) ? "C" : "NC");
 
     bool supported = false;
     switch (op->op) {
@@ -326,8 +336,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             break;
     }
 
-    GGML_LOG_DEBUG("ET: Device query support for %s (type=%s, shape=%s, bytes=%zu%s) -> %s\n",
-                   op_name, type_name, shape_str, ggml_nbytes(op), src_info,
+    GGML_LOG_DEBUG("ET: Device query support for %s (type=%s, shape=%s, bytes=%zu%s%s) -> %s\n",
+                   op_name, type_name, shape_str, ggml_nbytes(op), src_info, output_contiguity,
                    supported ? "SUPPORTED" : "unsupported");
 
     return supported;
