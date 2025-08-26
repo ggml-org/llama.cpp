@@ -1771,7 +1771,7 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
         // you should not be able to call enable_thinking if <think> is not supported
         GGML_ASSERT(!extra_context["enable_thinking"] || extra_context["enable_thinking"] == supports_thinking);
         // (content)?(<tool_call>{"name": "foo", "arguments": {"a": 1}}</tool_call>)*
-        data.grammar_lazy = true;
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             std::vector<std::string> tool_rules;
             std::vector<std::string> tool_call_alts;
