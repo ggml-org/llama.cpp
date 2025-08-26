@@ -8,7 +8,7 @@ WARNING: This documentation is neither complete (i.e. it does not cover everythi
 [[docs:overview:main.cpp]]
 === main.cpp
 
-"`main.cpp`" is the primary source file from which the documentation process started. It compiles into the llama-cli executable which provides chatbot functionality inside the terminal and has the following high-level structure (note that this analysis is focused on the then-likely-relevant parts to the purpose of embedding extraction, and is thus not exhaustive):
+"`main.cpp`" is the primary source file from which the documentation process started. It compiles into the llama-cli executable which provides chatbot functionality inside the terminal and has the following high-level structure (note that this analysis is not exhaustive):
 
 * (lines) 1-86: include headers, global variables, helper functions
 * 88-133: parameter parsing (call to [.codebit]#`common_params_parse(...)`# on line 91, edge case hadling afterwards), [.codebit]#`common_init()`#, console initialization
@@ -28,7 +28,6 @@ WARNING: This documentation is neither complete (i.e. it does not cover everythi
     ** 731-906: antiprompt/reverse prompt detection, console logic
 * 908-923: cleanup (print final logs, dealocate memory)
 
-The most important parts for the task at hand are the calls to [.codebit]#`common_init_from_params(...)`# (line 150) and [.codebit]#`llama_decode(...)`# (line 640).
 
 [[docs:overview:call_paths]]
 === Call Paths
