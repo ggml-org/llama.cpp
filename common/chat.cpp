@@ -1415,7 +1415,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
                        additional_context);
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
-    if (string_ends_with(data.prompt, "<think>\n")) {
+    if (string_ends_with(data.prompt, "<think>")) {
         if (!inputs.enable_thinking) {
             data.prompt += "</think>";
         } else {
