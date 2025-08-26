@@ -670,6 +670,93 @@ static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, cons
  * Takes a prefix regex that must have 1 group to capture the function name, a closing suffix, and expects json parameters in between.
  * Aggregates the prefix, suffix and in-between text into the content.
  */
+static void parse_json_tool_calls_deepseek_v3_1(
+    common_chat_msg_parser & builder,
+    const std::optional<common_regex> & block_open,
+    const std::optional<common_regex> & function_regex_start_only,
+    const std::optional<common_regex> & function_regex,
+    const common_regex & close_regex,
+    const std::optional<common_regex> & block_close,
+    bool allow_raw_python = false,
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
+
+    auto parse_tool_calls = [&]() {
+        size_t from = std::string::npos;
+        auto first = true;
+        while (true) {
+            auto res = function_regex_start_only && first
+                ? builder.try_consume_regex(*function_regex_start_only)
+                : function_regex
+                    ? builder.try_find_regex(*function_regex, from)
+                    : std::nullopt;
+
+            if (res) {
+                std::string name;
+                if (get_function_name) {
+                    name = get_function_name(*res);
+                } else {
+                    GGML_ASSERT(res->groups.size() == 2);
+                    name = builder.str(res->groups[1]);
+                }
+                first = false;
+                if (name.empty()) {
+                    // get_function_name signalled us that we should skip this match and treat it as content.
+                    from = res->groups[0].begin + 1;
+                    continue;
+                }
+                builder.move_to(res->groups[0].end);
+                from = builder.pos();
+
+                auto maybe_raw_python = name == "python" && allow_raw_python;
+                if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
+                    if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
+                        if (!builder.add_tool_call(name, "", arguments->value) || arguments->is_partial) {
+                            throw common_chat_msg_partial_exception("incomplete tool call");
+                        }
+                        builder.consume_regex(close_regex);
+                        from = builder.pos(); // continue after this call
+                        continue;
+                    }
+                    throw common_chat_msg_partial_exception("incomplete tool call");
+                }
+                if (maybe_raw_python) {
+                    auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
+                    if (!builder.add_tool_call(name, "", arguments)) {
+                        throw common_chat_msg_partial_exception("incomplete tool call");
+                    }
+                    return;
+                }
+                throw common_chat_msg_partial_exception("incomplete tool call");
+            }
+            break;
+        }
+        if (block_close) {
+            // ensure we’re right after the last call header/close
+            if (from != std::string::npos) builder.move_to(from);
+            builder.consume_regex(*block_close);
+        }
+        builder.consume_spaces();
+        builder.add_content(builder.consume_rest());
+    };
+    if (block_open) {
+        if (auto res = builder.try_find_regex(*block_open)) {
+            builder.move_to(res->groups[0].end); // consume opener
+            parse_tool_calls();
+            return;
+        } else {
+            builder.add_content(builder.consume_rest());
+            return;
+        }
+    } else {
+        parse_tool_calls();
+        return;
+    }
+}
+
+/**
+ * Takes a prefix regex that must have 1 group to capture the function name, a closing suffix, and expects json parameters in between.
+ * Aggregates the prefix, suffix and in-between text into the content.
+ */
 static void parse_json_tool_calls(
     common_chat_msg_parser & builder,
     const std::optional<common_regex> & block_open,
@@ -1395,13 +1482,54 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
         tool_calls_end);
 }
 
+static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & builder) {
+    static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?(?:function<｜tool▁sep｜>)?([^\\n<]+)(?:\\n```json\\n|<｜tool▁sep｜>)");
+
+    static const common_regex close_regex("(?:[\\n]*```[\\s\\r\\n]*)?<｜tool▁call▁end｜>");
+    static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
+    static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
+
+    if (!builder.syntax().parse_tool_calls) {
+        LOG_DBG("%s: not parse_tool_calls\n", __func__);
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    LOG_DBG("%s: parse_tool_calls\n", __func__);
+
+    parse_json_tool_calls_deepseek_v3_1(
+        builder,
+        /* block_open= */ tool_calls_begin,
+        /* function_regex_start_only= */ std::nullopt,
+        function_regex,
+        close_regex,
+        tool_calls_end);
+}
+
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
     // First try to parse using the standard reasoning parsing method
+    LOG_DBG("%s: thinking_forced_open: %s\n", __func__, std::to_string(builder.syntax().thinking_forced_open).c_str());
+
+    bool has_reasoning = false;
+    auto header_start_pos = builder.pos();
+    if (auto res = builder.try_find_literal("<think>")) {
+      has_reasoning = true;
+    }
+    if (auto res = builder.try_find_literal("</think>")) {
+      has_reasoning = true;
+    }
+    builder.move_to(header_start_pos);
+    if (!has_reasoning && builder.syntax().thinking_forced_open) {
+        LOG_DBG("%s: edge case no reasoning, adding content\n", __func__);
+        common_chat_parse_deepseek_v3_1_content(builder);
+        return;
+    }
     if (builder.try_parse_reasoning("<think>", "</think>")) {
         // If reasoning was parsed successfully, the remaining content is regular content
         LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
-        builder.add_content(builder.consume_rest());
+        // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
+        common_chat_parse_deepseek_v3_1_content(builder);
     } else {
         // If no reasoning tags found, check if we should treat everything as reasoning
         if (builder.syntax().thinking_forced_open) {
@@ -1409,27 +1537,8 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
             builder.add_reasoning_content(builder.consume_rest());
         } else {
-            // Tool calls are support in non-thinking mode
-            if (!builder.syntax().parse_tool_calls) {
-                LOG_DBG("%s: not parse_tool_calls\n", __func__);
-                builder.add_content(builder.consume_rest());
-                return;
-            }
-
             // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
-            static const common_regex function_regex("<｜tool▁call▁begin｜>([^\\n<]+)<｜tool▁sep｜>");
-            static const common_regex close_regex("<｜tool▁call▁end｜>");
-            static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
-            static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
-            LOG_DBG("%s: parse_tool_calls\n", __func__);
-
-            parse_json_tool_calls(
-                builder,
-                /* block_open= */ tool_calls_begin,
-                /* function_regex_start_only= */ std::nullopt,
-                function_regex,
-                close_regex,
-                tool_calls_end);
+            common_chat_parse_deepseek_v3_1_content(builder);
         }
     }
 }
