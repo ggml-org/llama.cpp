@@ -249,6 +249,7 @@ typedef struct {
     uint64_t nb33;
     int32_t  ne1;
     int32_t  ne2;
+    int32_t  ne3;
     float    scale;
     float    max_bias;
     float    m0;
@@ -256,6 +257,11 @@ typedef struct {
     int32_t  n_head_log2;
     float    logit_softcap;
 } ggml_metal_kargs_flash_attn_ext;
+
+typedef struct {
+    int32_t  nrows;
+    int32_t  ne20;
+} ggml_metal_kargs_flash_attn_ext_reduce;
 
 typedef struct {
     int32_t  ne00;
