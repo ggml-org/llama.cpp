@@ -273,6 +273,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_mul(dev_ctx, node);
                 break;
 
+            case GGML_OP_MUL_MAT:
+                ggml_et_op_mul_mat(dev_ctx, node);
+                break;
+
             default:
                 GGML_LOG_ERROR("ET: Unsupported operation in graph: %s\n", ggml_op_name(node->op));
                 return GGML_STATUS_FAILED;
@@ -299,9 +303,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     char src_info[2048] = "";
     if (op->src[0]) {
         char src_str[512];
-        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s", 
+        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s",
                 ggml_type_name(op->src[0]->type),
-                (long long)op->src[0]->ne[0], (long long)op->src[0]->ne[1], 
+                (long long)op->src[0]->ne[0], (long long)op->src[0]->ne[1],
                 (long long)op->src[0]->ne[2], (long long)op->src[0]->ne[3],
                 op->src[0]->nb[0], op->src[0]->nb[1], op->src[0]->nb[2], op->src[0]->nb[3],
                 ggml_is_contiguous(op->src[0]) ? "C" : "NC");
@@ -309,15 +313,15 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     }
     if (op->src[1]) {
         char src_str[512];
-        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s", 
+        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]nb[%zu,%zu,%zu,%zu]%s",
                 ggml_type_name(op->src[1]->type),
-                (long long)op->src[1]->ne[0], (long long)op->src[1]->ne[1], 
+                (long long)op->src[1]->ne[0], (long long)op->src[1]->ne[1],
                 (long long)op->src[1]->ne[2], (long long)op->src[1]->ne[3],
                 op->src[1]->nb[0], op->src[1]->nb[1], op->src[1]->nb[2], op->src[1]->nb[3],
                 ggml_is_contiguous(op->src[1]) ? "C" : "NC");
         strcat(src_info, src_str);
     }
-    
+
     // Add output tensor contiguity info
     char output_contiguity[32];
     snprintf(output_contiguity, sizeof(output_contiguity), " out_nb[%zu,%zu,%zu,%zu]%s",
@@ -329,7 +333,19 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_MUL:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                       op->src[1] && op->src[1]->type == GGML_TYPE_F32;
+                       op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]) &&
+                       ggml_is_contiguous(op->src[1]);
+            break;
+        case GGML_OP_MUL_MAT:
+            // Support Q8_0 x F32 -> F32 matrix multiplication
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_Q8_0 &&
+                       op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]) &&
+                       ggml_is_contiguous(op->src[1]);
             break;
         default:
             supported = false;
@@ -351,14 +367,24 @@ static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_ba
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
 
+    // This should only include ops that are worth offloading
+    // (i.e. large tensors)
+    // We are offloading all ops for testing.
     switch (op->op) {
         case GGML_OP_MUL:
-            // This should only include ops that are worth offloading
-            // (i.e. large tensors)
-            // We are offloading all MULs for testing.
             return op->type == GGML_TYPE_F32 &&
                    op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
-                   op->src[1] && op->src[1]->type == GGML_TYPE_F32;
+                   op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op) &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]);
+        case GGML_OP_MUL_MAT:
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0] && op->src[0]->type == GGML_TYPE_Q8_0 &&
+                   op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op) &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]);
         default:
             return false;
     }
