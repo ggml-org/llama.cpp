@@ -295,16 +295,22 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     snprintf(shape_str, sizeof(shape_str), "[%lld,%lld,%lld,%lld]",
              (long long)op->ne[0], (long long)op->ne[1], (long long)op->ne[2], (long long)op->ne[3]);
 
-    // Get source tensor types if available
-    char src_info[512] = "";
+    // Get source tensor types and shapes if available
+    char src_info[1024] = "";
     if (op->src[0]) {
-        char src_str[128];
-        snprintf(src_str, sizeof(src_str), " src0=%s", ggml_type_name(op->src[0]->type));
+        char src_str[256];
+        snprintf(src_str, sizeof(src_str), " src0=%s[%lld,%lld,%lld,%lld]", 
+                ggml_type_name(op->src[0]->type),
+                (long long)op->src[0]->ne[0], (long long)op->src[0]->ne[1], 
+                (long long)op->src[0]->ne[2], (long long)op->src[0]->ne[3]);
         strcat(src_info, src_str);
     }
     if (op->src[1]) {
-        char src_str[128];
-        snprintf(src_str, sizeof(src_str), " src1=%s", ggml_type_name(op->src[1]->type));
+        char src_str[256];
+        snprintf(src_str, sizeof(src_str), " src1=%s[%lld,%lld,%lld,%lld]", 
+                ggml_type_name(op->src[1]->type),
+                (long long)op->src[1]->ne[0], (long long)op->src[1]->ne[1], 
+                (long long)op->src[1]->ne[2], (long long)op->src[1]->ne[3]);
         strcat(src_info, src_str);
     }
 
