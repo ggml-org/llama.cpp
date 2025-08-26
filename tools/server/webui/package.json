@@ -13,10 +13,10 @@
 		"reset": "rm -rf .svelte-kit node_modules",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint .",
-		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run && npm run test:e2e",
 		"test:e2e": "playwright test",
-		"test:storybook": "vitest --project=storybook",
+		"test:ui": "vitest --project=storybook",
+		"test:unit": "vitest",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build"
 	},

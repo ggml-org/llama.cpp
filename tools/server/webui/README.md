@@ -1,38 +1,66 @@
-# sv
+# llama.cpp Web UI
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A modern, feature-rich web interface for llama.cpp built with SvelteKit. This UI provides an intuitive chat interface with advanced file handling, conversation management, and comprehensive model interaction capabilities.
 
-## Creating a project
+## Features
 
-If you're seeing this, you've probably already done this step. Congrats!
+- **Modern Chat Interface** - Clean, responsive design with dark/light mode
+- **File Attachments** - Support for images, text files, PDFs, and audio with rich previews and drag-and-drop support
+- **Conversation Management** - Create, edit, branch, and search conversations
+- **Advanced Markdown** - Code highlighting, math formulas (KaTeX), and content blocks
+- **Reasoning Content** - Support for models with thinking blocks
+- **Keyboard Shortcuts** - Full keyboard navigation (Ctrl+K, Ctrl+V, Ctrl+B, etc.)
+- **Request Tracking** - Monitor processing with slots endpoint integration
+- **UI Testing** - Storybook component library with automated tests
+
+## Development
+
+Install dependencies:
 
 ```bash
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
+npm install
 ```
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Start the development server + Storybook:
 
 ```bash
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
+
+This will start both the SvelteKit dev server and Storybook on port 6006.
 
 ## Building
 
-To create a production version of your app:
+Create a production build:
 
 ```bash
 npm run build
 ```
 
-You can preview the production build with `npm run preview`.
+The build outputs static files to `../public` directory for deployment with llama.cpp server.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Testing
+
+Run the test suite:
+
+```bash
+# E2E tests
+npm run test:e2e
+
+# Unit tests
+npm run test:unit
+
+# UI tests
+npm run test:ui
+
+# All tests
+npm run test
+```
+
+## Architecture
+
+- **Framework**: SvelteKit with Svelte 5 runes
+- **Components**: ShadCN UI + bits-ui design system
+- **Database**: IndexedDB with Dexie for local storage
+- **Build**: Static adapter for deployment with llama.cpp server
+- **Testing**: Playwright (E2E) + Vitest (unit) + Storybook (components)
