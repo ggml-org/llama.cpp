@@ -1758,6 +1758,13 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
 
     data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ std::nullopt, extra_context);
     data.format = COMMON_CHAT_FORMAT_HERMES_2_PRO;
+    auto supports_thinking = tmpl.source().find("<think>") != std::string::npos;
+
+    // you should not be able to call enable_thinking if <think> is not supported
+    if (!supports_thinking && extra_context["enable_thinking"]) {
+        extra_context["enable_thinking"] = false;
+    }
+
     if (string_ends_with(data.prompt, "<think>\n")) {
         if (!extra_context["enable_thinking"]) {
             data.prompt += "</think>";
@@ -1767,9 +1774,6 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
     }
 
     if (!inputs.tools.is_null()) {
-        auto supports_thinking = tmpl.source().find("<think>") != std::string::npos;
-        // you should not be able to call enable_thinking if <think> is not supported
-        GGML_ASSERT(!extra_context["enable_thinking"] || extra_context["enable_thinking"] == supports_thinking);
         // (content)?(<tool_call>{"name": "foo", "arguments": {"a": 1}}</tool_call>)*
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
