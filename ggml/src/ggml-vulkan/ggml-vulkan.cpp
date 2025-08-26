@@ -789,8 +789,8 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
-        device->device.freeMemory(device_memory);
         device->device.destroyBuffer(buffer);
+        device->device.freeMemory(device_memory);
     }
 };
 
