@@ -14195,13 +14195,17 @@ struct llm_build_nemotronh : public llm_graph_context_mamba {
                 // attention layer //
                 cur = build_attention_layer(cur, inp->get_attn(), model, n_embd_head, il);
             } else {
-                cur = build_ffn_layer(cur, inpSA, model, il);
+                cur = build_ffn_layer(cur, model, il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
+
+            // add residual
+            cur = ggml_add(ctx0, cur, inpSA);
+            cb(cur, "block_out", il);
 
             // input for next layer
             inpL = cur;
@@ -14271,16 +14275,8 @@ struct llm_build_nemotronh : public llm_graph_context_mamba {
 
     ggml_tensor * build_ffn_layer(
               ggml_tensor * cur,
-              ggml_tensor * inpSA,
         const llama_model & model,
         const int           il) {
-
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
-        cur = build_norm(ffn_inp,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, il);
-                cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
@@ -14289,9 +14285,6 @@ struct llm_build_nemotronh : public llm_graph_context_mamba {
                 NULL,
                 LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
                 cb(cur, "ffn_out", il);
-
-        cur = ggml_add(ctx0, cur, ffn_inp);
-        cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
