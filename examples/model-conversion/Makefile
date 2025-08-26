@@ -1,4 +1,5 @@
-# Validation functions
+MAKEFLAGS += --no-print-directory
+
 define validate_model_path
 	@if [ -z "$(MODEL_PATH)" ]; then \
 		echo "Error: MODEL_PATH must be provided either as:"; \
@@ -15,6 +16,13 @@ define validate_embedding_model_path
 		echo "  2. Command line argument: make $(1) EMBEDDING_MODEL_PATH=/path/to/model"; \
 		exit 1; \
 	fi
+endef
+
+define quantize_model
+	@CONVERTED_MODEL="$(1)" QUANTIZED_TYPE="$(QUANTIZED_TYPE)" \
+	TOKEN_EMBD_TYPE="$(TOKEN_EMBD_TYPE)" OUTPUT_TYPE="$(OUTPUT_TYPE)" \
+	./scripts/utils/quantize.sh "$(1)" "$(QUANTIZED_TYPE)" "$(TOKEN_EMBD_TYPE)" "$(OUTPUT_TYPE)"
+	@echo "Export the quantized model path to $(2) variable in your environment"
 endef
 
 ###
@@ -67,9 +75,15 @@ causal-quantize-Q8_0: causal-quantize-model
 causal-quantize-Q4_0: QUANTIZED_TYPE = Q4_0
 causal-quantize-Q4_0: causal-quantize-model
 
+# For Quantization Aware Trained (QAT) models in Q4_0 we explicitly set the
+# token embedding and output types to Q8_0 instead of the default Q6_K.
+causal-quantize-qat-Q4_0: QUANTIZED_TYPE = Q4_0
+causal-quantize-qat-Q4_0: TOKEN_EMBD_TYPE = Q8_0
+causal-quantize-qat-Q4_0: OUTPUT_TYPE = Q8_0
+causal-quantize-qat-Q4_0: causal-quantize-model
+
 causal-quantize-model:
-	@CONVERTED_MODEL="$(CONVERTED_MODEL)" QUANTIZED_TYPE="$(QUANTIZED_TYPE)" ./scripts/utils/quantize.sh ${CONVERTED_MODEL} ${QUANTIZED_TYPE}
-	@echo "Export the quantized model path to QUANTIZED_MODEL variable in your environment"
+	$(call quantize_model,$(CONVERTED_MODEL),QUANTIZED_MODEL)
 
 causal-run-quantized-model:
 	@QUANTIZED_MODEL="$(QUANTIZED_MODEL)" ./scripts/causal/run-converted-model.sh ${QUANTIZED_MODEL}
@@ -117,9 +131,15 @@ embedding-quantize-Q8_0: embedding-quantize-model
 embedding-quantize-Q4_0: QUANTIZED_TYPE = Q4_0
 embedding-quantize-Q4_0: embedding-quantize-model
 
+# For Quantization Aware Trained (QAT) models in Q4_0 we explicitly set the
+# token embedding and output types to Q8_0 instead of the default Q6_K.
+embedding-quantize-qat-Q4_0: QUANTIZED_TYPE = Q4_0
+embedding-quantize-qat-Q4_0: TOKEN_EMBD_TYPE = Q8_0
+embedding-quantize-qat-Q4_0: OUTPUT_TYPE = Q8_0
+embedding-quantize-qat-Q4_0: embedding-quantize-model
+
 embedding-quantize-model:
-	@./scripts/utils/quantize.sh ${CONVERTED_EMBEDDING_MODEL} ${QUANTIZED_TYPE}
-	@echo "Export the quantized model path to QUANTIZED_EMBEDDING_MODEL variable in your environment"
+	$(call quantize_model,$(CONVERTED_EMBEDDING_MODEL),QUANTIZED_EMBEDDING_MODEL)
 
 embedding-run-quantized-model:
 	@./scripts/embedding/run-converted-model.sh ${QUANTIZED_EMBEDDING_MODEL}
