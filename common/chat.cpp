@@ -1829,7 +1829,7 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
 
             builder.add_rule("thinking-start", "\"<think>\"");
-            builder.add_rule("thinking-content", "[^\\x00]*");
+            builder.add_rule("thinking-content", "( [^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^h] | \"</th\" [^i] | \"</thi\" [^n] | \"</thin\" [^k] | \"</think\" [^>] )*");
             builder.add_rule("thinking-end", "\"</think>\" space");
 
             //thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
