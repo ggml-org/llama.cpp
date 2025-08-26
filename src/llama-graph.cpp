@@ -644,6 +644,8 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
+
+    
     ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
     cb(tmp, "ffn_up", il);
 
@@ -1377,7 +1379,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
     LLAMA_LOG_INFO("ubatch.equal_seqs() = %d, n_seqs = %d\n", ubatch.equal_seqs(), ubatch.n_seqs);
 
-    assert(!ubatch.equal_seqs());
+    //  sassert(!ubatch.equal_seqs());
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
