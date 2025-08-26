@@ -596,7 +596,7 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-// Returns per-tensor type overrides to meet target BPW at lowest ppl
+// Returns per-tensor type overrides to meet target BPW at lowest error
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
     std::vector<no_init<uint8_t>> & buffer,
