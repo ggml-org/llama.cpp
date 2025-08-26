@@ -1,0 +1,73 @@
+[[docs:funcstructs:ggml.h]]
+== ggml.h
+
+[[docs:funcstructs:ggml.h:enum-ggml_object_type]]
+=== enum ggml_object_type
+
+Enumerates all possible types of [.codebit]#`struct ggml_object`#. These are [.codebit]#`GGML_OBJECT_TYPE_TENSOR`#, [.codebit]#`GGML_OBJECT_TYPE_GRAPH`# and [.codebit]#`GGML_OBJECT_TYPE_WORK_BUFFER`#.
+
+
+[[docs:funcstructs:ggml.h:struct-ggml_init_params]]
+=== struct ggml_init_params
+
+Ties together the parameters needed by [.codebit]#`ggml_init(...)`#. These are:
+
+[source,C++]
+----
+// memory pool
+size_t mem_size;   // bytes
+void * mem_buffer; // if NULL, memory will be allocated internally
+bool   no_alloc;   // don't allocate memory for the tensor data
+----
+
+
+[[docs:funcstructs:ggml.h:struct-ggml_tensor]]
+=== struct ggml_tensor
+
+Represents a unit of computation. Has the following members:
+
+* [.codebit]#`ggml_type type`#: enum that indicates the data type the tensor works with
+* [.codebit]#`ggml_backend_buffer buffer`#
+* [.codebit]#`int64_t ne[GGML_MAX_DIMS]`#: dimensions in terms of logical elements (i.e. for quantized data types that use batches, ne[0] holds total number of values the batches on a single "row" hold)
+* [.codebit]#`size_t nb[GGML_MAX_DIMS]`#: from comments:
+
+[source,C++]
+----
+// stride in bytes:
+// nb[0] = ggml_type_size(type)
+// nb[1] = nb[0]   * (ne[0] / ggml_blck_size(type)) + padding
+// nb[i] = nb[i-1] * ne[i-1]
+----
+
+* [.codebit]#`ggml_op op`#: enum indicating the operation the tensor does
+* [.codebit]#`int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)]`#
+* [.codebit]#`int32_t flags`#
+* [.codebit]#`ggml_tensor* src[GGML_MAX_SRC]`#: source tensors, a.k.a. tensors used as inputs for the operation
+* [.codebit]#`ggml_tensor * view_src`#
+* [.codebit]#`size_t view_offs`#
+* [.codebit]#`void* data`#: the result of the operation, with structure defined by ne and nb
+* [.codebit]#`char name[GGML_MAX_NAME]`#: name
+* [.codebit]#`void* extra`#: "extra things e.g. for ggml-cuda.cu"
+* [.codebit]#`char padding[8]`#: padding to 336 bytes, which is divisible by 16 ([.codebit]#`GGML_MEM_ALIGN`# is either 16 or 4), see struct ggml_context for more details
+
+
+[[docs:funcstructs:ggml.h:struct-ggml_type_traits]]
+=== struct ggml_type_traits
+
+This structure describes a data type and thus dictates how [.codebit]#`ggml_tensor.data`# is interpreted. It has the following members:
+
+* [.codebit]#`const char * type_name`#
+* [.codebit]#`int64_t blck_size`#: the number of logical values held in a single block (this is 0 for deprecated and removed types, 1 for non-quantized types, and something else for quantized ones)
+* [.codebit]#`int64_t blck_size_interleave`#: currently not set for any type
+* [.codebit]#`size_t type_size`#: the size of the data type for unquantized types, and the size of the structure representing a block of said type for quantized ones
+* [.codebit]#`bool is_quantized`#
+* [.codebit]#`ggml_to_float_t to_float`#: pointer to a function for conversion to float (see exact definition below)
+* [.codebit]#`ggml_from_float_t from_float_ref`#: pointer to a function for conversion from float (see exact definition below)
+
+The conversion function pointer types mentioned are defined as such:
+
+[source,C++]
+----
+typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
+----
