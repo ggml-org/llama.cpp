@@ -1432,6 +1432,22 @@ static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & bui
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
     // First try to parse using the standard reasoning parsing method
+    LOG_DBG("%s: thinking_forced_open: %s\n", __func__, std::to_string(builder.syntax().thinking_forced_open).c_str());
+
+    bool has_reasoning = false;
+    auto header_start_pos = builder.pos();
+    if (auto res = builder.try_find_literal("<think>")) {
+      has_reasoning = true;
+    }
+    if (auto res = builder.try_find_literal("</think>")) {
+      has_reasoning = true;
+    }
+    builder.move_to(header_start_pos);
+    if (!has_reasoning && builder.syntax().thinking_forced_open) {
+        LOG_DBG("%s: edge case no reasoning, adding content\n", __func__);
+        common_chat_parse_deepseek_v3_1_content(builder);
+        return;
+    }
     if (builder.try_parse_reasoning("<think>", "</think>")) {
         // If reasoning was parsed successfully, the remaining content is regular content
         LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
