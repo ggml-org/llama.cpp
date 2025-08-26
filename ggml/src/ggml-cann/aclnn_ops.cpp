@@ -1427,17 +1427,17 @@ static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
 static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer,
     float m, int64_t size, float start, float stop, float step){
     int64_t ne[] = {size};
-    size_t nb[] = {sizeof(float)};
+    size_t nb[] = {sizeof(uint16_t)};
 
-    ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * sizeof(float));
+    ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * sizeof(uint16_t));
     void* arange_buffer = arange_allocator.get();
 
     aclTensor* arange_tensor = ggml_cann_create_tensor(
-        arange_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
+        arange_buffer, ACL_FLOAT16, sizeof(uint16_t), ne, nb, 1);
     aclnn_arange(ctx, arange_tensor, start, stop, step, size);
 
     aclTensor* slope_tensor = ggml_cann_create_tensor(
-        slope_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
+        slope_buffer, ACL_FLOAT16, sizeof(uint16_t), ne, nb, 1);
 
     aclScalar* sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
 
@@ -3251,88 +3251,81 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
         // Step 3: create the PSEShift tensor if needed
         //         this tensor is considered as mask (f16) in the llama.cpp
-
         aclTensor* bcast_pse_tensor = nullptr;
-        int64_t bcast_pse_ne[GGML_MAX_DIMS];
-        size_t bcast_pse_nb[GGML_MAX_DIMS];
         ggml_cann_pool_alloc bcast_pse_allocator(ctx.pool());
-        void* bcast_pse_buffer = nullptr;
-
         if(src3 != nullptr){
-            bcast_pse_buffer = bcast_pse_allocator.alloc(
-                            ggml_nelements(src3) * src0->ne[2] * sizeof(uint16_t));
+            // Construct the truncated pse tensor (common for prefill/decode)
+            int64_t trunc_pse_ne[GGML_MAX_DIMS] = {
+                src3->ne[0],        // D
+                src0->ne[1],        // S (number of Q tokens)
+                src3->ne[2],        // mask N
+                src3->ne[3]         // B
+            };
+            size_t* trunc_pse_nb = src3->nb;
 
-            if(src0->ne[1] > 1){
-                // Case 1: broadcast pse for prefill stage with multiple head
-                aclTensor* acl_mask_f16_tensor = ggml_cann_create_tensor(src3);
-                bcast_pse_ne[0] = src3->ne[0];
-                bcast_pse_ne[1] = src3->ne[1];
-                bcast_pse_ne[2] = src0->ne[2];
-                bcast_pse_ne[3] = src3->ne[3];
+            aclTensor* acl_mask_f16_trunc_tensor = ggml_cann_create_tensor(
+                src3->data, ACL_FLOAT16, sizeof(uint16_t),
+                trunc_pse_ne, trunc_pse_nb, GGML_MAX_DIMS
+            );
 
+            int64_t bcast_pse_ne[GGML_MAX_DIMS];
+            size_t bcast_pse_nb[GGML_MAX_DIMS];
+            bcast_pse_ne[0] = src3->ne[0];      // D
+            bcast_pse_ne[1] = src0->ne[1];      // S
+            bcast_pse_ne[2] = src0->ne[2];      // N (num_heads)
+            bcast_pse_ne[3] = src3->ne[3];      // B
+            if (maxBias == 0.0f) {
+                // When maxBias == 0.0f, use nb = 0 reduce once repeat (Qwen2)
+                // Construct the bcast tensor (simulate repeat on the head dimension using stride=0)
                 bcast_pse_nb[0] = sizeof(uint16_t);
-                for(int i = 1; i < GGML_MAX_DIMS; ++i){
-                    bcast_pse_nb[i] = bcast_pse_nb[i - 1] * bcast_pse_ne[i - 1];
-                }
+                bcast_pse_nb[1] = bcast_pse_nb[0] * bcast_pse_ne[0];
+                bcast_pse_nb[2] = 0;                // <---- the head dimension shares the same data
+                bcast_pse_nb[3] = src3->nb[3];
 
                 bcast_pse_tensor = ggml_cann_create_tensor(
-                    bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t),
-                    bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS);
-
-                int64_t repeats[] = {1, src0->ne[2], 1, 1};
-                aclnn_repeat(ctx, acl_mask_f16_tensor, bcast_pse_tensor, repeats);
-
-                ggml_cann_release_resources(ctx, acl_mask_f16_tensor);
-            }else{
-                // Case 2: trunc the first row and broadcast pse for decode stage with multiple head
-                int64_t trunc_pse_ne[GGML_MAX_DIMS] = {src3->ne[0], src0->ne[1], src3->ne[2], src3->ne[3]};
-                size_t* trunc_pse_nb = src3->nb;
-
-                aclTensor* acl_mask_f16_trunc_tensor = ggml_cann_create_tensor(
                     src3->data, ACL_FLOAT16, sizeof(uint16_t),
-                    trunc_pse_ne, trunc_pse_nb, GGML_MAX_DIMS);
+                    bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS
+                );
 
-                bcast_pse_ne[0] = src3->ne[0];
-                bcast_pse_ne[1] = src0->ne[1];
-                bcast_pse_ne[2] = src0->ne[2];
-                bcast_pse_ne[3] = src3->ne[3];
-
+                ggml_cann_release_resources(ctx, acl_mask_f16_trunc_tensor);
+            } else {
                 bcast_pse_nb[0] = sizeof(uint16_t);
-                for(int i = 1; i < GGML_MAX_DIMS; ++i){
+                for (int i = 1; i < GGML_MAX_DIMS; i++) {
                     bcast_pse_nb[i] = bcast_pse_nb[i - 1] * bcast_pse_ne[i - 1];
                 }
 
+                void* bcast_pse_buffer = bcast_pse_allocator.alloc(
+                    ggml_nelements(src3) * src0->ne[2] * sizeof(uint16_t)
+                );
+
                 bcast_pse_tensor = ggml_cann_create_tensor(
                     bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t),
-                    bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS);
+                    bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS
+                );
 
                 int64_t repeats[] = {1, src0->ne[2], 1, 1};
                 aclnn_repeat(ctx, acl_mask_f16_trunc_tensor, bcast_pse_tensor, repeats);
 
-                ggml_cann_release_resources(ctx, acl_mask_f16_trunc_tensor);
-            }
-
-            // Compute the slope if needed. Derived from ggml_cann_softmax().
-            if(maxBias != 0.0f){
                 // alibi
+                // Compute the slope if needed. Derived from ggml_cann_softmax().
                 const int64_t n_heads = src0->ne[2];
-                ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
+                ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(uint16_t));
                 void* slope_buffer = slope_allocator.get();
                 aclnn_get_slope(ctx, n_heads, slope_buffer, maxBias);
 
                 int64_t slope_ne[] = {1, 1, n_heads, 1};
                 size_t slope_nb[GGML_MAX_DIMS];
-                slope_nb[0] = sizeof(float);
+                slope_nb[0] = sizeof(uint16_t);
                 for(int i = 1;i<GGML_MAX_DIMS;i++) {
                     slope_nb[i] = slope_nb[i-1] * slope_ne[0];
                 }
 
                 aclTensor* slope_tensor = ggml_cann_create_tensor(
-                    slope_buffer, ACL_FLOAT, sizeof(float),
+                    slope_buffer, ACL_FLOAT16, sizeof(uint16_t),
                     slope_ne, slope_nb, GGML_MAX_DIMS);
                 GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, bcast_pse_tensor, slope_tensor);
 
-                ggml_cann_release_resources(ctx, slope_tensor);
+                ggml_cann_release_resources(ctx, slope_tensor, acl_mask_f16_trunc_tensor);
             }
         }
 
