@@ -3,7 +3,6 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml-opt.h"
 
 #include <cmath>
@@ -899,6 +898,7 @@ static std::pair<int, int> test_backend(
 
 int main(void) {
     ggml_log_set(nullptr, nullptr);
+    ggml_backend_load_all();
     const size_t dev_count = ggml_backend_dev_count();
     printf("Testing %zu devices\n\n", dev_count);
     size_t n_ok = 0;
@@ -911,11 +911,12 @@ int main(void) {
 
         ggml_backend_t backend = ggml_backend_dev_init(devs[i], NULL);
         GGML_ASSERT(backend != NULL);
-#ifndef _MSC_VER
-        if (ggml_backend_is_cpu(backend)) {
-            ggml_backend_cpu_set_n_threads(backend, std::thread::hardware_concurrency() / 2);
+
+        auto * reg = ggml_backend_dev_backend_reg(devs[i]);
+        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+        if (ggml_backend_set_n_threads_fn) {
+            ggml_backend_set_n_threads_fn(backend, std::thread::hardware_concurrency() / 2);
         }
-#endif
         backends.push_back(backend);
     }
 
