@@ -14287,7 +14287,7 @@ struct llm_build_nemotronh : public llm_graph_context_mamba {
                 model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
                 model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
                 cb(cur, "ffn_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
