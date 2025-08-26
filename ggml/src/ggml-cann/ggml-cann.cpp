@@ -2336,7 +2336,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2354,7 +2354,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2506,7 +2506,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return true;
         case GGML_OP_FLASH_ATTN_EXT:{
 #ifdef ASCEND_310P
-            // FA not suppor on 310p device
+            // FA not support on 310p device
             return false;
 #endif
             // derived from [ggml-cuda.cu]
