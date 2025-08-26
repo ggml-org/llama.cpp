@@ -2034,22 +2034,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         const int64_t n_expert_used = hparams.n_expert_used;
         const int64_t n_ctx_train   = hparams.n_ctx_train;
 
-        LLAMA_LOG_INFO("n_head        = %lld\n", (long long) n_head);
-        LLAMA_LOG_INFO("n_head_kv     = %lld\n", (long long) n_head_kv);
-        LLAMA_LOG_INFO("n_embd        = %lld\n", (long long) n_embd);
-        LLAMA_LOG_INFO("n_embd_k_gqa  = %lld\n", (long long) n_embd_k_gqa);
-        LLAMA_LOG_INFO("n_embd_v_gqa  = %lld\n", (long long) n_embd_v_gqa);
-        LLAMA_LOG_INFO("n_embd_head_k = %lld\n", (long long) n_embd_head_k);
-        LLAMA_LOG_INFO("n_embd_head_v = %lld\n", (long long) n_embd_head_v);
-        LLAMA_LOG_INFO("n_ff          = %lld\n", (long long) n_ff);
-        LLAMA_LOG_INFO("n_embd_gqa    = %lld\n", (long long) n_embd_gqa);
-        LLAMA_LOG_INFO("n_vocab       = %lld\n", (long long) n_vocab);
-        LLAMA_LOG_INFO("n_token_types = %lld\n", (long long) n_token_types);
-        LLAMA_LOG_INFO("n_rot         = %lld\n", (long long) n_rot);
-        LLAMA_LOG_INFO("n_expert      = %lld\n", (long long) n_expert);
-        LLAMA_LOG_INFO("n_expert_used = %lld\n", (long long) n_expert_used);
-        LLAMA_LOG_INFO("n_ctx_train   = %lld\n", (long long) n_ctx_train);
-
         if (n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
@@ -7688,19 +7672,22 @@ struct llm_build_modern_bert : public llm_graph_context {
             if (has_gate_tensor || up_is_2x) {
                 mlp_out = build_ffn(
                     h,
-                    model.layers[il].ffn_up,   /*up_b*/   nullptr,           /*up_shexp*/   nullptr,
-                    model.layers[il].ffn_gate, /*gate_b*/ nullptr,           /*gate_shexp*/ nullptr,
-                    model.layers[il].ffn_down, /*down_b*/ nullptr,           /*down_shexp*/ nullptr,
-                    /*expert_scores*/ nullptr,
+                    model.layers[il].ffn_up,   /*up_b*/   NULL,           /*up_shexp*/   NULL,
+                    model.layers[il].ffn_gate, /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
+                    model.layers[il].ffn_down, /*down_b*/ NULL,           /*down_shexp*/ NULL,
+                    /*expert_scores*/ NULL,
                     LLM_FFN_GEGLU, LLM_FFN_PAR, il);
                 cb(mlp_out, "ffn_out_geglu", il);
             } else {
+
+                LLAMA_LOG_INFO("Ffn_up : {%lld, %lld}, ffn_down : {%lld, %lld}\n", model.layers[il].ffn_up->ne[0], model.layers[il].ffn_up->ne[1],
+                                                                                   model.layers[il].ffn_down->ne[0], model.layers[il].ffn_down->ne[0]);
                 mlp_out = build_ffn(
                     h,
-                    model.layers[il].ffn_up,   /*up_b*/   nullptr,           /*up_shexp*/   nullptr,
-                    /*gate*/ nullptr,          /*gate_b*/ nullptr,           /*gate_shexp*/ nullptr,
-                    model.layers[il].ffn_down, /*down_b*/ nullptr,           /*down_shexp*/ nullptr,
-                    /*expert_scores*/ nullptr,
+                    model.layers[il].ffn_up,   /*up_b*/   NULL,           /*up_shexp*/   NULL,
+                    /*gate*/ NULL,             /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
+                    model.layers[il].ffn_down, /*down_b*/ NULL,           /*down_shexp*/ NULL,
+                    /*expert_scores*/ NULL,
                     LLM_FFN_GELU, LLM_FFN_SEQ, il);
                 cb(mlp_out, "ffn_out_gelu", il);
             }
@@ -7712,7 +7699,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             inpL = cur_layer;
         }
 
-        // final model norm (final_norm)
+        // 9) final model norm (final_norm)
         cur = build_norm(inpL, model.output_norm, model.output_norm_b, LLM_NORM, -1);
         cb(cur, "final_norm", -1);
 
