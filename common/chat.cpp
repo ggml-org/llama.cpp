@@ -1837,11 +1837,11 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             if (extra_context["enable_thinking"]) {
                 if (data.thinking_forced_open) {
                     //thinking tag was already opened by used so we don't need to add it again
-                    thinking_grammar_logic = "(thinking-content thinking-end)? ";
+                    thinking_grammar_logic = "(thinking-content thinking-end) ";
                 }
                 else
                 {
-                    thinking_grammar_logic = "(thinking-start thinking-content thinking-end)? ";
+                    thinking_grammar_logic = "(thinking-start thinking-content thinking-end) ";
                 }
             }
 
