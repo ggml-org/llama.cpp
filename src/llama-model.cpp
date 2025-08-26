@@ -3751,14 +3751,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_NEMOTRON_H:
                 {
                     const int64_t d_conv  = hparams.ssm_d_conv;
-                    // Nemotron-H uses 12288 for conv1d tensors, not the standard 15680
-                    const int64_t d_inner = 12288; // Override: actual conv1d tensor dimension
                     const int64_t d_state = hparams.ssm_d_state;
-                    const int64_t n_head  = hparams.ssm_dt_rank;
                     const int64_t n_group = hparams.ssm_n_group;
                     // Use actual dimension from model: 22656 instead of calculated 22608
-                    const int64_t d_in_proj = 22656; // 2*d_inner + 2*n_group*d_state + n_head + 48;
-                    const int64_t d_x_part  = d_inner + 2*n_group*d_state; // x1 + B + C
+                    const int64_t d_in_proj = 22656;
 
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -11688,8 +11684,7 @@ struct llm_build_nemotron_h : public llm_graph_context_mamba {
                ggml_tensor * cur,
          const llama_model & model,
          const llama_ubatch & ubatch,
-                       int   il,
-               ggml_cgraph * gf) const {
+                       int   il) const {
         // Reuse the Mamba-2 implementation which handles FP32 conv + SSM states
         return build_mamba2_layer(inp, cur, model, ubatch, il);
     }
@@ -11712,7 +11707,7 @@ struct llm_build_nemotron_h : public llm_graph_context_mamba {
             // Nemotron-H hybrid layer logic based on schedule
             if (hparams.is_recurrent(il)) {
                 // SSM/Mamba layer - use Nemotron-H specific implementation
-                cur = build_nemotron_h_ssm_layer(inp_hybrid->get_recr(), cur, model, ubatch, il, gf);
+                cur = build_nemotron_h_ssm_layer(inp_hybrid->get_recr(), cur, model, ubatch, il);
             } else {
                 // Attention layer if KV heads are present (per schedule)
                 const bool is_attention_layer = hparams.n_head_kv(il) > 0;
