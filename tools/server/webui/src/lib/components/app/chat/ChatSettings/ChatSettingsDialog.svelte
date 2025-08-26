@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { Settings, Filter, AlertTriangle, Brain, Cog } from '@lucide/svelte';
+	import { Settings, Filter, AlertTriangle, Brain, Cog, Monitor, Sun, Moon } from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsSection } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
+	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { setMode } from 'mode-watcher';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import {
 		config,
@@ -22,12 +24,20 @@
 	let { onOpenChange, open = false }: Props = $props();
 
 	let localConfig: SettingsConfigType = $state({ ...config() });
+	let originalTheme: string = $state('');
 
 	$effect(() => {
 		if (open) {
 			localConfig = { ...config() };
+			originalTheme = config().theme as string;
 		}
 	});
+
+	function handleThemeChange(newTheme: string) {
+		localConfig.theme = newTheme;
+
+		setMode(newTheme as 'light' | 'dark' | 'system');
+	}
 
 	const defaultConfig = SETTING_CONFIG_DEFAULT;
 
@@ -71,9 +81,15 @@
 		resetConfig();
 
 		localConfig = { ...SETTING_CONFIG_DEFAULT };
+		
+		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
+		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
 	}
 
 	function handleClose() {
+		if (localConfig.theme !== originalTheme) {
+			setMode(originalTheme as 'light' | 'dark' | 'system');
+		}
 		onOpenChange?.(false);
 	}
 
@@ -93,6 +109,16 @@
 					key: 'systemMessage',
 					label: 'System Message (will be disabled if left empty)',
 					type: 'textarea'
+				},
+				{
+					key: 'theme',
+					label: 'Theme',
+					type: 'select',
+					options: [
+						{ value: 'system', label: 'System', icon: Monitor },
+						{ value: 'light', label: 'Light', icon: Sun },
+						{ value: 'dark', label: 'Dark', icon: Moon }
+					]
 				},
 				{
 					key: 'showTokensPerSecond',
@@ -265,7 +291,7 @@
 	);
 </script>
 
-<Dialog.Root {open} {onOpenChange}>
+<Dialog.Root {open} onOpenChange={handleClose}>
 	<Dialog.Content class="flex h-[64vh] flex-col gap-0 p-0" style="max-width: 48rem;">
 		<div class="flex flex-1 overflow-hidden">
 			<div class="border-border/30 w-64 border-r p-6">
@@ -324,6 +350,49 @@
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="min-h-[100px] max-w-2xl"
 									/>
+									{#if field.help || SETTING_CONFIG_INFO[field.key]}
+										<p class="text-muted-foreground mt-1 text-xs">
+											{field.help || SETTING_CONFIG_INFO[field.key]}
+										</p>
+									{/if}
+								{:else if field.type === 'select'}
+									{@const selectedOption = field.options?.find((opt: { value: string; label: string; icon?: any }) => opt.value === localConfig[field.key])}
+									<label for={field.key} class="block text-sm font-medium">
+										{field.label}
+									</label>
+
+									<Select.Root type="single" value={localConfig[field.key]} onValueChange={(value) => {
+										if (field.key === 'theme' && value) {
+											handleThemeChange(value);
+										} else {
+											localConfig[field.key] = value;
+										}
+									}}>
+										<Select.Trigger class="max-w-md">
+											<div class="flex items-center gap-2">
+												{#if selectedOption?.icon}
+													{@const IconComponent = selectedOption.icon}
+													<IconComponent class="h-4 w-4" />
+												{/if}
+												{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
+											</div>
+										</Select.Trigger>
+										<Select.Content>
+											{#if field.options}
+												{#each field.options as option}
+													<Select.Item value={option.value} label={option.label}>
+														<div class="flex items-center gap-2">
+															{#if option.icon}
+																{@const IconComponent = option.icon}
+																<IconComponent class="h-4 w-4" />
+															{/if}
+															{option.label}
+														</div>
+													</Select.Item>
+												{/each}
+											{/if}
+										</Select.Content>
+									</Select.Root>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}
 										<p class="text-muted-foreground mt-1 text-xs">
 											{field.help || SETTING_CONFIG_INFO[field.key]}

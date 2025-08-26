@@ -3,6 +3,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
+	theme: 'system',
 	showTokensPerSecond: false,
 	showThoughtInProgress: true,
 	excludeThoughtOnReq: false,
@@ -36,6 +37,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using --api-key option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',
+	theme: 'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 	pasteLongTextToFileLen: 'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
 	samplers: 'The order at which samplers are applied, in simplified way. Default is "top_k;tfs_z;typical_p;top_p;min_p;temperature": top_k->tfs_z->typical_p->top_p->min_p->temperature',
 	temperature: 'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
