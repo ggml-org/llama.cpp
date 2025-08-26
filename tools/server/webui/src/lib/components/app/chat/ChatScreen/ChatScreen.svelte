@@ -217,6 +217,13 @@
 		showDeleteDialog = false;
 	}
 
+	function handleDeleteDialogKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			handleDeleteConfirm();
+		}
+	}
+
 	$effect(() => {
 		// This solution is not ideal, but it works for now. But can be tricky for long conversations
 		// Eventually we might want to find a proper way to render the content scrolled down from the beginning
@@ -391,7 +398,7 @@
 <AlertDialog.Root bind:open={showDeleteDialog}>
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />
-		<AlertDialog.Content class="max-w-md">
+		<AlertDialog.Content class="max-w-md" onkeydown={handleDeleteDialogKeydown}>
 			<AlertDialog.Header>
 				<AlertDialog.Title>Delete Chat</AlertDialog.Title>
 				<AlertDialog.Description class="text-muted-foreground text-sm">
@@ -403,7 +410,7 @@
 				<AlertDialog.Cancel onclick={() => (showDeleteDialog = false)}>
 					Cancel
 				</AlertDialog.Cancel>
-				<AlertDialog.Action onclick={handleDeleteConfirm} class="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+				<AlertDialog.Action onclick={handleDeleteConfirm} class="bg-destructive hover:bg-destructive/80 text-white">
 					Delete
 				</AlertDialog.Action>
 			</AlertDialog.Footer>

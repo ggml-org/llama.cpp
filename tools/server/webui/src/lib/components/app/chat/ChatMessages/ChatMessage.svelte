@@ -6,16 +6,7 @@
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import MessageBranchingControls from './MessageBranchingControls.svelte';
 	import type { MessageSiblingInfo } from '$lib/utils/branching';
-	import {
-		AlertDialog,
-		AlertDialogAction,
-		AlertDialogCancel,
-		AlertDialogContent,
-		AlertDialogDescription,
-		AlertDialogFooter,
-		AlertDialogHeader,
-		AlertDialogTitle
-	} from '$lib/components/ui/alert-dialog';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { getDeletionInfo } from '$lib/stores/chat.svelte';
@@ -287,8 +278,8 @@
 	</div>
 {/snippet}
 
-<AlertDialog bind:open={showDeleteDialog}>
-	<AlertDialogContent
+<AlertDialog.Root bind:open={showDeleteDialog}>
+	<AlertDialog.Content
 		onkeydown={(e) => {
 			if (e.key === 'Enter') {
 				e.preventDefault();
@@ -296,9 +287,9 @@
 			}
 		}}
 	>
-		<AlertDialogHeader>
-			<AlertDialogTitle>Delete Message</AlertDialogTitle>
-			<AlertDialogDescription>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete Message</AlertDialog.Title>
+			<AlertDialog.Description>
 				{#if deletionInfo && deletionInfo.totalCount > 1}
 					<div class="space-y-2">
 						<p>This will delete <strong>{deletionInfo.totalCount} messages</strong> including:</p>
@@ -320,22 +311,22 @@
 				{:else}
 					Are you sure you want to delete this message? This action cannot be undone.
 				{/if}
-			</AlertDialogDescription>
-		</AlertDialogHeader>
+			</AlertDialog.Description>
+		</AlertDialog.Header>
 
-		<AlertDialogFooter>
-			<AlertDialogCancel>Cancel</AlertDialogCancel>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
 
-			<AlertDialogAction onclick={handleConfirmDelete} class="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+			<AlertDialog.Action onclick={handleConfirmDelete} class="bg-destructive hover:bg-destructive/80 text-white">
 				{#if deletionInfo && deletionInfo.totalCount > 1}
 					Delete {deletionInfo.totalCount} Messages
 				{:else}
 					Delete
 				{/if}
-			</AlertDialogAction>
-		</AlertDialogFooter>
-	</AlertDialogContent>
-</AlertDialog>
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <style>
 	.processing-container {
