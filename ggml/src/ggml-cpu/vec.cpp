@@ -335,6 +335,15 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         vst1q_f32(y + i, val);
         sum += (ggml_float)vaddvq_f32(val);
     }
+#elif defined(__riscv_v_intrinsic)
+    vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);
+    for (int avl; i < n; i += avl) {
+        avl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t val = ggml_v_expf_m2(__riscv_vfsub_vf_f32m2(__riscv_vle32_v_f32m2(&x[i], avl), max, avl), avl);
+        __riscv_vse32_v_f32m2(&y[i], val, avl);
+        vsum = __riscv_vfwredusum_vs_f32m2_f64m1(val, vsum, avl);
+    }
+    return (ggml_float)__riscv_vfmv_f_s_f64m1_f64(vsum);
 #endif
     for (; i < n; ++i) {
         float val = expf(x[i] - max);

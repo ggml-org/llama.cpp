@@ -986,7 +986,51 @@ inline static __m128 ggml_v_silu(__m128 x) {
     return _mm_div_ps(x, one_plus_exp_neg_x);
 }
 
-#endif // __ARM_NEON / __AVX2__ / __SSE2__
+#elif defined(__riscv_v_intrinsic)
+
+// adapted from arm limited optimized routine
+// the maximum error is 1.45358 plus 0.5 ulps
+// numbers above 88.38 will flush to infinity
+// numbers beneath -103.97 will flush to zero
+inline static vfloat32m2_t ggml_v_expf_m2(vfloat32m2_t x, int vl) {
+    const vfloat32m2_t r = __riscv_vfmv_v_f_f32m2(0x1.8p23f, vl);
+#ifdef __riscv_xtheadvector
+    // workaround for compiler bug (gcc 14.3.0: Error: unrecognized opcode `th.vmv1r.v v2,v4')
+    vfloat32m2_t z = __riscv_vfadd_vf_f32m2(r, 0.0f, vl);
+    z = __riscv_vfmacc_vf_f32m2(z, 0x1.715476p+0f, x, vl);
+#else
+    const vfloat32m2_t z = __riscv_vfmacc_vf_f32m2(r, 0x1.715476p+0f, x, vl);
+#endif
+    const vfloat32m2_t n = __riscv_vfsub_vv_f32m2(z, r, vl);
+    const vfloat32m2_t b = __riscv_vfnmsac_vf_f32m2(__riscv_vfnmsac_vf_f32m2(x, 0x1.62e4p-1f, n, vl),
+                                                    0x1.7f7d1cp-20f, n, vl);
+    const vuint32m2_t e = __riscv_vsll_vx_u32m2(__riscv_vreinterpret_v_f32m2_u32m2(z), 23, vl);
+    const vfloat32m2_t k = __riscv_vreinterpret_v_u32m2_f32m2(__riscv_vadd_vx_u32m2(e, 0x3f800000, vl)); // 1.0f
+    const vbool16_t c = __riscv_vmfgt_vf_f32m2_b16(__riscv_vfabs_v_f32m2(n, vl), 126.0f, vl);
+    const vfloat32m2_t u = __riscv_vfmul_vv_f32m2(b, b, vl);
+    const vfloat32m2_t j = __riscv_vfmacc_vv_f32m2(
+        __riscv_vfmul_vf_f32m2(b, 0x1.ffffecp-1f, vl),
+        __riscv_vfmacc_vv_f32m2(
+            __riscv_vfmacc_vf_f32m2(__riscv_vfmv_v_f_f32m2(0x1.fffdb6p-2f, vl), 0x1.555e66p-3f, b, vl),
+            __riscv_vfmacc_vf_f32m2(__riscv_vfmv_v_f_f32m2(0x1.573e2ep-5f, vl), 0x1.0e4020p-7f, b, vl),
+            u, vl), u, vl);
+    if (!__riscv_vcpop_m_b16(c, vl))
+        return __riscv_vfmacc_vv_f32m2(k, j, k, vl);
+    const vbool16_t  dm = __riscv_vmfle_vf_f32m2_b16(n, 0.0f, vl);
+    const vuint32m2_t d = __riscv_vmerge_vxm_u32m2(__riscv_vmv_v_x_u32m2(0, vl), 0x82000000, dm, vl);
+    const vfloat32m2_t s1 = __riscv_vreinterpret_v_u32m2_f32m2(__riscv_vadd_vx_u32m2(d, 0x7f000000, vl));
+    const vfloat32m2_t s2 = __riscv_vreinterpret_v_u32m2_f32m2(__riscv_vsub_vv_u32m2(e, d, vl));
+    const vfloat32m2_t r1 = __riscv_vmerge_vvm_f32m2(
+        __riscv_vfmacc_vv_f32m2(k, k, j, vl),
+        __riscv_vfmul_vv_f32m2(__riscv_vfmacc_vv_f32m2(s2, s2, j, vl), s1, vl),
+        c, vl);
+    return __riscv_vmerge_vvm_f32m2(
+        r1, __riscv_vfmul_vv_f32m2(s1, s1, vl),
+        __riscv_vmfgt_vf_f32m2_b16(__riscv_vfabs_v_f32m2(n, vl), 192.0f, vl),
+        vl);
+}
+
+#endif // __ARM_NEON / __AVX2__ / __SSE2__ / __riscv_v_intrinsic
 
 inline static void ggml_vec_silu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
