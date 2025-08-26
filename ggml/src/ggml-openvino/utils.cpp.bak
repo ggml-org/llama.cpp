@@ -1,0 +1,72 @@
+void model_cut() {
+    ov::Core core;
+    std::shared_ptr<ov::Model> model =
+        core.read_model("/home/zijun/dev/llama.cpp-ov/tmp/fold_graph/Model1_01_0x5555601c5ac0.xml");
+
+    ov::ParameterVector new_params;
+
+    auto ops = model->get_ops();
+    std::shared_ptr<ov::Node> node_a;
+    std::shared_ptr<ov::Node> node_b;
+    for (const auto& op : ops) {
+        if (op->get_friendly_name() == "Multiply_4636_ffn_norm-0") {
+            node_a = op;
+        } else if (op->get_friendly_name() == "Multiply_4645_ffn_gate_par-0") {
+            node_b = op;
+        } else if (op->get_friendly_name() == "Parameter_39914") {
+            auto param = std::dynamic_pointer_cast<ov::op::v0::Parameter>(op);
+            new_params.push_back(param);
+        } else if (op->get_friendly_name() == "Parameter_39915") {
+            auto param = std::dynamic_pointer_cast<ov::op::v0::Parameter>(op);
+            new_params.push_back(param);
+        }
+    }
+
+    auto subgraph_input_tensor = node_a->output(0);
+    auto subgraph_output_tensor = node_b->output(0);
+
+    auto new_input = std::make_shared<ov::op::v0::Parameter>(subgraph_input_tensor.get_element_type(),
+                                                             subgraph_input_tensor.get_shape());
+    new_input->set_friendly_name("subgraph_input");
+    new_params.push_back(new_input);
+
+    // Rewire: replace all consumers of original tensor with new input
+    subgraph_input_tensor.replace(new_input);
+
+    auto result = std::make_shared<ov::op::v0::Result>(subgraph_output_tensor);
+    result->set_friendly_name("subgraph_output");
+
+    auto subgraph = std::make_shared<ov::Model>(ov::ResultVector{result}, new_params, "trimmed_subgraph");
+
+    ov::serialize(subgraph, "/home/zijun/dev/llama.cpp-ov/tmp/subgraph.xml");
+
+    assert(false);
+}
+
+void create_graph() {
+    // Input shapes: [256, 1, 1]
+    ov::Shape input_shape{256, 1, 1};
+
+    // Define input parameters
+    auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+    auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+
+    // Concat on axis 2 -> shape becomes [256, 1, 2]
+    auto concat = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{input0, input1}, 2);
+
+    // Target shape constant for reshape: [256, 2]
+    auto reshape_shape = ov::op::v0::Constant::create(ov::element::i64, {2}, {256, 2});
+
+    // special_zero = false
+    auto reshape = std::make_shared<ov::op::v1::Reshape>(concat, reshape_shape, false);
+
+    // Define result node
+    auto result = std::make_shared<ov::op::v0::Result>(reshape);
+
+    // Create model
+    auto model = std::make_shared<ov::Model>(ov::ResultVector{result}, ov::ParameterVector{input0, input1}, "ReshapeConcatModel");
+
+    ov::serialize(subgraph, "/home/zijun/dev/llama.cpp-ov/tmp/subgraph3.xml");
+
+    exit(0);
+}
