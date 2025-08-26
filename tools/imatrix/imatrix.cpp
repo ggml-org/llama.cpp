@@ -30,7 +30,7 @@ static void print_usage(int, char ** argv) {
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
             "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
-            "       [--activation-statistics] [--show-statistics] [...]\n" , argv[0]);
+            "       [--output-format gguf|dat] [--activation-statistics] [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
 }
 
