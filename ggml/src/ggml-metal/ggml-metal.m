@@ -1876,7 +1876,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
         case GGML_OP_ROPE:
             return true;
         case GGML_OP_IM2COL:
-            return op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+            return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
         case GGML_OP_POOL_1D:
             return false;
         case GGML_OP_UPSCALE:
