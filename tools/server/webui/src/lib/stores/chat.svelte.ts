@@ -905,6 +905,10 @@ class ChatStore {
 				return;
 			}
 
+			// Set loading state for regeneration
+			this.isLoading = true;
+			this.currentResponse = '';
+
 			// Create new assistant message branch with empty content
 			const newAssistantMessage = await DatabaseService.createMessageBranch({
 				convId: this.activeConversation.id,
@@ -933,6 +937,7 @@ class ChatStore {
 			await this.streamChatCompletion(conversationPath, newAssistantMessage);
 		} catch (error) {
 			console.error('Failed to regenerate message with branching:', error);
+			this.isLoading = false;
 		}
 	}
 
