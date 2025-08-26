@@ -130,6 +130,6 @@ jobs:
               run: npm run build-storybook
               working-directory: tools/server/webui
 
-            - name: Run Storybook tests
-              run: npm run test:storybook
+            - name: Run UI tests
+              run: npm run test:ui
               working-directory: tools/server/webui
