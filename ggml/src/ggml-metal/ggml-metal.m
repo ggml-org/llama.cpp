@@ -5583,7 +5583,7 @@ static int ggml_metal_encode_node(
                     // half4x4 kernel
                     const int64_t nqptg = 1;  // queries per threadgroup    !! sync with kernel template arguments !!
                     const int64_t ncpsg = 32; // cache values per simdgroup !! sync with kernel template arguments !!
-                    const int64_t nkpsg = 1*ncpsg;
+                    const int64_t nkpsg = 1*ncpsg; // TODO: make adjustable
 
                     GGML_ASSERT(nqptg <= 32);
                     GGML_ASSERT(nqptg  % 1  == 0);
@@ -5602,6 +5602,7 @@ static int ggml_metal_encode_node(
                     int64_t nsgmax = 2;
                     while (true) {
                         const size_t smem = FATTN_SMEM(nsgmax);
+                        // avoid using more than half of the threadgroup memory - can cause slow downs especially for large head sizes
                         if (smem > device.maxThreadgroupMemoryLength/2) {
                             break;
                         }
@@ -5642,8 +5643,16 @@ static int ggml_metal_encode_node(
                         //printf("smem: %zu, max: %zu, nsg = %d, nsgmax = %d\n", smem, device.maxThreadgroupMemoryLength, (int) nsg, (int) nsgmax);
                         GGML_ASSERT(smem <= device.maxThreadgroupMemoryLength);
 
-                        // tokens per expert
-                        const size_t s_tmp = ggml_type_size(GGML_TYPE_F32)*(ne01*ne02*ne03*nwg*ne20 + ne01*ne02*ne03*nwg*2);
+                        // sanity checks
+                        GGML_ASSERT(ne01*ne02*ne03 == ne1*ne2*ne3);
+                        GGML_ASSERT(ne1*ne2*ne3 <= (1u << 31));
+
+                        const int32_t nrows = ne1*ne2*ne3;
+
+                        // temp buffer for writing the results from each workgroup
+                        // - ne20: the size of the head vector
+                        // -  + 2: the S and M values for each intermediate result
+                        const size_t s_tmp = ggml_type_size(GGML_TYPE_F32)*(nrows*nwg*(ne20 + 2));
                         id<MTLBuffer> h_tmp = ggml_metal_mem_pool_alloc(mem_pool, s_tmp);
                         if (!h_tmp) {
                             GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_tmp);
@@ -5662,10 +5671,8 @@ static int ggml_metal_encode_node(
                         // reduce the results from the workgroups
                         {
                             ggml_metal_kargs_flash_attn_ext_reduce args0 = {
+                                nrows,
                                 ne20,
-                                ne1,
-                                ne2,
-                                ne3,
                             };
 
                             id<MTLComputePipelineState> pipeline0 = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_REDUCE].pipeline;
@@ -5676,7 +5683,7 @@ static int ggml_metal_encode_node(
                             [encoder setBuffer:id_dst  offset:offs_dst      atIndex:2];
 
                             //printf("ne1 = %d, ne2 = %d, ne3 = %d, ne20 = %d\n", ne1, ne2, ne3, ne20);
-                            [encoder dispatchThreadgroups:MTLSizeMake((uint64_t) ne1*ne2*ne3, 1, 1) threadsPerThreadgroup:MTLSizeMake(32*32, 1, 1)];
+                            [encoder dispatchThreadgroups:MTLSizeMake(nrows, 1, 1) threadsPerThreadgroup:MTLSizeMake(32*32, 1, 1)];
                         }
                     }
 #undef FATTN_SMEM

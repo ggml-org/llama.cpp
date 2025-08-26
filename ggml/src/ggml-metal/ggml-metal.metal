@@ -5124,21 +5124,23 @@ kernel void kernel_flash_attn_ext_vec(
 
     // final rescale with 1/S and store to global memory
     if (sgitg == 0) {
-        device float  * dst1 = (device float  *) dst + (((uint64_t)args.ne3*args.ne2*args.ne1)*DV)*nwg;
+        const int64_t nrows = args.ne3*args.ne2*args.ne1;
+        const int64_t rid   = iq3*args.ne2*args.ne1 + iq2 + iq1*args.ne1;
+
         device float4 * dst4 = (device float4 *) dst;
+        device float  * dst1 = (device float  *) dst + nrows*DV*nwg; // the S and M are stored after the results
 
         const float S = nwg == 1 ? 1.0f/ss[0] : 1.0f;
 
-        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)iq1*args.ne1;
-
         // interleave the workgroup data
         for (short i = tiisg; i < DV4; i += NW) {
-            dst4[(rid*DV4 + i)*nwg + iwg] = (float4) sr4[i]*S;
+            dst4[rid*DV4*nwg + nwg*i + iwg] = (float4) sr4[i]*S;
         }
 
+        // store S and M
         if (nwg > 1 && tiisg == 0) {
-            dst1[(rid*2)*nwg + 2*iwg + 0] = ss[0];
-            dst1[(rid*2)*nwg + 2*iwg + 1] = ss[1];
+            dst1[rid*(2*nwg) + 2*iwg + 0] = ss[0];
+            dst1[rid*(2*nwg) + 2*iwg + 1] = ss[1];
         }
     }
 }
@@ -5253,19 +5255,18 @@ kernel void kernel_flash_attn_ext_reduce(
     const short DV4 = DV/4;
 
     device const float4 * htmp4 = (device const float4 *) htmp + rid*DV4*nwg;
-    device const float  * ss    = (device const float  *) htmp + (uint64_t)args.ne3*args.ne2*args.ne1*DV*nwg;
+    device const float  * ss    = (device const float  *) htmp + (uint64_t)args.nrows*DV*nwg;
     device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
 
-    float S = ss[(rid*2)*nwg + 2*iwg + 0];
-    float M = ss[(rid*2)*nwg + 2*iwg + 1];
+    float S = ss[rid*(2*nwg) + 2*iwg + 0];
+    float M = ss[rid*(2*nwg) + 2*iwg + 1];
 
-    const float m = simd_max(M);
-
+    const float m  = simd_max(M);
     const float ms = exp(M - m);
 
     S = 1.0f/simd_sum(S*ms);
 
-    for (short i = sgitg; i < DV4; i += nwg) {
+    for (int i = sgitg; i < DV4; i += nwg) {
         const float4 v = simd_sum(htmp4[i*nwg + iwg]*ms);
 
         if (iwg == 0) {

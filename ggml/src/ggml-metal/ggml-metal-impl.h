@@ -259,10 +259,8 @@ typedef struct {
 } ggml_metal_kargs_flash_attn_ext;
 
 typedef struct {
+    int32_t  nrows;
     int32_t  ne20;
-    int32_t  ne1;
-    int32_t  ne2;
-    int32_t  ne3;
 } ggml_metal_kargs_flash_attn_ext_reduce;
 
 typedef struct {
