@@ -1,11 +1,17 @@
+import { DatabaseService } from '$lib/services/database';
 import { ChatService } from '$lib/services/chat';
-import { DatabaseService } from '$lib/services';
-import { goto } from '$app/navigation';
-import { browser } from '$app/environment';
-import { extractPartialThinking } from '$lib/utils/thinking';
-import { config } from '$lib/stores/settings.svelte';
 import { slotsService } from '$lib/services/slots';
+import { serverStore } from '$lib/stores/server.svelte';
+import type {
+	DatabaseConversation,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types/database';
+import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
+import { browser } from '$app/environment';
+import { goto } from '$app/navigation';
+import { extractPartialThinking } from '$lib/utils/thinking';
 
 class ChatStore {
 	activeConversation = $state<DatabaseConversation | null>(null);
@@ -270,7 +276,7 @@ class ChatStore {
 						this.maxContextError = {
 							message: error.message,
 							estimatedTokens: 0, // Server-side error, we don't have client estimates
-							maxContext: 4096 // Default fallback, will be updated by context service if available
+							maxContext: serverStore.serverProps?.default_generation_settings.n_ctx ?? 4096 // Use server's actual n_ctx, fallback to 4096
 						};
 
 						if (onError) {
@@ -388,11 +394,12 @@ class ChatStore {
 				slotsService.stopPolling();
 				
 				const userMessageIndex = this.activeMessages.findIndex(
-					(m: DatabaseMessage) => m.id === userMessage.id
+					(m: DatabaseMessage) => m.id === userMessage!.id
 				);
+
 				if (userMessageIndex !== -1) {
 					this.activeMessages.splice(userMessageIndex, 1);
-					DatabaseService.deleteMessage(userMessage.id).catch(console.error);
+					DatabaseService.deleteMessage(userMessage!.id).catch(console.error);
 				}
 			}
 
