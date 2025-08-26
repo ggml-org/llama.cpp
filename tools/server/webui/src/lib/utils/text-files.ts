@@ -24,7 +24,7 @@ export async function readFileAsText(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (event) => {
-            if (event.target?.result) {
+            if (event.target?.result !== null && event.target?.result !== undefined) {
                 resolve(event.target.result as string);
             } else {
                 reject(new Error('Failed to read file'));

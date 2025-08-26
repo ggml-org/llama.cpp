@@ -1,4 +1,4 @@
-import { convertPDFToImage, convertPDFToText, isPdfMimeType } from "./pdf-processing";
+import { convertPDFToImage, convertPDFToText } from "./pdf-processing";
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from "./svg-to-png";
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from "./webp-to-png";
 import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -24,16 +24,17 @@ function readFileAsBase64(file: File): Promise<string> {
     });
 }
 
-// Note: This function is now redundant since we use getFileTypeCategory(file.type) === FileTypeCategory.AUDIO
-// Keeping for backward compatibility, but consider removing in future cleanup
-function isAudioMimeType(mimeType: string): boolean {
-    return getFileTypeCategory(mimeType) === FileTypeCategory.AUDIO;
+
+export interface FileProcessingResult {
+    extras: DatabaseMessageExtra[];
+    emptyFiles: string[];
 }
 
 export async function parseFilesToMessageExtras(
     files: ChatUploadedFile[]
-): Promise<DatabaseMessageExtra[]> {
+): Promise<FileProcessingResult> {
     const extras: DatabaseMessageExtra[] = [];
+    const emptyFiles: string[] = [];
 
     for (const file of files) {
         if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
@@ -151,7 +152,11 @@ export async function parseFilesToMessageExtras(
             try {
                 const content = await readFileAsText(file.file);
 
-                if (isLikelyTextFile(content)) {
+                // Check if file is empty
+                if (content.trim() === '') {
+                    console.warn(`File ${file.name} is empty and will be skipped`);
+                    emptyFiles.push(file.name);
+                } else if (isLikelyTextFile(content)) {
                     extras.push({
                         type: 'textFile',
                         name: file.name,
@@ -166,5 +171,5 @@ export async function parseFilesToMessageExtras(
         }
     }
 
-    return extras;
+    return { extras, emptyFiles };
 }

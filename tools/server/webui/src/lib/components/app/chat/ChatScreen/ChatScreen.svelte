@@ -3,6 +3,7 @@
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
+	import EmptyFileAlertDialog from '$lib/components/app/EmptyFileAlertDialog.svelte';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
 	import { supportsVision, supportsAudio, serverError, serverLoading } from '$lib/stores/server.svelte';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash, SlotsInfo } from '$lib/components/app';
@@ -30,9 +31,8 @@
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isDragOver = $state(false);
 	let dragCounter = $state(0);
-
-	// Alert Dialog state for file upload errors
 	let showFileErrorDialog = $state(false);
+	
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
 		modalityUnsupported: File[];
@@ -46,6 +46,9 @@
 	});
 
 	let showDeleteDialog = $state(false);
+
+	let showEmptyFileDialog = $state(false);
+	let emptyFileNames = $state<string[]>([]);
 
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -109,7 +112,20 @@
 		message: string,
 		files?: ChatUploadedFile[]
 	): Promise<boolean> {
-		const extras = files ? await parseFilesToMessageExtras(files) : undefined;
+		const result = files ? await parseFilesToMessageExtras(files) : undefined;
+
+		if (result?.emptyFiles && result.emptyFiles.length > 0) {
+			emptyFileNames = result.emptyFiles;
+			showEmptyFileDialog = true;
+
+			if (files) {
+				const emptyFileNamesSet = new Set(result.emptyFiles);
+				uploadedFiles = uploadedFiles.filter(file => !emptyFileNamesSet.has(file.name));
+			}
+			return false;
+		}
+
+		const extras = result?.extras;
 
 		// Check context limit using real-time slots data
 		const contextCheck = await contextService.checkContextLimit();
@@ -133,7 +149,6 @@
 	}
 
 	async function processFiles(files: File[]) {
-		// First filter by general file type support
 		const generallySupported: File[] = [];
 		const generallyUnsupported: File[] = [];
 
@@ -145,20 +160,17 @@
 			}
 		}
 
-		// Then filter by model modalities
 		const { supportedFiles, unsupportedFiles, modalityReasons } =
 			filterFilesByModalities(generallySupported);
 
-		// Combine all unsupported files
 		const allUnsupportedFiles = [...generallyUnsupported, ...unsupportedFiles];
 
 		if (allUnsupportedFiles.length > 0) {
-			// Determine supported types for current model
 			const supportedTypes: string[] = ['text files', 'PDFs'];
+			
 			if (supportsVision()) supportedTypes.push('images');
 			if (supportsAudio()) supportedTypes.push('audio files');
 
-			// Structure error data for better presentation
 			fileErrorData = {
 				generallyUnsupported,
 				modalityUnsupported: unsupportedFiles,
@@ -398,6 +410,16 @@
 		</AlertDialog.Content>
 	</AlertDialog.Portal>
 </AlertDialog.Root>
+
+<EmptyFileAlertDialog 
+	bind:open={showEmptyFileDialog} 
+	emptyFiles={emptyFileNames}
+	onOpenChange={(open) => {
+		if (!open) {
+			emptyFileNames = [];
+		}
+	}}
+/>
 
 <style>
 	.conversation-chat-form {
