@@ -3180,10 +3180,37 @@ void ggml_cann_mul_mat_id(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
 void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
-    ggml_tensor* src0 = dst->src[0]; // q, fp32
-    ggml_tensor* src1 = dst->src[1]; // k, fp16
-    ggml_tensor* src2 = dst->src[2]; // v, fp16
+    ggml_tensor* src0 = dst->src[0]; // q, fp32 | B, N, S, D (uncont) -> B, S, N, D (cont)
+    ggml_tensor* src1 = dst->src[1]; // k, fp16 | B, N, S, D (uncont) -> B, S, N, D (cont)
+    ggml_tensor* src2 = dst->src[2]; // v, fp16 | B, N, S, D (uncont) -> B, S, N, D (cont)
     ggml_tensor* src3 = dst->src[3]; // mask, fp16
+
+    // B, N, S, D (uncont) -> B, S, N, D (cont)
+    int64_t src0_bsnd_ne[GGML_MAX_DIMS];
+    memcpy(src0_bsnd_ne, src0->ne, GGML_MAX_DIMS * sizeof(int64_t));
+    size_t src0_bsnd_nb[GGML_MAX_DIMS];
+    memcpy(src0_bsnd_nb, src0->nb, GGML_MAX_DIMS * sizeof(size_t));
+    int64_t src1_bsnd_ne[GGML_MAX_DIMS];
+    memcpy(src1_bsnd_ne, src1->ne, GGML_MAX_DIMS * sizeof(int64_t));
+    size_t src1_bsnd_nb[GGML_MAX_DIMS];
+    memcpy(src1_bsnd_nb, src1->nb, GGML_MAX_DIMS * sizeof(size_t));
+    int64_t src2_bsnd_ne[GGML_MAX_DIMS];
+    memcpy(src2_bsnd_ne, src2->ne, GGML_MAX_DIMS * sizeof(int64_t));
+    size_t src2_bsnd_nb[GGML_MAX_DIMS];
+    memcpy(src2_bsnd_nb, src2->nb, GGML_MAX_DIMS * sizeof(size_t));
+
+    auto transpose12 = [](int64_t* ne, size_t* nb) {
+        int64_t ne_tmp = ne[1];
+        size_t  nb_tmp = nb[1];
+        ne[1] = ne[2];
+        nb[1] = nb[2];
+        ne[2] = ne_tmp;
+        nb[2] = nb_tmp;
+    };
+
+    transpose12(src0_bsnd_ne, src0_bsnd_nb);
+    transpose12(src1_bsnd_ne, src1_bsnd_nb);
+    transpose12(src2_bsnd_ne, src2_bsnd_nb);
 
     float maxBias = 0.0f;
     float scaleValue = 1.0f;
@@ -3206,11 +3233,12 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         void* src0_f16_buffer = nullptr;
 
         if(ggml_cann_type_mapping(src0->type) != faDataType){
-            aclTensor* acl_src0_f32_tensor = ggml_cann_create_tensor(src0);
+            aclTensor* acl_src0_f32_tensor = ggml_cann_create_tensor(src0, src0_bsnd_ne,
+                src0_bsnd_nb, GGML_MAX_DIMS);
             src0_f16_buffer = src0_f16_allocator.alloc(
                                     ggml_nelements(src0) * faElemSize);
 
-            int64_t* src0_f16_ne = src0->ne;
+            int64_t* src0_f16_ne = src0_bsnd_ne;
             size_t   src0_f16_nb[GGML_MAX_DIMS];
             src0_f16_nb[0] = sizeof(uint16_t);
             for(int i = 1; i < GGML_MAX_DIMS; ++i){
@@ -3224,20 +3252,23 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             aclnn_cast(ctx, acl_src0_f32_tensor, acl_src0_f16_tensor, faDataType);
             ggml_cann_release_resources(ctx, acl_src0_f32_tensor);
         }else{
-            acl_src0_f16_tensor = ggml_cann_create_tensor(src0);
+            acl_src0_f16_tensor = ggml_cann_create_tensor(src0, src0_bsnd_ne,
+                src0_bsnd_nb, GGML_MAX_DIMS);
         }
 
         // Step 2: create the acl tensors for src1 (Key), src2 (Value),
         //         and the direct output from FusedInferAttention
 
-        acl_src1_f16_tensor = ggml_cann_create_tensor(src1);
-        acl_src2_f16_tensor = ggml_cann_create_tensor(src2);
+        acl_src1_f16_tensor = ggml_cann_create_tensor(src1, src1_bsnd_ne,
+            src1_bsnd_nb, GGML_MAX_DIMS);
+        acl_src2_f16_tensor = ggml_cann_create_tensor(src2, src2_bsnd_ne,
+            src2_bsnd_nb, GGML_MAX_DIMS);
 
         ggml_cann_pool_alloc out_f16_allocator(ctx.pool());
         void* out_f16_buffer = out_f16_allocator.alloc(
                                     ggml_nelements(dst) * faElemSize);
 
-        int64_t* out_f16_ne = src0->ne;
+        int64_t* out_f16_ne = src0_bsnd_ne;
         size_t out_f16_nb[GGML_MAX_DIMS];
         out_f16_nb[0] = faElemSize;
         for(int i = 1; i < GGML_MAX_DIMS; ++i){
@@ -3342,7 +3373,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         // double  scaleValue = 1 / sqrt(src0->ne[0]); // 1/sqrt(d)
         int64_t preTokens = 65535;
         int64_t nextTokens = 65535;
-        char layout[5] = {'B', 'N', 'S', 'D', 0};
+        char layout[5] = {'B', 'S', 'N', 'D', 0};
         int64_t sparseMode = 0;
         int64_t innerPrecise = (src0->ne[1] == 1) ? 0 : 2;
         int64_t blockSize = 0;
@@ -3379,32 +3410,9 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         );
 
         // Step 6: post-processing, permute and cast to f32
-
-        int64_t new_dim[] = {0, 2, 1, 3};
         aclTensor* acl_dst_tensor = ggml_cann_create_tensor(dst);
-
-        if(ggml_cann_type_mapping(dst->type) != faDataType){
-            ggml_cann_pool_alloc perm_out_f16_allocator(ctx.pool());
-            perm_out_f16_allocator.alloc(ggml_nelements(dst) * faElemSize);
-            void* perm_out_f16_buffer = perm_out_f16_allocator.get();
-
-            int64_t* perm_out_f16_ne = dst->ne;
-            size_t  perm_out_f16_nb[GGML_MAX_DIMS];
-            perm_out_f16_nb[0] = faElemSize;
-            for(int i = 1; i < GGML_MAX_DIMS; ++i){
-                perm_out_f16_nb[i] = perm_out_f16_nb[i - 1] * perm_out_f16_ne[i - 1];
-            }
-            aclTensor* acl_perm_out_f16_tensor = ggml_cann_create_tensor(
-                perm_out_f16_buffer, faDataType, faElemSize,
-                perm_out_f16_ne, perm_out_f16_nb, GGML_MAX_DIMS);
-            aclnn_permute(ctx, acl_dst_f16_tensor, acl_perm_out_f16_tensor, new_dim, GGML_MAX_DIMS);
-            aclnn_cast(ctx,
-                acl_perm_out_f16_tensor, acl_dst_tensor, ggml_cann_type_mapping(dst->type));
-            ggml_cann_release_resources(ctx, acl_perm_out_f16_tensor);
-        }else{
-            // only need to permute
-            aclnn_permute(ctx, acl_dst_f16_tensor, acl_dst_tensor, new_dim, GGML_MAX_DIMS);
-        }
+        // TODO: when dst is fp16, don't need cast
+        aclnn_cast(ctx, acl_dst_f16_tensor, acl_dst_tensor, ggml_cann_type_mapping(dst->type));
         ggml_cann_release_resources(ctx, acl_src0_f16_tensor,
                                          acl_src1_f16_tensor,
                                          acl_src2_f16_tensor,
