@@ -26,6 +26,7 @@ def test_ctx_shift_enabled():
     # 64 tokens are generated thanks to shifting the context when it gets full
     global server
     server.enable_ctx_shift = True
+    server.fa = "off"  # FIXME prompt_n assert fails otherwise
     server.start()
     res = server.make_request("POST", "/completion", data={
         "n_predict": 64,
