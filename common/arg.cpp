@@ -1106,7 +1106,7 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
     printf("\"\n\n");
 
     printf("    case \"$prev\" in\n");
-    printf("        --model)\n");
+    printf("        --model|-m)\n");
     printf("            COMPREPLY=( $(compgen -f -X '!*.gguf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
     printf("            return 0\n");
     printf("            ;;\n");
