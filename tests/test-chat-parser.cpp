@@ -262,6 +262,27 @@ static void test_deepseek_v3_1_tool_calls() {
         assert_equals(variant, std::string(""), m.content);
         assert_equals(variant, std::string("REASONING"), m.reasoning_content);
     }
+    // variant: simple + multiple tool calls
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ false,
+            /* .parse_tool_calls = */ true,
+        };
+        const char* variant = "simple_multiple_tool_calls";
+        const std::string in = "CONTENT<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 2, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Paris\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string("get_weather"), m.tool_calls[1].name);
+        assert_equals(variant, std::string("{\"city\":\"Paris\"}"), m.tool_calls[1].arguments);
+        assert_equals(variant, std::string("CONTENT"), m.content);
+        assert_equals(variant, std::string(""), m.reasoning_content);
+    }
+
 
     // variant: thinking forced open + tool call in reasoning content + function + fenced JSON
     {
