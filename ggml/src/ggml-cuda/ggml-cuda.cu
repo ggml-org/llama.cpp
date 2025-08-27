@@ -2907,39 +2907,29 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                         int n_fuse = 0;
 
-                        ggml_op ops[8] = {GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD};
+                        ggml_op ops[8] = {GGML_OP_ADD};
 
                         for (; n_fuse <= 6; ++n_fuse){
-
                             if (!ggml_can_fuse(cgraph, i + n_fuse, ops + n_fuse, 2)) {
                                 break;
                             }
-
                             if (cgraph->nodes[i + n_fuse] != cgraph->nodes[i + n_fuse + 1]->src[0]) {
                                 break;
                             }
-
                             if (!ggml_are_same_layout(cgraph->nodes[i + n_fuse]->src[1], cgraph->nodes[i + n_fuse + 1]->src[1])) {
                                 break;
                             }
-
                         }
 
                         n_fuse++;
 
                         if (n_fuse > 1) {
-                            printf("fused ADD: %d\n", n_fuse);
-
                             for (int j = 0; j < n_fuse - 1; ++j) {
                                 node->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
                             }
-
                             cgraph->nodes[i + n_fuse - 1]->data = node->data;
-
                             ggml_cuda_op_fused_add(*cuda_ctx, node, n_fuse);
-
-                            i += n_fuse -1;
-
+                            i += n_fuse - 1;
                             continue;
                         }
                     }
