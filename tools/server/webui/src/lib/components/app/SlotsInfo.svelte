@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import { onMount } from 'svelte';
 
 	const processingState = useProcessingState();
 
@@ -9,19 +8,15 @@
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	onMount(() => {
-		processingState.startMonitoring();
-		
-		return () => {
-			processingState.stopMonitoring();
-		};
-	});
-
+	// Monitor during loading and add delay before stopping to capture final updates
 	$effect(() => {
 		if (isLoading()) {
 			processingState.startMonitoring();
 		} else {
-			processingState.stopMonitoring();
+			// Delay stopping to capture final context updates after streaming
+			setTimeout(() => {
+				processingState.stopMonitoring();
+			}, 2000); // 2 second delay to ensure we get final updates
 		}
 	});
 </script>

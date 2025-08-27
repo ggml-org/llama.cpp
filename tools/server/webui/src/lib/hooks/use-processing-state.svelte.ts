@@ -17,9 +17,18 @@ export function useProcessingState() {
 		});
 
 		try {
-			await slotsService.startPolling();
+			// Try to get current state immediately for UI display
+			const currentState = await slotsService.getCurrentState();
+			if (currentState) {
+				processingState = currentState;
+			}
+			
+			// Start streaming polling only if streaming is active
+			if (slotsService.isStreaming()) {
+				slotsService.startStreamingPolling();
+			}
 		} catch (error) {
-			console.warn('Failed to start slots polling:', error);
+			console.warn('Failed to start slots monitoring:', error);
 			// Continue without slots monitoring - graceful degradation
 		}
 	}
@@ -34,8 +43,6 @@ export function useProcessingState() {
 			unsubscribe();
 			unsubscribe = null;
 		}
-
-		slotsService.stopPolling();
 	}
 
 	function getProcessingMessage(): string {

@@ -194,7 +194,10 @@ class ChatStore {
 	
 		let streamedReasoningContent = '';
 
-		await this.chatService.sendChatCompletion(
+		// Start slots polling when streaming begins
+		slotsService.startStreamingPolling();
+
+		await this.chatService.sendMessage(
 			allMessages,
 			{
 				...apiOptions,
@@ -202,6 +205,9 @@ class ChatStore {
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
 					this.currentResponse = streamedContent;
+
+					// Update slots state on each chunk
+					slotsService.updateSlotsState();
 
 					// Parse thinking content during streaming
 					const partialThinking = extractPartialThinking(streamedContent);
@@ -219,6 +225,9 @@ class ChatStore {
 				onReasoningChunk: (reasoningChunk: string) => {
 					streamedReasoningContent += reasoningChunk;
 
+					// Update slots state on reasoning chunks too
+					slotsService.updateSlotsState();
+
 					const messageIndex = this.activeMessages.findIndex(
 						(m) => m.id === assistantMessage.id
 					);
@@ -230,6 +239,9 @@ class ChatStore {
 				},
 
 				onComplete: async (finalContent?: string, reasoningContent?: string) => {
+					// Stop slots polling when streaming completes
+					slotsService.stopStreamingPolling();
+
 					// Update assistant message in database
 					await DatabaseService.updateMessage(assistantMessage.id, {
 						content: finalContent || streamedContent,
@@ -246,6 +258,9 @@ class ChatStore {
 				},
 
 				onError: (error: Error) => {
+					// Stop slots polling on any error
+					slotsService.stopStreamingPolling();
+
 					// Don't log or show error if it's an AbortError (user stopped generation)
 					if (error.name === 'AbortError' || error instanceof DOMException) {
 						this.isLoading = false;
@@ -258,8 +273,6 @@ class ChatStore {
 						console.warn('Context error detected:', error.message);
 						this.isLoading = false;
 						this.currentResponse = '';
-
-						slotsService.stopPolling();
 
 						// Remove the assistant message that was created but failed
 						const messageIndex = this.activeMessages.findIndex(
@@ -370,8 +383,6 @@ class ChatStore {
 			await this.streamChatCompletion(allMessages, assistantMessage, undefined, (error: Error) => {
 				// Handle context errors by also removing the user message
 				if (error.name === 'ContextError' && userMessage) {
-					slotsService.stopPolling();
-					
 					// Remove user message from UI
 					const userMessageIndex = this.activeMessages.findIndex(
 						(m: DatabaseMessage) => m.id === userMessage!.id
@@ -391,8 +402,6 @@ class ChatStore {
 
 			// Handle context errors by removing the user message if it was added
 			if (error instanceof Error && error.name === 'ContextError' && userMessage) {
-				slotsService.stopPolling();
-				
 				const userMessageIndex = this.activeMessages.findIndex(
 					(m: DatabaseMessage) => m.id === userMessage!.id
 				);
@@ -409,6 +418,8 @@ class ChatStore {
 	}
 
 	stopGeneration() {
+		// Stop slots polling when user manually stops generation
+		slotsService.stopStreamingPolling();
 		this.chatService.abort();
 		this.savePartialResponseIfNeeded();
 		this.isLoading = false;
@@ -424,6 +435,8 @@ class ChatStore {
 			return;
 		}
 
+		// Stop slots polling when gracefully stopping
+		slotsService.stopStreamingPolling();
 		this.chatService.abort();
 		await this.savePartialResponseIfNeeded();
 		this.isLoading = false;

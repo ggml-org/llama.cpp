@@ -1,4 +1,5 @@
 import { ChatService } from '$lib/services/chat';
+import { slotsService } from '$lib/services/slots';
 
 /**
  * Server properties store
@@ -54,6 +55,9 @@ class ServerStore {
 			const props = await ChatService.getServerProps();
 			this._serverProps = props;
 			console.log('Server properties loaded:', props);
+			
+			// Reset slots service availability check when server props change
+			slotsService.resetAvailabilityCheck();
 		} catch (error) {
 			let errorMessage = 'Failed to connect to server';
 			
@@ -87,6 +91,9 @@ class ServerStore {
 		this._serverProps = null;
 		this._error = null;
 		this._loading = false;
+		
+		// Reset slots service when server state is cleared
+		slotsService.resetAvailabilityCheck();
 	}
 }
 

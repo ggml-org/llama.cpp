@@ -2,58 +2,44 @@ import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
 import { serverStore } from '$lib/stores/server.svelte';
 
 export class SlotsService {
-	private pollingInterval: number;
-	private pollingTimer: number | null = null;
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
-	private slotsAvailable: boolean | null = null;
-	private slotsEndpointSupported: boolean | null = null;
 	private lastTokenCount: number = 0;
 	private lastTimestamp: number = 0;
+	private isStreamingActive: boolean = false;
+	private currentTokensPerSecond: number = 0;
+	private tokenRateHistory: number[] = [];
+	private lastUpdateTime: number = 0;
+	private pendingUpdate: boolean = false;
+	private streamStartTime: number = 0;
+	private streamStartTokens: number = 0;
 
-	constructor(pollingInterval = 500) {
-		this.pollingInterval = pollingInterval;
-	}
+	constructor() {}
 
 	/**
 	 * Check if slots endpoint is available based on server properties and endpoint support
 	 */
 	private async isSlotsEndpointAvailable(): Promise<boolean> {
-		// If we've already determined endpoint support, use cached result
-		if (this.slotsEndpointSupported !== null) {
-			return this.slotsEndpointSupported;
-		}
-
-		// First check server properties
 		const serverProps = serverStore.serverProps;
+
 		if (!serverProps) {
-			this.slotsEndpointSupported = false;
 			return false;
 		}
 
-		// Check if server has slots support (total_slots > 0)
 		if (serverProps.total_slots <= 0) {
-			this.slotsEndpointSupported = false;
 			return false;
 		}
 
-		// Test if the endpoint is actually implemented
 		try {
 			const response = await fetch('/slots');
 			
-			// Handle 501 Not Implemented specifically
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented - server started without --slots flag');
-				this.slotsEndpointSupported = false;
 				return false;
 			}
 			
-			// If we get any successful response or other error, assume it's supported
-			this.slotsEndpointSupported = true;
 			return true;
 		} catch (error) {
-			// Network errors - assume endpoint might be supported but server is down
 			console.warn('Unable to test slots endpoint availability:', error);
-			this.slotsEndpointSupported = false;
 			return false;
 		}
 	}
@@ -62,33 +48,87 @@ export class SlotsService {
 	 * Reset slots availability check (call when server properties change)
 	 */
 	resetAvailabilityCheck(): void {
-		this.slotsAvailable = null;
-		this.slotsEndpointSupported = null;
 	}
 
-	async startPolling(): Promise<void> {
-		if (this.pollingTimer) {
+	/**
+	 * Start streaming session tracking
+	 */
+	startStreamingPolling(): void {
+		this.isStreamingActive = true;
+		this.streamStartTime = Date.now();
+		this.streamStartTokens = 0;
+		this.currentTokensPerSecond = 0;
+		this.tokenRateHistory = [];
+	}
+
+	/**
+	 * Stop streaming session tracking
+	 */
+	stopStreamingPolling(): void {
+		this.isStreamingActive = false;
+		this.lastTokenCount = 0;
+		this.lastTimestamp = 0;
+		this.currentTokensPerSecond = 0;
+		this.tokenRateHistory = [];
+		this.lastUpdateTime = 0;
+		this.pendingUpdate = false;
+		this.streamStartTime = 0;
+		this.streamStartTokens = 0;
+	}
+
+	/**
+	 * Check if currently in a streaming session
+	 */
+	isStreaming(): boolean {
+		return this.isStreamingActive;
+	}
+
+	/**
+	 * Fetch and update slots state on demand (called during streaming chunks)
+	 * Debounced to prevent excessive requests during high-frequency streaming
+	 */
+	async updateSlotsState(): Promise<void> {
+		if (!this.isStreamingActive) {
 			return;
 		}
 
-		// Only start polling if slots endpoint is available
+		const currentTime = Date.now();
+		const timeSinceLastUpdate = currentTime - this.lastUpdateTime;
+
+		// For the first few calls, use shorter debouncing to get tokens/sec faster
+		const debounceTime = this.tokenRateHistory.length < 2 ? 50 : 100;
+
+		if (timeSinceLastUpdate < debounceTime) {
+			if (!this.pendingUpdate) {
+				this.pendingUpdate = true;
+				setTimeout(async () => {
+					this.pendingUpdate = false;
+					await this.performUpdate();
+				}, debounceTime - timeSinceLastUpdate);
+			}
+			return;
+		}
+
+		await this.performUpdate();
+	}
+
+
+	/**
+	 * Perform the actual slots state update
+	 */
+	private async performUpdate(): Promise<void> {
+		if (!this.isStreamingActive) {
+			return;
+		}
+
 		const isAvailable = await this.isSlotsEndpointAvailable();
+
 		if (!isAvailable) {
-			console.info('Slots endpoint not available - polling disabled');
 			return;
 		}
 
-		this.poll();
-		this.pollingTimer = window.setInterval(() => {
-			this.poll();
-		}, this.pollingInterval);
-	}
-
-	stopPolling(): void {
-		if (this.pollingTimer) {
-			clearInterval(this.pollingTimer);
-			this.pollingTimer = null;
-		}
+		this.lastUpdateTime = Date.now();
+		await this.fetchAndNotify();
 	}
 
 	subscribe(callback: (state: ApiProcessingState) => void): () => void {
@@ -98,15 +138,12 @@ export class SlotsService {
 		};
 	}
 
-	private async poll(): Promise<void> {
+	private async fetchAndNotify(): Promise<void> {
 		try {
 			const response = await fetch(`/slots`);
 			
-			// Handle 501 Not Implemented - stop polling and mark as unsupported
 			if (response.status === 501) {
-				console.info('Slots endpoint not implemented - stopping polling');
-				this.slotsEndpointSupported = false;
-				this.stopPolling();
+				console.info('Slots endpoint not implemented');
 				return;
 			}
 			
@@ -118,6 +155,7 @@ export class SlotsService {
 			const slots: ApiSlotData[] = await response.json();
 			const processingState = this.parseProcessingState(slots);
 			
+			
 			this.callbacks.forEach(callback => {
 				try {
 					callback(processingState);
@@ -126,7 +164,7 @@ export class SlotsService {
 				}
 			});
 		} catch (error) {
-			console.warn('Error polling slots:', error);
+			console.warn('Error fetching slots:', error);
 		}
 	}
 
@@ -158,31 +196,59 @@ export class SlotsService {
 			status = 'preparing';
 		}
 
-		// Calculate context usage (estimate based on prompt length and decoded tokens)
-		const promptTokens = Math.floor(activeSlot.prompt.length / 4); // Rough estimate
+		const promptTokens = Math.floor(activeSlot.prompt.length / 4);
 		const contextUsed = promptTokens + activeSlot.next_token.n_decoded;
 
-		// Calculate tokens per second
-		let tokensPerSecond = 0;
 		const currentTime = Date.now();
 		const currentTokens = activeSlot.next_token.n_decoded;
 		
-		if (status === 'generating' && this.lastTimestamp > 0 && currentTokens > this.lastTokenCount) {
-			const timeDiff = (currentTime - this.lastTimestamp) / 1000; // Convert to seconds
-			const tokenDiff = currentTokens - this.lastTokenCount;
-			if (timeDiff > 0) {
-				tokensPerSecond = tokenDiff / timeDiff;
+		if (this.isStreamingActive) {
+			// Initialize stream tracking on first call
+			if (this.streamStartTokens === 0 && currentTokens > 0) {
+				this.streamStartTokens = currentTokens;
+				this.streamStartTime = currentTime;
 			}
+			
+			// Calculate tokens/sec using multiple methods for reliability
+			let calculatedRate = 0;
+			
+			// Method 1: Use recent interval (preferred for accuracy)
+			if (this.lastTimestamp > 0 && currentTokens > this.lastTokenCount) {
+				const timeDiff = (currentTime - this.lastTimestamp) / 1000;
+				const tokenDiff = currentTokens - this.lastTokenCount;
+				
+				if (timeDiff > 0.02) {
+					calculatedRate = tokenDiff / timeDiff;
+				}
+			}
+			
+			// Method 2: Use total stream time (fallback for early display)
+			if (calculatedRate === 0 && this.streamStartTime > 0 && currentTokens > this.streamStartTokens) {
+				const totalTimeDiff = (currentTime - this.streamStartTime) / 1000;
+				const totalTokenDiff = currentTokens - this.streamStartTokens;
+				
+				if (totalTimeDiff > 0.1) { // At least 100ms of streaming
+					calculatedRate = totalTokenDiff / totalTimeDiff;
+				}
+			}
+			
+			// Update rate if we have a valid calculation
+			if (calculatedRate > 0) {
+				this.tokenRateHistory.push(calculatedRate);
+				if (this.tokenRateHistory.length > 5) {
+					this.tokenRateHistory.shift();
+				}
+				
+				this.currentTokensPerSecond = this.tokenRateHistory.reduce((sum, rate) => sum + rate, 0) / this.tokenRateHistory.length;
+			}
+			
+			// Always show some rate during active streaming (even if 0 initially)
+			// This ensures the UI always displays tokens/sec field during streaming
 		}
 		
-		// Update tracking for next calculation
-		if (status === 'generating') {
+		if (this.isStreamingActive && currentTokens >= this.lastTokenCount) {
 			this.lastTokenCount = currentTokens;
 			this.lastTimestamp = currentTime;
-		} else if (status === 'idle') {
-			// Reset when idle
-			this.lastTokenCount = 0;
-			this.lastTimestamp = 0;
 		}
 
 		return {
@@ -195,13 +261,13 @@ export class SlotsService {
 			topP: activeSlot.params.top_p,
 			speculative: activeSlot.speculative,
 			hasNextToken: activeSlot.next_token.has_next_token,
-			tokensPerSecond
+			tokensPerSecond: this.currentTokensPerSecond
 		};
 	}
 
 	async getCurrentState(): Promise<ApiProcessingState | null> {
-		// Check if slots endpoint is available before making request
 		const isAvailable = await this.isSlotsEndpointAvailable();
+		
 		if (!isAvailable) {
 			return null;
 		}
@@ -209,10 +275,8 @@ export class SlotsService {
 		try {
 			const response = await fetch(`/slots`);
 			
-			// Handle 501 Not Implemented
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented');
-				this.slotsEndpointSupported = false;
 				return null;
 			}
 			
