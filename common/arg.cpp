@@ -3539,6 +3539,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     add_opt(common_arg(
+        {"--fim-qwen-30b-default"},
+        string_format("use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF";
+            params.model.hf_file = "qwen3-coder-30b-a3b-instruct-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
         { "--diffusion-steps" }, "N",
         string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
         [](common_params & params, int value) { params.diffusion.steps = value; }
