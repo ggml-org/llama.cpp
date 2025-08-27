@@ -36,8 +36,8 @@ env:
 jobs:
 
 
-  windows-2019-cmake-cuda:
-    runs-on: windows-2019
+  windows-latest-cmake-cuda:
+    runs-on: windows-latest
 
     steps:
       - name: Clone
