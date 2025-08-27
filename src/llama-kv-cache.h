@@ -38,8 +38,8 @@ public:
         using idx_vec_t = std::vector<uint32_t>;
 
         // number of streams: ns = s1 - s0 + 1
-        llama_seq_id s0;
-        llama_seq_id s1;
+        uint32_t s0;
+        uint32_t s1;
 
         std::vector<llama_seq_id> strm; // [ns]
         std::vector<idx_vec_t>    idxs; // [ns]
@@ -139,7 +139,7 @@ public:
     // graph_build API
     //
 
-    uint32_t get_n_kv() const;
+    uint32_t get_n_kv(const slot_info & sinfo) const;
 
     // TODO: temporary
     bool get_supports_set_rows() const;
