@@ -46,8 +46,11 @@ export function useChatExtraContext(): ChatExtraContextApi {
     try {
       for (const file of files) {
         const mimeType = file.type;
-        if (file.size > 10 * 1024 * 1024) {
-          toast.error('File is too large. Maximum size is 10MB.');
+
+        // this limit is only to prevent accidental uploads of huge files
+        // it can potentially crashes the browser because we read the file as base64
+        if (file.size > 500 * 1024 * 1024) {
+          toast.error('File is too large. Maximum size is 500MB.');
           break;
         }
 

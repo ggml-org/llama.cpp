@@ -7,7 +7,7 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
- * Reranking endoint (https://github.com/ggml-org/llama.cpp/pull/9510)
+ * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
  * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
@@ -66,7 +66,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-nkvo, --no-kv-offload` | disable KV offload<br/>(env: LLAMA_ARG_NO_KV_OFFLOAD) |
 | `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
-| `-dt, --defrag-thold N` | KV cache defragmentation threshold (default: 0.1, < 0 - disabled)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
+| `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--no-mmap` | do not memory-map model (slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_NO_MMAP) |
@@ -164,6 +164,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--api-key-file FNAME` | path to file containing API keys (default: none) |
 | `--ssl-key-file FNAME` | path to file a PEM-encoded SSL private key<br/>(env: LLAMA_ARG_SSL_KEY_FILE) |
 | `--ssl-cert-file FNAME` | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE) |
+| `--chat-template-kwargs STRING` | JSON object containing additional params for the json template parser. Example: `--chat_template_kwargs "{\"enable_thinking\":false}`"<br/>(env: LLAMA_CHAT_TEMPLATE_KWARGS) |
 | `-to, --timeout N` | server read/write timeout in seconds (default: 600)<br/>(env: LLAMA_ARG_TIMEOUT) |
 | `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
@@ -173,7 +174,8 @@ The project is under active development, and we are [looking for feedback and co
 | `--no-slots` | disables slots monitoring endpoint<br/>(env: LLAMA_ARG_NO_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
 | `--jinja` | use jinja template for chat (default: disabled)<br/>(env: LLAMA_ARG_JINJA) |
-| `--reasoning-format FORMAT` | reasoning format (default: deepseek; allowed values: deepseek, none)<br/>controls whether thought tags are extracted from the response, and in which format they're returned. 'none' leaves thoughts unparsed in `message.content`, 'deepseek' puts them in `message.reasoning_content` (for DeepSeek R1 & Command R7B only).<br/>only supported for non-streamed responses<br/>(env: LLAMA_ARG_THINK) |
+| `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)<br/>(default: deepseek)<br/>(env: LLAMA_ARG_THINK) |
+| `--reasoning-budget N` | controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, falcon3, gemma, gigachat, glmedge, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, falcon3, gemma, gigachat, glmedge, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
 | `--no-prefill-assistant` | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/>(env: LLAMA_ARG_NO_PREFILL_ASSISTANT) |
@@ -186,6 +188,8 @@ The project is under active development, and we are [looking for feedback and co
 | `-devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
 | `-ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | number of layers to store in VRAM for the draft model<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `-md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_MODEL_DRAFT) |
+| `-ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for speculative decoding model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K_DRAFT) |
+| `-ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for speculative decoding model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V_DRAFT) |
 | `-mv, --model-vocoder FNAME` | vocoder model for audio generation (default: unused) |
 | `--tts-use-guide-tokens` | Use guide tokens to improve TTS word recall |
 | `--embd-bge-small-en-default` | use default bge-small-en-v1.5 model (note: can download weights from the internet) |
@@ -222,6 +226,10 @@ services:
 ### Multimodal support
 
 Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
+It is currently available in the following endpoints:
+- The OAI-compatible chat endpoint.
+- The non-OAI-compatible completions endpoint.
+- The non-OAI-compatible embeddings endpoint.
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
 
@@ -367,6 +375,8 @@ node index.js
 
 ### GET `/health`: Returns heath check result
 
+This endpoint is public (no API key check).
+
 **Response format**
 
 - HTTP status code 503
@@ -394,12 +404,15 @@ These input shapes and data type are allowed for `prompt`:
   - Single string: `"string"`
   - Single sequence of tokens: `[12, 34, 56]`
   - Mixed tokens and strings: `[12, 34, "string", 56, 78]`
+  - A JSON object which optionally contains multimodal data: `{ "prompt_string": "string", "multimodal_data": ["base64"] }`
 
 Multiple prompts are also supported. In this case, the completion result will be an array.
 
   - Only strings: `["string1", "string2"]`
-  - Strings and sequences of tokens: `["string1", [12, 34, 56]]`
-  - Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string"]`
+  - Strings, JSON objects, and sequences of tokens: `["string1", [12, 34, 56], { "prompt_string": "string", "multimodal_data": ["base64"]}]`
+  - Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string", { "prompt_string": "string" }]`
+
+Note for `multimodal_data` in JSON object prompts. This should be an array of strings, containing base64 encoded multimodal data such as images and audio. There must be an identical number of MTMD media markers in the string prompt element which act as placeholders for the data provided to this parameter. The multimodal data files will be substituted in order. The marker string (e.g. `<__media__>`) can be found by calling `mtmd_default_marker()` defined in [the MTMD C API](https://github.com/ggml-org/llama.cpp/blob/5fd160bbd9d70b94b5b11b0001fd7f477005e4a0/tools/mtmd/mtmd.h#L87). A client *must not* specify this field unless the server has the multimodal capability. Clients should check `/models` or `/v1/models` for the `multimodal` capability before a multimodal request.
 
 `temperature`: Adjust the randomness of the generated text. Default: `0.8`
 
@@ -463,15 +476,13 @@ These words will not be included in the completion, so make sure to add them to 
 
 `ignore_eos`: Ignore end of stream token and continue generating.  Default: `false`
 
-`logit_bias`: Modify the likelihood of a token appearing in the generated text completion. For example, use `"logit_bias": [[15043,1.0]]` to increase the likelihood of the token 'Hello', or `"logit_bias": [[15043,-1.0]]` to decrease its likelihood. Setting the value to false, `"logit_bias": [[15043,false]]` ensures that the token `Hello` is never produced. The tokens can also be represented as strings, e.g. `[["Hello, World!",-0.5]]` will reduce the likelihood of all the individual tokens that represent the string `Hello, World!`, just like the `presence_penalty` does. Default: `[]`
+`logit_bias`: Modify the likelihood of a token appearing in the generated text completion. For example, use `"logit_bias": [[15043,1.0]]` to increase the likelihood of the token 'Hello', or `"logit_bias": [[15043,-1.0]]` to decrease its likelihood. Setting the value to false, `"logit_bias": [[15043,false]]` ensures that the token `Hello` is never produced. The tokens can also be represented as strings, e.g. `[["Hello, World!",-0.5]]` will reduce the likelihood of all the individual tokens that represent the string `Hello, World!`, just like the `presence_penalty` does. For compatibility with the OpenAI API, a JSON object {"<string or token id>": bias, ...} can also be passed. Default: `[]`
 
 `n_probs`: If greater than 0, the response also contains the probabilities of top N tokens for each generated token given the sampling settings. Note that for temperature < 0 the tokens are sampled greedily but token probabilities are still being calculated via a simple softmax of the logits without considering any other sampler settings. Default: `0`
 
 `min_keep`: If greater than 0, force samplers to return N possible tokens at minimum. Default: `0`
 
 `t_max_predict_ms`: Set a time limit in milliseconds for the prediction (a.k.a. text-generation) phase. The timeout will trigger if the generation takes more than the specified time (measured since the first token was generated) and if a new-line character has already been generated. Useful for FIM applications. Default: `0`, which is disabled.
-
-`image_data`: An array of objects to hold base64-encoded image `data` and its `id`s to be reference in `prompt`. You can determine the place of the image in the prompt as in the following: `USER:[img-12]Describe the image in detail.\nASSISTANT:`. In this case, `[img-12]` will be replaced by the embeddings of the image with id `12` in the following `image_data` array: `{..., "image_data": [{"data": "<BASE64_STRING>", "id": 12}]}`. Use `image_data` only with multimodal models, e.g., LLaVA.
 
 `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 
@@ -569,6 +580,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `add_special`: (Optional) Boolean indicating if special tokens, i.e. `BOS`, should be inserted.  Default: `false`
 
+`parse_special`: (Optional) Boolean indicating if special tokens should be tokenized. When `false` special tokens are treated as plaintext.  Default: `true`
+
 `with_pieces`: (Optional) Boolean indicating whether to return token pieces along with IDs.  Default: `false`
 
 **Response:**
@@ -630,11 +643,20 @@ Returns a JSON object with a field `prompt` containing a string of the input mes
 
 The same as [the embedding example](../embedding) does.
 
+This endpoint also supports multimodal embeddings. See the documentation for the `/completions` endpoint for details on how to send a multimodal prompt.
+
 *Options:*
 
 `content`: Set the text to process.
 
-`image_data`: An array of objects to hold base64-encoded image `data` and its `id`s to be reference in `content`. You can determine the place of the image in the content as in the following: `Image: [img-21].\nCaption: This is a picture of a house`. In this case, `[img-21]` will be replaced by the embeddings of the image with id `21` in the following `image_data` array: `{..., "image_data": [{"data": "<BASE64_STRING>", "id": 21}]}`. Use `image_data` only with multimodal models, e.g., LLaVA.
+`embd_normalize`: Normalization for pooled embeddings. Can be one of the following values:
+```
+  -1: No normalization
+   0: Max absolute
+   1: Taxicab
+   2: Euclidean/L2
+  >2: P-Norm
+```
 
 ### POST `/reranking`: Rerank documents according to a given query
 
@@ -705,7 +727,7 @@ If the tokens are missing, then the extra context is simply prefixed at the star
 
 ### **GET** `/props`: Get server global properties.
 
-This endpoint is public (no API key check). By default, it is read-only. To make POST request to change global properties, you need to start server with `--props`
+By default, it is read-only. To make POST request to change global properties, you need to start server with `--props`
 
 **Response format**
 
@@ -1112,6 +1134,14 @@ If model supports multimodal, you can input the media file via `image_url` conte
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
+
+`chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
+
+`reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
+
+`thinking_forced_open`: Force a reasoning model to always output the reasoning. Only works on certain models.
+
+`parse_tool_calls`: Whether to parse the generated tool call.
 
 *Examples:*
 

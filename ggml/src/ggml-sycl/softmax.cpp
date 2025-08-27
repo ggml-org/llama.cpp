@@ -127,11 +127,11 @@ static void soft_max_f32_submitter(const float * x, const T * mask, float * dst,
                                    const int nrows_y, const float scale, const float max_bias, const float m0,
                                    const float m1, uint32_t n_head_log2, sycl::range<3> block_nums, sycl::range<3> block_dims,
                                    const size_t n_local_scratch, queue_ptr stream) {
-    stream->submit([&](sycl::handler &cgh) {
+    sycl_launch(stream, [&](sycl::handler & cgh) {
         sycl::local_accessor<float, 1> local_buf_acc(n_local_scratch, cgh);
 
-        cgh.parallel_for(
-            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        sycl_parallel_for(
+            cgh, sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 soft_max_f32<vals_smem, ncols_template, block_size_template>(x, mask, dst, ncols_par,
                                                                              nrows_y, scale, max_bias, m0,
@@ -225,7 +225,7 @@ static void soft_max_f32_sycl(const float * x, const T * mask,
 }
 
 void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
@@ -249,16 +249,13 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F16) {
         const sycl::half * src1_dd = static_cast<sycl::half *>(dst->src[1]->data);
-        GGML_SYCL_DEBUG("%s: F16 mask\n", __func__);
         soft_max_f32_sycl<sycl::half>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias,
                           main_stream, ctx.device);
     } else if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F32) {
         const float * src1_dd = static_cast<const float *>(dst->src[1]->data);
-        GGML_SYCL_DEBUG("%s: F32 mask\n", __func__);
         soft_max_f32_sycl<float>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
     } else {
         /* mask unavailable */
-        GGML_SYCL_DEBUG("%s: No mask\n", __func__);
         soft_max_f32_sycl<float>(src0_dd, nullptr, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
     }
 }

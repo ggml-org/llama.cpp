@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <numeric>
 
 /**
  * This the arbitrary data which will be passed to each callback.
@@ -55,6 +56,8 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                         v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
                     } else if (type == GGML_TYPE_F32) {
                         v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I64) {
+                        v = (float) *(int64_t *) &data[i];
                     } else if (type == GGML_TYPE_I32) {
                         v = (float) *(int32_t *) &data[i];
                     } else if (type == GGML_TYPE_I16) {
@@ -74,6 +77,12 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
         }
         LOG("                                     ]\n");
         LOG("                                     sum = %f\n", sum);
+    }
+
+    // TODO: make this abort configurable/optional?
+    if (std::isnan(sum)) {
+        LOG_ERR("encountered NaN - aborting\n");
+        exit(0);
     }
 }
 
@@ -133,6 +142,11 @@ static bool run(llama_context * ctx, const common_params & params) {
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
+
+    if (tokens.empty()) {
+        LOG_ERR("%s : there are not input tokens to process - (try to provide a prompt with '-p')\n", __func__);
+        return false;
+    }
 
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
         LOG_ERR("%s : failed to eval\n", __func__);

@@ -49,6 +49,6 @@ charset = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 
-[tools/mtmd/miniaudio.h]
+[vendor/miniaudio/miniaudio.h]
 trim_trailing_whitespace = unset
 insert_final_newline = unset

@@ -1,204 +1,193 @@
 #pragma once
 
-#include "llama.h"
-#include "llama-io.h"
+#include "llama-batch.h"
 #include "llama-graph.h"
+#include "llama-kv-cells.h"
 #include "llama-memory.h"
 
-#include "ggml-cpp.h"
-
-#include <set>
 #include <unordered_map>
 #include <vector>
 
 struct llama_cparams;
 struct llama_hparams;
-struct llama_ubatch;
-struct llama_sbatch;
 struct llama_model;
 struct llama_context;
 
-struct llama_kv_cache : public llama_memory_i {
-    virtual ~llama_kv_cache() = default;
-
-    // call if batch processing fails - restores the cache state
-    virtual void restore() = 0;
-
-    // call after successful batch processing - clears any pending state
-    virtual void commit()  = 0;
-
-    // process any pending defrag/shift/etc. operations
-    // optionally call once before processing a new batch
-    virtual bool update(llama_context & lctx) = 0;
-
-    // schedule a defrag if the fragmentation threshold is exceeded. otherwise, do nothing
-    virtual void defrag_sched(float thold) = 0;
-
-    // simulate full cache, used for allocating worst-case compute buffers
-    virtual void set_full() = 0;
-
-    //
-    // batch processing
-    //
-
-    // =============================================================================================================
-    // TODO: refactor  and simplify this
-
-    virtual llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) = 0;
-
-    // different KV caches require different batch splitting strategies
-    virtual llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const = 0;
-
-    // find an empty slot of size "n_tokens" in the cache
-    virtual bool find_slot(const llama_ubatch & batch) = 0;
-
-    // =============================================================================================================
-
-    // getters
-    virtual bool get_can_shift() const = 0;
-
-    bool get_can_edit() const override { return get_can_shift(); }
-
-    //
-    // state write/read
-    //
-
-    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const = 0;
-    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) = 0;
-};
-
 //
-// llama_kv_cache_guard
+// llama_kv_cache
 //
 
-struct llama_kv_cache_guard {
-    llama_kv_cache_guard(llama_kv_cache * kv) : kv(kv) {}
-
-    ~llama_kv_cache_guard() {
-        kv->restore();
-    }
-
-    void commit() {
-        kv->commit();
-    }
-
-private:
-    llama_kv_cache * kv;
-};
-
-//
-// llama_kv_cache_unified
-//
-
-class llama_kv_cache_unified : public llama_kv_cache {
+class llama_kv_cache : public llama_memory_i {
 public:
     static uint32_t get_padding(const llama_cparams & cparams);
 
-    // this callback is used to filter out layers that should not be included in the cache
-    using layer_filter_cb = std::function<bool(int32_t il)>;
+    struct stream_copy_info {
+        bool empty() const {
+            assert(ssrc.size() == sdst.size());
+            return ssrc.empty();
+        }
 
-    llama_kv_cache_unified(
-            const llama_model &  model,
-              layer_filter_cb && filter,
-                    ggml_type    type_k,
-                    ggml_type    type_v,
-                         bool    v_trans,
-                         bool    offload,
-                     uint32_t    kv_size,
-                     uint32_t    n_seq_max,
-                     uint32_t    n_pad,
-                     uint32_t    n_swa,
-               llama_swa_type    swa_type);
+        std::vector<uint32_t> ssrc;
+        std::vector<uint32_t> sdst;
+    };
 
-    ~llama_kv_cache_unified() = default;
+    // for each ubatch, create a slot_info that contains information about where the ubatch should be inserted in the
+    //   KV cells. for example, cell indices for each token, such that: token[i] -> goes to cells[idxs[i]]
+    struct slot_info {
+        // data for ggml_set_rows
+        using idx_vec_t = std::vector<uint32_t>;
+
+        // number of streams: ns = s1 - s0 + 1
+        uint32_t s0;
+        uint32_t s1;
+
+        std::vector<llama_seq_id> strm; // [ns]
+        std::vector<idx_vec_t>    idxs; // [ns]
+
+        uint32_t head() const {
+            GGML_ASSERT(idxs.size() == 1);
+            GGML_ASSERT(!idxs[0].empty());
+
+            return idxs[0][0];
+        }
+
+        void resize(size_t n) {
+            strm.resize(n);
+            idxs.resize(n);
+        }
+
+        size_t size() const {
+            GGML_ASSERT(idxs.size() == strm.size());
+            GGML_ASSERT(!idxs.empty());
+
+            return idxs[0].size();
+        }
+
+        size_t n_stream() const {
+            return strm.size();
+        }
+
+        bool empty() const {
+            return idxs.empty();
+        }
+
+        void clear() {
+            idxs.clear();
+        }
+    };
+
+    using slot_info_vec_t = std::vector<slot_info>;
+
+    llama_kv_cache(
+            const llama_model & model,
+                    ggml_type   type_k,
+                    ggml_type   type_v,
+                         bool   v_trans,
+                         bool   offload,
+                         bool   unified,
+                     uint32_t   kv_size,
+                     uint32_t   n_seq_max,
+                     uint32_t   n_pad,
+                     uint32_t   n_swa,
+               llama_swa_type   swa_type,
+        const layer_filter_cb & filter,
+        const  layer_reuse_cb & reuse);
+
+    ~llama_kv_cache() = default;
 
     //
     // llama_memory_i
     //
 
-    void clear() override;
+    llama_memory_context_ptr init_batch(
+            llama_batch_allocr & balloc,
+            uint32_t n_ubatch,
+            bool embd_all) override;
+
+    llama_memory_context_ptr init_full() override;
+
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+
+    bool get_can_shift() const override;
+
+    void clear(bool data) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
     void seq_keep(llama_seq_id seq_id)                                                          override;
-    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
+    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) override;
     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    //
-    // llama_kv_cache
-    //
-
-    void restore() override;
-    void commit()  override;
-
-    bool update(llama_context & ctx) override;
-
-    void defrag_sched(float thold) override;
-
-    void set_full() override;
-
-    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
-
-    // updates the cache head
-    // Note: On success, it's important that cache.head points
-    // to the first cell of the slot.
-    bool find_slot(const llama_ubatch & batch) override;
-
-    bool get_can_shift() const override;
-
     // state write/load
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
     //
-    // llama_kv_cache_unified specific API
+    // llama_kv_cache specific API
     //
 
-    uint32_t get_n() const;
-    uint32_t get_size() const;
+    uint32_t get_size()     const;
+    uint32_t get_n_stream() const;
+
+    bool get_has_shift() const;
+
+    //
+    // graph_build API
+    //
+
+    uint32_t get_n_kv(const slot_info & sinfo) const;
+
+    // TODO: temporary
+    bool get_supports_set_rows() const;
 
     // get views of the current state of the cache
-    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
-    // store k_cur and v_cur in the cache based on the current head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
+    // store k_cur and v_cur in the cache based on the provided head location
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
 
-    void prune_swa(llama_seq_id seq_id, llama_pos pmin, llama_pos pmax);
+    //
+    // preparation API
+    //
+
+    // find places for the provided ubatches in the cache, returns the slot infos
+    // return empty vector on failure
+    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
+
+    bool update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info);
+
+    // find a slot of kv cells that can hold the ubatch
+    // if cont == true, then the slot must be continuous
+    // return empty slot_info on failure
+    slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
+
+    // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+
+    //
+    // input API
+    //
+
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+
+    void set_input_k_shift(ggml_tensor * dst) const;
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:
     const llama_model & model;
     const llama_hparams & hparams;
-
-    struct kv_cell {
-        llama_pos pos   = -1;
-        llama_pos delta =  0;
-
-        // TODO: replace with bitset uint64_t
-        std::set<llama_seq_id> seq_id;
-
-        bool has_seq_id(const llama_seq_id & id) const {
-            return seq_id.find(id) != seq_id.end();
-        }
-
-        bool is_empty() const {
-            return seq_id.empty();
-        }
-
-        bool is_same_seq(const kv_cell & other) const {
-            return seq_id == other.seq_id;
-        }
-    };
 
     struct kv_layer {
         // layer index in the model
@@ -207,20 +196,15 @@ private:
 
         ggml_tensor * k;
         ggml_tensor * v;
+
+        std::vector<ggml_tensor *> k_stream;
+        std::vector<ggml_tensor *> v_stream;
     };
 
-    bool has_shift = false;
-    bool do_defrag = false;
-    bool v_trans   = true;  // the value tensor is transposed
-
-    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
-    uint32_t size = 0; // total number of cells, shared across all sequences
-    uint32_t used = 0; // used cells (i.e. at least one seq_id) (TODO: add `struct kv_cells` and keep track automaticallt)
-
-    // computed before each graph build
-    uint32_t n = 0;
+    bool v_trans = true;  // the value tensor is transposed
 
     const uint32_t n_seq_max = 1;
+    const uint32_t n_stream  = 1;
 
     // required padding
     const uint32_t n_pad = 1;
@@ -228,36 +212,34 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
+    // env: LLAMA_KV_CACHE_DEBUG
+    int debug = 0;
+
+    // env: LLAMA_SET_ROWS (temporary)
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
+    bool supports_set_rows = true;
+
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
-    std::vector<kv_cell>  cells;  // TODO: replace with `struct kv_cells`
+    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+    std::vector<uint32_t> v_heads;
+
+    std::vector<llama_kv_cells> v_cells;
+
+    // maps from a sequence id to a stream id
+    std::vector<uint32_t> seq_to_stream;
+
+    // pending stream copies that will be applied during the next update
+    stream_copy_info sc_info;
+
     std::vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
-
-    // recovery information used to restore the KV cells to their original state in case of a failure
-    struct {
-        void clear() {
-            cells.clear();
-        }
-
-        std::unordered_map<uint32_t, kv_cell> cells;
-    } recovery;
-
-    // defrag
-    struct {
-        std::vector<uint32_t> ids;
-    } defrag_info;
-
-    // return true if cells have been moved
-    bool defrag_prepare(int32_t n_max_nodes);
-
-    // find how many cells are currently in use
-    uint32_t cell_max() const;
 
     size_t total_size() const;
 
@@ -275,241 +257,118 @@ private:
                           float   freq_base,
                           float   freq_scale) const;
 
-    llm_graph_result_ptr build_graph_shift(
-            const llama_cparams & cparams,
-                   ggml_context * ctx,
-                    ggml_cgraph * gf) const;
+    ggml_cgraph * build_graph_shift(
+               llm_graph_result * res,
+                  llama_context * lctx) const;
 
-    llm_graph_result_ptr build_graph_defrag(
-            const llama_cparams & cparams,
-                   ggml_context * ctx,
-                    ggml_cgraph * gf) const;
+    struct cell_ranges_t {
+        uint32_t strm;
 
-    void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
-    void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
-
-    bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
-    bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
-};
-
-//
-// llama_kv_cache_unified_iswa
-//
-
-// utilizes two instances of llama_kv_cache_unified
-//   the first instance is for the non-SWA layers of the model and the second instance is for the SWA layers
-//   upon successful commit, the SWA cache removes old tokens outside the n_swa window
-
-class llama_kv_cache_unified_iswa : public llama_kv_cache {
-public:
-    llama_kv_cache_unified_iswa(
-            const llama_model & model,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                         bool   v_trans,
-                         bool   offload,
-                         bool   swa_full,
-                     uint32_t   kv_size,
-                     uint32_t   n_seq_max,
-                     uint32_t   n_batch,
-                     uint32_t   n_pad);
-
-    ~llama_kv_cache_unified_iswa() = default;
-
-    //
-    // llama_memory_i
-    //
-
-    void clear() override;
-
-    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
-    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
-    void seq_keep(llama_seq_id seq_id)                                                          override;
-    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
-    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
-
-    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
-    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
-
-    //
-    // llama_kv_cache
-    //
-
-    void restore() override;
-    void commit()  override;
-
-    bool update(llama_context & ctx) override;
-
-    void defrag_sched(float thold) override;
-
-    void set_full() override;
-
-    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
-
-    bool find_slot(const llama_ubatch & batch) override;
-
-    bool get_can_shift() const override;
-
-    // state write/load
-
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
-
-    //
-    // llama_kv_cache_unified_iswa specific API
-    //
-
-    llama_kv_cache_unified * get_kv_base() const;
-    llama_kv_cache_unified * get_kv_swa () const;
-
-private:
-    const llama_hparams & hparams;
-
-    bool do_prune = true;
-
-    struct {
-        struct entry {
-            llama_pos pmin;
-            llama_pos pmax;
-        };
-
-        void clear() {
-            pos.clear();
-        }
-
-        // used to perform SWA pruning of old tokens
-        std::unordered_map<llama_seq_id, entry> pos;
-    } pending;
-
-    std::unique_ptr<llama_kv_cache_unified> kv_base;
-    std::unique_ptr<llama_kv_cache_unified> kv_swa;
-};
-
-//
-// llama_kv_cache_recurrent
-//
-
-class llama_kv_cache_recurrent : public llama_kv_cache {
-public:
-    struct kv_cell {
-        llama_pos pos  = -1;
-        int32_t   src  = -1; // used to copy states
-        int32_t   tail = -1;
-
-        std::set<llama_seq_id> seq_id;
-
-        bool has_seq_id(const llama_seq_id & id) const {
-            return seq_id.find(id) != seq_id.end();
-        }
-
-        bool is_empty() const {
-            return seq_id.empty();
-        }
-
-        bool is_same_seq(const kv_cell & other) const {
-            return seq_id == other.seq_id;
-        }
+        std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
     };
 
-    llama_kv_cache_recurrent(
-            const llama_model & model,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                         bool   offload,
-                     uint32_t   kv_size,
-                     uint32_t   n_seq_max);
+    void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
+    void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
 
-    ~llama_kv_cache_recurrent() = default;
+    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
+    bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count);
+};
+
+class llama_kv_cache_context : public llama_memory_context_i {
+public:
+    // some shorthands
+    using slot_info_vec_t  = llama_kv_cache::slot_info_vec_t;
+    using stream_copy_info = llama_kv_cache::stream_copy_info;
+
+    // used for errors
+    llama_kv_cache_context(llama_memory_status status);
+
+    // used to create a full-cache context
+    llama_kv_cache_context(
+            llama_kv_cache * kv);
+
+    // used to create an update context
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            llama_context * lctx,
+            bool do_shift,
+            stream_copy_info sc_info);
+
+    // used to create a batch procesing context from a batch
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos,
+            std::vector<llama_ubatch> ubatches);
+
+    virtual ~llama_kv_cache_context();
 
     //
-    // llama_memory_i
+    // llama_memory_context_i
     //
 
-    void clear() override;
+    bool next()  override;
+    bool apply() override;
 
-    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
-    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
-    void seq_keep(llama_seq_id seq_id)                                                          override;
-    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
-    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
-
-    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
-    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+    llama_memory_status  get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache
+    // llama_kv_cache_context specific API
     //
 
-    void restore() override;
-    void commit()  override;
+    uint32_t get_n_kv() const;
 
-    bool update(llama_context & ctx) override;
+    // TODO: temporary
+    bool get_supports_set_rows() const;
 
-    void defrag_sched(float thold) override;
+    // get views of the current state of the cache
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
-    void set_full() override;
+    // store k_cur and v_cur in the cache based on the provided head location
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
-    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
 
-    bool find_slot(const llama_ubatch & batch) override;
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
-    bool get_can_shift() const override;
-
-    // TODO: temporary methods - they are not really const as they do const_cast<>, fix this
-    int32_t s_copy(int i) const;
-    float   s_mask(int i) const;
-
-    // state write/load
-
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
-
-    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
-    uint32_t size = 0; // total number of cells, shared across all sequences
-    uint32_t used = 0; // used cells (i.e. at least one seq_id)
-
-    // computed before each graph build
-    uint32_t n = 0;
-
-    std::vector<kv_cell> cells;
-
-    std::vector<ggml_tensor *> k_l; // per layer
-    std::vector<ggml_tensor *> v_l;
+    void set_input_k_shift   (ggml_tensor * dst) const;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:
-    //const llama_model & model;
-    const llama_hparams & hparams;
+    llama_memory_status status;
 
-    // commit/restore cache
-    // TODO: rework for recurrent cache
-    struct slot_range {
-        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
-        uint32_t c1 = 0;
-    };
+    llama_kv_cache * kv;
+    llama_context * lctx;
 
-    // pending cell updates that are not yet committed
-    struct {
-        std::vector<slot_range> ranges;
-    } pending;
+    //
+    // update context
+    //
 
-    const uint32_t n_seq_max = 1;
+    bool do_shift = false;
 
-    std::vector<ggml_context_ptr>        ctxs;
-    std::vector<ggml_backend_buffer_ptr> bufs;
+    stream_copy_info sc_info;
 
-    // find how many cells are currently in use
-    uint32_t cell_max() const;
+    //
+    // batch processing context
+    //
 
-    size_t total_size() const;
+    // the index of the cur ubatch to process
+    size_t i_cur = 0;
 
-    size_t size_k_bytes() const;
-    size_t size_v_bytes() const;
+    slot_info_vec_t sinfos;
 
-    void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
-    void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
+    std::vector<llama_ubatch> ubatches;
 
-    bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
-    bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+    //
+    // data needed for building the compute graph for the current ubatch:
+    //
+
+    // a heuristic, to avoid attending the full cache if it is not yet utilized
+    // as the cache gets filled, the benefit from this heuristic disappears
+    int32_t n_kv;
 };

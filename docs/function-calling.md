@@ -2,7 +2,6 @@
 
 [chat.h](../common/chat.h) (https://github.com/ggml-org/llama.cpp/pull/9639) adds support for [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) and is used in:
 - `llama-server` when started w/ `--jinja` flag
-- `llama-cli` (WIP: https://github.com/ggml-org/llama.cpp/pull/11556)
 
 ## Universal support w/ Native & Generic handlers
 
@@ -12,7 +11,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
   - Functionary v3.1 / v3.2
   - Hermes 2/3, Qwen 2.5
-  - Qwen 2.5 Coder (WIP: https://github.com/ggml-org/llama.cpp/pull/12034)
+  - Qwen 2.5 Coder
   - Mistral Nemo
   - Firefunction v2
   - Command R7B
@@ -325,36 +324,65 @@ To get the official template from original HuggingFace repos, you can use [scrip
 > [!TIP]
 > If there is no official `tool_use` Jinja template, you may want to set `--chat-template chatml` to use a default that works with many models (YMMV!), or write your own (e.g. we provide a custom [llama-cpp-deepseek-r1.jinja](../models/templates/llama-cpp-deepseek-r1.jinja) for DeepSeek R1 distills)
 
+> [!CAUTION]
+> Beware of extreme KV quantizations (e.g. `-ctk q4_0`), they can substantially degrade the model's tool calling performance.
+
 Test in CLI (or with any library / software that can use OpenAI-compatible API backends):
 
 ```bash
 curl http://localhost:8080/v1/chat/completions -d '{
-"model": "gpt-3.5-turbo",
-"tools": [
-    {
-    "type":"function",
-    "function":{
-        "name":"python",
-        "description":"Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
-        "parameters":{
-        "type":"object",
-        "properties":{
-            "code":{
-            "type":"string",
-            "description":"The code to run in the ipython interpreter."
+    "model": "gpt-3.5-turbo",
+    "tools": [
+        {
+        "type":"function",
+        "function":{
+            "name":"python",
+            "description":"Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
+            "parameters":{
+            "type":"object",
+            "properties":{
+                "code":{
+                "type":"string",
+                "description":"The code to run in the ipython interpreter."
+                }
+            },
+            "required":["code"]
             }
-        },
-        "required":["code"]
         }
-    }
-    }
-],
-"messages": [
-    {
-    "role": "user",
-    "content": "Print a hello world message with python."
-    }
-]
+        }
+    ],
+    "messages": [
+        {
+        "role": "user",
+        "content": "Print a hello world message with python."
+        }
+    ]
+}'
+
+
+curl http://localhost:8080/v1/chat/completions -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {"role": "system", "content": "You are a chatbot that uses tools/functions. Dont overthink things."},
+        {"role": "user", "content": "What is the weather in Istanbul?"}
+    ],
+    "tools": [{
+        "type":"function",
+        "function":{
+            "name":"get_current_weather",
+            "description":"Get the current weather in a given location",
+            "parameters":{
+                "type":"object",
+                "properties":{
+                    "location":{
+                        "type":"string",
+                        "description":"The city and country/state, e.g. `San Francisco, CA`, or `Paris, France`"
+                    }
+                },
+                "required":["location"]
+            }
+        }
+    }]
 }'
 ```
 

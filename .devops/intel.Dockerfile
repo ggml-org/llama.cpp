@@ -49,19 +49,23 @@ COPY --from=build /app/full /app
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y \
-    git \
-    python3 \
-    python3-pip \
-    && pip install --upgrade pip setuptools wheel \
-    && pip install -r requirements.txt \
-    && apt autoremove -y \
-    && apt clean -y \
-    && rm -rf /tmp/* /var/tmp/* \
-    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
-    && find /var/cache -type f -delete
+RUN apt-get update && \
+    apt-get install -y \
+        git \
+        python3 \
+        python3-pip \
+        python3-venv && \
+    python3 -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements.txt && \
+    apt autoremove -y && \
+    apt clean -y && \
+    rm -rf /tmp/* /var/tmp/* && \
+    find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete && \
+    find /var/cache -type f -delete
 
+ENV PATH="/opt/venv/bin:$PATH"
 
 ENTRYPOINT ["/app/tools.sh"]
 

@@ -44,6 +44,7 @@
 #define KEY_WIN_ATTN_PATTERN      "clip.vision.n_wa_pattern"
 #define KEY_ATTN_WINDOW_SIZE      "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION      "clip.minicpmv_version"
+#define KEY_MINICPMV_QUERY_NUM    "clip.minicpmv_query_num"
 
 // audio-specific
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
@@ -81,6 +82,7 @@
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
 #define TN_IMAGE_NEWLINE   "model.image_newline"
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
+#define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
@@ -107,6 +109,7 @@
 // ultravox
 #define TN_CONV1D       "a.conv1d.%d.%s"
 #define TN_MM_AUDIO_MLP "mm.a.mlp.%d.%s"
+#define TN_MM_AUDIO_FC  "mm.a.fc.%s" // fully connected layer
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
 #define TN_MM_NORM_MID  "mm.a.norm_mid.%s"
 
@@ -128,6 +131,11 @@ enum projector_type {
     PROJECTOR_TYPE_ULTRAVOX,
     PROJECTOR_TYPE_INTERNVL,
     PROJECTOR_TYPE_LLAMA4,
+    PROJECTOR_TYPE_QWEN2A,
+    PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
+    PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_LFM2,
+    PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -145,6 +153,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_ULTRAVOX,  "ultravox"},
     { PROJECTOR_TYPE_INTERNVL,  "internvl"},
     { PROJECTOR_TYPE_LLAMA4,    "llama4"},
+    { PROJECTOR_TYPE_QWEN2A,    "qwen2a"},
+    { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
+    { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
+    { PROJECTOR_TYPE_LFM2,      "lfm2"},
+    { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

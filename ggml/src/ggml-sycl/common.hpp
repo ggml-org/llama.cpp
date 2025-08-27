@@ -13,8 +13,10 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+#include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
@@ -44,11 +46,20 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 
-#define GGML_SYCL_DEBUG(...)        \
-  do {                              \
-    if (g_ggml_sycl_debug)          \
-      fprintf(stderr, __VA_ARGS__); \
-  } while (0)
+#if defined(__clang__) && __has_builtin(__builtin_expect)
+// Hint the optimizer to pipeline the more likely following instruction in branches
+#    define LIKELY(expr)   __builtin_expect(expr, true)
+#    define UNLIKELY(expr) __builtin_expect(expr, false)
+#else
+#    define LIKELY(expr)   (expr)
+#    define UNLIKELY(expr) (expr)
+#endif
+
+#define GGML_SYCL_DEBUG(...)              \
+    do {                                  \
+        if (UNLIKELY(g_ggml_sycl_debug))  \
+            fprintf(stderr, __VA_ARGS__); \
+    } while (0)
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -138,8 +149,6 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
-static const int8_t kvalues_iq4nl[16]={-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -190,7 +199,7 @@ struct sycl_device_info {
     // size_t  smpb;               // max. shared memory per block
     bool    vmm;                // virtual memory support
     size_t  total_vram;
-    sycl_hw_info hw_info;
+    //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
     optimize_feature opt_feature;
 };
 
@@ -276,29 +285,6 @@ struct ggml_tensor_extra_gpu {
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
-
-inline optimize_feature check_gpu_optimize_feature(syclex::architecture &arch) {
-    optimize_feature opt;
-
-    opt.reorder =
-        (arch == syclex::architecture::intel_gpu_dg1 ||
-         arch == syclex::architecture::intel_gpu_acm_g10 ||
-         arch == syclex::architecture::intel_gpu_acm_g11 ||
-         arch == syclex::architecture::intel_gpu_acm_g12 ||
-         arch == syclex::architecture::intel_gpu_pvc ||
-         arch == syclex::architecture::intel_gpu_pvc_vg ||
-         arch == syclex::architecture::intel_gpu_mtl_u ||
-         arch == syclex::architecture::intel_gpu_mtl_s ||
-         arch == syclex::architecture::intel_gpu_mtl_h ||
-         arch == syclex::architecture::intel_gpu_arl_u ||
-         arch == syclex::architecture::intel_gpu_arl_s ||
-         arch == syclex::architecture::intel_gpu_arl_h ||
-         arch == syclex::architecture::intel_gpu_bmg_g21 ||
-         arch == syclex::architecture::intel_gpu_lnl_m
-        );
-
-    return opt;
-}
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
@@ -471,6 +457,19 @@ static __dpct_inline__ float warp_reduce_max(float x,
     return x;
 }
 
+/* Helper for Computing the linear offset of a ggml_tensor given
+per-dimension sizes, strides, and indices */
+template<int N>
+__dpct_inline__ size_t calculate_offset(const std::array<int, N> & strides, const std::array<int, N> & indices) {
+    size_t offset = 0;
+#pragma unroll
+    for (int i = 0; i < N; i++) {
+        auto index_i = indices[i];
+        offset += strides[i] * index_i;
+    }
+    return offset;
+}
+
 // Helper for vec loading aligned data
 template <typename Tp, int n>
 inline sycl::vec<Tp, n> vec_aligned_load(const Tp* aligned_ptr) {
@@ -490,4 +489,73 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
+    if (LIKELY(!g_ggml_sycl_debug)) {
+        return "";
+    }
+    std::stringstream ss;
+    ss << prefix << "=[";
+    for (std::size_t i = 0; i < N - 1; ++i) {
+        ss << array[i] << ", ";
+    }
+    if constexpr (N > 0) {
+        ss << array[N - 1];
+    }
+    ss << "]";
+    return ss.str();
+}
+
+inline std::string debug_get_tensor_str(const std::string &prefix,
+        const ggml_tensor *tensor, const std::string &suffix = "") {
+    std::stringstream ss;
+    if (LIKELY(!g_ggml_sycl_debug)) { return ss.str(); }
+    ss << prefix.c_str() << "=";
+    if (tensor) {
+        ss << "'" << tensor->name << "':type=" << ggml_type_name(tensor->type);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";ne", tensor->ne);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";nb", tensor->nb);
+
+        if (!ggml_is_contiguous(tensor)) { ss << ";strided"; }
+        if (ggml_is_permuted(tensor)) { ss << ";permuted"; }
+    } else {
+        ss << "nullptr";
+    }
+    ss << suffix;
+    return ss.str();
+}
+
+// Use scope_op_debug_print to log operations coming from running a model
+struct scope_op_debug_print {
+    // Use string_views to avoid the cost of creating a string and concatenating them
+    // string_views must be alive for as long as the object is alive
+    // scope_op_debug_print are used with string literals in practice which are stored in constant space so always accessible
+    scope_op_debug_print(const std::string_view & func, const std::string_view & func_suffix, const ggml_tensor * dst,
+                         std::size_t num_src, const std::string_view & suffix = "") :
+        func(func),
+        func_suffix(func_suffix) {
+        if (LIKELY(!g_ggml_sycl_debug)) {
+            return;
+        }
+        GGML_SYCL_DEBUG("[SYCL][OP] call %s%s:", func.data(), func_suffix.data());
+        GGML_SYCL_DEBUG("%s", debug_get_tensor_str(" dst", dst).c_str());
+        if (dst) {
+            for (std::size_t i = 0; i < num_src; ++i) {
+                GGML_SYCL_DEBUG("%s", debug_get_tensor_str("\tsrc" + std::to_string(i), dst->src[i]).c_str());
+            }
+        }
+        GGML_SYCL_DEBUG("%s\n", suffix.data());
+    }
+
+    scope_op_debug_print(const std::string_view & func, const ggml_tensor * dst, std::size_t num_src,
+                         const std::string_view & suffix = "") :
+        scope_op_debug_print(func, "", dst, num_src, suffix) {}
+
+    ~scope_op_debug_print() { GGML_SYCL_DEBUG("[SYCL][OP] call %s%s done\n", func.data(), func_suffix.data()); }
+
+  private:
+    std::string_view func;
+    std::string_view func_suffix;
+};
+
 #endif // GGML_SYCL_COMMON_HPP

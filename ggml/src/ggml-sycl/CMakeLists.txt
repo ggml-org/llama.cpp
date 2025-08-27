@@ -13,7 +13,7 @@ elseif(SUPPORTS_SYCL)
         If you expected the oneAPI Release compiler, please install oneAPI & source it, like:
         source /opt/intel/oneapi/setvars.sh")
 else()
-    message(FATAL_ERROR, "C++ compiler lacks SYCL support.")
+    message(FATAL_ERROR "C++ compiler lacks SYCL support.")
 endif()
 message(STATUS "SYCL found")
 #todo: AOT
@@ -142,7 +142,7 @@ else()
         FetchContent_Declare(
             ONEMATH
             GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
-            GIT_TAG c255b1b4c41e2ee3059455c1f96a965d6a62568a
+            GIT_TAG 8efe85f5aaebb37f1d8c503b7af66315feabf142
         )
         FetchContent_MakeAvailable(ONEMATH)
         # Create alias to match with find_package targets name
@@ -170,7 +170,7 @@ else()
         target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NVIDIA)
     elseif (GGML_SYCL_TARGET STREQUAL "AMD")
         if (NOT GGML_SYCL_DEVICE_ARCH)
-            message(ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
+            message(FATAL_ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
         endif()
         target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_rocblas)
         target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")

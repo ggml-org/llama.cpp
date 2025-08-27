@@ -32,7 +32,7 @@ struct whisper_filters {
     std::vector<float> data;
 };
 
-extern bool preprocess_audio(
+bool preprocess_audio(
         const float * samples,
         size_t n_samples,
         const whisper_filters & filters,
@@ -40,23 +40,8 @@ extern bool preprocess_audio(
 
 } // namespace whisper_preprocessor
 
-
-// TODO @ngxson : move this helper to mtmd-helpers.cpp
-namespace audio_helpers {
-
-extern bool is_audio_file(const char * buf, size_t len);
-
-extern bool decode_audio_from_buf(
-        const unsigned char * buf_in,
-        size_t len,
-        int target_sampler_rate,
-        std::vector<float> & pcmf32_mono);
-
-} // namespace audio_helpers
-
-
 namespace whisper_precalc_filters {
 
-extern whisper_preprocessor::whisper_filters get_128_bins();
+whisper_preprocessor::whisper_filters get_128_bins();
 
 } // namespace whisper_precalc_filters
