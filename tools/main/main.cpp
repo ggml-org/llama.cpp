@@ -592,7 +592,7 @@ int main(int argc, char ** argv) {
                     }
 
                     if (params.n_predict == -2) {
-                        LOG_WRN("\n\n%s: context full and n_predict == -%d => stopping\n", __func__, params.n_predict);
+                        LOG_WRN("\n\n%s: context full and n_predict == %d => stopping\n", __func__, params.n_predict);
                         break;
                     }
 
