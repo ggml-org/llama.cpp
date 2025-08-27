@@ -432,6 +432,7 @@
 
 	div :global(code) {
 		background: transparent;
+		color: var(--code-foreground);
 	}
 
 	/* Mentions and hashtags */
