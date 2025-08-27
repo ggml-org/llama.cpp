@@ -1,4 +1,5 @@
 #include "binbcast.cuh"
+#include <driver_types.h>
 #include <cstdint>
 
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {
@@ -53,6 +54,37 @@ static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x*gridDim.x) {
         const int i10 = i0 % ne10;
         dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0] : 0.0f, (float)src1_row[i10]);
+    }
+}
+
+template<typename src_t, typename dst_t>
+static __global__ void k_fused_add(const src_t ** src, int n_srcs, dst_t * dst,
+    const int ne0, const int ne1, const int ne2, const int ne3,
+    const int s1, const int s2, const int s3) {
+
+    const int i0s = blockDim.x*blockIdx.x + threadIdx.x;
+    const int i1 = (blockDim.y*blockIdx.y + threadIdx.y);
+    const int i2 = (blockDim.z*blockIdx.z + threadIdx.z) / ne3;
+    const int i3 = (blockDim.z*blockIdx.z + threadIdx.z) % ne3;
+
+    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
+        return;
+    }
+
+    const size_t i_src0 = i3*s3 + i2*s2 + i1*s1;
+    const size_t i_src1 = i3*s3 + i2*s2 + i1*s1;
+    const size_t i_src2 = i3*s3 + i2*s2 + i1*s1;
+    const size_t i_dst  = i3*s3 + i2*s2 + i1*s1;
+
+    dst_t * dst_row = dst + i_dst;
+
+    for (int i0 = i0s; i0 < ne0; i0 += blockDim.x*gridDim.x) {
+        float sum = 0.;
+        for (int i = 0 ; i < n_srcs; ++i) {
+            const src_t * src_row = src[i] + i_dst;  // use same offset as dst
+            sum += (float)src_row[i0];
+        }
+        dst_row[i0] = (dst_t)sum;
     }
 }
 
@@ -329,6 +361,51 @@ void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_div(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_div>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+}
+
+
+void ggml_cuda_op_fused_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst, int n_fuse) {
+
+    printf("ggml_cuda_op_fused_add: %d\n", n_fuse);
+
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(1 <= n_fuse && n_fuse <= 8);
+
+    // Collect device pointers on host
+    const float * h_src[n_fuse + 1];
+    for(int i = 0 ; i < n_fuse + 1; ++i) {
+       h_src[i] = (const float*)dst->src[i]->data;
+    }
+
+    // Allocate device array for pointers and copy
+    const float ** d_src;
+    cudaMalloc((void **) &d_src, (n_fuse + 1) * sizeof(float *));
+    cudaMemcpy(d_src, h_src, (n_fuse + 1) * sizeof(float *), cudaMemcpyHostToDevice);
+
+    //All layouts are same in the fused ops
+    const int ne0 = dst->ne[0];
+    const int ne1 = dst->ne[1];
+    const int ne2 = dst->ne[2];
+    const int ne3 = dst->ne[3];
+    const int s1  = dst->nb[1] / sizeof(float);
+    const int s2  = dst->nb[2] / sizeof(float);
+    const int s3  = dst->nb[3] / sizeof(float);
+
+    const int block_size = 128;
+    dim3      block_dims;
+    block_dims.x = std::min<unsigned int>(ne0, block_size);
+    block_dims.y = std::min<unsigned int>(ne1, block_size / block_dims.x);
+    block_dims.z = std::min(std::min<unsigned int>(ne2 * ne3, block_size / block_dims.x / block_dims.y), 64U);
+
+    dim3 block_nums((ne0 + block_dims.x - 1) / block_dims.x,
+                    (ne1 + block_dims.y - 1) / block_dims.y,
+                    (ne2 * ne3 + block_dims.z - 1) / block_dims.z);
+
+    k_fused_add<float, float>
+        <<<block_nums, block_dims, 0, stream>>>(d_src, n_fuse + 1, (float *) dst->data, ne0, ne1, ne2, ne3, s1, s2, s3);
+
+    cudaFree(d_src);
 }
 
 void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
