@@ -664,6 +664,9 @@ struct ggml_backend_sched_split {
     int i_end;
     struct ggml_tensor * inputs[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_inputs;
+    // contiguous buffer for multiple input tensors
+    struct ggml_tensor * inputs_contiguous_buffer;
+    size_t inputs_contiguous_buffer_size;
     // graph view of this split
     struct ggml_cgraph graph;
 };
@@ -712,6 +715,10 @@ struct ggml_backend_sched {
 
     char * context_buffer;
     size_t context_buffer_size;
+
+    // host staging buffer for bulk contiguous copies of input tensors
+    void * host_staging_buffer;
+    size_t host_staging_buffer_size;
 
     bool op_offload;
 
@@ -1202,6 +1209,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 split->backend_id = node_backend_id;
                 split->i_start = i;
                 split->n_inputs = 0;
+                split->inputs_contiguous_buffer = NULL;
+                split->inputs_contiguous_buffer_size = 0;
                 cur_backend_id = node_backend_id;
             }
 
@@ -1317,6 +1326,29 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             graph_copy->nodes[graph_copy->n_nodes++] = input_cpy;
         }
 
+        // Create and add contiguous buffer to the graph for this split
+        if (split->n_inputs > 0) {
+            // Calculate total size needed for contiguous allocation of all input tensors in a split
+            size_t total_size = 0;
+            for (int i = 0; i < split->n_inputs; i++) {
+                total_size = (total_size + TENSOR_ALIGNMENT - 1) & ~(TENSOR_ALIGNMENT - 1);
+                total_size += ggml_nbytes(split->inputs[i]);
+            }
+            split->inputs_contiguous_buffer_size = total_size;
+            
+            // Create a single buffer tensor to hold all input data
+            split->inputs_contiguous_buffer = ggml_new_tensor_1d(sched->ctx, GGML_TYPE_I8, total_size);
+            ggml_format_name(split->inputs_contiguous_buffer, "%s#inputs_contiguous_buffer#%d", ggml_backend_name(sched->backends[split->backend_id]), 0);
+            ggml_set_input(split->inputs_contiguous_buffer);
+            ggml_set_output(split->inputs_contiguous_buffer);
+
+            if (split->inputs_contiguous_buffer != NULL) {
+                assert(graph_copy->size > graph_copy->n_nodes);
+                sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
+                graph_copy->nodes[graph_copy->n_nodes++] = split->inputs_contiguous_buffer;
+            }
+        }
+
         for (int j = split->i_start; j < split->i_end; j++) {
             assert(graph_copy->size > graph_copy->n_nodes);
             sched->node_backend_ids[graph_copy->n_nodes] = tensor_backend_id(graph->nodes[j]);
@@ -1416,6 +1448,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
         // copy the input tensors to the split backend
+
+        bool bulk_copy_used = false;
+        size_t bulk_offset = 0;
+        // Ensure host staging buffer is large enough, reallocate if needed
+        if (sched->host_staging_buffer_size < split->inputs_contiguous_buffer_size) {
+            free(sched->host_staging_buffer);
+            sched->host_staging_buffer = malloc(split->inputs_contiguous_buffer_size);
+            sched->host_staging_buffer_size = split->inputs_contiguous_buffer_size;
+        }
+
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
             struct ggml_tensor * input = split->inputs[input_id];
@@ -1423,12 +1465,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                } else {
-                    ggml_backend_synchronize(split_backend);
-                }
-                ggml_backend_tensor_copy(input, input_cpy);
+                // Bulk copy: accumulate data in host buffer and setup tensor views
+                GGML_ASSERT(split->inputs_contiguous_buffer != NULL && split->inputs_contiguous_buffer->data != NULL);
+                bulk_offset = (bulk_offset + TENSOR_ALIGNMENT - 1) & ~(TENSOR_ALIGNMENT - 1);
+                
+                memcpy((char*)sched->host_staging_buffer + bulk_offset, input->data, ggml_nbytes(input));
+                
+                // Update tensor_copy to point into contiguous GPU buffer
+                input_cpy->data = (char*)split->inputs_contiguous_buffer->data + bulk_offset;
+                input_cpy->buffer = split->inputs_contiguous_buffer->buffer;
+                input_cpy->view_src = split->inputs_contiguous_buffer;
+                input_cpy->view_offs = bulk_offset;
+                
+                bulk_offset += ggml_nbytes(input);
+                bulk_copy_used = true;
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -1527,15 +1577,36 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
                         ggml_backend_synchronize(input_backend);
-                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                        } else {
-                            ggml_backend_synchronize(split_backend);
-                        }
-                        ggml_backend_tensor_copy(input, input_cpy);
+
+                        // Bulk copy: accumulate data in host buffer and setup tensor views
+                        GGML_ASSERT(split->inputs_contiguous_buffer != NULL && split->inputs_contiguous_buffer->data != NULL);
+                        bulk_offset = (bulk_offset + TENSOR_ALIGNMENT - 1) & ~(TENSOR_ALIGNMENT - 1);
+                        
+                        // Copy tensor data to host buffer
+                        ggml_backend_tensor_get(input, (char*)sched->host_staging_buffer + bulk_offset, 0, ggml_nbytes(input));
+                        
+                        // Update tensor_copy to point into contiguous GPU buffer
+                        input_cpy->data = (char*)split->inputs_contiguous_buffer->data + bulk_offset;
+                        input_cpy->buffer = split->inputs_contiguous_buffer->buffer;
+                        input_cpy->view_src = split->inputs_contiguous_buffer;
+                        input_cpy->view_offs = bulk_offset;
+                        
+                        bulk_offset += ggml_nbytes(input);
+                        bulk_copy_used = true;
                     }
                 }
             }
+        }
+
+        // Finalize bulk copy if it was actually used
+        if (bulk_copy_used) {
+            // Synchronize and perform single bulk copy to GPU
+            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+            } else {
+                ggml_backend_synchronize(split_backend);
+            }            
+            ggml_backend_tensor_set(split->inputs_contiguous_buffer, sched->host_staging_buffer, 0, bulk_offset);
         }
 
         if (!sched->callback_eval) {
@@ -1622,6 +1693,10 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
     sched->context_buffer = (char *) malloc(sched->context_buffer_size);
 
+    // initialize reusable host buffer for bulk copies
+    sched->host_staging_buffer = NULL;
+    sched->host_staging_buffer_size = 0;
+
     const int initial_splits_capacity = 16;
     sched->splits = (ggml_backend_sched_split *) calloc(initial_splits_capacity, sizeof(sched->splits[0]));
     sched->splits_capacity = initial_splits_capacity;
@@ -1666,6 +1741,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->prev_node_backend_ids);
     free(sched->prev_leaf_backend_ids);
     free(sched->context_buffer);
+    free(sched->host_staging_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
     free(sched);
