@@ -84,6 +84,16 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         }
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);
+    #elif defined(__riscv_v_intrinsic)
+        vfloat32m1_t vsum = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+        for (int i = 0, avl; i < n; i += avl) {
+            avl = __riscv_vsetvl_e32m8(n - i);
+            vfloat32m8_t ax = __riscv_vle32_v_f32m8(&x[i], avl);
+            vfloat32m8_t ay = __riscv_vle32_v_f32m8(&y[i], avl);
+            vfloat32m8_t prod = __riscv_vfmul_vv_f32m8(ax, ay, avl);
+            vsum = __riscv_vfredusum_vs_f32m8_f32m1(prod, vsum, avl);
+        }
+        sumf += __riscv_vfmv_f_s_f32m1_f32(vsum);
     #else
         const int np = (n & ~(GGML_F32_STEP - 1));
 
@@ -197,7 +207,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 
     ggml_float sumf = 0.0;
 
-#if defined(GGML_SIMD)
+#if defined(GGML_SIMD) && !defined(__riscv_v_intrinsic)
     const int np = (n & ~(GGML_F16_STEP - 1));
 
     GGML_F16_VEC sum[GGML_F16_ARR] = { GGML_F16_VEC_ZERO };
@@ -325,6 +335,15 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         vst1q_f32(y + i, val);
         sum += (ggml_float)vaddvq_f32(val);
     }
+#elif defined(__riscv_v_intrinsic)
+    vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);
+    for (int avl; i < n; i += avl) {
+        avl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t val = ggml_v_expf_m2(__riscv_vfsub_vf_f32m2(__riscv_vle32_v_f32m2(&x[i], avl), max, avl), avl);
+        __riscv_vse32_v_f32m2(&y[i], val, avl);
+        vsum = __riscv_vfwredusum_vs_f32m2_f64m1(val, vsum, avl);
+    }
+    return (ggml_float)__riscv_vfmv_f_s_f64m1_f64(vsum);
 #endif
     for (; i < n; ++i) {
         float val = expf(x[i] - max);
