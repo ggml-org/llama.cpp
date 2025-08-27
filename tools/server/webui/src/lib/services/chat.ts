@@ -10,14 +10,15 @@ export class ChatService {
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
 	 * Supports both streaming and non-streaming responses with comprehensive parameter configuration.
+	 * Automatically converts database messages with attachments to the appropriate API format.
 	 * 
-	 * @param messages - Array of chat messages to send to the API
+	 * @param messages - Array of chat messages to send to the API (supports both ApiChatMessageData and DatabaseMessage with attachments)
 	 * @param options - Configuration options for the chat completion request. See `SettingsChatServiceOptions` type for details.
 	 * @returns {Promise<string | void>} that resolves to the complete response string (non-streaming) or void (streaming)
 	 * @throws {Error} if the request fails or is aborted
 	 */
 	async sendMessage(
-		messages: ApiChatMessageData[],
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		options: SettingsChatServiceOptions = {}
 		): Promise<string | void> {
 		const { 
@@ -38,8 +39,21 @@ export class ChatService {
 		this.abort();
 		this.abortController = new AbortController();
 
+		// Convert database messages with attachments to API format if needed
+		const normalizedMessages: ApiChatMessageData[] = messages.map((msg) => {
+			// Check if this is a DatabaseMessage by checking for DatabaseMessage-specific fields
+			if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+				// This is a DatabaseMessage, convert it
+				const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+				return ChatService.convertMessageToChatServiceData(dbMsg);
+			} else {
+				// This is already an ApiChatMessageData object
+				return msg as ApiChatMessageData;
+			}
+		});
+
 		// Build base request body with system message injection
-		const processedMessages = this.injectSystemMessage(messages);
+		const processedMessages = this.injectSystemMessage(normalizedMessages);
 		
 		const requestBody: ApiChatCompletionRequest = {
 			messages: processedMessages.map((msg: ApiChatMessageData) => ({
@@ -431,87 +445,6 @@ export class ChatService {
 			role: message.role as 'user' | 'assistant' | 'system',
 			content: contentParts
 		};
-	}
-
-	/**
-	 * Unified method to send chat completions supporting both ApiChatMessageData and DatabaseMessage types.
-	 * Automatically converts database messages with attachments to the appropriate API format.
-	 * 
-	 * @param messages - Array of messages in either API format or database format with attachments
-	 * @param options - Configuration options for the chat completion
-	 * @param options.stream - Whether to use streaming response (default: true)
-	 * @param options.temperature - Controls randomness in generation (default: 0.7)
-	 * @param options.max_tokens - Maximum number of tokens to generate (default: 2048)
-	 * @param options.onChunk - Callback for streaming response chunks
-	 * @param options.onComplete - Callback when response is complete
-	 * @param options.onError - Callback for error handling
-	 * @returns Promise that resolves to the complete response string or void for streaming
-	 */
-	async sendChatCompletion(
-		messages: (ApiChatMessageData[] | DatabaseMessage[]) | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
-		options: {
-			stream?: boolean;
-			temperature?: number;
-			max_tokens?: number;
-			onChunk?: (chunk: string) => void;
-			onReasoningChunk?: (chunk: string) => void;
-			onComplete?: (response?: string, reasoningContent?: string) => void;
-			onError?: (error: Error) => void;
-		} = {}
-	): Promise<string | void> {
-		// Handle both array formats and convert messages with extras
-		const normalizedMessages: ApiChatMessageData[] = messages.map((msg) => {
-			// Check if this is already a ApiChatMessageData object by checking for DatabaseMessage-specific fields
-			if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-				// This is a DatabaseMessage, convert it
-				const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-				const converted = ChatService.convertMessageToChatServiceData(dbMsg);
-				return converted;
-			} else {
-				// This is already an ApiChatMessageData object
-				return msg as ApiChatMessageData;
-			}
-		});
-
-		// Set default options for API compatibility
-		const finalOptions = {
-			stream: true,
-			temperature: 0.7,
-			max_tokens: 2048,
-			...options
-		};
-
-		return this.sendMessage(normalizedMessages, finalOptions);
-	}
-
-	/**
-	 * Static method for backward compatibility with the legacy ApiService.
-	 * Creates a temporary ChatService instance and sends a chat completion request.
-	 * 
-	 * @param messages - Array of database messages to send
-	 * @param onChunk - Optional callback for streaming response chunks
-	 * @param onComplete - Optional callback when response is complete
-	 * @param onError - Optional callback for error handling
-	 * @returns Promise that resolves to the complete response string
-	 * @static
-	 * @deprecated Use ChatService instance methods instead
-	 */
-	static async sendChatCompletion(
-		messages: DatabaseMessage[],
-		onChunk?: (content: string) => void,
-		onComplete?: () => void,
-		onError?: (error: Error) => void
-	): Promise<string> {
-		const service = new ChatService();
-		const result = await service.sendChatCompletion(messages, {
-			stream: true,
-			temperature: 0.7,
-			max_tokens: 2048,
-			onChunk,
-			onComplete: () => onComplete?.(),
-			onError
-		});
-		return result as string;
 	}
 
 	/**
