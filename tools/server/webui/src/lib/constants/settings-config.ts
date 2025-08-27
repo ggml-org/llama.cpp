@@ -6,7 +6,6 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	theme: 'system',
 	showTokensPerSecond: false,
 	showThoughtInProgress: true,
-	excludeThoughtOnReq: false,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	// make sure these default values are in sync with `common.h`
@@ -61,7 +60,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showTokensPerSecond: 'Display generation speed in tokens per second during streaming.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	excludeThoughtOnReq: 'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1).',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	pyInterpreterEnabled: 'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'
 };

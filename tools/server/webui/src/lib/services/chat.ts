@@ -40,7 +40,6 @@ export class ChatService {
 
 		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(messages);
-		const currentConfig = config();
 		
 		const requestBody: ApiChatCompletionRequest = {
 			messages: processedMessages.map((msg: ApiChatMessageData) => ({
@@ -50,9 +49,8 @@ export class ChatService {
 			stream
 		};
 
-		if (!currentConfig.excludeThoughtOnReq) {
-			requestBody.reasoning_format = 'auto';
-		}
+		// Always request reasoning content from server, but never send it back in message history
+		requestBody.reasoning_format = 'auto';
 
 		// Add generation parameters if provided
 		if (temperature !== undefined) requestBody.temperature = temperature;
@@ -195,7 +193,6 @@ export class ChatService {
 		const decoder = new TextDecoder();
 		let fullResponse = '';
 		let fullReasoningContent = '';
-		let thinkContent = '';
 		let regularContent = '';
 		let insideThinkTag = false;
 		let hasReceivedData = false;
@@ -240,8 +237,8 @@ export class ChatService {
 								insideThinkTag = this.processContentForThinkTags(
 									content,
 									insideThinkTag,
-									(thinkChunk) => {
-										thinkContent += thinkChunk;
+									() => {
+										// Think content is ignored - we don't include it in API requests
 									},
 									(regularChunk) => {
 										regularContent += regularChunk;

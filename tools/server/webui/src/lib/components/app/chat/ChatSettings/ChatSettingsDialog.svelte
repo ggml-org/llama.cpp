@@ -202,11 +202,6 @@
 					key: 'showThoughtInProgress',
 					label: 'Show thought in progress',
 					type: 'checkbox'
-				},
-				{
-					key: 'excludeThoughtOnReq',
-					label: 'Exclude thought on request',
-					type: 'checkbox'
 				}
 			]
 		},
