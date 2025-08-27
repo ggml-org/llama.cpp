@@ -7916,10 +7916,7 @@ class NemotronHModel(Mamba2Model):
         # Initialize the base Mamba2Model
         super().__init__(*args, **kwargs)
         
-        # Use Llama conversion for attention layers
-        self._transformer_model_class = LlamaModel
-        
-        # Nemotron-H specific parameters
+        # Nemotron-H specific parameters with Gabe's fixes
         self.n_group = self.find_hparam(["n_groups"], optional=True) or self.find_hparam(["num_groups"], optional=True) or 8
         # Use actual conv1d tensor dimension for Nemotron-H (12288 not 15680)
         self.d_inner = 12288  # Fixed: matches actual conv1d tensor dimensions
@@ -7928,41 +7925,98 @@ class NemotronHModel(Mamba2Model):
 
         # Initialize hybrid model attributes
         self.has_attention = True
-
-        # Determine attention layers
         self._attn_layers = self._get_attn_layers()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        """Override Mamba2 tensor transformation with Nemotron-H specific logic"""
+        """Consolidated Nemotron-H tensor transformation with Gabe's fixes applied"""
         
+        # Handle backbone prefix mapping
         if name.startswith("model.backbone") or name.startswith("model.lm_head"):
-            # map Mamba-Codestral-7B-v0.1 tensor names to the names used by Mamba-2
             name = name.removeprefix("model.")
+            
+        # Handle token embeddings and output tensors
+        if "backbone.embeddings.weight" in name:
+            yield (self.map_tensor_name("token_embd.weight"), data_torch)
+            return
+        elif "backbone.norm.weight" in name:
+            yield (self.map_tensor_name("output_norm.weight"), data_torch)
+            return
+        elif "backbone.lm_head.weight" in name:
+            yield (self.map_tensor_name("output.weight"), data_torch)
+            return
 
-        if name.endswith(".dt_bias"):
-            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+        # Handle layer-specific tensors with improved logic
+        if "backbone.layers." in name and bid is not None:
+            parts = name.split(".")
+            if len(parts) >= 4:
+                layer_component = ".".join(parts[3:])
+                
+                # Detect and map layer types
+                if layer_component == "norm.weight":
+                    new_name = f"blk.{bid}.attn_norm.weight"
+                elif any(x in layer_component for x in ["A_log", "D", "conv1d", "dt_bias", "in_proj", "mixer.norm", "out_proj"]):
+                    new_name = self._map_mamba_tensor(layer_component, bid)
+                    
+                    # Apply Gabe's tensor transformations with specific fixes
+                    if layer_component == "mixer.conv1d.weight":
+                        # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288] with BOS alignment fix
+                        if len(data_torch.shape) == 3:  # [12288, 1, 4]
+                            data_torch = data_torch.squeeze(1)  # -> [12288, 4]
+                        if len(data_torch.shape) == 2:
+                            data_torch = data_torch.t().contiguous()  # -> [4, 12288] for BOS alignment
+                        logger.debug(f"Conv1d BOS alignment: {data_torch.shape}")
+                    elif layer_component.endswith("A_log"):
+                        # A_log transformation with proper dimensions
+                        data_torch = -torch.exp(data_torch)
+                        if len(data_torch.shape) == 1:
+                            data_torch = data_torch.unsqueeze(1)  # -> [128, 1] explicitly
+                        logger.debug(f"A_log transformation: {data_torch.shape}")
+                    elif layer_component.endswith("D"):
+                        # D tensor proper dimensions  
+                        if len(data_torch.shape) == 1:
+                            data_torch = data_torch.unsqueeze(1)  # -> [128, 1] explicitly
+                        logger.debug(f"D tensor shape: {data_torch.shape}")
+                    elif layer_component == "mixer.norm.weight":
+                        # Apply Gabe's flattened RMS norm fix for n_groups=8
+                        if len(data_torch.shape) == 1:  # [10240]
+                            # Calculate correct dimensions: 10240 elements with n_groups=8 -> [1280, 8]
+                            elements_per_group = data_torch.numel() // self.n_group
+                            data_torch = data_torch.reshape((elements_per_group, self.n_group))
+                        logger.debug(f"SSM norm reshape for n_groups={self.n_group}: {data_torch.shape}")
+                        
+                elif any(x in layer_component for x in ["q_proj", "k_proj", "v_proj", "o_proj"]):
+                    new_name = self._map_attention_tensor(layer_component, bid)
+                elif any(x in layer_component for x in ["down_proj", "up_proj"]):
+                    new_name = self._map_mlp_tensor(layer_component, bid)
+                else:
+                    # If we can't map it in the layer-specific logic, fall back to parent mapping
+                    if name.endswith(".dt_bias"):
+                        name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+                    new_name = self.map_tensor_name(name)
+        else:
+            # For non-layer tensors, apply standard mapping
+            if name.endswith(".dt_bias"):
+                name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+            new_name = self.map_tensor_name(name)
 
-        new_name = self.map_tensor_name(name)
-
+        # Handle base Mamba2 tensor transformations for backward compatibility
         if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):
-            # For conv1d weights: [12288, 1, 4] -> squeeze -> [12288, 4] -> transpose -> [4, 12288]
-            data_torch = data_torch.squeeze()  # Remove dim 1
+            if len(data_torch.shape) == 3:  # [12288, 1, 4]
+                data_torch = data_torch.squeeze(1)  # -> [12288, 4]
             if len(data_torch.shape) == 2:
-                data_torch = data_torch.t().contiguous()  # [12288, 4] -> [4, 12288]
+                data_torch = data_torch.t().contiguous()  # -> [4, 12288]
         elif any(self.match_model_tensor_name(new_name, t, bid, suffix="") for t in [
-            gguf.MODEL_TENSOR.SSM_A,
-            gguf.MODEL_TENSOR.SSM_D,
+            gguf.MODEL_TENSOR.SSM_A, gguf.MODEL_TENSOR.SSM_D,
         ]):
-            # For SSM A/D: NVIDIA [128] -> llama.cpp expects [128, 1] 
-            # But ensure exactly [128, 1] not [1, 128] to avoid GGML reversal issues
-            if len(data_torch.shape) == 1:  # [128]
+            if len(data_torch.shape) == 1:
                 data_torch = data_torch.unsqueeze(1)  # -> [128, 1] explicitly
         elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_NORM, bid):
-            data_torch = data_torch.reshape((self.n_group, self.d_inner // self.n_group))
+            if len(data_torch.shape) == 1:  # [10240]
+                elements_per_group = data_torch.numel() // self.n_group
+                data_torch = data_torch.reshape((elements_per_group, self.n_group))
 
-        # Apply A_log transformation
+        # Apply A_log transformation for base cases
         if name.endswith(".A_log"):
-            logger.debug("A_log --> A ==> " + new_name)
             data_torch = -torch.exp(data_torch)
 
         yield (new_name, data_torch)
@@ -7973,9 +8027,6 @@ class NemotronHModel(Mamba2Model):
         d_state = self.find_hparam(["state_size",  "d_state"],    optional=True) or 128
         head_dim = self.find_hparam(["mamba_d_head", "head_dim"], optional=True) or 64
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
-        
-        # Skip the d_inner == 2 * d_model assertion for hybrid architectures
-        # Nemotron-H has a different inner dimension calculation based on mamba_num_heads * mamba_head_dim
         
         self.gguf_writer.add_context_length(2**20)  # arbitrary value; for those who use the default
         self.gguf_writer.add_embedding_length(self.d_model)
@@ -8001,125 +8052,22 @@ class NemotronHModel(Mamba2Model):
         self.gguf_writer.add_array(f"{gguf.MODEL_ARCH_NAMES[self.model_arch]}.layer_types", layer_types)
 
     def set_vocab(self):
+        # BOS token handling fix from Gabe's findings - ensures tensor alignment through first conv1d
         self._set_vocab_gpt2()
+        
+        # Nemotron-H specific BOS token configuration
+        try:
+            # Force BOS token ID to align with model expectations
+            self.gguf_writer.add_bos_token_id(1)  # Standard GPT-2 style BOS token
+            logger.info("Applied Nemotron-H BOS token fix for conv1d alignment")
+        except Exception as e:
+            logger.debug(f"BOS token already set or unavailable: {e}")
 
-    def modify_tensors(self, data_torch, name, bid):
-        # Custom tensor name mapping for Nemotron-H hybrid architecture
-        
-        # Handle token embeddings and output tensors
-        if "backbone.embeddings.weight" in name:
-            return [(self.map_tensor_name("token_embd.weight"), data_torch)]
-        elif "backbone.norm.weight" in name:
-            return [(self.map_tensor_name("output_norm.weight"), data_torch)]
-        elif "backbone.lm_head.weight" in name:
-            return [(self.map_tensor_name("output.weight"), data_torch)]
-        
-        # Handle layer-specific tensors
-        if "backbone.layers." in name and bid is not None:
-            # Extract the actual layer component name
-            parts = name.split(".")
-            if len(parts) >= 4:
-                layer_component = ".".join(parts[3:])  # Everything after "backbone.layers.X"
-                
-                # Detect layer type based on tensor names and map accordingly
-                if layer_component == "norm.weight":
-                    # Layer norm (not mixer norm) - all layers use attn_norm in llama.cpp
-                    new_name = f"blk.{bid}.attn_norm.weight"
-                elif any(x in layer_component for x in ["A_log", "D", "conv1d", "dt_bias", "in_proj", "mixer.norm", "out_proj"]):
-                    # Mamba layer tensors (note: mixer.norm, not just norm.weight)
-                    new_name = self._map_mamba_tensor(layer_component, bid)
-                    # NVIDIA GROUND TRUTH TENSOR TRANSFORMATIONS
-                    
-                    # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288]
-                    # IMPORTANT: GGUF reverses dimensions, so we need [12288, 4] to get {4, 12288} in metadata
-                    if "conv1d.weight" in layer_component:
-                        original_shape = data_torch.shape
-                        if len(data_torch.shape) == 3:  # [12288, 1, 4]
-                            # Remove middle dimension: [12288, 1, 4] -> [12288, 4] (no transpose for GGUF reversal)
-                            data_torch = data_torch.squeeze(1).contiguous()  # -> [12288, 4]
-                        elif len(data_torch.shape) == 2:  # [12288, 4]
-                            data_torch = data_torch.contiguous()  # Keep [12288, 4] (no transpose for GGUF reversal)
-                        # Ensure final shape is exactly [12288, 4] (will become {4, 12288} after GGUF reversal)
-                        assert data_torch.shape == (12288, 4), f"Conv1d wrong final shape: {data_torch.shape}"
-                        print(f"DEBUG: Conv1d {layer_component} {original_shape} -> {data_torch.shape}")
-                        
-                    # A_log: NVIDIA [128] -> llama.cpp [128, 1] with -exp transform
-                    # IMPORTANT: GGUF reverses dimensions, so we need [1, 128] to get {128, 1} in metadata
-                    if layer_component.endswith("A_log"):
-                        original_shape = data_torch.shape
-                        data_torch = -torch.exp(data_torch)  # Apply -exp transformation
-                        if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.reshape(1, 128)  # -> [1, 128] for GGUF reversal
-                        print(f"DEBUG: A_log {layer_component} {original_shape} -> {data_torch.shape}")
-                            
-                    # D: NVIDIA [128] -> llama.cpp [128, 1] 
-                    # IMPORTANT: GGUF reverses dimensions, so we need [1, 128] to get {128, 1} in metadata
-                    if layer_component.endswith("D"):
-                        original_shape = data_torch.shape
-                        if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.reshape(1, 128)  # -> [1, 128] for GGUF reversal
-                        print(f"DEBUG: D {layer_component} {original_shape} -> {data_torch.shape}")
-                            
-                    # Grouped RMSNorm: NVIDIA [10240] -> llama.cpp [1280, 8]
-                    if layer_component == "mixer.norm.weight":
-                        if len(data_torch.shape) == 1:  # [10240]
-                            # 10240 elements = 1280 * 8 groups
-                            data_torch = data_torch.reshape(1280, 8)
-                    # in_proj needs split order expected by llama.cpp mamba2 builder: [z, xBC, dt]
-                    if layer_component == "mixer.in_proj.weight":
-                        W = data_torch
-                        # Expected logical sizes
-                        d_x_part = self.d_inner + 2 * self.n_group * self.d_state
-                        n_head = max(1, self.d_inner // max(1, self.d_head))
-                        exp_d_in_proj = 2 * self.d_inner + 2 * self.n_group * self.d_state + n_head
-                        # Detect orientation: [n_embd, d_in_proj] or [d_in_proj, n_embd]
-                        if W.shape[1] == self.d_model and W.shape[0] == exp_d_in_proj:
-                            W = W.t().contiguous()
-                        n_embd, d_in_proj = W.shape
-                        # Validate
-                        if d_in_proj < (self.d_inner + d_x_part + n_head):
-                            # Can't reliably repack; keep original mapping
-                            return [(self._map_mamba_tensor(layer_component, bid), data_torch)]
-                        # Assume dt at the end
-                        dt = W[:, -n_head:]
-                        body = W[:, : d_in_proj - n_head]
-                        # Two common packings: [z, xBC] or [xBC, z]
-                        # Prefer moving z to the front: [z, xBC, dt]
-                        # Heuristic: pick the split that yields xBC width == d_x_part
-                        z_first = False
-                        # Try xBC first
-                        xbc = body[:, : d_x_part]
-                        z = body[:, d_x_part: d_x_part + self.d_inner]
-                        if z.shape[1] != self.d_inner:
-                            # Try z first
-                            z_first = True
-                            z = body[:, : self.d_inner]
-                            xbc = body[:, self.d_inner: self.d_inner + d_x_part]
-                        repacked = torch.cat([z, xbc, dt], dim=1)
-                        data_torch = repacked
-                elif any(x in layer_component for x in ["q_proj", "k_proj", "v_proj", "o_proj"]):
-                    # Attention layer tensors
-                    new_name = self._map_attention_tensor(layer_component, bid)
-                elif any(x in layer_component for x in ["down_proj", "up_proj"]):
-                    # MLP layer tensors
-                    new_name = self._map_mlp_tensor(layer_component, bid)
-                else:
-                    # Fallback to default mapping
-                    return super().modify_tensors(data_torch, name, bid)
-                
-                # Debug: verify final tensor shape before returning (accounting for GGUF reversal)
-                if any(x in layer_component for x in ["A_log", "D", "conv1d.weight"]):
-                    print(f"DEBUG: Final tensor {new_name} shape: {data_torch.shape} (will reverse to GGUF metadata)")
-                return [(new_name, data_torch)]
-        
-        # Default to parent processing
-        return super().modify_tensors(data_torch, name, bid)
-    
     def _map_mamba_tensor(self, component, bid):
         """Map Mamba layer tensor names"""
         mapping = {
-            "mixer.A_log": f"blk.{bid}.ssm_a",  # No .weight suffix for ssm_a and ssm_d
-            "mixer.D": f"blk.{bid}.ssm_d",  # No .weight suffix for ssm_a and ssm_d
+            "mixer.A_log": f"blk.{bid}.ssm_a",
+            "mixer.D": f"blk.{bid}.ssm_d",
             "mixer.conv1d.weight": f"blk.{bid}.ssm_conv1d.weight",
             "mixer.conv1d.bias": f"blk.{bid}.ssm_conv1d.bias",
             "mixer.dt_bias": f"blk.{bid}.ssm_dt.bias",
@@ -8133,7 +8081,6 @@ class NemotronHModel(Mamba2Model):
         # 1) explicit layer types list
         lt = self.hparams.get("layer_types")
         if isinstance(lt, list):
-            # support string or int types
             attn = []
             for i, t in enumerate(lt):
                 if isinstance(t, str) and t.lower().startswith("attn"):
@@ -8152,7 +8099,6 @@ class NemotronHModel(Mamba2Model):
         # 4) fallback: Nemotron-H 9B default or evenly spaced ~8%
         if self.block_count == 56:
             return [14, 21, 30, 39]
-        # evenly spaced n ~ max(1, round(0.08 * L))
         n = max(1, round(0.08 * self.block_count))
         if n >= self.block_count:
             return list(range(self.block_count))

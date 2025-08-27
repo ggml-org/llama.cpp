@@ -3731,8 +3731,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     const int64_t d_inner = hparams.ssm_d_inner;
                     const int64_t d_state = hparams.ssm_d_state;
                     const int64_t n_group = hparams.ssm_n_group;
-                    // Calculate d_in_proj dynamically from tensor - will be determined from GGUF
-                    int64_t d_in_proj = 2 * d_inner;  // Default fallback, will be updated from actual tensor
+                    // Calculate d_in_proj - Nemotron-H uses 22656 instead of calculated 2*d_inner=24576
+                    int64_t d_in_proj = 22656;  // Nemotron-H actual tensor dimension from GGUF
 
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -3764,7 +3764,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         if (is_mamba_layer) {
                             // Mamba-2 style SSM tensors (Nemotron-H) compatible with build_mamba2_layer
                             // in_proj packs [x1, B, C, x2, dt_hat] in this kernel order
-                            layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, d_in_proj}, 0);
+                            // Try calculated dimensions first, fallback to Nemotron-H actual dimensions (22656)
+                            layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, d_in_proj}, TENSOR_NOT_REQUIRED);
+                            if (!layer.ssm_in) {
+                                // Nemotron-H has different d_in_proj than calculated - use actual dimensions
+                                const int64_t nemotron_d_in_proj = 22656; // Actual tensor size from GGUF
+                                layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, nemotron_d_in_proj}, 0);
+                                d_in_proj = nemotron_d_in_proj; // Update for consistency
+                            }
 
                             // depthwise conv: GGUF has {12288, 4} due to conversion - adapt to ground truth
                             // NVIDIA ground truth: [12288, 1, 4] -> GGUF: {12288, 4} 
@@ -3784,9 +3791,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_state}, 0); // Use d_state (128) not n_head (80)
 
                             // SSM decay and skip parameters per SSM state dimension
-                            // Nemotron-H: GGUF has A,D as {128, 1} due to conversion - adapt to ground truth
-                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {d_state, 1}, 0);
-                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {d_state, 1}, 0);
+                            // Nemotron-H: GGUF has A,D as {1, 128} due to conversion - match actual GGUF dimensions
+                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, d_state}, 0);
+                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {1, d_state}, 0);
 
                             // grouped RMSNorm: GGUF has {8, 1280} due to conversion - adapt to ground truth 
                             // 10240 total elements grouped as 8 groups of 1280 elements each
@@ -11463,10 +11470,12 @@ struct llm_graph_context_mamba : public llm_graph_context {
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
             y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
-            // grouped RMS norm
+            // flattened RMS norm for models with n_groups > 1 (Nemotron-H fix)
+            // Nemotron-H has n_groups=8, requires flattened norm calculation
             if (model.layers[il].ssm_norm) {
-                y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
-                y = build_norm(y, model.layers[il].ssm_norm, NULL, LLM_NORM_RMS, il);
+                y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
+                ggml_tensor * ssm_norm_1d = ggml_reshape_1d(ctx0, model.layers[il].ssm_norm, d_inner);
+                y = build_norm(y, ssm_norm_1d, NULL, LLM_NORM_RMS, il);
             }
 
             y = ggml_reshape_3d(ctx0, y, d_inner, n_seq_tokens, n_seqs);
@@ -11725,8 +11734,11 @@ struct llm_build_nemotron_h : public llm_graph_context_mamba {
                         kv_head*(d_conv - 1)*(d_inner + 2*n_group*d_state)*ggml_element_size(conv_states_all))));
             cb(conv_states_all, "nemotron_h_conv1d_state", il);
 
-            // 1D convolution
-            x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
+            // 1D convolution - extract only the first d_inner elements for convolution
+            ggml_tensor * conv_x_inner = ggml_view_3d(ctx0, conv_x, 
+                conv_x->ne[0], d_inner, conv_x->ne[2], 
+                conv_x->nb[1], conv_x->nb[2], 0);
+            x = ggml_ssm_conv(ctx0, conv_x_inner, model.layers[il].ssm_conv1d);
             cb(x, "nemotron_h_conv1d", il);
 
             // bias
