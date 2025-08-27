@@ -142,6 +142,8 @@
 			return false;
 		}
 
+		// Enable autoscroll for user-initiated message sending
+		autoScrollEnabled = true;
 		await sendMessage(message, extras);
 		scrollChatToBottom();
 
@@ -266,7 +268,11 @@
 		role="main"
 		aria-label="Chat interface with file drop zone"
 	>
-		<ChatMessages class="mb-16 md:mb-24" messages={activeMessages()} />
+		<ChatMessages 
+			class="mb-16 md:mb-24" 
+			messages={activeMessages()} 
+			onUserAction={() => { autoScrollEnabled = true; }}
+		/>
 
 		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
 			<SlotsInfo />

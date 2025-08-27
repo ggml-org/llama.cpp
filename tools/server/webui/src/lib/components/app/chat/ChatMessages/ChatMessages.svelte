@@ -13,9 +13,10 @@
 	interface Props {
 		class?: string;
 		messages?: DatabaseMessage[];
+		onUserAction?: () => void;
 	}
 
-	let { class: className, messages = [] }: Props = $props();
+	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	let lastUpdateTime = $state(0);
@@ -73,11 +74,15 @@
 		await navigateToSibling(siblingId);
 	}
 	async function handleEditWithBranching(message: DatabaseMessage, newContent: string) {
+		// Enable autoscroll for user-initiated edit action
+		onUserAction?.();
 		await editMessageWithBranching(message.id, newContent);
 		// Refresh after editing to update sibling counts
 		refreshAllMessages();
 	}
 	async function handleRegenerateWithBranching(message: DatabaseMessage) {
+		// Enable autoscroll for user-initiated regenerate action
+		onUserAction?.();
 		await regenerateMessageWithBranching(message.id);
 		// Refresh after regenerating to update sibling counts
 		refreshAllMessages();
