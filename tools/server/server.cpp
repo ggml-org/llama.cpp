@@ -5004,7 +5004,7 @@ int main(int argc, char ** argv) {
         // Only add fallback when using embedded static files
         svr->Get(".*", [](const httplib::Request & req, httplib::Response & res) {
             // Skip API routes - they should have been handled above
-            if (req.path.find("/v1/") != std::string::npos || 
+            if (req.path.find("/v1/") != std::string::npos ||
                 req.path.find("/health") != std::string::npos ||
                 req.path.find("/metrics") != std::string::npos ||
                 req.path.find("/props") != std::string::npos ||
@@ -5019,7 +5019,7 @@ int main(int argc, char ** argv) {
                 req.path.find("/slots") != std::string::npos) {
                 return false; // Let other handlers process API routes
             }
-            
+
             // Serve index.html for all other routes (SPA fallback)
             if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
                 res.set_content("Error: gzip is not supported by this browser", "text/plain");
