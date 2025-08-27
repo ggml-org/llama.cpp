@@ -1,4 +1,5 @@
 #include "vec.h"
+#include <riscv_vector.h>
 
 #include <cassert>
 
@@ -85,15 +86,21 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);
     #elif defined(__riscv_v_intrinsic)
-        vfloat32m1_t vsum = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-        for (int i = 0, avl; i < n; i += avl) {
-            avl = __riscv_vsetvl_e32m8(n - i);
-            vfloat32m8_t ax = __riscv_vle32_v_f32m8(&x[i], avl);
-            vfloat32m8_t ay = __riscv_vle32_v_f32m8(&y[i], avl);
-            vfloat32m8_t prod = __riscv_vfmul_vv_f32m8(ax, ay, avl);
-            vsum = __riscv_vfredusum_vs_f32m8_f32m1(prod, vsum, avl);
+        int vl = __riscv_vsetvlmax_e32m8();
+        vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+        vfloat32m8_t vsum;
+        vfloat32m8_t ax;
+        vfloat32m8_t ay;
+        vsum = __riscv_vfmv_v_f_f32m8_tu(vsum, 0.0f, vl);
+        for (int i = 0; i < n; i += vl) {
+            vl = __riscv_vsetvl_e32m8(n - i);
+            ax = __riscv_vle32_v_f32m8_tu(ax, &x[i], vl);
+            ay = __riscv_vle32_v_f32m8_tu(ay, &y[i], vl);
+            vsum = __riscv_vfmacc_vv_f32m8_tu(vsum, ax, ay, vl);
         }
-        sumf += __riscv_vfmv_f_s_f32m1_f32(vsum);
+        vl = __riscv_vsetvlmax_e32m8();
+        vs = __riscv_vfredusum_vs_f32m8_f32m1(vsum, vs, vl);
+        sumf += __riscv_vfmv_f_s_f32m1_f32(vs);
     #else
         const int np = (n & ~(GGML_F32_STEP - 1));
 
