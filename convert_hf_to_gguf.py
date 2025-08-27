@@ -8208,7 +8208,13 @@ class GptOssModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-
+        
+        name = name.replace("language_model.", "") # InternVL
+        
+        if name.startswith("vision_model") or name.startswith("mlp") :    
+            # skip vision tensors
+            return []
+            
         if "sinks" in name:
             name += ".weight"
 
