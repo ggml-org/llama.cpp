@@ -1270,15 +1270,18 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
             const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
 
-            int tmp, tmp2, sumi;
+            int tmp, tmp2;
+            float ftmp, ft2;
+
             __asm__ __volatile__(
-                "vsetivli zero, 12, e8, m1\n\t"
-                "vle8.v v1, (%[s6b])\n\t" // {aux[0], aux[1], aux[2]}
-                "vsetivli zero, 4, e32, m1\n\t"
+                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+                "vle32.v v1, (%[s6b])\n\t"
+                "vslide1down.vx v1, v1, zero\n\t"
+                "vmv.v.x v16, zero\n\t"
                 "vslidedown.vi v2, v1, 2\n\t"
                 "vmv1r.v v3, v2\n\t"
                 "vslideup.vi v2, v3, 1\n\t" // {aux[2], aux[2]}
-                "vsetivli zero, 2, e32, m1\n\t"
+                "vsetivli zero, 2, e32, m1, ta, ma\n\t"
                 "vmv.v.i v4, 4\n\t"
                 "vand.vx v8, v1, %[kmask1]\n\t"
                 "vslide1up.vx v5, v4, zero\n\t" // {0, 4}
@@ -1292,7 +1295,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 "vor.vv v1, v6, v2\n\t"
                 "vsse32.v v8, (%[utmp]), %[t2]\n\t"
                 "vsse32.v v1, (%[t1]), %[t2]\n\t"
-                "vsetivli zero, 8, e16, m1\n\t"
+                "vsetivli zero, 8, e16, m1, ta, ma\n\t"
                 "vle32.v v2, (%[bsums])\n\t"
                 "vnsrl.wi v0, v2, 0\n\t"
                 "vnsrl.wi v1, v2, 16\n\t"
@@ -1300,13 +1303,14 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 "vle8.v v3, (%[mins])\n\t"
                 "vzext.vf2 v4, v3\n\t"
                 "vwmul.vv v6, v4, v2\n\t"
-                "vmv.v.x v0, zero\n\t"
-                "vsetivli zero, 8, e32, m2\n\t"
-                "vredsum.vs v0, v6, v0\n\t"
-                "vmv.x.s %[sumi], v0"
-                : [t1] "=&r" (tmp), [t2] "=&r" (tmp2), [sumi] "=&r" (sumi)
+                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+                "vredsum.vs v0, v6, v16\n\t"
+                "vredsum.vs v0, v7, v0\n\t"
+                "vfcvt.f.x.v v0, v0\n\t"
+                "vfmv.f.s %[ftmp], v0"
+                : [t1] "=&r" (tmp), [t2] "=&r" (tmp2), [ftmp] "=&f" (ftmp)
                 : [bsums] "r" (y[i].bsums), [mins] "r" (mins), [utmp] "r" (utmp)
-                , [s6b] "r" (x[i].scales), [kmask1] "r" (kmask1)
+                , [s6b] "r" (&x[i]), [kmask1] "r" (kmask1)
                 , [kmask2] "r" (kmask2), [kmask3] "r" (kmask3)
                 : "memory"
                 , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
@@ -1314,59 +1318,144 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
                 , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
             );
-            sumf -= dmin * sumi;
+            sumf -= dmin * ftmp;
 
-            const uint8_t * restrict q4 = x[i].qs;
-            const int8_t  * restrict q8 = y[i].qs;
+            const uint8_t * restrict q40 = x[i].qs + 0;
+            const uint8_t * restrict q41 = x[i].qs + 16;
+            const uint8_t * restrict q42 = x[i].qs + 32;
+            const uint8_t * restrict q43 = x[i].qs + 48;
+            const int8_t  * restrict q80;
+            const int8_t  * restrict q81;
+            const int8_t  * restrict q82;
+            const int8_t  * restrict q83;
 
-            sumi = 0;
+            ftmp = 0;
             const uint8_t * scale = scales;
 
-            for (int j = 0; j < QK_K/128; ++j) {
-                int vl128 = 128, vl64 = 64, vl32 = 32;
-                __asm__ __volatile__(
-                    "vsetvli zero, %[vl128], e8, m8\n\t"
-                    "vle8.v v8, (%[q8])\n\t"
-                    "vsetvli zero, %[vl64], e8, m4\n\t"
-                    "vle8.v v0, (%[q4])\n\t"
-                    "vsrl.vi v4, v0, 4\n\t"
-                    "vand.vi v0, v0, 0xF\n\t"
-                    "vsetvli zero, %[vl32], e8, m2\n\t"
-                    "vwmul.vv v28, v6, v14\n\t"
-                    "vwmul.vv v20, v4, v10\n\t"
-                    "vwmul.vv v24, v2, v12\n\t"
-                    "vwmul.vv v16, v0, v8\n\t"
-                    "vsetivli zero, 4, e32, m1\n\t"
-                    "vle8.v v2, (%[scale])\n\t"
-                    "vmv.v.x v0, zero\n\t"
-                    "vzext.vf4 v1, v2\n\t"
-                    "vsetvli zero, %[vl32], e16, m4\n\t"
-                    "vwredsum.vs v6, v24, v0\n\t"
-                    "vwredsum.vs v7, v28, v0\n\t"
-                    "vwredsum.vs v4, v16, v0\n\t"
-                    "vwredsum.vs v5, v20, v0\n\t"
-                    "vsetivli zero, 4, e32, m1\n\t"
-                    "vslideup.vi v6, v7, 1\n\t"
-                    "vslideup.vi v4, v5, 1\n\t"
-                    "vslideup.vi v4, v6, 2\n\t"
-                    "vmul.vv v8, v4, v1\n\t"
-                    "vredsum.vs v0, v8, v0\n\t"
-                    "vmv.x.s %[tmp], v0\n\t"
-                    "add %[sumi], %[sumi], %[tmp]"
-                    : [tmp] "=&r" (tmp), [sumi] "+&r" (sumi)
-                    : [vl128] "r" (vl128), [vl64] "r" (vl64), [vl32] "r" (vl32)
-                    , [q4] "r" (q4), [q8] "r" (q8), [scale] "r" (scale)
-                    : "memory"
-                    , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
-                    , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
-                    , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
-                    , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
-                );
-
-                q4 += 64;    q8 += 128;    scale += 4;
-            }
-
-            sumf += d * sumi;
+            int s0, s1, s2, s3;
+            __asm__ __volatile__(
+                "vsetivli zero, 16, e8, m1, ta, ma\n\t"
+                "vle8.v v0, (%[q40])\n\t"
+                "addi %[q80], %[ys], 0\n\t"
+                "addi %[q40], %[q40], 64\n\t"
+                "vle8.v v1, (%[q41])\n\t"
+                "addi %[q81], %[ys], 16\n\t"
+                "addi %[q41], %[q41], 64\n\t"
+                "vle8.v v2, (%[q42])\n\t"
+                "addi %[q82], %[ys], 32\n\t"
+                "addi %[q42], %[q42], 64\n\t"
+                "vle8.v v3, (%[q43])\n\t"
+                "addi %[q83], %[ys], 48\n\t"
+                "addi %[q43], %[q43], 64\n\t"
+                "vle8.v v8, (%[q80])\n\t"
+                "vsrl.vi v4, v0, 4\n\t"
+                "addi %[q80], %[q80], 64\n\t"
+                "vle8.v v9, (%[q81])\n\t"
+                "vand.vi v0, v0, 0xF\n\t"
+                "addi %[q81], %[q81], 64\n\t"
+                "vle8.v v10, (%[q82])\n\t"
+                "vsrl.vi v5, v1, 4\n\t"
+                "addi %[q82], %[q82], 64\n\t"
+                "vle8.v v11, (%[q83])\n\t"
+                "vand.vi v1, v1, 0xF\n\t"
+                "addi %[q83], %[q83], 64\n\t"
+                "vle8.v v12, (%[q80])\n\t"
+                "vsrl.vi v6, v2, 4\n\t"
+                "addi %[q80], %[q80], 64\n\t"
+                "vle8.v v13, (%[q81])\n\t"
+                "vand.vi v2, v2, 0xF\n\t"
+                "addi %[q81], %[q81], 64\n\t"
+                "vle8.v v14, (%[q82])\n\t"
+                "vsrl.vi v7, v3, 4\n\t"
+                "addi %[q82], %[q82], 64\n\t"
+                "vle8.v v15, (%[q83])\n\t"
+                "vand.vi v3, v3, 0xF\n\t"
+                "addi %[q83], %[q83], 64\n\t"
+                "vwmul.vv v16, v0, v8\n\t"
+                "vwmul.vv v24, v2, v12\n\t"
+                "vwmul.vv v20, v4, v10\n\t"
+                "vwmul.vv v28, v6, v14\n\t"
+                "vwmacc.vv v16, v1, v9\n\t"
+                "vwmacc.vv v24, v3, v13\n\t"
+                "vwmacc.vv v20, v5, v11\n\t"
+                "vwmacc.vv v28, v7, v15\n\t"
+                "vle8.v v0, (%[q40])\n\t"
+                "addi %[q40], %[q80], 64\n\t"
+                "vle8.v v1, (%[q41])\n\t"
+                "addi %[q41], %[q81], 64\n\t"
+                "vle8.v v2, (%[q42])\n\t"
+                "addi %[q42], %[q82], 64\n\t"
+                "vle8.v v3, (%[q43])\n\t"
+                "addi %[q43], %[q83], 64\n\t"
+                "vle8.v v8, (%[q80])\n\t"
+                "vsrl.vi v4, v0, 4\n\t"
+                "vle8.v v9, (%[q81])\n\t"
+                "vand.vi v0, v0, 0xF\n\t"
+                "vle8.v v10, (%[q82])\n\t"
+                "vsrl.vi v5, v1, 4\n\t"
+                "vle8.v v11, (%[q83])\n\t"
+                "vand.vi v1, v1, 0xF\n\t"
+                "vle8.v v12, (%[q40])\n\t"
+                "vsrl.vi v6, v2, 4\n\t"
+                "vle8.v v13, (%[q41])\n\t"
+                "vand.vi v2, v2, 0xF\n\t"
+                "vle8.v v14, (%[q42])\n\t"
+                "vsrl.vi v7, v3, 4\n\t"
+                "vle8.v v15, (%[q43])\n\t"
+                "vand.vi v3, v3, 0xF\n\t"
+                "vwmul.vv v18, v0, v8\n\t"
+                "vwmul.vv v26, v2, v12\n\t"
+                "vwmul.vv v22, v4, v10\n\t"
+                "vwmul.vv v30, v6, v14\n\t"
+                "vwmacc.vv v18, v1, v9\n\t"
+                "vwmacc.vv v26, v3, v13\n\t"
+                "vwmacc.vv v22, v5, v11\n\t"
+                "vwmacc.vv v30, v7, v15\n\t"
+                "vmv.v.x v0, zero\n\t"
+                "vsetivli zero, 16, e16, m2, ta, ma\n\t"
+                "vwredsum.vs v4, v16, v0\n\t"
+                "lbu %[s0], 0(%[scale])\n\t"
+                "vwredsum.vs v5, v20, v0\n\t"
+                "lbu %[s1], 1(%[scale])\n\t"
+                "vwredsum.vs v6, v24, v0\n\t"
+                "lbu %[s2], 2(%[scale])\n\t"
+                "vwredsum.vs v7, v28, v0\n\t"
+                "lbu %[s3], 3(%[scale])\n\t"
+                "vwredsum.vs v8, v18, v0\n\t"
+                "lbu %[q40], 4(%[scale])\n\t"
+                "vwredsum.vs v9, v22, v0\n\t"
+                "lbu %[q41], 5(%[scale])\n\t"
+                "vwredsum.vs v10, v26, v0\n\t"
+                "lbu %[q42], 6(%[scale])\n\t"
+                "vwredsum.vs v11, v30, v0\n\t"
+                "lbu %[q43], 7(%[scale])\n\t"
+                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+                "vmul.vx v0, v4, %[s0]\n\t"
+                "vmul.vx v1, v8, %[q40]\n\t"
+                "vmacc.vx v0, %[s1], v5\n\t"
+                "vmacc.vx v1, %[q41], v9\n\t"
+                "vmacc.vx v0, %[s2], v6\n\t"
+                "vmacc.vx v1, %[q42], v10\n\t"
+                "vmacc.vx v0, %[s3], v7\n\t"
+                "vmacc.vx v1, %[q43], v11\n\t"
+                "vfcvt.f.x.v v0, v0\n\t"
+                "vfcvt.f.x.v v1, v1\n\t"
+                "vfmv.f.s %[ft2], v0\n\t"
+                "vfmv.f.s %[ftmp], v1\n\t"
+                "fadd.s %[ft2], %[ft2], %[ftmp]\n\t"
+                "fmadd.s %[sumf], %[d], %[ft2], %[sumf]"
+                : [tmp] "=&r" (tmp), [ftmp] "=&f" (ftmp), [sumf] "+&f" (sumf), [ft2] "=&f" (ft2)
+                , [s0] "=&r" (s0), [s1] "=&r" (s1), [s2] "=&r" (s2), [s3] "=&r" (s3)
+                , [q40] "+&r" (q40), [q41] "+&r" (q41), [q42] "+&r" (q42), [q43] "+&r" (q43)
+                , [q80] "=&r" (q80), [q81] "=&r" (q81), [q82] "=&r" (q82), [q83] "=&r" (q83)
+                , [scale] "+&r" (scale)
+                : [d] "f" (d), [ys] "r" (y[i].qs)
+                : "memory"
+                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+            );
         }
         break;
     default:
