@@ -191,7 +191,7 @@ int main(int argc, char ** argv) {
 
                 const float speed_pp = is_pp_shared ? pp / t_pp : pl*pp / t_pp;
                 const float speed_tg = pl*tg / t_tg;
-                const float speed    = n_kv / t;
+                const float speed    = ((is_pp_shared ? pp : pl*pp) + pl*tg) / t;
 
                 if(params.batched_bench_output_jsonl) {
                     LOG(

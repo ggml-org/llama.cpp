@@ -137,6 +137,18 @@ Then the quantized model can be run using the following command:
 (venv) $ make causal-run-quantized-model
 ```
 
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make causal-quantize-qat-Q4_0
+```
+
 
 ## Embedding Language Model Conversion
 
@@ -236,6 +248,18 @@ export QUANTIZED_EMBEDDING_MODEL=/path/to/quantized/model-Q8_0.gguf
 Then the quantized model can be run using the following command:
 ```console
 (venv) $ make embedding-run-quantized-model
+```
+
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make embedding-quantize-qat-Q4_0
 ```
 
 ## Perplexity Evaluation
