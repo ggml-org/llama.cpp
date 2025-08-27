@@ -486,6 +486,14 @@ inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
     return v_abo + v_abe;
 }
 
+/**
+ * @see https://github.com/ggml-org/llama.cpp/pull/14037
+ */
+inline float vec_hsum(float32x4_t v) {
+    float32x4_t v_temp = v + vec_reve(v);
+    return v_temp[0] + v_temp[1];
+}
+
 inline static int32x4_t ggml_vec_dot(int32x4_t acc, int8x16_t a, int8x16_t b) {
     const int16x8_t p = vec_mule(a, b) + vec_mulo(a, b);
     return acc + (vec_unpackh(p) + vec_unpackl(p));

@@ -28,7 +28,6 @@ LLAMA_BENCH_DB_FIELDS = [
     "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
     "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
     "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-    "defrag_thold",
     "use_mmap",     "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
     "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
 ]
@@ -38,7 +37,6 @@ LLAMA_BENCH_DB_TYPES = [
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "TEXT",    "TEXT",    "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "TEXT",    "TEXT",
-    "REAL",
     "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",
 ]

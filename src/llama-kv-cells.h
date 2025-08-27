@@ -77,24 +77,24 @@ public:
     }
 
     // move cell isrc to idst (used during defrag)
-    void mv(uint32_t isrc, uint32_t idst) {
-        assert(isrc < pos.size());
-        assert(idst < pos.size());
+    //void mv(uint32_t isrc, uint32_t idst) {
+    //    assert(isrc < pos.size());
+    //    assert(idst < pos.size());
 
-        assert(pos[idst] == -1);
-        assert(pos[isrc] != -1);
+    //    assert(pos[idst] == -1);
+    //    assert(pos[isrc] != -1);
 
-        pos  [idst] = pos  [isrc];
-        shift[idst] = shift[isrc];
-        seq  [idst] = seq  [isrc];
+    //    pos  [idst] = pos  [isrc];
+    //    shift[idst] = shift[isrc];
+    //    seq  [idst] = seq  [isrc];
 
-        pos  [isrc] = -1;
-        shift[isrc] =  0;
-        seq  [isrc].reset();
+    //    pos  [isrc] = -1;
+    //    shift[isrc] =  0;
+    //    seq  [isrc].reset();
 
-        used.erase (isrc);
-        used.insert(idst);
-    }
+    //    used.erase (isrc);
+    //    used.insert(idst);
+    //}
 
     // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
     llama_kv_cells cp(uint32_t i, uint32_t n) const {
