@@ -296,9 +296,17 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                # Debug tensor shape tracking
+                if any(x in new_name for x in ["ssm_a", "ssm_d", "ssm_conv1d.weight"]):
+                    print(f"DEBUG: Pre-numpy {new_name} torch shape: {data_torch.shape}")
+                
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
+                
+                # Debug numpy shape
+                if any(x in new_name for x in ["ssm_a", "ssm_d", "ssm_conv1d.weight"]):
+                    print(f"DEBUG: Post-numpy {new_name} numpy shape: {data.shape}")
 
                 # if data ends up empty, it means data_torch was a scalar tensor -> restore
                 if len(data.shape) == 0:
@@ -383,6 +391,11 @@ class ModelBase:
                     data = gguf.quants.quantize(data, data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
+
+                # Debug shape before and after reversal
+                if any(x in new_name for x in ["ssm_a", "ssm_d", "ssm_conv1d.weight"]):
+                    print(f"DEBUG: {new_name} raw shape: {shape}")
+                    print(f"DEBUG: {new_name} reversed: {list(reversed(shape))}")
 
                 # reverse shape to make it similar to the internal ggml dimension order
                 shape_str = f"{{{', '.join(str(n) for n in reversed(shape))}}}"
@@ -7919,6 +7932,41 @@ class NemotronHModel(Mamba2Model):
         # Determine attention layers
         self._attn_layers = self._get_attn_layers()
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Override Mamba2 tensor transformation with Nemotron-H specific logic"""
+        
+        if name.startswith("model.backbone") or name.startswith("model.lm_head"):
+            # map Mamba-Codestral-7B-v0.1 tensor names to the names used by Mamba-2
+            name = name.removeprefix("model.")
+
+        if name.endswith(".dt_bias"):
+            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+
+        new_name = self.map_tensor_name(name)
+
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):
+            # For conv1d weights: [12288, 1, 4] -> squeeze -> [12288, 4] -> transpose -> [4, 12288]
+            data_torch = data_torch.squeeze()  # Remove dim 1
+            if len(data_torch.shape) == 2:
+                data_torch = data_torch.t().contiguous()  # [12288, 4] -> [4, 12288]
+        elif any(self.match_model_tensor_name(new_name, t, bid, suffix="") for t in [
+            gguf.MODEL_TENSOR.SSM_A,
+            gguf.MODEL_TENSOR.SSM_D,
+        ]):
+            # For SSM A/D: NVIDIA [128] -> llama.cpp expects [128, 1] 
+            # But ensure exactly [128, 1] not [1, 128] to avoid GGML reversal issues
+            if len(data_torch.shape) == 1:  # [128]
+                data_torch = data_torch.unsqueeze(1)  # -> [128, 1] explicitly
+        elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_NORM, bid):
+            data_torch = data_torch.reshape((self.n_group, self.d_inner // self.n_group))
+
+        # Apply A_log transformation
+        if name.endswith(".A_log"):
+            logger.debug("A_log --> A ==> " + new_name)
+            data_torch = -torch.exp(data_torch)
+
+        yield (new_name, data_torch)
+
     def set_gguf_parameters(self):
         """Override to skip Mamba2 parameter validation that doesn't apply to hybrid architecture"""
         d_conv  = self.find_hparam(["conv_kernel", "d_conv"],     optional=True) or 4
@@ -7983,27 +8031,34 @@ class NemotronHModel(Mamba2Model):
                     # NVIDIA GROUND TRUTH TENSOR TRANSFORMATIONS
                     
                     # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288]
+                    # IMPORTANT: GGUF reverses dimensions, so we need [12288, 4] to get {4, 12288} in metadata
                     if "conv1d.weight" in layer_component:
                         original_shape = data_torch.shape
                         if len(data_torch.shape) == 3:  # [12288, 1, 4]
-                            # Remove middle dimension and transpose: [12288, 1, 4] -> [12288, 4] -> [4, 12288]
-                            data_torch = data_torch.squeeze(1).t().contiguous()  # -> [4, 12288]
+                            # Remove middle dimension: [12288, 1, 4] -> [12288, 4] (no transpose for GGUF reversal)
+                            data_torch = data_torch.squeeze(1).contiguous()  # -> [12288, 4]
                         elif len(data_torch.shape) == 2:  # [12288, 4]
-                            data_torch = data_torch.t().contiguous()  # [12288, 4] -> [4, 12288]
-                        # Ensure final shape is exactly [4, 12288]
-                        assert data_torch.shape == (4, 12288), f"Conv1d wrong final shape: {data_torch.shape}"
+                            data_torch = data_torch.contiguous()  # Keep [12288, 4] (no transpose for GGUF reversal)
+                        # Ensure final shape is exactly [12288, 4] (will become {4, 12288} after GGUF reversal)
+                        assert data_torch.shape == (12288, 4), f"Conv1d wrong final shape: {data_torch.shape}"
                         print(f"DEBUG: Conv1d {layer_component} {original_shape} -> {data_torch.shape}")
                         
                     # A_log: NVIDIA [128] -> llama.cpp [128, 1] with -exp transform
+                    # IMPORTANT: GGUF reverses dimensions, so we need [1, 128] to get {128, 1} in metadata
                     if layer_component.endswith("A_log"):
+                        original_shape = data_torch.shape
                         data_torch = -torch.exp(data_torch)  # Apply -exp transformation
                         if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.reshape(128, 1)  # -> [128, 1] explicitly
+                            data_torch = data_torch.reshape(1, 128)  # -> [1, 128] for GGUF reversal
+                        print(f"DEBUG: A_log {layer_component} {original_shape} -> {data_torch.shape}")
                             
                     # D: NVIDIA [128] -> llama.cpp [128, 1] 
+                    # IMPORTANT: GGUF reverses dimensions, so we need [1, 128] to get {128, 1} in metadata
                     if layer_component.endswith("D"):
+                        original_shape = data_torch.shape
                         if len(data_torch.shape) == 1:  # [128]
-                            data_torch = data_torch.reshape(128, 1)  # -> [128, 1] explicitly
+                            data_torch = data_torch.reshape(1, 128)  # -> [1, 128] for GGUF reversal
+                        print(f"DEBUG: D {layer_component} {original_shape} -> {data_torch.shape}")
                             
                     # Grouped RMSNorm: NVIDIA [10240] -> llama.cpp [1280, 8]
                     if layer_component == "mixer.norm.weight":
@@ -8052,6 +8107,9 @@ class NemotronHModel(Mamba2Model):
                     # Fallback to default mapping
                     return super().modify_tensors(data_torch, name, bid)
                 
+                # Debug: verify final tensor shape before returning (accounting for GGUF reversal)
+                if any(x in layer_component for x in ["A_log", "D", "conv1d.weight"]):
+                    print(f"DEBUG: Final tensor {new_name} shape: {data_torch.shape} (will reverse to GGUF metadata)")
                 return [(new_name, data_torch)]
         
         # Default to parent processing
