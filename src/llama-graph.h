@@ -589,13 +589,15 @@ struct llm_graph_context {
     // do mat_mul, while optionally apply lora
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
-              ggml_tensor * cur) const;
+              ggml_tensor * cur,
+                ggml_prec   prec = GGML_PREC_DEFAULT) const;
 
     // do mat_mul_id, while optionally apply lora
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
-              ggml_tensor * ids) const;
+              ggml_tensor * ids,
+                ggml_prec   prec = GGML_PREC_DEFAULT) const;
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,
