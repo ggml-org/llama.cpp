@@ -451,7 +451,6 @@ void llama_model::load_arch(llama_model_loader & ml) {
 }
 
 void llama_model::load_hparams(llama_model_loader & ml) {
-    
     const gguf_context * ctx = ml.meta.get();
 
     // get metadata as string
@@ -464,7 +463,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         const std::string value = gguf_kv_to_str(ctx, i);
         gguf_kv.emplace(name, value);
     }
-
 
     // get general kv
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
@@ -586,7 +584,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     }
 
     // arch-specific KVs
-    LLAMA_LOG_INFO("Switching Arch\n");
     switch (arch) {
         case LLM_ARCH_LLAMA:
             {
@@ -1901,6 +1898,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
 void llama_model::load_vocab(llama_model_loader & ml) {
     const auto kv = LLM_KV(arch);
+
     vocab.load(ml, kv);
 }
 
@@ -2045,7 +2043,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
-            LLAMA_LOG_INFO("Creating Tensor: %s\n", tn.str().c_str());
+
             if (!t_meta) {
                 if (flags & TENSOR_NOT_REQUIRED) {
                     return nullptr;
@@ -2120,6 +2118,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
 
             ggml_backend_buffer_type_t buft = nullptr;
+
             // check overrides
             if (ml.tensor_buft_overrides) {
                 std::string tensor_name = tn.str();
@@ -2167,6 +2166,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     first_moved_to_buft   = buft;
                 }
             }
+            
             ggml_context * ctx = ctx_for_buft(buft);
 
             // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
@@ -2624,14 +2624,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_NOMIC_BERT_MOE:
                 {
                     tok_embd     = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
-                    tok_norm     = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
-
                     type_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, TENSOR_NOT_REQUIRED);                        
-                    tok_norm_b   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "bias"),   {n_embd}, 0);
-
 
                     if (arch == LLM_ARCH_BERT) {
                         pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,    "weight"), {n_embd, n_ctx_train}, 0);
+
                         cls   = create_tensor(tn(LLM_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
                         cls_b = create_tensor(tn(LLM_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
 
@@ -2639,11 +2636,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
                     }
 
+                    tok_norm   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
+                    tok_norm_b = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "bias"),   {n_embd}, 0);
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
                         layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
-                        
+                        layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
 
                         if (!layer.wqkv) {
                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
@@ -2657,8 +2657,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
 
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {n_embd, n_embd}, 0);
-                        
-                        layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+
                         layer.attn_out_norm   = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd}, 0);
                         layer.attn_out_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "bias", i),   {n_embd}, 0);
 
@@ -2668,7 +2667,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff,   n_embd, n_expert}, 0);
                             layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,   "weight", i), {n_embd, n_expert}, 0);
                         } else {
-
                             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,        "weight", i), {n_embd, n_ff}, 0);
                             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN,      "weight", i), {n_ff, n_embd}, 0);
 
@@ -2683,7 +2681,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.layer_out_norm   = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd}, 0);
                         layer.layer_out_norm_b = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, 0);
-                        
                     }
                 } break;
             case LLM_ARCH_MODERN_BERT: 
@@ -7549,7 +7546,6 @@ struct llm_build_modern_bert : public llm_graph_context {
         const int64_t n_embd_head   = hparams.n_embd_head_v;
         const int64_t n_embd_gqa    = hparams.n_embd_v_gqa(); 
         const int64_t n_tokens      = ubatch.n_tokens;
-        const int64_t n_ff          = hparams.n_ff();
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
