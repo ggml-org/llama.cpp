@@ -3253,9 +3253,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     const uint32_t v_dim              = head_dim;
                     const int64_t num_attention_heads = hparams.n_head();
                     const int64_t q_num_heads         = num_attention_heads;
-                    const int64_t dt_dim              = hparams.ssm_dt_rank > 0
-                        ? hparams.ssm_dt_rank
-                        : std::max<int64_t>(64, hparams.n_embd / 16);
+                    const int64_t dt_dim              = std::max(64, int(hparams.n_embd / 16));
 
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -17265,9 +17263,7 @@ private:
             cb(x_bcdt, "mamba_bcdt_proj", il);
 
             // split into dt, B, C
-            const int64_t dt_dim = hparams.ssm_dt_rank > 0
-                ? hparams.ssm_dt_rank
-                : std::max<int64_t>(64, hparams.n_embd / 16);
+            const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
             ggml_tensor * B = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
             ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*d_state);
             ggml_tensor * dt  = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(2*d_state));
