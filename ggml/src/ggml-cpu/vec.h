@@ -223,7 +223,6 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
         }
         GGML_F16x_VEC_REDUCE(sumf[0], sum_00, sum_01, sum_02, sum_03);
         GGML_F16x_VEC_REDUCE(sumf[1], sum_10, sum_11, sum_12, sum_13);
-  
     #elif defined(__riscv_v_intrinsic)
       // todo: RVV impl
       for (int i = 0; i < n; ++i) {
@@ -481,7 +480,6 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
         for (int i = 0; i < n; ++i) {
             y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i]) + GGML_CPU_FP16_TO_FP32(x[i])*v);
         }
-        
     #else
         const int np = (n & ~(GGML_F16_STEP - 1));
 
