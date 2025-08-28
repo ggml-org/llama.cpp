@@ -250,7 +250,7 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
 #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
     const int vlen = svcntw();
     for (; i < n; i += vlen) {
-        svbool_t pg = svwhilelt_b32_s32(i, n);
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
         svst1_f32(pg, y + i, ggml_v_silu(pg, svld1_f32(pg, x + i)));
     }
 #elif defined(__ARM_NEON) && defined(__aarch64__)
@@ -278,7 +278,7 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
         _mm_storeu_ps(y + i, _mm_mul_ps(ggml_v_silu(_mm_loadu_ps(x + i)), _mm_loadu_ps(g + i)));
     }
 #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
-    int vlen = svcntw();
+    const int vlen = svcntw();
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
         svst1_f32(pg, y + i, svmul_f32_x(pg, ggml_v_silu(pg, svld1_f32(pg, x + i)), svld1_f32(pg, g + i)));
@@ -331,7 +331,7 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         sum += (ggml_float)_mm_cvtss_f32(val);
     }
 #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
-    int vlen = svcntw();
+    const int vlen = svcntw();
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
         svfloat32_t val = ggml_v_expf(pg, svsub_f32_x(pg, svld1_f32(pg, x + i),
