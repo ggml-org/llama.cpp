@@ -7654,7 +7654,11 @@ class NemotronHModel(GraniteHybridModel):
         super().__init__(*args, **kwargs)
 
         # Save the top-level head_dim for later
-        self.head_dim = self.hparams["head_dim"]
+        self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
+        assert self.head_dim is not None, "Could not find the attention head dim in config"
+
+        # Don't use expand to calculate d_inner
+        self.d_inner = self.find_hparam(["num_heads"]) * self.d_model
 
         # Update the ssm / attn / mlp layers
         # M: Mamba2, *: Attention, -: MLP
