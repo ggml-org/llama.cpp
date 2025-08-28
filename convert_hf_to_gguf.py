@@ -465,7 +465,6 @@ class ModelBase:
     @classmethod
     def from_model_architecture(cls, arch: str, model_type = ModelType.TEXT) -> type[ModelBase]:
         try:
-            print(f"model_type: {model_type}, arch: {arch}")
             return cls._model_classes[model_type][arch]
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
