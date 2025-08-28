@@ -121,14 +121,6 @@
 		onDelete?.(message);
 		showDeleteDialog = false;
 	}
-
-	$effect(() => {
-		if (message.role === 'assistant' && !message.content && isLoading()) {
-			processingState.startMonitoring();
-		} else {
-			processingState.stopMonitoring();
-		}
-	});
 </script>
 
 {#if message.role === 'user'}
