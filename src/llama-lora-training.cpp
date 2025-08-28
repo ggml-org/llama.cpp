@@ -290,7 +290,7 @@ struct llama_adapter_lora * llama_lora_training_init(
 bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userdata) {
     (void) userdata; // Unused param
 
-    if (!tensor || !tensor->name) {
+    if (!tensor) {
         return false;
     }
 
