@@ -111,12 +111,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *   src0, const src1_t *
     dst_row[i0] = (dst_t) result;
 }
 
-template <float (*bin_op)(const float, const float),
-          int n_fuse,
-          typename src0_t,
-          typename src1_t,
-          typename dst_t,
-          size_t... I>
+template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>
 static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
                                   const src0_t * src0_dd, const src1_t * src1_dd, dst_t * dst_dd,
                                   cudaStream_t stream, std::index_sequence<I...>) {
@@ -301,7 +296,7 @@ template <float (*bin_op)(const float, const float), int n_fuse = 1> struct bin_
     void operator()(const struct ggml_tensor * src0, const struct ggml_tensor * src1, struct ggml_tensor * dst,
             const src0_t * src0_dd, const src1_t * src1_dd, dst_t * dst_dd,
             cudaStream_t stream) {
-        launch_bin_bcast_pack<bin_op, n_fuse, src0_t, src1_t, dst_t>(
+        launch_bin_bcast_pack<bin_op, src0_t, src1_t, dst_t>(
             src0, src1, dst, src0_dd, src1_dd, dst_dd, stream, std::make_index_sequence<n_fuse>{});
     }
 };
@@ -367,19 +362,19 @@ template <int n_fuse> static void ggml_cuda_op_fused_add_impl(ggml_backend_cuda_
     const ggml_tensor * src1 = dst->src[1];
 
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        launch_bin_bcast_pack<op_add, n_fuse, float, float, float>(src0, src1, dst,
+        launch_bin_bcast_pack<op_add, float, float, float>(src0, src1, dst,
             (const float *) src0->data, (const float *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast_pack<op_add, n_fuse, half, half, half>(src0, src1, dst,
+        launch_bin_bcast_pack<op_add, half, half, half>(src0, src1, dst,
             (const half *) src0->data, (const half *) src1->data, (half *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast_pack<op_add, n_fuse, half, float, half>(src0, src1, dst,
+        launch_bin_bcast_pack<op_add, half, float, half>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (half *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-        launch_bin_bcast_pack<op_add, n_fuse, half, float, float>(src0, src1, dst,
+        launch_bin_bcast_pack<op_add, half, float, float>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else {
