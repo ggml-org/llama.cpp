@@ -14339,11 +14339,11 @@ struct llm_build_nemotronh : public llm_graph_context_mamba {
 
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
+                NULL,                      NULL,                        NULL,
                 model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                 NULL,
                 LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
-                cb(cur, "ffn_out", il);
+        cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
