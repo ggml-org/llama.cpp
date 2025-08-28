@@ -1777,6 +1777,7 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
 
     // Ensure all kernels finish execution before proceeding further
     stream->wait();
+}
 
 static void argmax_f32_i32_sycl(const float *x, int *dst, const int ncols,
                                const int nrows, queue_ptr stream) {
