@@ -357,6 +357,7 @@ extern "C" {
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
         float target_bpw;                     // target bits per weight (bpw)
+        bool precise_lambda;                  // use precise_lambda calculation - slow computation but very accurate
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {

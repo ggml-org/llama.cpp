@@ -132,7 +132,9 @@ static void usage(const char * executable) {
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
-    printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 16.0 \n");
+    printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 16.0\n");
+    printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
+    printf("  --precise-lambda: given a target bpw, use a high-precision error computation at the expense of longer processing times\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -538,6 +540,8 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--precise-lambda") == 0) {
+            params.precise_lambda = true;
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
             if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
                 usage(argv[0]);
