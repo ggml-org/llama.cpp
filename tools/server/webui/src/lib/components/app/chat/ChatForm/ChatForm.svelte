@@ -1,15 +1,6 @@
 <script lang="ts">
-	import { ChatAttachmentsList } from '$lib/components/app';
-	import { ChatFormActions, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
+	import { ChatAttachmentsList, ChatFormActions, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
-	import { onMount } from 'svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { 
-		AudioRecorder, 
-		convertToWav, 
-		createAudioFile, 
-		isAudioRecordingSupported 
-	} from '$lib/utils/audio-recording';
 	import { 
 		TextMimeType, 
 		ImageExtension, 
@@ -20,6 +11,14 @@
 		PdfMimeType, 
 		TextExtension 
 	} from '$lib/constants/supported-file-types';
+	import { config } from '$lib/stores/settings.svelte';
+	import { 
+		AudioRecorder, 
+		convertToWav, 
+		createAudioFile, 
+		isAudioRecordingSupported 
+	} from '$lib/utils/audio-recording';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -45,57 +44,16 @@
 		uploadedFiles = $bindable([]),
 	}: Props = $props();
 
-	const currentConfig = $derived(config());
-	const pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
-
 	let audioRecorder: AudioRecorder | undefined;
-	let isRecording = $state(false);
+	let currentConfig = $derived(config());
+	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
+	let isRecording = $state(false);
 	let message = $state('');
+	let pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
-	let fileAcceptString = $state<string | undefined>(undefined);
-
-	async function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-
-			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
-
-			const messageToSend = message.trim();
-			const filesToSend = [...uploadedFiles];
-
-			message = '';
-			uploadedFiles = [];
-
-			textareaRef?.resetHeight();
-
-			const success = await onSend?.(messageToSend, filesToSend);
-
-			if (!success) {
-				message = messageToSend;
-				uploadedFiles = filesToSend;
-			}
-		}
-	}
-
-	function handleFileSelect(files: File[]) {
-		onFileUpload?.(files);
-	}
-
-	function handleFileUpload(fileType?: 'image' | 'audio' | 'pdf' | 'file') {
-		if (fileType) {
-			fileAcceptString = getAcceptStringForFileType(fileType);
-		} else {
-			fileAcceptString = undefined;
-		}
-		
-		// Use setTimeout to ensure the accept attribute is applied before opening dialog
-		setTimeout(() => {
-			fileInputRef?.click();
-		}, 10);
-	}
 
 	function getAcceptStringForFileType(fileType: 'image' | 'audio' | 'file' | 'pdf'): string {
 		switch (fileType) {
@@ -121,6 +79,46 @@
 				].join(',');
 			default:
 				return '';
+		}
+	}
+
+	function handleFileSelect(files: File[]) {
+		onFileUpload?.(files);
+	}
+
+	function handleFileUpload(fileType?: 'image' | 'audio' | 'pdf' | 'file') {
+		if (fileType) {
+			fileAcceptString = getAcceptStringForFileType(fileType);
+		} else {
+			fileAcceptString = undefined;
+		}
+		
+		// Use setTimeout to ensure the accept attribute is applied before opening dialog
+		setTimeout(() => {
+			fileInputRef?.click();
+		}, 10);
+	}
+
+	async function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+
+			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+			const messageToSend = message.trim();
+			const filesToSend = [...uploadedFiles];
+
+			message = '';
+			uploadedFiles = [];
+
+			textareaRef?.resetHeight();
+
+			const success = await onSend?.(messageToSend, filesToSend);
+
+			if (!success) {
+				message = messageToSend;
+				uploadedFiles = filesToSend;
+			}
 		}
 	}
 
@@ -155,30 +153,6 @@
 		}
 	}
 
-	async function handleSubmit(event: SubmitEvent) {
-		event.preventDefault();
-		if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
-
-		const messageToSend = message.trim();
-		const filesToSend = [...uploadedFiles];
-
-		message = '';
-		uploadedFiles = [];
-
-		textareaRef?.resetHeight();
-
-		const success = await onSend?.(messageToSend, filesToSend);
-
-		if (!success) {
-			message = messageToSend;
-			uploadedFiles = filesToSend;
-		}
-	}
-
-	function handleStop() {
-		onStop?.();
-	}
-
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
@@ -204,6 +178,30 @@
 			} catch (error) {
 				console.error('Failed to start recording:', error);
 			}
+		}
+	}
+
+	function handleStop() {
+		onStop?.();
+	}
+
+	async function handleSubmit(event: SubmitEvent) {
+		event.preventDefault();
+		if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+		const messageToSend = message.trim();
+		const filesToSend = [...uploadedFiles];
+
+		message = '';
+		uploadedFiles = [];
+
+		textareaRef?.resetHeight();
+
+		const success = await onSend?.(messageToSend, filesToSend);
+
+		if (!success) {
+			message = messageToSend;
+			uploadedFiles = filesToSend;
 		}
 	}
 

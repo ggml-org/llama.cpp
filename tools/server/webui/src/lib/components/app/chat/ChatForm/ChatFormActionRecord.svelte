@@ -5,19 +5,19 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
+		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
 		onMicClick?: () => void;
-		class?: string;
 	}
 
 	let {
+		class: className = '',
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
-		onMicClick,
-		class: className = ''
+		onMicClick
 	}: Props = $props();
 </script>
 

@@ -1,8 +1,7 @@
 <script lang="ts">
+	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FileTypeCategory, TextMimeType } from '$lib/constants/supported-file-types';
-	import { X } from '@lucide/svelte';
-	import { stopPropagation } from 'svelte/legacy';
 
 	interface Props {
 		class?: string;
@@ -126,9 +125,10 @@
 		</div>
 
 		<div class="flex flex-col gap-1">
-			<span class="text-foreground max-w-36 truncate text-sm font-medium md:max-w-72"
-				>{name}</span
-			>
+			<span class="text-foreground max-w-36 truncate text-sm font-medium md:max-w-72">
+				{name}
+			</span>
+
 			{#if size}
 				<span class="text-left text-muted-foreground text-xs">{formatFileSize(size)}</span>
 			{/if}
@@ -148,5 +148,5 @@
 				<X class="h-3 w-3" />
 			</Button>
 		{/if}
-		</button>
+	</button>
 {/if}

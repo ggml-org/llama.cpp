@@ -1,37 +1,35 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
 	import { Square, ArrowUp } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { FileTypeCategory } from '$lib/constants/supported-file-types';
 	import ChatFormActionFileAttachments from './ChatFormActionFileAttachments.svelte';
 	import ChatFormActionRecord from './ChatFormActionRecord.svelte';
 
 	interface Props {
+		canSend?: boolean;
+		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
-		canSend?: boolean;
-		onFileUpload?: (fileType?: 'image' | 'audio' | 'file' | 'pdf') => void;
-		onStop?: () => void;
-		onMicClick?: () => void;
 		isRecording?: boolean;
-		class?: string;
+		onFileUpload?: (fileType?: FileTypeCategory) => void;
+		onMicClick?: () => void;
+		onStop?: () => void;
 	}
 
 	let {
+		canSend = false,
+		class: className = '',
 		disabled = false,
 		isLoading = false,
-		canSend = false,
-		onFileUpload,
-		onStop,
-		onMicClick,
 		isRecording = false,
-		class: className = ''
+		onFileUpload,
+		onMicClick,
+		onStop
 	}: Props = $props();
 </script>
 
 <div class="flex items-center justify-between gap-1 {className}">
-	<ChatFormActionFileAttachments 
-		disabled={disabled}
-		{onFileUpload}
-	/>
+	<ChatFormActionFileAttachments  {disabled} {onFileUpload} />
 
 	<div class="flex gap-2">
 		{#if isLoading}

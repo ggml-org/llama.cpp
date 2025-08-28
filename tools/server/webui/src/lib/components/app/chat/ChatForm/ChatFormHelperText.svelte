@@ -1,12 +1,12 @@
 <script lang="ts">
 	interface Props {
-		show?: boolean;
 		class?: string;
+		show?: boolean;
 	}
 
 	let {
-		show = true,
-		class: className = ''
+		class: className = '',
+		show = true
 	}: Props = $props();
 </script>
 

@@ -42,3 +42,7 @@ trigger: manual
 -   Stores should leverage Svelte's reactivity system
 -   Clear separation: services handle data, stores handle state
 -   Services can be reused across multiple stores
+
+#### Misc
+
+-   Always use `let` for $derived state variables

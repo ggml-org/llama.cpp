@@ -60,22 +60,23 @@
 					: textContent)
 	);
 
-	let isImage = $derived(getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image');
-	let isText = $derived(getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text');
-	let isPdf = $derived(displayType === PdfMimeType.PDF);
 	let isAudio = $derived(getFileTypeCategory(displayType) === FileTypeCategory.AUDIO || displayType === 'audio');
-
-	let pdfViewMode = $state<'text' | 'pages'>('pages');
-	let pdfImages = $state<string[]>([]);
-	let pdfImagesLoading = $state(false);
-	let pdfImagesError = $state<string | null>(null);
+	let isImage = $derived(getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image');
+	let isPdf = $derived(displayType === PdfMimeType.PDF);
+	let isText = $derived(getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text');
 
 	let IconComponent = $derived(() => {
 		if (isImage) return Image;
 		if (isText || isPdf) return FileText;
 		if (isAudio) return Music;
+
 		return FileIcon;
 	});
+
+	let pdfViewMode = $state<'text' | 'pages'>('pages');
+	let pdfImages = $state<string[]>([]);
+	let pdfImagesLoading = $state(false);
+	let pdfImagesError = $state<string | null>(null);
 
 	function formatFileSize(bytes: number): string {
 		if (bytes === 0) return '0 Bytes';
@@ -99,13 +100,12 @@
 			if (uploadedFile?.file) {
 				file = uploadedFile.file;
 			} else if (attachment?.type === 'pdfFile') {
-				
 				// Check if we have pre-processed images
 				if ((attachment as any).images && Array.isArray((attachment as any).images)) {
 					pdfImages = (attachment as any).images;
 					return;
 				}
-				
+
 				// Convert base64 back to File for processing
 				if ((attachment as any).base64Data) {
 					const base64Data = (attachment as any).base64Data;
@@ -118,10 +118,9 @@
 					file = new File([byteArray], displayName, { type: PdfMimeType.PDF });
 				}
 			}
-			
+
 			if (file) {
-				const images = await convertPDFToImage(file);
-				pdfImages = images;
+				pdfImages = await convertPDFToImage(file);
 			} else {
 				throw new Error('No PDF file available for conversion');
 			}
@@ -153,8 +152,10 @@
 
 						<div class="text-muted-foreground flex items-center gap-2 text-sm">
 							<span>{displayType}</span>
+
 							{#if displaySize}
 								<span>•</span>
+
 								<span>{formatFileSize(displaySize)}</span>
 							{/if}
 						</div>
@@ -170,8 +171,10 @@
 							disabled={pdfImagesLoading}
 						>
 							<FileText class="h-4 w-4 mr-1" />
+
 							Text
 						</Button>
+
 						<Button
 							variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
 							size="sm"
@@ -183,6 +186,7 @@
 							{:else}
 								<Eye class="h-4 w-4 mr-1" />
 							{/if}
+
 							Pages
 						</Button>
 					</div>
@@ -204,6 +208,7 @@
 					<div class="flex items-center justify-center p-8">
 						<div class="text-center">
 							<div class="h-8 w-8 mx-auto mb-4 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+
 							<p class="text-muted-foreground">Converting PDF to images...</p>
 						</div>
 					</div>
@@ -211,8 +216,11 @@
 					<div class="flex items-center justify-center p-8">
 						<div class="text-center">
 							<FileText class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
+
 							<p class="text-muted-foreground mb-4">Failed to load PDF images</p>
+
 							<p class="text-muted-foreground text-sm">{pdfImagesError}</p>
+
 							<Button class="mt-4" onclick={() => { pdfViewMode = 'text'; }}>View as Text</Button>
 						</div>
 					</div>
@@ -221,6 +229,7 @@
 						{#each pdfImages as image, index}
 							<div class="text-center">
 								<p class="text-muted-foreground mb-2 text-sm">Page {index + 1}</p>
+
 								<img
 									src={image}
 									alt="PDF Page {index + 1}"
@@ -233,6 +242,7 @@
 					<div class="flex items-center justify-center p-8">
 						<div class="text-center">
 							<FileText class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
+
 							<p class="text-muted-foreground mb-4">No PDF pages available</p>
 						</div>
 					</div>
