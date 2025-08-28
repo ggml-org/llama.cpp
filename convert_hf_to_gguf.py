@@ -72,6 +72,7 @@ class ModelBase:
     endianess: gguf.GGUFEndian
     use_temp_file: bool
     lazy: bool
+    dry_run: bool
     part_names: list[str]
     is_safetensors: bool
     hparams: dict[str, Any]
@@ -111,6 +112,7 @@ class ModelBase:
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
         self.lazy = not eager or (remote_hf_model_id is not None)
+        self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         if remote_hf_model_id is not None:
             self.is_safetensors = True
@@ -4871,10 +4873,34 @@ class NeoBert(BertModel):
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
+    _lora_files = {}
+    _lora_names = []
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        if lora_names := hparams.get("lora_adaptations"):
+            self._lora_names = lora_names
+            self.model_arch = gguf.MODEL_ARCH.JINA_BERT_V3
+
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
         self._xlmroberta_tokenizer_init()
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        if self._lora_names:
+            for name in self._lora_names:
+                fname = self.add_prefix_to_filename(self.fname_out, f"lora-{name}-")
+                self._lora_files[name] = gguf.GGUFWriter(fname, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file, dry_run=self.dry_run)
+
+        return super().generate_extra_tensors()
+
+    def set_type(self):
+        for lora_writer in self._lora_files.values():
+            lora_writer.add_type(gguf.GGUFType.ADAPTER)
+            lora_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
+        super().set_type()
 
     def set_vocab(self):
         self._xlmroberta_set_vocab()
@@ -4885,12 +4911,61 @@ class XLMRobertaModel(BertModel):
         if name.startswith("roberta."):
             name = name[8:]
 
+        # jina-embeddings-v3
+        if ".parametrizations." in name:
+            name = name.replace(".parametrizations.", ".")
+            if name.endswith(".original"):
+                name = name[:-9]
+
         # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
         if name == "embeddings.position_embeddings.weight":
             if self._position_offset is not None:
                 data_torch = data_torch[self._position_offset:,:]
 
+        if name.endswith(".0.lora_A") or name.endswith(".0.lora_B"):
+            if name.startswith("pooler.dense"):
+                return []
+
+            num_loras = data_torch.size(0)
+            assert num_loras == len(self._lora_names)
+
+            # Split out each LoRA in their own GGUF
+            for i, lora_writer in enumerate(self._lora_files.values()):
+                new_name = self.map_tensor_name(name[:-9]) + name[-7:].lower()
+                data = data_torch[i, :, :]
+                # Transpose/flip token_embd/types into correct shape
+                if new_name == "token_embd.weight.lora_b":
+                    data = data.T
+                elif new_name.startswith("token_types.weight."):
+                    new_name = new_name[:-1] + ("a" if new_name[-1:] == "b" else "b")
+                lora_writer.add_tensor(new_name, data.float().numpy(), raw_dtype=gguf.GGMLQuantizationType.F32)
+
+            return []
+
         return super().modify_tensors(data_torch, name, bid)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # jina-embeddings-v3
+        if rotary_emb_base := self.hparams.get("rotary_emb_base"):
+            self.gguf_writer.add_rope_freq_base(rotary_emb_base)
+        lora_alpha = self.hparams.get("lora_alpha")
+        if lora_prompt_prefixes := self.hparams.get("task_instructions"):
+            assert self._lora_files and all(lora_name in lora_prompt_prefixes for lora_name in self._lora_files.keys())
+        for lora_name, lora_writer in self._lora_files.items():
+            lora_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, lora_alpha if lora_alpha is not None else 1.0)
+            lora_writer.add_string(gguf.Keys.Adapter.LORA_TASK_NAME, lora_name)
+            if lora_prompt_prefixes:
+                lora_writer.add_string(gguf.Keys.Adapter.LORA_PROMPT_PREFIX, lora_prompt_prefixes[lora_name])
+
+    def write(self):
+        super().write()
+        for lora_writer in self._lora_files.values():
+            lora_writer.write_header_to_file()
+            lora_writer.write_kv_data_to_file()
+            lora_writer.write_tensors_to_file(progress=True)
+            lora_writer.close()
 
 
 @ModelBase.register("GemmaForCausalLM")
