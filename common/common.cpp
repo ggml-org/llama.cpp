@@ -991,8 +991,6 @@ struct common_init_result common_init_from_params(common_params & params) {
         }
     }
 
-    char buf[1024];
-
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
         llama_adapter_lora_ptr lora;
@@ -1004,6 +1002,7 @@ struct common_init_result common_init_from_params(common_params & params) {
             return iparams;
         }
 
+        char buf[1024];
         la.ptr = lora.get();
         llama_adapter_meta_val_str(la.ptr, "adapter.lora.task_name", buf, sizeof(buf));
         la.task_name = buf;
