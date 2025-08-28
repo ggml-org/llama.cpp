@@ -1,0 +1,48 @@
+---
+base_model:
+- {base_model}
+---
+# {model_name} GGUF
+
+Recommended way to run this model:
+
+```sh
+llama-server -hf {namespace}/{model_name}-GGUF
+```
+
+Then the endpoint can be accessed at http://localhost:8080/embedding, for
+example using `curl`:
+```console
+curl --request POST \
+    --url http://localhost:8080/embedding \
+    --header "Content-Type: application/json" \
+    --data '{{"input": "Hello embeddings"}}' \
+    --silent
+```
+
+Alternatively, the `llama-embedding` command line tool can be used:
+```sh
+llama-embedding -hf {namespace}/{model_name}-GGUF --verbose-prompt -p "Hello embeddings"
+```
+
+#### embd_normalize
+When a model uses pooling, or the pooling method is specified using `--pooling`,
+the normalization can be controlled by the `embd_normalize` parameter.
+
+The default value is `2` which means that the embeddings are normalized using
+the Euclidean norm (L2). Other options are:
+* -1 No normalization
+*  0 Max absolute
+*  1 Taxicab
+*  2 Euclidean/L2
+* \>2 P-Norm
+
+This can be passed in the request body to `llama-server`, for example:
+```sh
+    --data '{{"input": "Hello embeddings", "embd_normalize": -1}}' \
+```
+
+And for `llama-embedding`, by passing `--embd-normalize <value>`, for example:
+```sh
+llama-embedding -hf {namespace}/{model_name}-GGUF  --embd-normalize -1 -p "Hello embeddings"
+```

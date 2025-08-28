@@ -112,6 +112,7 @@ int main(int argc, char ** argv) {
     ctx_params.no_perf = false;
     if (embedding_mode) {
         ctx_params.embeddings = true;
+        ctx_params.pooling_type = LLAMA_POOLING_TYPE_NONE;
         ctx_params.n_ubatch = ctx_params.n_batch;
     }
 

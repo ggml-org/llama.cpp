@@ -6,7 +6,7 @@ The motivation for having this is that the conversion process can often be an
 iterative process, where the original model is inspected, converted, updates
 made to llama.cpp, converted again, etc. Once the model has been converted it
 needs to be verified against the original model, and then optionally quantified,
-and is some cases perplexity checked of the quantized model. And finally the
+and in some cases perplexity checked of the quantized model. And finally the
 model/models need to the ggml-org on Hugging Face. This tool/example tries to
 help with this process.
 
@@ -62,7 +62,7 @@ Command line arguments take precedence over environment variables when both are 
 
 In cases where the transformer implementation for the model has not been released
 yet it is possible to set the environment variable `UNRELEASED_MODEL_NAME` which
-will the cause the transformer implementation to be loaded explicitely and not
+will then cause the transformer implementation to be loaded explicitely and not
 use AutoModelForCausalLM:
 ```
 export UNRELEASED_MODEL_NAME=SomeNewModel
@@ -87,7 +87,7 @@ from the converted model.
 # Or using command line argument
 (venv) $ make causal-run-original-model MODEL_PATH=~/work/ai/models/some_model
 ```
-This command will save two file to the `data` directory, one is a binary file
+This command will save two files to the `data` directory, one is a binary file
 containing logits which will be used for comparison with the converted model
 later, and the other is a text file which allows for manual visual inspection.
 
@@ -128,13 +128,25 @@ Quantized model saved to: /path/to/quantized/model-Q8_0.gguf
 Export the quantized model path to QUANTIZED_MODEL variable in your environment
 ```
 This will show the path to the quantized model in the terminal, which can then
-be used set the `QUANTIZED_MODEL` environment variable:
+be used to set the `QUANTIZED_MODEL` environment variable:
 ```console
 export QUANTIZED_MODEL=/path/to/quantized/model-Q8_0.gguf
 ```
-The the quantized model can be run using the following command:
+Then the quantized model can be run using the following command:
 ```console
 (venv) $ make causal-run-quantized-model
+```
+
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make causal-quantize-qat-Q4_0
 ```
 
 
@@ -229,13 +241,25 @@ Quantized model saved to: /path/to/quantized/model-Q8_0.gguf
 Export the quantized model path to QUANTIZED_EMBEDDING_MODEL variable in your environment
 ```
 This will show the path to the quantized model in the terminal, which can then
-be used set the `QUANTIZED_EMBEDDING_MODEL` environment variable:
+be used to set the `QUANTIZED_EMBEDDING_MODEL` environment variable:
 ```console
 export QUANTIZED_EMBEDDING_MODEL=/path/to/quantized/model-Q8_0.gguf
 ```
-The the quantized model can be run using the following command:
+Then the quantized model can be run using the following command:
 ```console
 (venv) $ make embedding-run-quantized-model
+```
+
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make embedding-quantize-qat-Q4_0
 ```
 
 ## Perplexity Evaluation
@@ -246,7 +270,7 @@ token/logits file:
 ```console
 (venv) $ make perplexity-run QUANTIZED_MODEL=~/path/to/quantized/model.gguf
 ```
-This will use the wikitext dataset to run the perplexity evaluation and and
+This will use the wikitext dataset to run the perplexity evaluation and
 output the perplexity score to the terminal. This value can then be compared
 with the perplexity score of the unquantized model.
 
@@ -285,12 +309,20 @@ For the following targets a `HF_TOKEN` environment variable is required.
 This will create a new model repsository on Hugging Face with the specified
 model name.
 ```console
-(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev"
+(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
 Repository ID:  danbev/TestModel-GGUF
 Repository created: https://huggingface.co/danbev/TestModel-GGUF
 ```
 Note that we append a `-GGUF` suffix to the model name to ensure a consistent
 naming convention for GGUF models.
+
+An embedding model can be created using the following command:
+```console
+(venv) $ make hf-create-model-embedding MODEL_NAME='TestEmbeddingModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
+```
+The only difference is that the model card for an embedding model will be different
+with regards to the llama-server command and also how to access/call the embedding
+endpoint.
 
 ### Upload a GGUF model to model repository
 The following target uploads a model to an existing Hugging Face model repository.

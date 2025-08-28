@@ -97,6 +97,7 @@ enum llm_arch {
     LLM_ARCH_DREAM,
     LLM_ARCH_SMALLTHINKER,
     LLM_ARCH_LLADA,
+    LLM_ARCH_SEED_OSS,
     LLM_ARCH_UNKNOWN,
 };
 
