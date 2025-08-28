@@ -7648,7 +7648,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 @ModelBase.register("NemotronHForCausalLM")
 class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
-    model_arch = gguf.MODEL_ARCH.NEMOTRONH
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -1570,7 +1570,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
-        case LLM_ARCH_NEMOTRONH:
+        case LLM_ARCH_NEMOTRON_H:
             {
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
                 ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
@@ -4709,7 +4709,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
-            case LLM_ARCH_NEMOTRONH:
+            case LLM_ARCH_NEMOTRON_H:
                 {
                     // mamba2 Mixer SSM params
                     // NOTE: int64_t for tensor dimensions
@@ -5953,7 +5953,7 @@ void llama_model::print_info() const {
         arch == LLM_ARCH_FALCON_H1 ||
         arch == LLM_ARCH_PLAMO2 ||
         arch == LLM_ARCH_GRANITE_HYBRID ||
-        arch == LLM_ARCH_NEMOTRONH) {
+        arch == LLM_ARCH_NEMOTRON_H) {
         LLAMA_LOG_INFO("%s: ssm_d_conv       = %u\n",     __func__, hparams.ssm_d_conv);
         LLAMA_LOG_INFO("%s: ssm_d_inner      = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state      = %u\n",     __func__, hparams.ssm_d_state);
@@ -14220,8 +14220,8 @@ struct llm_build_nemotron : public llm_graph_context {
     }
 };
 
-struct llm_build_nemotronh : public llm_graph_context_mamba {
-    llm_build_nemotronh(
+struct llm_build_nemotron_h : public llm_graph_context_mamba {
+    llm_build_nemotron_h(
             const llama_model      & model,
             const llm_graph_params & params) :
         llm_graph_context_mamba(params) {
@@ -18508,7 +18508,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     if (arch == LLM_ARCH_FALCON_H1) {
                         filter_attn = [&](int32_t) { return true; };
                         filter_recr = [&](int32_t) { return true; };
-                    } else if (arch == LLM_ARCH_NEMOTRONH) {
+                    } else if (arch == LLM_ARCH_NEMOTRON_H) {
                         filter_attn = [&](int32_t il) {
                             return !hparams.is_recurrent(il) && hparams.n_ff(il) == 0;
                         };
@@ -18865,9 +18865,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_nemotron>(*this, params);
             } break;
-        case LLM_ARCH_NEMOTRONH:
+        case LLM_ARCH_NEMOTRON_H:
             {
-                llm = std::make_unique<llm_build_nemotronh>(*this, params);
+                llm = std::make_unique<llm_build_nemotron_h>(*this, params);
             } break;
         case LLM_ARCH_EXAONE:
             {
@@ -19104,7 +19104,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
         case LLM_ARCH_WAVTOKENIZER_DEC:
-        case LLM_ARCH_NEMOTRONH:
+        case LLM_ARCH_NEMOTRON_H:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values

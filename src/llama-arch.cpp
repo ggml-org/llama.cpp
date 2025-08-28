@@ -69,7 +69,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_T5ENCODER,        "t5encoder"        },
     { LLM_ARCH_JAIS,             "jais"             },
     { LLM_ARCH_NEMOTRON,         "nemotron"         },
-    { LLM_ARCH_NEMOTRONH,        "nemotronh"        },
+    { LLM_ARCH_NEMOTRON_H,       "nemotron_h"       },
     { LLM_ARCH_EXAONE,           "exaone"           },
     { LLM_ARCH_EXAONE4,          "exaone4"          },
     { LLM_ARCH_RWKV6,            "rwkv6"            },
@@ -1552,7 +1552,7 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
-        LLM_ARCH_NEMOTRONH,
+        LLM_ARCH_NEMOTRON_H,
         {
             { LLM_TENSOR_TOKEN_EMBD,     "token_embd" },
             { LLM_TENSOR_OUTPUT_NORM,    "output_norm" },
@@ -2381,7 +2381,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_PLAMO2:
         case LLM_ARCH_GRANITE_HYBRID:
         case LLM_ARCH_LFM2:
-        case LLM_ARCH_NEMOTRONH:
+        case LLM_ARCH_NEMOTRON_H:
             return true;
         default:
             return false;
