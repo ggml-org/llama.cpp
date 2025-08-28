@@ -1,1 +1,1 @@
-export const SLOTS_DEBOUNCE_TIME = 100;
+export const SLOTS_DEBOUNCE_INTERVAL = 100;

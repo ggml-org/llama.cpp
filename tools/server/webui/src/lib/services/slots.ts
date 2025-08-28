@@ -1,6 +1,6 @@
 import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
 import { serverStore } from '$lib/stores/server.svelte';
-import { SLOTS_DEBOUNCE_TIME } from '$lib/constants/debounce';
+import { SLOTS_DEBOUNCE_INTERVAL } from '$lib/constants/debounce';
 
 export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
@@ -10,9 +10,10 @@ export class SlotsService {
 	private currentTokensPerSecond: number = 0;
 	private tokenRateHistory: number[] = [];
 	private lastUpdateTime: number = 0;
-	private pendingUpdate: boolean = false;
 	private streamStartTime: number = 0;
 	private streamStartTokens: number = 0;
+	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private lastKnownState: ApiProcessingState | null = null;
 
 	constructor() {}
 
@@ -72,9 +73,13 @@ export class SlotsService {
 		this.currentTokensPerSecond = 0;
 		this.tokenRateHistory = [];
 		this.lastUpdateTime = 0;
-		this.pendingUpdate = false;
 		this.streamStartTime = 0;
 		this.streamStartTokens = 0;
+
+		if (this.debounceTimer !== null) {
+			clearTimeout(this.debounceTimer);
+			this.debounceTimer = null;
+		}
 	}
 
 	/**
@@ -96,21 +101,32 @@ export class SlotsService {
 		const currentTime = Date.now();
 		const timeSinceLastUpdate = currentTime - this.lastUpdateTime;
 
-		// For the first few calls, use shorter debouncing to get tokens/sec faster
-		const debounceTime = this.tokenRateHistory.length < 2 ? 50 : SLOTS_DEBOUNCE_TIME;
-
-		if (timeSinceLastUpdate < debounceTime) {
-			if (!this.pendingUpdate) {
-				this.pendingUpdate = true;
-				setTimeout(async () => {
-					this.pendingUpdate = false;
-					await this.performUpdate();
-				}, debounceTime - timeSinceLastUpdate);
+		if (timeSinceLastUpdate >= SLOTS_DEBOUNCE_INTERVAL) {
+			if (this.debounceTimer !== null) {
+				clearTimeout(this.debounceTimer);
+				this.debounceTimer = null;
 			}
+
+			this.lastUpdateTime = currentTime;
+
+			await this.performUpdate();
 			return;
 		}
 
-		await this.performUpdate();
+		if (this.debounceTimer !== null) {
+			return;
+		}
+
+		const waitTime = SLOTS_DEBOUNCE_INTERVAL - timeSinceLastUpdate;
+
+		this.debounceTimer = setTimeout(async () => {
+			this.debounceTimer = null;
+
+			if (this.isStreamingActive) {
+				this.lastUpdateTime = Date.now();
+				await this.performUpdate();
+			}
+		}, waitTime);
 	}
 
 
@@ -156,6 +172,7 @@ export class SlotsService {
 			const slots: ApiSlotData[] = await response.json();
 			const processingState = this.parseProcessingState(slots);
 			
+			this.lastKnownState = processingState;
 			
 			this.callbacks.forEach(callback => {
 				try {
@@ -204,13 +221,11 @@ export class SlotsService {
 		const currentTokens = activeSlot.next_token.n_decoded;
 		
 		if (this.isStreamingActive) {
-			// Initialize stream tracking on first call
 			if (this.streamStartTokens === 0 && currentTokens > 0) {
 				this.streamStartTokens = currentTokens;
 				this.streamStartTime = currentTime;
 			}
 			
-			// Calculate tokens/sec using multiple methods for reliability
 			let calculatedRate = 0;
 			
 			// Method 1: Use recent interval (preferred for accuracy)
@@ -233,7 +248,6 @@ export class SlotsService {
 				}
 			}
 			
-			// Update rate if we have a valid calculation
 			if (calculatedRate > 0) {
 				this.tokenRateHistory.push(calculatedRate);
 				if (this.tokenRateHistory.length > 5) {
@@ -242,9 +256,6 @@ export class SlotsService {
 				
 				this.currentTokensPerSecond = this.tokenRateHistory.reduce((sum, rate) => sum + rate, 0) / this.tokenRateHistory.length;
 			}
-			
-			// Always show some rate during active streaming (even if 0 initially)
-			// This ensures the UI always displays tokens/sec field during streaming
 		}
 		
 		if (this.isStreamingActive && currentTokens >= this.lastTokenCount) {
@@ -267,6 +278,11 @@ export class SlotsService {
 	}
 
 	async getCurrentState(): Promise<ApiProcessingState | null> {
+		if (this.isStreamingActive) {
+			return this.lastKnownState;
+		}
+
+		// For non-streaming state, make direct call
 		const isAvailable = await this.isSlotsEndpointAvailable();
 		
 		if (!isAvailable) {

@@ -206,9 +206,6 @@ class ChatStore {
 					streamedContent += chunk;
 					this.currentResponse = streamedContent;
 
-					// Update slots state on each chunk
-					slotsService.updateSlotsState();
-
 					// Parse thinking content during streaming
 					const partialThinking = extractPartialThinking(streamedContent);
 
@@ -220,13 +217,12 @@ class ChatStore {
 						// Update message with parsed content
 						this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
 					}
+
+					slotsService.updateSlotsState();
 				},
 
 				onReasoningChunk: (reasoningChunk: string) => {
 					streamedReasoningContent += reasoningChunk;
-
-					// Update slots state on reasoning chunks too
-					slotsService.updateSlotsState();
 
 					const messageIndex = this.activeMessages.findIndex(
 						(m) => m.id === assistantMessage.id
@@ -236,6 +232,8 @@ class ChatStore {
 						// Update message with reasoning content
 						this.activeMessages[messageIndex].thinking = streamedReasoningContent;
 					}
+
+					slotsService.updateSlotsState();
 				},
 
 				onComplete: async (finalContent?: string, reasoningContent?: string) => {
