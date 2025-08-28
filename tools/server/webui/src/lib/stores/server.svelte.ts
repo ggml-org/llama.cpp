@@ -9,6 +9,7 @@ class ServerStore {
 	private _serverProps = $state<ApiLlamaCppServerProps | null>(null);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
+	private _slotsEndpointAvailable = $state<boolean | null>(null);
 
 	get serverProps(): ApiLlamaCppServerProps | null {
 		return this._serverProps;
@@ -46,6 +47,40 @@ class ServerStore {
 		return this._serverProps?.modalities?.audio ?? false;
 	}
 
+	get slotsEndpointAvailable(): boolean | null {
+		return this._slotsEndpointAvailable;
+	}
+
+	/**
+	 * Check if slots endpoint is available based on server properties and endpoint support
+	 */
+	private async checkSlotsEndpointAvailability(): Promise<void> {
+		if (!this._serverProps) {
+			this._slotsEndpointAvailable = false;
+			return;
+		}
+
+		if (this._serverProps.total_slots <= 0) {
+			this._slotsEndpointAvailable = false;
+			return;
+		}
+
+		try {
+			const response = await fetch('/slots');
+			
+			if (response.status === 501) {
+				console.info('Slots endpoint not implemented - server started without --slots flag');
+				this._slotsEndpointAvailable = false;
+				return;
+			}
+			
+			this._slotsEndpointAvailable = true;
+		} catch (error) {
+			console.warn('Unable to test slots endpoint availability:', error);
+			this._slotsEndpointAvailable = false;
+		}
+	}
+
 	async fetchServerProps(): Promise<void> {
 		this._loading = true;
 		this._error = null;
@@ -56,8 +91,8 @@ class ServerStore {
 			this._serverProps = props;
 			console.log('Server properties loaded:', props);
 			
-			// Reset slots service availability check when server props change
-			slotsService.resetAvailabilityCheck();
+			// Check slots endpoint availability after server props are loaded
+			await this.checkSlotsEndpointAvailability();
 		} catch (error) {
 			let errorMessage = 'Failed to connect to server';
 			
@@ -91,9 +126,7 @@ class ServerStore {
 		this._serverProps = null;
 		this._error = null;
 		this._loading = false;
-		
-		// Reset slots service when server state is cleared
-		slotsService.resetAvailabilityCheck();
+		this._slotsEndpointAvailable = null;
 	}
 }
 
@@ -106,3 +139,4 @@ export const modelName = () => serverStore.modelName;
 export const supportedModalities = () => serverStore.supportedModalities;
 export const supportsVision = () => serverStore.supportsVision;
 export const supportsAudio = () => serverStore.supportsAudio;
+export const slotsEndpointAvailable = () => serverStore.slotsEndpointAvailable;

@@ -1,5 +1,5 @@
 import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
-import { serverStore } from '$lib/stores/server.svelte';
+import { slotsEndpointAvailable } from '$lib/stores/server.svelte';
 import { SLOTS_DEBOUNCE_INTERVAL } from '$lib/constants/debounce';
 
 export class SlotsService {
@@ -14,43 +14,6 @@ export class SlotsService {
 	private streamStartTokens: number = 0;
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastKnownState: ApiProcessingState | null = null;
-
-	constructor() {}
-
-	/**
-	 * Check if slots endpoint is available based on server properties and endpoint support
-	 */
-	private async isSlotsEndpointAvailable(): Promise<boolean> {
-		const serverProps = serverStore.serverProps;
-
-		if (!serverProps) {
-			return false;
-		}
-
-		if (serverProps.total_slots <= 0) {
-			return false;
-		}
-
-		try {
-			const response = await fetch('/slots');
-			
-			if (response.status === 501) {
-				console.info('Slots endpoint not implemented - server started without --slots flag');
-				return false;
-			}
-			
-			return true;
-		} catch (error) {
-			console.warn('Unable to test slots endpoint availability:', error);
-			return false;
-		}
-	}
-
-	/**
-	 * Reset slots availability check (call when server properties change)
-	 */
-	resetAvailabilityCheck(): void {
-	}
 
 	/**
 	 * Start streaming session tracking
@@ -134,13 +97,13 @@ export class SlotsService {
 	 * Perform the actual slots state update
 	 */
 	private async performUpdate(): Promise<void> {
-		if (!this.isStreamingActive) {
+		const isAvailable = slotsEndpointAvailable();
+
+		if (!isAvailable) {
 			return;
 		}
 
-		const isAvailable = await this.isSlotsEndpointAvailable();
-
-		if (!isAvailable) {
+		if (!this.isStreamingActive) {
 			return;
 		}
 
@@ -282,8 +245,8 @@ export class SlotsService {
 			return this.lastKnownState;
 		}
 
-		// For non-streaming state, make direct call
-		const isAvailable = await this.isSlotsEndpointAvailable();
+		// For non-streaming state, check server store availability
+		const isAvailable = slotsEndpointAvailable();
 		
 		if (!isAvailable) {
 			return null;
