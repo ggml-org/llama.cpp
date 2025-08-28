@@ -2904,9 +2904,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 if (!disable_fusion) {
 
                     if (node->op == GGML_OP_ADD) {
-
                         int n_fuse = 0;
-
                         ggml_op ops[8] = {GGML_OP_ADD};
 
                         for (; n_fuse <= 6; ++n_fuse){
