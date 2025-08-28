@@ -178,14 +178,16 @@ static __global__ void rms_norm_f32(const float * x, float *       dst,
     const float scale = rsqrtf(mean + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        if constexpr (do_multiply) {
+        if constexpr (do_multiply && do_add) {
+            const int mul_col = col % mul_ncols;
+            const int add_col = col % add_ncols;
+            dst[col] = scale * x[col] * mul[mul_col] + add[add_col];
+        } else if constexpr (do_multiply) {
             const int mul_col = col % mul_ncols;
             dst[col] = scale * x[col] * mul[mul_col];
-
-            if constexpr (do_add) {
-                const int add_col = col % add_ncols;
-                dst[col] += add[add_col];
-            }
+        } else if constexpr (do_add) {
+            const int add_col = col % add_ncols;
+            dst[col] += add[add_col];
         } else {
             dst[col] = scale * x[col];
         }

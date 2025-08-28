@@ -2,35 +2,14 @@
 #include <cstdint>
 #include <utility>
 
-static __device__ __forceinline__ float op_repeat(const float a, const float b) {
-    return b;
-    GGML_UNUSED(a);
-}
-
-static __device__ __forceinline__ float op_add(const float a, const float b) {
-    return a + b;
-}
-
-static __device__ __forceinline__ float op_sub(const float a, const float b) {
-    return a - b;
-}
-
-static __device__ __forceinline__ float op_mul(const float a, const float b) {
-    return a * b;
-}
-
-static __device__ __forceinline__ float op_div(const float a, const float b) {
-    return a / b;
-}
-
-template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, typename... S1Ptrs>
+template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, typename... src1_ptrs>
 static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
         const int ne0, const int ne1, const int ne2, const int ne3,
         const int ne10, const int ne11, const int ne12, const int ne13,
         /*int s0, */ const int s1, const int s2, const int s3,
         /*int s00,*/ const int s01, const int s02, const int s03,
         /*int s10,*/ const int s11, const int s12, const int s13,
-        S1Ptrs... src1s) {
+        src1_ptrs... src1s) {
     const int i0s = blockDim.x*blockIdx.x + threadIdx.x;
     const int i1 = (blockDim.y*blockIdx.y + threadIdx.y);
     const int i2 = (blockDim.z*blockIdx.z + threadIdx.z) / ne3;
@@ -55,26 +34,20 @@ static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst
         const int i10 = i0 % ne10;
 
         float result = src0_row ? (float) src0_row[i0] : 0.0f;
-
-        auto add_one = [&](const src1_t * p) {
-            const src1_t * row = p + i_src1;
-            result             = bin_op(result, (float) row[i10]);
-            return 0;
-        };
-        (void) std::initializer_list<int>{ (add_one(src1s), 0)... };
+        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
 
         dst_row[i0] = (dst_t) result;
     }
 }
 
-template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, typename... S1Ptrs>
+template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, typename... src1_ptrs>
 static __global__ void k_bin_bcast_unravel(const src0_t *   src0, const src1_t *   src1, dst_t *          dst,
         const int ne0, const int ne1, const int ne2,const int ne3,
         const int ne10, const int ne11, const int ne12, const int ne13,
         /*int s0, */ const int s1, const int s2, const int s3,
         /*int s00,*/ const int s01, const int s02, const int s03,
         /*int s10,*/ const int s11, const int s12, const int s13,
-        S1Ptrs... src1s) {
+        src1_ptrs ... src1s) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     const int i3 = i/(ne2*ne1*ne0);
@@ -100,13 +73,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *   src0, const src1_t *
     const int i10 = i0 % ne10;
 
     float result = src0_row ? (float) src0_row[i0] : 0.0f;
-
-    auto add_one = [&](const src1_t * p) {
-        const src1_t * row = p + i_src1;
-        result             = bin_op(result, (float) row[i10]);
-        return 0;
-    };
-    (void) std::initializer_list<int>{ (add_one(src1s), 0)... };
+    result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
 
     dst_row[i0] = (dst_t) result;
 }
@@ -291,7 +258,8 @@ static __global__ void k_repeat_back(
     dst[tid3*ne2*ne1*ne0 + tid2*ne1*ne0 + tid1*ne0 + tid0] = sum;
 }
 
-template <float (*bin_op)(const float, const float), int n_fuse = 1> struct bin_bcast_cuda {
+template <float (*bin_op)(const float, const float), int n_fuse = 1>
+struct bin_bcast_cuda {
     template<typename src0_t, typename src1_t, typename dst_t>
     void operator()(const struct ggml_tensor * src0, const struct ggml_tensor * src1, struct ggml_tensor * dst,
             const src0_t * src0_dd, const src1_t * src1_dd, dst_t * dst_dd,
@@ -355,26 +323,27 @@ void ggml_cuda_op_div(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_div>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
 }
 
-template <int n_fuse> static void ggml_cuda_op_fused_add_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+template <float (*op)(const float, const float), int n_fuse>
+static void ggml_cuda_op_fused_binbcast_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     cudaStream_t stream = ctx.stream();
 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        launch_bin_bcast_pack<op_add, float, float, float>(src0, src1, dst,
+        launch_bin_bcast_pack<op, float, float, float>(src0, src1, dst,
             (const float *) src0->data, (const float *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast_pack<op_add, half, half, half>(src0, src1, dst,
+        launch_bin_bcast_pack<op, half, half, half>(src0, src1, dst,
             (const half *) src0->data, (const half *) src1->data, (half *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
-        launch_bin_bcast_pack<op_add, half, float, half>(src0, src1, dst,
+        launch_bin_bcast_pack<op, half, float, half>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (half *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-        launch_bin_bcast_pack<op_add, half, float, float>(src0, src1, dst,
+        launch_bin_bcast_pack<op, half, float, float>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else {
@@ -385,30 +354,32 @@ template <int n_fuse> static void ggml_cuda_op_fused_add_impl(ggml_backend_cuda_
     }
 }
 
-void ggml_cuda_op_fused_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst, int n_fuse) {
+
+template<float (*op)(const float, const float)>
+void ggml_cuda_op_fused_binbcast(ggml_backend_cuda_context & ctx, ggml_tensor * dst, int n_fuse) {
     GGML_ASSERT(2 <= n_fuse && n_fuse <= 8);
 
     switch (n_fuse) {
         case 2:
-            ggml_cuda_op_fused_add_impl<2>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 2>(ctx, dst);
             break;
         case 3:
-            ggml_cuda_op_fused_add_impl<3>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 3>(ctx, dst);
             break;
         case 4:
-            ggml_cuda_op_fused_add_impl<4>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 4>(ctx, dst);
             break;
         case 5:
-            ggml_cuda_op_fused_add_impl<5>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 5>(ctx, dst);
             break;
         case 6:
-            ggml_cuda_op_fused_add_impl<6>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 6>(ctx, dst);
             break;
         case 7:
-            ggml_cuda_op_fused_add_impl<7>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 7>(ctx, dst);
             break;
         case 8:
-            ggml_cuda_op_fused_add_impl<8>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op, 8>(ctx, dst);
             break;
         default:
             GGML_ASSERT(false && "Unsupported n_fuse value");
@@ -445,3 +416,5 @@ void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         } break;
     }
 }
+
+template void ggml_cuda_op_fused_binbcast<op_add>(ggml_backend_cuda_context &, ggml_tensor *, int);
