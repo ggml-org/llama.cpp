@@ -1835,6 +1835,10 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             //thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
             std::string thinking_grammar_logic = ""; // thinking tag was closed or not supported/wanted
             if (extra_context["enable_thinking"]) {
+                data.grammar_triggers.push_back({
+                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+                    data.thinking_forced_open ? "</think>" : "<think>"
+                });
                 if (data.thinking_forced_open) {
                     //thinking tag was already opened by used so we don't need to add it again
                     thinking_grammar_logic = "(thinking-content thinking-end) ";
