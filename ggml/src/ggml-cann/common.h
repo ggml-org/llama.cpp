@@ -360,6 +360,37 @@ struct ggml_cann_graph {
 };
 #endif  // USE_ACL_GRAPH
 
+struct ggml_cann_rope_cache {
+    ~ggml_cann_rope_cache() {
+        if(theta_scale_cache != nullptr) {
+            ACL_CHECK(aclrtFree(theta_scale_cache));
+        }
+        if(sin_cache != nullptr) {
+            ACL_CHECK(aclrtFree(sin_cache));
+        }
+        if(cos_cache != nullptr) {
+            ACL_CHECK(aclrtFree(cos_cache));
+        }
+    }
+
+    void* theta_scale_cache = nullptr;
+    void* sin_cache = nullptr;
+    void* cos_cache = nullptr;
+    int first_layer = -1;
+    int64_t position_length = 0;
+};
+
+struct ggml_cann_tensor_cache {
+    ~ggml_cann_tensor_cache() {
+        if(cache != nullptr) {
+            ACL_CHECK(aclrtFree(cache));
+        }
+    }
+
+    void* cache = nullptr;
+    int64_t size = 0;
+};
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -376,15 +407,11 @@ struct ggml_backend_cann_context {
     bool async_mode;
     bool support_set_rows;
     // Rope Cache
-    void* rope_init_ptr = nullptr;
-    void* rope_sin_ptr = nullptr;
-    void* rope_cos_ptr = nullptr;
-    int64_t max_prompt_length = 0;
+    ggml_cann_rope_cache rope_cache;
     // Constant Pool
-    void* f32_zero_cache = nullptr;
-    void* f32_one_cache = nullptr;
-    int64_t f32_zero_cache_element = 0;
-    int64_t f32_one_cache_element = 0;
+    ggml_cann_tensor_cache rms_norm_one_tensor_cache;
+    ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
+
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -423,21 +450,6 @@ struct ggml_backend_cann_context {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
-        }
-        if(rope_init_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_init_ptr));
-        }
-        if(rope_sin_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_sin_ptr));
-        }
-        if(rope_cos_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_cos_ptr));
-        }
-        if(f32_zero_cache != nullptr) {
-            ACL_CHECK(aclrtFree(f32_zero_cache));
-        }
-        if(f32_one_cache != nullptr) {
-            ACL_CHECK(aclrtFree(f32_one_cache));
         }
     }
 
