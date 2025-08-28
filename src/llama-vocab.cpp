@@ -2470,7 +2470,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         // set attributes by model/tokenizer/architecture name
         if (false
                 || _contains_any(tokenizer_pre, {"jina-v2-de", "jina-v2-es", "jina-v2-code"})
-                || _contains_any(general_arch, {"nomic-bert-moe"})
+                || _contains_any(general_arch, {"nomic-bert-moe", "jina-bert-v3"})
            ) {
             if (token_to_id.count("<mask>") == 0) {
                 LLAMA_LOG_WARN("%s: Mask token is missing in vocab, please reconvert model!\n", __func__);
