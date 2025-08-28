@@ -15,7 +15,8 @@
 		AudioMimeType,
 		PdfExtension,
 		PdfMimeType,
-		TextExtension
+		TextExtension,
+		FileTypeCategory
 	} from '$lib/constants/supported-file-types';
 	import { config } from '$lib/stores/settings.svelte';
 	import {
@@ -61,15 +62,15 @@
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
-	function getAcceptStringForFileType(fileType: 'image' | 'audio' | 'file' | 'pdf'): string {
+	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
 		switch (fileType) {
-			case 'image':
+			case FileTypeCategory.IMAGE:
 				return [...Object.values(ImageExtension), ...Object.values(ImageMimeType)].join(',');
-			case 'audio':
+			case FileTypeCategory.AUDIO:
 				return [...Object.values(AudioExtension), ...Object.values(AudioMimeType)].join(',');
-			case 'pdf':
+			case FileTypeCategory.PDF:
 				return [...Object.values(PdfExtension), ...Object.values(PdfMimeType)].join(',');
-			case 'file':
+			case FileTypeCategory.TEXT:
 				return [...Object.values(TextExtension), TextMimeType.PLAIN].join(',');
 			default:
 				return '';
@@ -80,7 +81,7 @@
 		onFileUpload?.(files);
 	}
 
-	function handleFileUpload(fileType?: 'image' | 'audio' | 'pdf' | 'file') {
+	function handleFileUpload(fileType?: FileTypeCategory) {
 		if (fileType) {
 			fileAcceptString = getAcceptStringForFileType(fileType);
 		} else {

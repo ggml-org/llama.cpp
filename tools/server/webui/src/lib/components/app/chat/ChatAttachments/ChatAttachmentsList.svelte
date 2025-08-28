@@ -146,7 +146,6 @@
 					id={item.id}
 					name={item.name}
 					preview={item.preview}
-					size={item.size}
 					{readonly}
 					onRemove={onFileRemove}
 					height={imageHeight}
@@ -160,7 +159,6 @@
 					id={item.id}
 					name={item.name}
 					type={item.type}
-					size={item.size}
 					{readonly}
 					onRemove={onFileRemove}
 					textContent={item.textContent}
