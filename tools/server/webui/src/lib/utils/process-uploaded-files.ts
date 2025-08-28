@@ -1,4 +1,3 @@
-import { isPdfMimeType } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';

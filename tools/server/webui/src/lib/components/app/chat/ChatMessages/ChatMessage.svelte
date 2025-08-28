@@ -7,17 +7,18 @@
 		ChatMessageThinkingBlock,
 		MarkdownContent
 	} from '$lib/components/app';
-	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import MessageBranchingControls from './MessageBranchingControls.svelte';
+	import { inputClasses } from '$lib/constants/input-classes';
 	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { getDeletionInfo } from '$lib/stores/chat.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import type { Component } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { inputClasses } from '$lib/constants/input-classes';
+	import MessageBranchingControls from './MessageBranchingControls.svelte';
 
 	interface Props {
 		class?: string;
@@ -243,19 +244,19 @@
 	</div>
 {/snippet}
 
-{#snippet actionButton(config: { icon: any; tooltip: string; onclick: () => void })}
-	<Tooltip>
-		<TooltipTrigger>
+{#snippet actionButton(config: { icon: Component; tooltip: string; onclick: () => void })}
+	<Tooltip.Root>
+		<Tooltip.Trigger>
 			<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={config.onclick}>
 				{@const IconComponent = config.icon}
 				<IconComponent class="h-3 w-3" />
 			</Button>
-		</TooltipTrigger>
+		</Tooltip.Trigger>
 
-		<TooltipContent>
+		<Tooltip.Content>
 			<p>{config.tooltip}</p>
-		</TooltipContent>
-	</Tooltip>
+		</Tooltip.Content>
+	</Tooltip.Root>
 {/snippet}
 
 {#snippet timestampAndActions(config: {

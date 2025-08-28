@@ -42,7 +42,7 @@
 				: attachment?.type === 'textFile'
 					? 'text'
 					: attachment?.type === 'audioFile'
-						? (attachment as any).mimeType || 'audio'
+						? attachment.mimeType || 'audio'
 						: attachment?.type === 'pdfFile'
 							? 'application/pdf'
 							: type || 'unknown')
@@ -51,16 +51,15 @@
 	let displaySize = $derived(uploadedFile?.size || size);
 
 	let displayPreview = $derived(
-		uploadedFile?.preview ||
-			(attachment?.type === 'imageFile' ? (attachment as any).base64Url : preview)
+		uploadedFile?.preview || (attachment?.type === 'imageFile' ? attachment.base64Url : preview)
 	);
 
 	let displayTextContent = $derived(
 		uploadedFile?.textContent ||
 			(attachment?.type === 'textFile'
-				? (attachment as any).content
+				? attachment.content
 				: attachment?.type === 'pdfFile'
-					? (attachment as any).content
+					? attachment.content
 					: textContent)
 	);
 
@@ -111,14 +110,14 @@
 				file = uploadedFile.file;
 			} else if (attachment?.type === 'pdfFile') {
 				// Check if we have pre-processed images
-				if ((attachment as any).images && Array.isArray((attachment as any).images)) {
-					pdfImages = (attachment as any).images;
+				if (attachment.images && Array.isArray(attachment.images)) {
+					pdfImages = attachment.images;
 					return;
 				}
 
 				// Convert base64 back to File for processing
-				if ((attachment as any).base64Data) {
-					const base64Data = (attachment as any).base64Data;
+				if (attachment.base64Data) {
+					const base64Data = attachment.base64Data;
 					const byteCharacters = atob(base64Data);
 					const byteNumbers = new Array(byteCharacters.length);
 					for (let i = 0; i < byteCharacters.length; i++) {
@@ -248,7 +247,7 @@
 					</div>
 				{:else if pdfImages.length > 0}
 					<div class="max-h-[70vh] space-y-4 overflow-auto">
-						{#each pdfImages as image, index}
+						{#each pdfImages as image, index (image)}
 							<div class="text-center">
 								<p class="mb-2 text-sm text-muted-foreground">Page {index + 1}</p>
 
@@ -284,7 +283,7 @@
 							<audio
 								controls
 								class="mb-4 w-full"
-								src="data:{(attachment as any).mimeType};base64,{(attachment as any).base64Data}"
+								src="data:{attachment.mimeType};base64,{attachment.base64Data}"
 							>
 								Your browser does not support the audio element.
 							</audio>

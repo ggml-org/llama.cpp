@@ -6,8 +6,6 @@
 import {
 	FileTypeCategory,
 	getFileTypeCategory,
-	ALL_SUPPORTED_EXTENSIONS,
-	ALL_SUPPORTED_MIME_TYPES,
 	ImageExtension,
 	ImageMimeType,
 	AudioExtension,
@@ -131,14 +129,6 @@ export function generateModalityErrorMessage(
 
 	const hasVision = supportsVision();
 	const hasAudio = supportsAudio();
-
-	// Group files by reason
-	const imageFiles = unsupportedFiles.filter(
-		(f) => getFileTypeCategory(f.type) === FileTypeCategory.IMAGE
-	);
-	const audioFiles = unsupportedFiles.filter(
-		(f) => getFileTypeCategory(f.type) === FileTypeCategory.AUDIO
-	);
 
 	let message = '';
 

@@ -6,7 +6,6 @@
 		id: string;
 		name: string;
 		preview: string;
-		size?: number;
 		readonly?: boolean;
 		onRemove?: (id: string) => void;
 		onClick?: (event?: MouseEvent) => void;
@@ -21,7 +20,6 @@
 		id,
 		name,
 		preview,
-		size,
 		readonly = false,
 		onRemove,
 		onClick,

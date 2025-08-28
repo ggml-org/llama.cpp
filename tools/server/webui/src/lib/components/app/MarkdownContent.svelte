@@ -111,7 +111,7 @@
 
 		const copyButtons = containerRef.querySelectorAll('.copy-code-btn');
 
-		for (const [index, button] of Array.from(copyButtons).entries()) {
+		for (const button of copyButtons) {
 			button.addEventListener('click', async (e) => {
 				e.preventDefault();
 				e.stopPropagation();
@@ -175,6 +175,7 @@
 </script>
 
 <div bind:this={containerRef} class={className}>
+	<!-- eslint-disable-next-line no-at-html-tags -->
 	{@html processedHtml}
 </div>
 

@@ -11,7 +11,7 @@ export class AudioRecorder {
 	private stream: MediaStream | null = null;
 	private recordingState: boolean = false;
 
-	async startRecording(options: AudioRecordingOptions = {}): Promise<void> {
+	async startRecording(): Promise<void> {
 		try {
 			this.stream = await navigator.mediaDevices.getUserMedia({
 				audio: {
@@ -122,6 +122,7 @@ export async function convertToWav(audioBlob: Blob): Promise<Blob> {
 
 		const arrayBuffer = await audioBlob.arrayBuffer();
 
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
 		const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);

@@ -1,6 +1,4 @@
 import { slotsService } from './slots';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 
 export interface ContextCheckResult {
 	wouldExceed: boolean;

@@ -32,7 +32,7 @@
 			<div class="rounded-lg bg-muted p-3">
 				<div class="mb-2 font-medium">Empty Files:</div>
 				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
-					{#each emptyFiles as fileName}
+					{#each emptyFiles as fileName (fileName)}
 						<li class="font-mono text-sm">{fileName}</li>
 					{/each}
 				</ul>

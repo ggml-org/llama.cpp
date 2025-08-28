@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { AlertTriangle, RefreshCw, Server } from '@lucide/svelte';
+	import { AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import { ServerStatus } from '$lib/components/app';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { fade, fly } from 'svelte/transition';

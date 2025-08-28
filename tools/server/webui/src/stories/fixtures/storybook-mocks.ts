@@ -7,7 +7,7 @@ import { serverStore } from '$lib/stores/server.svelte';
  */
 export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 	// Directly set the private _serverProps for testing purposes
-	(serverStore as any)._serverProps = {
+	(serverStore as unknown as { _serverProps: ApiLlamaCppServerProps })._serverProps = {
 		model_path: props.model_path || 'test-model',
 		modalities: {
 			vision: props.modalities?.vision ?? false,
@@ -21,9 +21,15 @@ export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
  * Reset server store to clean state for testing
  */
 export function resetServerStore(): void {
-	(serverStore as any)._serverProps = null;
-	(serverStore as any)._error = null;
-	(serverStore as any)._loading = false;
+	(serverStore as unknown as { _serverProps: ApiLlamaCppServerProps })._serverProps = {
+		model_path: '',
+		modalities: {
+			vision: false,
+			audio: false
+		}
+	} as ApiLlamaCppServerProps;
+	(serverStore as unknown as { _error: string })._error = '';
+	(serverStore as unknown as { _loading: boolean })._loading = false;
 }
 
 /**

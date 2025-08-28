@@ -6,11 +6,10 @@
 
 	interface Props {
 		class?: string;
-		variant?: 'header' | 'inline';
 		showActions?: boolean;
 	}
 
-	let { class: className = '', variant = 'header', showActions = false }: Props = $props();
+	let { class: className = '', showActions = false }: Props = $props();
 
 	const serverData = $derived(serverProps());
 	const loading = $derived(serverLoading());

@@ -2,7 +2,7 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatSidebar from '$lib/components/app/chat/ChatSidebar/ChatSidebar.svelte';
 	import type { DatabaseConversation } from '$lib/types/database.d.ts';
-	import { waitFor, within, expect } from 'storybook/internal/test';
+	import { waitFor } from 'storybook/internal/test';
 	import { screen } from 'storybook/test';
 
 	const { Story } = defineMeta({
@@ -51,7 +51,7 @@
 <Story
 	asChild
 	name="Default"
-	play={async ({ canvas }) => {
+	play={async () => {
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 		
 		waitFor(() => setTimeout(() => {
@@ -67,8 +67,7 @@
 <Story
 	asChild
 	name="SearchActive"
-	play={async ({ userEvent, canvasElement }) => {
-		let canvas = within(canvasElement);
+	play={async ({ userEvent }) => {
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 		
 		waitFor(() => setTimeout(() => {
@@ -87,7 +86,7 @@
 <Story
 	asChild
 	name="Empty"
-	play={async ({ canvas }) => {
+	play={async () => {
 		// Mock empty conversations store
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 		chatStore.conversations = [];

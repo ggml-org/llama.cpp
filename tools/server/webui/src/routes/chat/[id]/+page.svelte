@@ -52,7 +52,7 @@
 
 	$effect(() => {
 		if (typeof window !== 'undefined') {
-			const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+			const handleBeforeUnload = () => {
 				if (isLoading()) {
 					console.log('Page unload detected while streaming - aborting stream');
 					stopGeneration();

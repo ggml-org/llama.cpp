@@ -1,8 +1,4 @@
 <script lang="ts">
-	import {
-		ALL_SUPPORTED_EXTENSIONS,
-		ALL_SUPPORTED_MIME_TYPES
-	} from '$lib/constants/supported-file-types';
 	import { generateModalityAwareAcceptString } from '$lib/utils/modality-file-validation';
 
 	interface Props {
@@ -11,9 +7,6 @@
 		onFileSelect?: (files: File[]) => void;
 		class?: string;
 	}
-
-	// Generate accept string from our enum-based supported file types
-	const defaultAccept = [...ALL_SUPPORTED_EXTENSIONS, ...ALL_SUPPORTED_MIME_TYPES].join(',');
 
 	let {
 		accept = $bindable(),

@@ -5,7 +5,7 @@
 		editMessageWithBranching,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
-	import { activeConversation, activeMessages } from '$lib/stores/chat.svelte';
+	import { activeConversation } from '$lib/stores/chat.svelte';
 	import { ChatMessage } from '$lib/components/app';
 	import { getMessageSiblings } from '$lib/utils/branching';
 	import { DatabaseService } from '$lib/services/database';
@@ -19,14 +19,12 @@
 	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
-	let lastUpdateTime = $state(0);
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
 		if (conversation) {
 			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
-				lastUpdateTime = Date.now();
 			});
 		} else {
 			allConversationMessages = [];
@@ -36,14 +34,6 @@
 	// Single effect that tracks both conversation and message changes
 	$effect(() => {
 		const conversation = activeConversation();
-		const currentActiveMessages = activeMessages();
-
-		// Track message count and timestamps to detect changes
-		const messageCount = currentActiveMessages.length;
-		const lastMessageTimestamp =
-			currentActiveMessages.length > 0
-				? Math.max(...currentActiveMessages.map((m) => m.timestamp || 0))
-				: 0;
 
 		if (conversation) {
 			refreshAllMessages();
@@ -54,9 +44,6 @@
 		if (!messages.length) {
 			return [];
 		}
-
-		// Force dependency on lastUpdateTime to ensure reactivity
-		const _ = lastUpdateTime;
 
 		return messages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
@@ -97,7 +84,7 @@
 </script>
 
 <div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
-	{#each displayMessages as { message, siblingInfo }}
+	{#each displayMessages as { message, siblingInfo } (message.id)}
 		<ChatMessage
 			class="mx-auto w-full max-w-[48rem]"
 			{message}

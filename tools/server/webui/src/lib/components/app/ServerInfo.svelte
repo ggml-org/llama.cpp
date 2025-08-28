@@ -25,7 +25,7 @@
 			{/if}
 
 			{#if modalities.length > 0}
-				{#each modalities as modality}
+				{#each modalities as modality (modality)}
 					<Badge variant="secondary" class="text-xs">
 						{#if modality === 'vision'}
 							<Eye class="mr-1 h-3 w-3" />

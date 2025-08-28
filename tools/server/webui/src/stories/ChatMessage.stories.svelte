@@ -1,7 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage.svelte';
-	import { expect } from 'storybook/internal/test';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatScreen/ChatMessage',
@@ -34,20 +33,6 @@
 			'The answer to the ultimate question of life, the universe, and everything is **42**.\n\nThis comes from Douglas Adams\' "The Hitchhiker\'s Guide to the Galaxy," where a supercomputer named Deep Thought calculated this answer over 7.5 million years. However, the question itself was never properly formulated, which is why the answer seems meaningless without context.',
 		parent: '1',
 		thinking: '',
-		children: []
-	};
-
-	const thinkingMessage: DatabaseMessage = {
-		id: '3',
-		convId: 'conv-1',
-		type: 'message',
-		timestamp: Date.now() - 1000 * 60 * 2,
-		role: 'assistant',
-		content:
-			"Let me solve this step by step.\n\nFirst, I need to understand what you're asking for. Then I'll work through the problem systematically.",
-		parent: '1',
-		thinking:
-			'The user is asking me to solve a complex problem. I should break this down into steps:\n\n1. Understand the requirements\n2. Analyze the problem\n3. Consider different approaches\n4. Choose the best solution\n5. Implement and explain\n\nThis seems like a good approach to take.',
 		children: []
 	};
 
@@ -97,7 +82,7 @@
 		message: streamingMessage
 	}}
 	asChild
-	play={async ({ canvas }) => {
+	play={async () => {
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
 			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
@@ -135,9 +120,6 @@
 		}
 
 		streamingMessage.timestamp = Date.now();
-
-		// const collapsibleTrigger = canvas.getByText('Reasoning');
-		// expect(collapsibleTrigger).not.toHaveAttribute('data-state', 'open');
 	}}
 >
 	<div class="w-[56rem]">
@@ -150,7 +132,7 @@
 	args={{
 		message: processingMessage
 	}}
-	play={async ({ canvas }) => {
+	play={async () => {
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 		

@@ -361,7 +361,7 @@
 					<div class="space-y-2">
 						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
 						<div class="space-y-1">
-							{#each fileErrorData.generallyUnsupported as file}
+							{#each fileErrorData.generallyUnsupported as file (file.name)}
 								<div class="rounded-md bg-destructive/10 px-3 py-2">
 									<p class="font-mono text-sm break-all text-destructive">
 										{file.name}
@@ -377,7 +377,7 @@
 					<div class="space-y-2">
 						<h4 class="text-sm font-medium text-destructive">Model Compatibility Issues</h4>
 						<div class="space-y-1">
-							{#each fileErrorData.modalityUnsupported as file}
+							{#each fileErrorData.modalityUnsupported as file (file.name)}
 								<div class="rounded-md bg-destructive/10 px-3 py-2">
 									<p class="font-mono text-sm break-all text-destructive">
 										{file.name}

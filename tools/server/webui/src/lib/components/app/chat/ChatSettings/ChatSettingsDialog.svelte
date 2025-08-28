@@ -11,6 +11,7 @@
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { supportsVision } from '$lib/stores/server.svelte';
+	import type { Component } from 'svelte';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -44,6 +45,7 @@
 				JSON.parse(localConfig.custom);
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
+				console.error(error);
 				return;
 			}
 		}
@@ -108,7 +110,7 @@
 
 	const settingSections: Array<{
 		title: string;
-		icon: any;
+		icon: Component;
 		fields: SettingsFieldConfig[];
 	}> = [
 		{
@@ -304,7 +306,7 @@
 				<nav class="space-y-1 py-2">
 					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
 
-					{#each settingSections as section}
+					{#each settingSections as section (section.title)}
 						<button
 							class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
 							section.title
@@ -321,8 +323,8 @@
 
 			<ScrollArea class="flex-1">
 				<div class="space-y-6 p-6">
-					<ChatSettingsSection title={currentSection.title} icon={currentSection.icon}>
-						{#each currentSection.fields as field}
+					<ChatSettingsSection title={currentSection.title} Icon={currentSection.icon}>
+						{#each currentSection.fields as field (field.key)}
 							<div class="space-y-2">
 								{#if field.type === 'input'}
 									<label for={field.key} class="block text-sm font-medium">
@@ -360,7 +362,7 @@
 									{/if}
 								{:else if field.type === 'select'}
 									{@const selectedOption = field.options?.find(
-										(opt: { value: string; label: string; icon?: any }) =>
+										(opt: { value: string; label: string; icon?: Component }) =>
 											opt.value === localConfig[field.key]
 									)}
 									<label for={field.key} class="block text-sm font-medium">
@@ -389,7 +391,7 @@
 										</Select.Trigger>
 										<Select.Content>
 											{#if field.options}
-												{#each field.options as option}
+												{#each field.options as option (option.value)}
 													<Select.Item value={option.value} label={option.label}>
 														<div class="flex items-center gap-2">
 															{#if option.icon}

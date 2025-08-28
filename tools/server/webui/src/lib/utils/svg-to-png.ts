@@ -1,4 +1,4 @@
-import { ImageMimeType, ImageExtension } from '$lib/constants/supported-file-types';
+import { ImageMimeType } from '$lib/constants/supported-file-types';
 
 /**
  * Convert an SVG base64 data URL to a PNG data URL
