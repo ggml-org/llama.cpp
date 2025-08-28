@@ -9,14 +9,10 @@ import type {
 	ApiChatCompletionStreamChunk,
 	ApiChatMessageData,
 	ApiChatMessageContentPart,
-	ApiLlamaCppServerProps,
+	ApiLlamaCppServerProps
 } from '$lib/types/api';
 
-import type {
-	ChatMessageType,
-	ChatRole,
-	ChatUploadedFile,
-} from '$lib/types/chat';
+import type { ChatMessageType, ChatRole, ChatUploadedFile } from '$lib/types/chat';
 
 import type {
 	DatabaseAppSettings,
@@ -26,13 +22,13 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile,
 	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraPdfFile
 } from '$lib/types/database';
 
 import type {
 	SettingsConfigValue,
 	SettingsFieldConfig,
-	SettingsConfigType,
+	SettingsConfigType
 } from '$lib/types/settings';
 
 declare global {
@@ -66,6 +62,6 @@ declare global {
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,
-		SettingsChatServiceOptions,
-	}
+		SettingsChatServiceOptions
+	};
 }

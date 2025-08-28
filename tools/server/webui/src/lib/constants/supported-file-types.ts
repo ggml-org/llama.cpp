@@ -181,160 +181,160 @@ export enum TextMimeType {
 export const IMAGE_FILE_TYPES = {
 	[ImageFileType.JPEG]: {
 		extensions: [ImageExtension.JPG, ImageExtension.JPEG],
-		mimeTypes: [ImageMimeType.JPEG],
+		mimeTypes: [ImageMimeType.JPEG]
 	},
 	[ImageFileType.PNG]: {
 		extensions: [ImageExtension.PNG],
-		mimeTypes: [ImageMimeType.PNG],
+		mimeTypes: [ImageMimeType.PNG]
 	},
 	[ImageFileType.GIF]: {
 		extensions: [ImageExtension.GIF],
-		mimeTypes: [ImageMimeType.GIF],
+		mimeTypes: [ImageMimeType.GIF]
 	},
 	[ImageFileType.WEBP]: {
 		extensions: [ImageExtension.WEBP],
-		mimeTypes: [ImageMimeType.WEBP],
+		mimeTypes: [ImageMimeType.WEBP]
 	},
 	[ImageFileType.SVG]: {
 		extensions: [ImageExtension.SVG],
-		mimeTypes: [ImageMimeType.SVG],
+		mimeTypes: [ImageMimeType.SVG]
 	}
 } as const;
 
 export const AUDIO_FILE_TYPES = {
 	[AudioFileType.MP3]: {
 		extensions: [AudioExtension.MP3],
-		mimeTypes: [AudioMimeType.MP3_MPEG, AudioMimeType.MP3],
+		mimeTypes: [AudioMimeType.MP3_MPEG, AudioMimeType.MP3]
 	},
 	[AudioFileType.WAV]: {
 		extensions: [AudioExtension.WAV],
-		mimeTypes: [AudioMimeType.WAV],
+		mimeTypes: [AudioMimeType.WAV]
 	}
 } as const;
 
 export const PDF_FILE_TYPES = {
 	[PdfFileType.PDF]: {
 		extensions: [PdfExtension.PDF],
-		mimeTypes: [PdfMimeType.PDF],
+		mimeTypes: [PdfMimeType.PDF]
 	}
 } as const;
 
 export const TEXT_FILE_TYPES = {
 	[TextFileType.PLAIN_TEXT]: {
 		extensions: [TextExtension.TXT],
-		mimeTypes: [TextMimeType.PLAIN],
+		mimeTypes: [TextMimeType.PLAIN]
 	},
 	[TextFileType.MARKDOWN]: {
 		extensions: [TextExtension.MD],
-		mimeTypes: [TextMimeType.MARKDOWN],
+		mimeTypes: [TextMimeType.MARKDOWN]
 	},
 	[TextFileType.JAVASCRIPT]: {
 		extensions: [TextExtension.JS],
-		mimeTypes: [TextMimeType.JAVASCRIPT, TextMimeType.JAVASCRIPT_APP],
+		mimeTypes: [TextMimeType.JAVASCRIPT, TextMimeType.JAVASCRIPT_APP]
 	},
 	[TextFileType.TYPESCRIPT]: {
 		extensions: [TextExtension.TS],
-		mimeTypes: [TextMimeType.TYPESCRIPT],
+		mimeTypes: [TextMimeType.TYPESCRIPT]
 	},
 	[TextFileType.JSX]: {
 		extensions: [TextExtension.JSX],
-		mimeTypes: [TextMimeType.JSX],
+		mimeTypes: [TextMimeType.JSX]
 	},
 	[TextFileType.TSX]: {
 		extensions: [TextExtension.TSX],
-		mimeTypes: [TextMimeType.TSX],
+		mimeTypes: [TextMimeType.TSX]
 	},
 	[TextFileType.CSS]: {
 		extensions: [TextExtension.CSS],
-		mimeTypes: [TextMimeType.CSS],
+		mimeTypes: [TextMimeType.CSS]
 	},
 	[TextFileType.HTML]: {
 		extensions: [TextExtension.HTML, TextExtension.HTM],
-		mimeTypes: [TextMimeType.HTML],
+		mimeTypes: [TextMimeType.HTML]
 	},
 	[TextFileType.JSON]: {
 		extensions: [TextExtension.JSON],
-		mimeTypes: [TextMimeType.JSON],
+		mimeTypes: [TextMimeType.JSON]
 	},
 	[TextFileType.XML]: {
 		extensions: [TextExtension.XML],
-		mimeTypes: [TextMimeType.XML_TEXT, TextMimeType.XML_APP],
+		mimeTypes: [TextMimeType.XML_TEXT, TextMimeType.XML_APP]
 	},
 	[TextFileType.YAML]: {
 		extensions: [TextExtension.YAML, TextExtension.YML],
-		mimeTypes: [TextMimeType.YAML_TEXT, TextMimeType.YAML_APP],
+		mimeTypes: [TextMimeType.YAML_TEXT, TextMimeType.YAML_APP]
 	},
 	[TextFileType.CSV]: {
 		extensions: [TextExtension.CSV],
-		mimeTypes: [TextMimeType.CSV],
+		mimeTypes: [TextMimeType.CSV]
 	},
 	[TextFileType.LOG]: {
 		extensions: [TextExtension.LOG],
-		mimeTypes: [TextMimeType.PLAIN],
+		mimeTypes: [TextMimeType.PLAIN]
 	},
 	[TextFileType.PYTHON]: {
 		extensions: [TextExtension.PY],
-		mimeTypes: [TextMimeType.PYTHON],
+		mimeTypes: [TextMimeType.PYTHON]
 	},
 	[TextFileType.JAVA]: {
 		extensions: [TextExtension.JAVA],
-		mimeTypes: [TextMimeType.JAVA],
+		mimeTypes: [TextMimeType.JAVA]
 	},
 	[TextFileType.CPP]: {
 		extensions: [TextExtension.CPP, TextExtension.C, TextExtension.H],
-		mimeTypes: [TextMimeType.CPP_SRC, TextMimeType.C_SRC, TextMimeType.C_HDR],
+		mimeTypes: [TextMimeType.CPP_SRC, TextMimeType.C_SRC, TextMimeType.C_HDR]
 	},
 	[TextFileType.PHP]: {
 		extensions: [TextExtension.PHP],
-		mimeTypes: [TextMimeType.PHP],
+		mimeTypes: [TextMimeType.PHP]
 	},
 	[TextFileType.RUBY]: {
 		extensions: [TextExtension.RB],
-		mimeTypes: [TextMimeType.RUBY],
+		mimeTypes: [TextMimeType.RUBY]
 	},
 	[TextFileType.GO]: {
 		extensions: [TextExtension.GO],
-		mimeTypes: [TextMimeType.GO],
+		mimeTypes: [TextMimeType.GO]
 	},
 	[TextFileType.RUST]: {
 		extensions: [TextExtension.RS],
-		mimeTypes: [TextMimeType.RUST],
+		mimeTypes: [TextMimeType.RUST]
 	},
 	[TextFileType.SHELL]: {
 		extensions: [TextExtension.SH, TextExtension.BAT],
-		mimeTypes: [TextMimeType.SHELL, TextMimeType.BAT],
+		mimeTypes: [TextMimeType.SHELL, TextMimeType.BAT]
 	},
 	[TextFileType.SQL]: {
 		extensions: [TextExtension.SQL],
-		mimeTypes: [TextMimeType.SQL],
+		mimeTypes: [TextMimeType.SQL]
 	},
 	[TextFileType.R]: {
 		extensions: [TextExtension.R],
-		mimeTypes: [TextMimeType.R],
+		mimeTypes: [TextMimeType.R]
 	},
 	[TextFileType.SCALA]: {
 		extensions: [TextExtension.SCALA],
-		mimeTypes: [TextMimeType.SCALA],
+		mimeTypes: [TextMimeType.SCALA]
 	},
 	[TextFileType.KOTLIN]: {
 		extensions: [TextExtension.KT],
-		mimeTypes: [TextMimeType.KOTLIN],
+		mimeTypes: [TextMimeType.KOTLIN]
 	},
 	[TextFileType.SWIFT]: {
 		extensions: [TextExtension.SWIFT],
-		mimeTypes: [TextMimeType.SWIFT],
+		mimeTypes: [TextMimeType.SWIFT]
 	},
 	[TextFileType.DART]: {
 		extensions: [TextExtension.DART],
-		mimeTypes: [TextMimeType.DART],
+		mimeTypes: [TextMimeType.DART]
 	},
 	[TextFileType.VUE]: {
 		extensions: [TextExtension.VUE],
-		mimeTypes: [TextMimeType.VUE],
+		mimeTypes: [TextMimeType.VUE]
 	},
 	[TextFileType.SVELTE]: {
 		extensions: [TextExtension.SVELTE],
-		mimeTypes: [TextMimeType.SVELTE],
+		mimeTypes: [TextMimeType.SVELTE]
 	}
 } as const;
 
@@ -355,16 +355,32 @@ export const ALL_SUPPORTED_MIME_TYPES = [
 
 // Helper functions for file type detection
 export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
-	if (Object.values(IMAGE_FILE_TYPES).some(type => (type.mimeTypes as readonly string[]).includes(mimeType))) {
+	if (
+		Object.values(IMAGE_FILE_TYPES).some((type) =>
+			(type.mimeTypes as readonly string[]).includes(mimeType)
+		)
+	) {
 		return FileTypeCategory.IMAGE;
 	}
-	if (Object.values(AUDIO_FILE_TYPES).some(type => (type.mimeTypes as readonly string[]).includes(mimeType))) {
+	if (
+		Object.values(AUDIO_FILE_TYPES).some((type) =>
+			(type.mimeTypes as readonly string[]).includes(mimeType)
+		)
+	) {
 		return FileTypeCategory.AUDIO;
 	}
-	if (Object.values(PDF_FILE_TYPES).some(type => (type.mimeTypes as readonly string[]).includes(mimeType))) {
+	if (
+		Object.values(PDF_FILE_TYPES).some((type) =>
+			(type.mimeTypes as readonly string[]).includes(mimeType)
+		)
+	) {
 		return FileTypeCategory.PDF;
 	}
-	if (Object.values(TEXT_FILE_TYPES).some(type => (type.mimeTypes as readonly string[]).includes(mimeType))) {
+	if (
+		Object.values(TEXT_FILE_TYPES).some((type) =>
+			(type.mimeTypes as readonly string[]).includes(mimeType)
+		)
+	) {
 		return FileTypeCategory.TEXT;
 	}
 	return null;
@@ -372,35 +388,35 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 
 export function getFileTypeByExtension(filename: string): string | null {
 	const extension = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-	
+
 	// Check image types
 	for (const [key, type] of Object.entries(IMAGE_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.IMAGE}:${key}`;
 		}
 	}
-	
+
 	// Check audio types
 	for (const [key, type] of Object.entries(AUDIO_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.AUDIO}:${key}`;
 		}
 	}
-	
+
 	// Check PDF types
 	for (const [key, type] of Object.entries(PDF_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.PDF}:${key}`;
 		}
 	}
-	
+
 	// Check text types
 	for (const [key, type] of Object.entries(TEXT_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.TEXT}:${key}`;
 		}
 	}
-	
+
 	return null;
 }
 

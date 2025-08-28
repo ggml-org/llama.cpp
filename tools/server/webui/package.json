@@ -12,7 +12,7 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"reset": "rm -rf .svelte-kit node_modules",
 		"format": "prettier --write .",
-		"lint": "prettier --check . && eslint .",
+		"lint": "prettier --check --write . && eslint .",
 		"test": "npm run test:ui -- --run && npm run test:client -- --run && npm run test:server -- --run && npm run test:e2e",
 		"test:e2e": "playwright test",
 		"test:client": "vitest --project=client",

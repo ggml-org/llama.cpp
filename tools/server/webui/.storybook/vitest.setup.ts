@@ -5,7 +5,7 @@ import { beforeAll } from 'vitest';
 const project = setProjectAnnotations([previewAnnotations]);
 
 beforeAll(async () => {
-  if (project.beforeAll) {
-    await project.beforeAll();
-  }
+	if (project.beforeAll) {
+		await project.beforeAll();
+	}
 });

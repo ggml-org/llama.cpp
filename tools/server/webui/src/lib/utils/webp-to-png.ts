@@ -34,14 +34,12 @@ export function webpBase64UrlToPngDataURL(
 					ctx.fillRect(0, 0, canvas.width, canvas.height);
 				}
 				ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-				
+
 				resolve(canvas.toDataURL(ImageMimeType.PNG));
 			};
 
 			img.onerror = () => {
-				reject(
-					new Error('Failed to load WebP image. Ensure the WebP data is valid.')
-				);
+				reject(new Error('Failed to load WebP image. Ensure the WebP data is valid.'));
 			};
 
 			img.src = base64UrlWebp;

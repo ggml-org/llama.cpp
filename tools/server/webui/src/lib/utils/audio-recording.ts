@@ -1,4 +1,4 @@
-import { AudioMimeType } from "$lib/constants/supported-file-types";
+import { AudioMimeType } from '$lib/constants/supported-file-types';
 
 export interface AudioRecordingOptions {
 	mimeType?: string;
@@ -13,7 +13,7 @@ export class AudioRecorder {
 
 	async startRecording(options: AudioRecordingOptions = {}): Promise<void> {
 		try {
-			this.stream = await navigator.mediaDevices.getUserMedia({ 
+			this.stream = await navigator.mediaDevices.getUserMedia({
 				audio: {
 					echoCancellation: true,
 					noiseSuppression: true,
@@ -43,9 +43,9 @@ export class AudioRecorder {
 			this.mediaRecorder.onstop = () => {
 				const mimeType = this.mediaRecorder?.mimeType || AudioMimeType.WAV;
 				const audioBlob = new Blob(this.audioChunks, { type: mimeType });
-				
+
 				this.cleanup();
-				
+
 				resolve(audioBlob);
 			};
 
@@ -72,7 +72,7 @@ export class AudioRecorder {
 
 	private initializeRecorder(stream: MediaStream): void {
 		const options: MediaRecorderOptions = {};
-		
+
 		if (MediaRecorder.isTypeSupported(AudioMimeType.WAV)) {
 			options.mimeType = AudioMimeType.WAV;
 		} else if (MediaRecorder.isTypeSupported(AudioMimeType.WEBM_OPUS)) {
@@ -105,7 +105,7 @@ export class AudioRecorder {
 
 	private cleanup(): void {
 		if (this.stream) {
-			this.stream.getTracks().forEach(track => track.stop());
+			this.stream.getTracks().forEach((track) => track.stop());
 			this.stream = null;
 		}
 		this.mediaRecorder = null;
@@ -121,15 +121,15 @@ export async function convertToWav(audioBlob: Blob): Promise<Blob> {
 		}
 
 		const arrayBuffer = await audioBlob.arrayBuffer();
-		
+
 		const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-		
+
 		const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-		
+
 		const wavBlob = audioBufferToWav(audioBuffer);
-		
+
 		audioContext.close();
-		
+
 		return wavBlob;
 	} catch (error) {
 		console.error('Failed to convert audio to WAV:', error);
@@ -146,16 +146,16 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	const byteRate = sampleRate * blockAlign;
 	const dataSize = length * blockAlign;
 	const bufferSize = 44 + dataSize;
-	
+
 	const arrayBuffer = new ArrayBuffer(bufferSize);
 	const view = new DataView(arrayBuffer);
-	
+
 	const writeString = (offset: number, string: string) => {
 		for (let i = 0; i < string.length; i++) {
 			view.setUint8(offset + i, string.charCodeAt(i));
 		}
 	};
-	
+
 	writeString(0, 'RIFF'); // ChunkID
 	view.setUint32(4, bufferSize - 8, true); // ChunkSize
 	writeString(8, 'WAVE'); // Format
@@ -169,16 +169,16 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	view.setUint16(34, 16, true); // BitsPerSample
 	writeString(36, 'data'); // Subchunk2ID
 	view.setUint32(40, dataSize, true); // Subchunk2Size
-	
+
 	let offset = 44;
 	for (let i = 0; i < length; i++) {
 		for (let channel = 0; channel < numberOfChannels; channel++) {
 			const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
-			view.setInt16(offset, sample * 0x7FFF, true);
+			view.setInt16(offset, sample * 0x7fff, true);
 			offset += 2;
 		}
 	}
-	
+
 	return new Blob([arrayBuffer], { type: AudioMimeType.WAV });
 }
 
@@ -186,7 +186,7 @@ export function createAudioFile(audioBlob: Blob, filename?: string): File {
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const extension = audioBlob.type.includes('wav') ? 'wav' : 'mp3';
 	const defaultFilename = `recording-${timestamp}.${extension}`;
-	
+
 	return new File([audioBlob], filename || defaultFilename, {
 		type: audioBlob.type,
 		lastModified: Date.now()

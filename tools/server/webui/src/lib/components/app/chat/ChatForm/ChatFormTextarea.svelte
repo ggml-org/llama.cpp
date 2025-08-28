@@ -17,7 +17,7 @@
 		onKeydown,
 		onPaste,
 		placeholder = 'Ask anything...',
-		value = $bindable(''),
+		value = $bindable('')
 	}: Props = $props();
 
 	let textareaElement: HTMLTextAreaElement | undefined;
@@ -48,7 +48,7 @@
 	<textarea
 		bind:this={textareaElement}
 		bind:value
-		class="placeholder:text-muted-foreground text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+		class="text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
 		onkeydown={onKeydown}
 		oninput={(event) => autoResizeTextarea(event.currentTarget)}
 		onpaste={onPaste}

@@ -9,7 +9,7 @@
 </script>
 
 {#if props}
-	<div class="text-muted-foreground flex flex-wrap items-center justify-center gap-4 text-sm">
+	<div class="flex flex-wrap items-center justify-center gap-4 text-sm text-muted-foreground">
 		{#if model}
 			<Badge variant="outline" class="text-xs">
 				<Server class="mr-1 h-3 w-3" />
@@ -19,23 +19,23 @@
 
 		<div class="flex gap-4">
 			{#if props.default_generation_settings.n_ctx}
-			<Badge variant="secondary" class="text-xs">
-				ctx: {props.default_generation_settings.n_ctx.toLocaleString()}
-			</Badge>
-		{/if}
-
-		{#if modalities.length > 0}
-			{#each modalities as modality}
 				<Badge variant="secondary" class="text-xs">
-					{#if modality === 'vision'}
-						<Eye class="mr-1 h-3 w-3" />
-					{:else if modality === 'audio'}
-						<Mic class="mr-1 h-3 w-3" />
-					{/if}
-					{modality}
+					ctx: {props.default_generation_settings.n_ctx.toLocaleString()}
 				</Badge>
-			{/each}
-		{/if}
+			{/if}
+
+			{#if modalities.length > 0}
+				{#each modalities as modality}
+					<Badge variant="secondary" class="text-xs">
+						{#if modality === 'vision'}
+							<Eye class="mr-1 h-3 w-3" />
+						{:else if modality === 'audio'}
+							<Mic class="mr-1 h-3 w-3" />
+						{/if}
+						{modality}
+					</Badge>
+				{/each}
+			{/if}
 		</div>
 	</div>
 {/if}

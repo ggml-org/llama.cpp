@@ -1,4 +1,4 @@
-import type { SETTING_CONFIG_DEFAULT } from "$lib/constants/settings-config";
+import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 
 export type SettingsConfigValue = string | number | boolean;
 

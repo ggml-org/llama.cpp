@@ -9,11 +9,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { setMode } from 'mode-watcher';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
-	import {
-		config,
-		updateMultipleConfig,
-		resetConfig
-	} from '$lib/stores/settings.svelte';
+	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { supportsVision } from '$lib/stores/server.svelte';
 
 	interface Props {
@@ -55,10 +51,25 @@
 		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
 		const numericFields = [
-			'temperature', 'top_k', 'top_p', 'min_p', 'max_tokens', 'pasteLongTextToFileLen',
-			'dynatemp_range', 'dynatemp_exponent', 'typical_p', 'xtc_probability', 'xtc_threshold',
-			'repeat_last_n', 'repeat_penalty', 'presence_penalty', 'frequency_penalty',
-			'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n'
+			'temperature',
+			'top_k',
+			'top_p',
+			'min_p',
+			'max_tokens',
+			'pasteLongTextToFileLen',
+			'dynatemp_range',
+			'dynatemp_exponent',
+			'typical_p',
+			'xtc_probability',
+			'xtc_threshold',
+			'repeat_last_n',
+			'repeat_penalty',
+			'presence_penalty',
+			'frequency_penalty',
+			'dry_multiplier',
+			'dry_base',
+			'dry_allowed_length',
+			'dry_penalty_last_n'
 		];
 
 		for (const field of numericFields) {
@@ -81,7 +92,7 @@
 		resetConfig();
 
 		localConfig = { ...SETTING_CONFIG_DEFAULT };
-		
+
 		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
 		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
 	}
@@ -289,13 +300,13 @@
 <Dialog.Root {open} onOpenChange={handleClose}>
 	<Dialog.Content class="flex h-[64vh] flex-col gap-0 p-0" style="max-width: 48rem;">
 		<div class="flex flex-1 overflow-hidden">
-			<div class="border-border/30 w-64 border-r p-6">
+			<div class="w-64 border-r border-border/30 p-6">
 				<nav class="space-y-1 py-2">
 					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
 
 					{#each settingSections as section}
 						<button
-							class="hover:bg-accent flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors {activeSection ===
+							class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
 							section.title
 								? 'bg-accent text-accent-foreground'
 								: 'text-muted-foreground'}"
@@ -310,7 +321,6 @@
 
 			<ScrollArea class="flex-1">
 				<div class="space-y-6 p-6">
-
 					<ChatSettingsSection title={currentSection.title} icon={currentSection.icon}>
 						{#each currentSection.fields as field}
 							<div class="space-y-2">
@@ -322,13 +332,12 @@
 									<Input
 										id={field.key}
 										value={String(localConfig[field.key] || '')}
-										onchange={(e) =>
-											(localConfig[field.key] = e.currentTarget.value)}
+										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="max-w-md"
 									/>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="text-muted-foreground mt-1 text-xs">
+										<p class="mt-1 text-xs text-muted-foreground">
 											{field.help || SETTING_CONFIG_INFO[field.key]}
 										</p>
 									{/if}
@@ -340,29 +349,35 @@
 									<Textarea
 										id={field.key}
 										value={String(localConfig[field.key] || '')}
-										onchange={(e) =>
-											(localConfig[field.key] = e.currentTarget.value)}
+										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="min-h-[100px] max-w-2xl"
 									/>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="text-muted-foreground mt-1 text-xs">
+										<p class="mt-1 text-xs text-muted-foreground">
 											{field.help || SETTING_CONFIG_INFO[field.key]}
 										</p>
 									{/if}
 								{:else if field.type === 'select'}
-									{@const selectedOption = field.options?.find((opt: { value: string; label: string; icon?: any }) => opt.value === localConfig[field.key])}
+									{@const selectedOption = field.options?.find(
+										(opt: { value: string; label: string; icon?: any }) =>
+											opt.value === localConfig[field.key]
+									)}
 									<label for={field.key} class="block text-sm font-medium">
 										{field.label}
 									</label>
 
-									<Select.Root type="single" value={localConfig[field.key]} onValueChange={(value) => {
-										if (field.key === 'theme' && value) {
-											handleThemeChange(value);
-										} else {
-											localConfig[field.key] = value;
-										}
-									}}>
+									<Select.Root
+										type="single"
+										value={localConfig[field.key]}
+										onValueChange={(value) => {
+											if (field.key === 'theme' && value) {
+												handleThemeChange(value);
+											} else {
+												localConfig[field.key] = value;
+											}
+										}}
+									>
 										<Select.Trigger class="max-w-md">
 											<div class="flex items-center gap-2">
 												{#if selectedOption?.icon}
@@ -389,7 +404,7 @@
 										</Select.Content>
 									</Select.Root>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="text-muted-foreground mt-1 text-xs">
+										<p class="mt-1 text-xs text-muted-foreground">
 											{field.help || SETTING_CONFIG_INFO[field.key]}
 										</p>
 									{/if}
@@ -400,26 +415,28 @@
 											id={field.key}
 											checked={Boolean(localConfig[field.key])}
 											disabled={isDisabled}
-											onCheckedChange={(checked) =>
-												(localConfig[field.key] = checked)}
+											onCheckedChange={(checked) => (localConfig[field.key] = checked)}
 											class="mt-1"
 										/>
 
 										<div class="space-y-1">
 											<label
 												for={field.key}
-												class="cursor-pointer text-sm font-medium leading-none {isDisabled ? 'text-muted-foreground' : ''}"
+												class="cursor-pointer text-sm leading-none font-medium {isDisabled
+													? 'text-muted-foreground'
+													: ''}"
 											>
 												{field.label}
 											</label>
 
 											{#if field.help || SETTING_CONFIG_INFO[field.key]}
-												<p class="text-muted-foreground text-xs">
+												<p class="text-xs text-muted-foreground">
 													{field.help || SETTING_CONFIG_INFO[field.key]}
 												</p>
 											{:else if field.key === 'pdfAsImage' && !supportsVision()}
-												<p class="text-muted-foreground text-xs">
-													PDF-to-image processing requires a vision-capable model. PDFs will be processed as text.
+												<p class="text-xs text-muted-foreground">
+													PDF-to-image processing requires a vision-capable model. PDFs will be
+													processed as text.
 												</p>
 											{/if}
 										</div>
@@ -430,7 +447,7 @@
 					</ChatSettingsSection>
 
 					<div class="mt-8 border-t pt-6">
-						<p class="text-muted-foreground text-xs">
+						<p class="text-xs text-muted-foreground">
 							Settings are saved in browser's localStorage
 						</p>
 					</div>

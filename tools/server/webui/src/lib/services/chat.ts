@@ -11,7 +11,7 @@ export class ChatService {
 	 * Sends a chat completion request to the llama.cpp server.
 	 * Supports both streaming and non-streaming responses with comprehensive parameter configuration.
 	 * Automatically converts database messages with attachments to the appropriate API format.
-	 * 
+	 *
 	 * @param messages - Array of chat messages to send to the API (supports both ApiChatMessageData and DatabaseMessage with attachments)
 	 * @param options - Configuration options for the chat completion request. See `SettingsChatServiceOptions` type for details.
 	 * @returns {Promise<string | void>} that resolves to the complete response string (non-streaming) or void (streaming)
@@ -20,19 +20,37 @@ export class ChatService {
 	async sendMessage(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		options: SettingsChatServiceOptions = {}
-		): Promise<string | void> {
-		const { 
-			stream, onChunk, onComplete, onError,
+	): Promise<string | void> {
+		const {
+			stream,
+			onChunk,
+			onComplete,
+			onError,
 			// Generation parameters
-			temperature, max_tokens,
+			temperature,
+			max_tokens,
 			// Sampling parameters
-			dynatemp_range, dynatemp_exponent, top_k, top_p, min_p,
-			xtc_probability, xtc_threshold, typical_p,
+			dynatemp_range,
+			dynatemp_exponent,
+			top_k,
+			top_p,
+			min_p,
+			xtc_probability,
+			xtc_threshold,
+			typical_p,
 			// Penalty parameters
-			repeat_last_n, repeat_penalty, presence_penalty, frequency_penalty,
-			dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
+			repeat_last_n,
+			repeat_penalty,
+			presence_penalty,
+			frequency_penalty,
+			dry_multiplier,
+			dry_base,
+			dry_allowed_length,
+			dry_penalty_last_n,
 			// Other parameters
-			samplers, custom, timings_per_token
+			samplers,
+			custom,
+			timings_per_token
 		} = options;
 
 		// Cancel any ongoing request and create a new abort controller
@@ -54,7 +72,7 @@ export class ChatService {
 
 		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(normalizedMessages);
-		
+
 		const requestBody: ApiChatCompletionRequest = {
 			messages: processedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
@@ -92,7 +110,10 @@ export class ChatService {
 
 		// Add sampler configuration if provided
 		if (samplers !== undefined) {
-			requestBody.samplers = typeof samplers === 'string' ? samplers.split(';').filter((s: string) => s.trim()) : samplers;
+			requestBody.samplers =
+				typeof samplers === 'string'
+					? samplers.split(';').filter((s: string) => s.trim())
+					: samplers;
 		}
 
 		// Add timing parameters if provided
@@ -120,7 +141,7 @@ export class ChatService {
 
 			if (!response.ok) {
 				let errorMessage = `Server error (${response.status})`;
-				
+
 				switch (response.status) {
 					case 400:
 						errorMessage = 'Invalid request - check your message format';
@@ -140,12 +161,18 @@ export class ChatService {
 					default:
 						errorMessage = `Server error (${response.status}): ${response.statusText}`;
 				}
-				
+
 				throw new Error(errorMessage);
 			}
 
 			if (stream) {
-				return this.handleStreamResponse(response, onChunk, onComplete, onError, options.onReasoningChunk);
+				return this.handleStreamResponse(
+					response,
+					onChunk,
+					onComplete,
+					onError,
+					options.onReasoningChunk
+				);
 			} else {
 				return this.handleNonStreamResponse(response, onComplete, onError);
 			}
@@ -159,7 +186,9 @@ export class ChatService {
 			let friendlyError: Error;
 			if (error instanceof Error) {
 				if (error.name === 'TypeError' && error.message.includes('fetch')) {
-					friendlyError = new Error('Unable to connect to server - please check if the server is running');
+					friendlyError = new Error(
+						'Unable to connect to server - please check if the server is running'
+					);
 				} else if (error.message.includes('ECONNREFUSED')) {
 					friendlyError = new Error('Connection refused - server may be offline');
 				} else if (error.message.includes('ETIMEDOUT')) {
@@ -182,7 +211,7 @@ export class ChatService {
 	/**
 	 * Handles streaming response from the chat completion API.
 	 * Processes server-sent events and extracts content chunks from the stream.
-	 * 
+	 *
 	 * @param response - The fetch Response object containing the streaming data
 	 * @param onChunk - Optional callback invoked for each content chunk received
 	 * @param onComplete - Optional callback invoked when the stream is complete with full response
@@ -226,7 +255,9 @@ export class ChatService {
 							// Check if we received any actual content
 							if (!hasReceivedData && fullResponse.length === 0) {
 								// Empty response - likely a context error
-								const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+								const contextError = new Error(
+									'The request exceeds the available context size. Try increasing the context size or enable context shift.'
+								);
 								contextError.name = 'ContextError';
 								onError?.(contextError);
 								return;
@@ -280,7 +311,9 @@ export class ChatService {
 
 			// If we reach here without receiving [DONE] and no data, it's likely a context error
 			if (!hasReceivedData && fullResponse.length === 0) {
-				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				const contextError = new Error(
+					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
+				);
 				contextError.name = 'ContextError';
 				onError?.(contextError);
 				return;
@@ -299,24 +332,26 @@ export class ChatService {
 	/**
 	 * Handles non-streaming response from the chat completion API.
 	 * Parses the JSON response and extracts the generated content.
-	 * 
+	 *
 	 * @param response - The fetch Response object containing the JSON data
 	 * @param onComplete - Optional callback invoked when response is successfully parsed
 	 * @param onError - Optional callback invoked if an error occurs during parsing
-		 * @returns {Promise<string>} Promise that resolves to the generated content string
+	 * @returns {Promise<string>} Promise that resolves to the generated content string
 	 * @throws {Error} if the response cannot be parsed or is malformed
 	 */
 	private async handleNonStreamResponse(
 		response: Response,
 		onComplete?: (response: string, reasoningContent?: string) => void,
 		onError?: (error: Error) => void
-		): Promise<string> {
+	): Promise<string> {
 		try {
 			// Check if response body is empty
 			const responseText = await response.text();
 			if (!responseText.trim()) {
 				// Empty response - likely a context error
-				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				const contextError = new Error(
+					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
+				);
 				contextError.name = 'ContextError';
 				onError?.(contextError);
 				throw contextError;
@@ -332,7 +367,9 @@ export class ChatService {
 
 			// Check if content is empty even with valid JSON structure
 			if (!content.trim()) {
-				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				const contextError = new Error(
+					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
+				);
 				contextError.name = 'ContextError';
 				onError?.(contextError);
 				throw contextError;
@@ -359,7 +396,7 @@ export class ChatService {
 	 * Converts a database message with attachments to API chat message format.
 	 * Processes various attachment types (images, text files, PDFs) and formats them
 	 * as content parts suitable for the chat completion API.
-	 * 
+	 *
 	 * @param message - Database message object with optional extra attachments
 	 * @param message.content - The text content of the message
 	 * @param message.role - The role of the message sender (user, assistant, system)
@@ -367,7 +404,9 @@ export class ChatService {
 	 * @returns {ApiChatMessageData} object formatted for the chat completion API
 	 * @static
 	 */
-	static convertMessageToChatServiceData(message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }): ApiChatMessageData {
+	static convertMessageToChatServiceData(
+		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+	): ApiChatMessageData {
 		// If no extras, return simple text message
 		if (!message.extra || message.extra.length === 0) {
 			return {
@@ -388,7 +427,10 @@ export class ChatService {
 		}
 
 		// Add image files
-		const imageFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile => extra.type === 'imageFile');
+		const imageFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
+				extra.type === 'imageFile'
+		);
 
 		for (const image of imageFiles) {
 			contentParts.push({
@@ -398,7 +440,10 @@ export class ChatService {
 		}
 
 		// Add text files as additional text content
-		const textFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile => extra.type === 'textFile');
+		const textFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
+				extra.type === 'textFile'
+		);
 
 		for (const textFile of textFiles) {
 			contentParts.push({
@@ -408,7 +453,10 @@ export class ChatService {
 		}
 
 		// Add audio files
-		const audioFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile => extra.type === 'audioFile');
+		const audioFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
+				extra.type === 'audioFile'
+		);
 
 		for (const audio of audioFiles) {
 			contentParts.push({
@@ -421,7 +469,10 @@ export class ChatService {
 		}
 
 		// Add PDF files as text content
-		const pdfFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile => extra.type === 'pdfFile');
+		const pdfFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
+				extra.type === 'pdfFile'
+		);
 
 		for (const pdfFile of pdfFiles) {
 			if (pdfFile.processedAsImages && pdfFile.images) {
@@ -473,7 +524,7 @@ export class ChatService {
 	/**
 	 * Processes content to separate thinking tags from regular content.
 	 * Parses <think> and </think> tags to route content to appropriate handlers.
-	 * 
+	 *
 	 * @param content - The content string to process
 	 * @param currentInsideThinkTag - Current state of whether we're inside a think tag
 	 * @param addThinkContent - Callback to handle content inside think tags
@@ -521,7 +572,7 @@ export class ChatService {
 	/**
 	 * Aborts any ongoing chat completion request.
 	 * Cancels the current request and cleans up the abort controller.
-	 * 
+	 *
 	 * @public
 	 */
 	public abort(): void {
@@ -535,7 +586,7 @@ export class ChatService {
 	 * Injects a system message at the beginning of the conversation if configured in settings.
 	 * Checks for existing system messages to avoid duplication and retrieves the system message
 	 * from the current configuration settings.
-	 * 
+	 *
 	 * @param messages - Array of chat messages to process
 	 * @returns Array of messages with system message injected at the beginning if configured
 	 * @private
@@ -543,13 +594,13 @@ export class ChatService {
 	private injectSystemMessage(messages: ApiChatMessageData[]): ApiChatMessageData[] {
 		const currentConfig = config();
 		const systemMessage = currentConfig.systemMessage?.toString().trim();
-		
+
 		// If no system message is configured, return messages as-is
 		if (!systemMessage) {
 			console.log('No system message configured, returning original messages');
 			return messages;
 		}
-		
+
 		// Check if first message is already a system message
 		if (messages.length > 0 && messages[0].role === 'system') {
 			// If the existing system message doesn't match current config, replace it
@@ -562,16 +613,16 @@ export class ChatService {
 				};
 				return updatedMessages;
 			}
-			
+
 			return messages;
 		}
-		
+
 		// Inject system message at the beginning
 		const systemMsg: ApiChatMessageData = {
 			role: 'system',
 			content: systemMessage
 		};
-		
+
 		return [systemMsg, ...messages];
 	}
 }

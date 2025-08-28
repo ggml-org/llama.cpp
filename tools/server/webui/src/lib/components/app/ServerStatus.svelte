@@ -35,7 +35,7 @@
 <div class="flex items-center space-x-2 {className}">
 	<div class="flex items-center space-x-2">
 		<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
-		<span class="text-muted-foreground text-sm">{getStatusText()}</span>
+		<span class="text-sm text-muted-foreground">{getStatusText()}</span>
 	</div>
 
 	{#if serverData && !error}

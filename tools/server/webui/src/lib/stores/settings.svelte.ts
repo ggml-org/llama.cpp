@@ -42,7 +42,7 @@ class SettingsStore {
 			// Merge with defaults to prevent breaking changes
 			this.config = {
 				...SETTING_CONFIG_DEFAULT,
-				...savedVal,
+				...savedVal
 			};
 		} catch (error) {
 			console.warn('Failed to parse config from localStorage, using defaults:', error);

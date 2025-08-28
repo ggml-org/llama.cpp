@@ -30,7 +30,8 @@
 		type: 'message',
 		timestamp: Date.now() - 1000 * 60 * 3,
 		role: 'assistant',
-		content: 'The answer to the ultimate question of life, the universe, and everything is **42**.\n\nThis comes from Douglas Adams\' "The Hitchhiker\'s Guide to the Galaxy," where a supercomputer named Deep Thought calculated this answer over 7.5 million years. However, the question itself was never properly formulated, which is why the answer seems meaningless without context.',
+		content:
+			'The answer to the ultimate question of life, the universe, and everything is **42**.\n\nThis comes from Douglas Adams\' "The Hitchhiker\'s Guide to the Galaxy," where a supercomputer named Deep Thought calculated this answer over 7.5 million years. However, the question itself was never properly formulated, which is why the answer seems meaningless without context.',
 		parent: '1',
 		thinking: '',
 		children: []
@@ -42,9 +43,11 @@
 		type: 'message',
 		timestamp: Date.now() - 1000 * 60 * 2,
 		role: 'assistant',
-		content: 'Let me solve this step by step.\n\nFirst, I need to understand what you\'re asking for. Then I\'ll work through the problem systematically.',
+		content:
+			"Let me solve this step by step.\n\nFirst, I need to understand what you're asking for. Then I'll work through the problem systematically.",
 		parent: '1',
-		thinking: 'The user is asking me to solve a complex problem. I should break this down into steps:\n\n1. Understand the requirements\n2. Analyze the problem\n3. Consider different approaches\n4. Choose the best solution\n5. Implement and explain\n\nThis seems like a good approach to take.',
+		thinking:
+			'The user is asking me to solve a complex problem. I should break this down into steps:\n\n1. Understand the requirements\n2. Analyze the problem\n3. Consider different approaches\n4. Choose the best solution\n5. Implement and explain\n\nThis seems like a good approach to take.',
 		children: []
 	};
 
@@ -96,25 +99,26 @@
 	asChild
 	play={async ({ canvas }) => {
 		// Phase 1: Stream reasoning content in chunks
-		let reasoningText = "I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.";
-		
-		
+		let reasoningText =
+			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
+
 		let reasoningChunk = 'I';
 		let i = 0;
 		while (i < reasoningText.length) {
 			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
 			const chunk = reasoningText.slice(i, i + chunkSize);
 			reasoningChunk += chunk;
-			
+
 			// Update the reactive state directly
 			streamingMessage.thinking = reasoningChunk;
-			
+
 			i += chunkSize;
-			await new Promise(resolve => setTimeout(resolve, 50));
+			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
-		
-		const regularText = "Based on my analysis, here's the solution:\n\n**Step 1:** First, we need to understand the requirements clearly.\n\n**Step 2:** Then we can implement the solution systematically.\n\n**Step 3:** Finally, we test and validate the results.\n\nThis approach ensures we cover all aspects of the problem effectively.";
-		
+
+		const regularText =
+			"Based on my analysis, here's the solution:\n\n**Step 1:** First, we need to understand the requirements clearly.\n\n**Step 2:** Then we can implement the solution systematically.\n\n**Step 3:** Finally, we test and validate the results.\n\nThis approach ensures we cover all aspects of the problem effectively.";
+
 		let contentChunk = '';
 		i = 0;
 
@@ -122,26 +126,22 @@
 			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
 			const chunk = regularText.slice(i, i + chunkSize);
 			contentChunk += chunk;
-			
+
 			// Update the reactive state directly
 			streamingMessage.content = contentChunk;
-			
-			i += chunkSize;
-			await new Promise(resolve => setTimeout(resolve, 50));
-		}
-		
-		streamingMessage.timestamp = Date.now();
 
+			i += chunkSize;
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+
+		streamingMessage.timestamp = Date.now();
 
 		// const collapsibleTrigger = canvas.getByText('Reasoning');
 		// expect(collapsibleTrigger).not.toHaveAttribute('data-state', 'open');
 	}}
 >
-
 	<div class="w-[56rem]">
-		<ChatMessage
-		message={streamingMessage}
-	/>
+		<ChatMessage message={streamingMessage} />
 	</div>
 </Story>
 

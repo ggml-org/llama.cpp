@@ -5,8 +5,21 @@
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
 	import EmptyFileAlertDialog from '$lib/components/app/EmptyFileAlertDialog.svelte';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
-	import { supportsVision, supportsAudio, serverError, serverLoading } from '$lib/stores/server.svelte';
-	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash, SlotsInfo } from '$lib/components/app';
+	import {
+		supportsVision,
+		supportsAudio,
+		serverError,
+		serverLoading
+	} from '$lib/stores/server.svelte';
+	import {
+		ChatForm,
+		ChatScreenHeader,
+		ChatMessages,
+		ServerInfo,
+		ServerErrorSplash,
+		ServerLoadingSplash,
+		SlotsInfo
+	} from '$lib/components/app';
 	import {
 		activeMessages,
 		activeConversation,
@@ -17,7 +30,7 @@
 	} from '$lib/stores/chat.svelte';
 	import { contextService } from '$lib/services/context';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { AUTO_SCROLL_INTERVAL,  AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
+	import { AUTO_SCROLL_INTERVAL, AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -32,7 +45,7 @@
 	let isDragOver = $state(false);
 	let dragCounter = $state(0);
 	let showFileErrorDialog = $state(false);
-	
+
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
 		modalityUnsupported: File[];
@@ -108,10 +121,7 @@
 		}
 	}
 
-	async function handleSendMessage(
-		message: string,
-		files?: ChatUploadedFile[]
-	): Promise<boolean> {
+	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
 		const result = files ? await parseFilesToMessageExtras(files) : undefined;
 
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
@@ -120,7 +130,7 @@
 
 			if (files) {
 				const emptyFileNamesSet = new Set(result.emptyFiles);
-				uploadedFiles = uploadedFiles.filter(file => !emptyFileNamesSet.has(file.name));
+				uploadedFiles = uploadedFiles.filter((file) => !emptyFileNamesSet.has(file.name));
 			}
 			return false;
 		}
@@ -169,7 +179,7 @@
 
 		if (allUnsupportedFiles.length > 0) {
 			const supportedTypes: string[] = ['text files', 'PDFs'];
-			
+
 			if (supportsVision()) supportedTypes.push('images');
 			if (supportsAudio()) supportedTypes.push('audio files');
 
@@ -202,7 +212,7 @@
 			event.preventDefault();
 			goto('/?new_chat=true');
 		}
-		
+
 		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
 			event.preventDefault();
 			if (activeConversation()) {
@@ -268,13 +278,15 @@
 		role="main"
 		aria-label="Chat interface with file drop zone"
 	>
-		<ChatMessages 
-			class="mb-16 md:mb-24" 
-			messages={activeMessages()} 
-			onUserAction={() => { autoScrollEnabled = true; }}
+		<ChatMessages
+			class="mb-16 md:mb-24"
+			messages={activeMessages()}
+			onUserAction={() => {
+				autoScrollEnabled = true;
+			}}
 		/>
 
-		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
+		<div class="sticky right-0 bottom-0 left-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
 			<SlotsInfo />
 
 			<div class="conversation-chat-form rounded-t-3xl pb-4">
@@ -310,7 +322,7 @@
 			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
-				<p class="text-muted-foreground text-lg">How can I help you today?</p>
+				<p class="text-lg text-muted-foreground">How can I help you today?</p>
 			</div>
 
 			<div class="mb-6 flex justify-center" in:fly={{ y: 10, duration: 300, delay: 200 }}>
@@ -339,7 +351,7 @@
 		<AlertDialog.Content class="max-w-md">
 			<AlertDialog.Header>
 				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
-				<AlertDialog.Description class="text-muted-foreground text-sm">
+				<AlertDialog.Description class="text-sm text-muted-foreground">
 					Some files cannot be uploaded with the current model.
 				</AlertDialog.Description>
 			</AlertDialog.Header>
@@ -347,16 +359,14 @@
 			<div class="space-y-4">
 				{#if fileErrorData.generallyUnsupported.length > 0}
 					<div class="space-y-2">
-						<h4 class="text-destructive text-sm font-medium">Unsupported File Types</h4>
+						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
 						<div class="space-y-1">
 							{#each fileErrorData.generallyUnsupported as file}
-								<div class="bg-destructive/10 rounded-md px-3 py-2">
-									<p class="text-destructive break-all font-mono text-sm">
+								<div class="rounded-md bg-destructive/10 px-3 py-2">
+									<p class="font-mono text-sm break-all text-destructive">
 										{file.name}
 									</p>
-									<p class="text-muted-foreground mt-1 text-xs">
-										File type not supported
-									</p>
+									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
 								</div>
 							{/each}
 						</div>
@@ -365,18 +375,15 @@
 
 				{#if fileErrorData.modalityUnsupported.length > 0}
 					<div class="space-y-2">
-						<h4 class="text-destructive text-sm font-medium">
-							Model Compatibility Issues
-						</h4>
+						<h4 class="text-sm font-medium text-destructive">Model Compatibility Issues</h4>
 						<div class="space-y-1">
 							{#each fileErrorData.modalityUnsupported as file}
-								<div class="bg-destructive/10 rounded-md px-3 py-2">
-									<p class="text-destructive break-all font-mono text-sm">
+								<div class="rounded-md bg-destructive/10 px-3 py-2">
+									<p class="font-mono text-sm break-all text-destructive">
 										{file.name}
 									</p>
-									<p class="text-muted-foreground mt-1 text-xs">
-										{fileErrorData.modalityReasons[file.name] ||
-											'Not supported by current model'}
+									<p class="mt-1 text-xs text-muted-foreground">
+										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
 									</p>
 								</div>
 							{/each}
@@ -384,9 +391,9 @@
 					</div>
 				{/if}
 
-				<div class="bg-muted/50 rounded-md p-3">
+				<div class="rounded-md bg-muted/50 p-3">
 					<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
-					<p class="text-muted-foreground text-sm">
+					<p class="text-sm text-muted-foreground">
 						{fileErrorData.supportedTypes.join(', ')}
 					</p>
 				</div>
@@ -407,16 +414,17 @@
 		<AlertDialog.Content class="max-w-md" onkeydown={handleDeleteDialogKeydown}>
 			<AlertDialog.Header>
 				<AlertDialog.Title>Delete Chat</AlertDialog.Title>
-				<AlertDialog.Description class="text-muted-foreground text-sm">
+				<AlertDialog.Description class="text-sm text-muted-foreground">
 					Are you sure you want to delete this chat? This action cannot be undone.
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel onclick={() => (showDeleteDialog = false)}>
-					Cancel
-				</AlertDialog.Cancel>
-				<AlertDialog.Action onclick={handleDeleteConfirm} class="bg-destructive hover:bg-destructive/80 text-white">
+				<AlertDialog.Cancel onclick={() => (showDeleteDialog = false)}>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Action
+					onclick={handleDeleteConfirm}
+					class="bg-destructive text-white hover:bg-destructive/80"
+				>
 					Delete
 				</AlertDialog.Action>
 			</AlertDialog.Footer>
@@ -424,8 +432,8 @@
 	</AlertDialog.Portal>
 </AlertDialog.Root>
 
-<EmptyFileAlertDialog 
-	bind:open={showEmptyFileDialog} 
+<EmptyFileAlertDialog
+	bind:open={showEmptyFileDialog}
 	emptyFiles={emptyFileNames}
 	onOpenChange={(open) => {
 		if (!open) {

@@ -2,7 +2,11 @@
 	import { Edit, Copy, RefreshCw, Check, X, Trash2 } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatAttachmentsList, ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
+	import {
+		ChatAttachmentsList,
+		ChatMessageThinkingBlock,
+		MarkdownContent
+	} from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import MessageBranchingControls from './MessageBranchingControls.svelte';
 	import type { MessageSiblingInfo } from '$lib/utils/branching';
@@ -40,7 +44,12 @@
 	let showDeleteDialog = $state(false);
 	let editedContent = $state(message.content);
 	let isEditing = $state(false);
-	let deletionInfo = $state<{ totalCount: number; userMessages: number; assistantMessages: number; messageTypes: string[] } | null>(null);
+	let deletionInfo = $state<{
+		totalCount: number;
+		userMessages: number;
+		assistantMessages: number;
+		messageTypes: string[];
+	} | null>(null);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	const processingState = useProcessingState();
@@ -159,16 +168,12 @@
 		{:else}
 			{#if message.extra && message.extra.length > 0}
 				<div class="mb-2 max-w-[80%]">
-					<ChatAttachmentsList
-						attachments={message.extra}
-						readonly={true}
-						imageHeight="h-80"
-					/>
+					<ChatAttachmentsList attachments={message.extra} readonly={true} imageHeight="h-80" />
 				</div>
 			{/if}
 
 			{#if message.content.trim()}
-				<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
+				<Card class="max-w-[80%] rounded-2xl bg-primary px-2.5 py-1.5 text-primary-foreground">
 					<div class="text-md whitespace-pre-wrap">
 						{message.content}
 					</div>
@@ -182,20 +187,20 @@
 	</div>
 {:else}
 	<div
-		class="text-md leading-7.5 group w-full {className}"
+		class="text-md group w-full leading-7.5 {className}"
 		role="group"
 		aria-label="Assistant message with actions"
 	>
 		{#if thinkingContent}
-			<ChatMessageThinkingBlock 
-				reasoningContent={thinkingContent} 
-				isStreaming={!message.timestamp} 
+			<ChatMessageThinkingBlock
+				reasoningContent={thinkingContent}
+				isStreaming={!message.timestamp}
 				hasRegularContent={!!messageContent?.trim()}
 			/>
 		{/if}
 
 		{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
-			<div class="w-full max-w-[48rem] mt-6" in:fade>
+			<div class="mt-6 w-full max-w-[48rem]" in:fade>
 				<div class="processing-container">
 					<span class="processing-text">
 						{processingState.getProcessingMessage()}
@@ -207,13 +212,17 @@
 		{#if message.role === 'assistant'}
 			<MarkdownContent content={messageContent} />
 		{:else}
-			<div class="whitespace-pre-wrap text-sm">
+			<div class="text-sm whitespace-pre-wrap">
 				{messageContent}
 			</div>
 		{/if}
 
 		{#if message.timestamp}
-			{@render timestampAndActions({ role: 'assistant', justify: 'start', actionsPosition: 'left' })}
+			{@render timestampAndActions({
+				role: 'assistant',
+				justify: 'start',
+				actionsPosition: 'left'
+			})}
 		{/if}
 	</div>
 {/if}
@@ -223,13 +232,13 @@
 		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
 	>
 		{@render actionButton({ icon: Copy, tooltip: 'Copy', onclick: handleCopy })}
-		
+
 		{#if config?.role === 'user'}
 			{@render actionButton({ icon: Edit, tooltip: 'Edit', onclick: handleEdit })}
 		{:else if config?.role === 'assistant'}
 			{@render actionButton({ icon: RefreshCw, tooltip: 'Regenerate', onclick: handleRegenerate })}
 		{/if}
-		
+
 		{@render actionButton({ icon: Trash2, tooltip: 'Delete', onclick: handleDelete })}
 	</div>
 {/snippet}
@@ -249,21 +258,30 @@
 	</Tooltip>
 {/snippet}
 
-{#snippet timestampAndActions(config: { role: ChatRole; justify: 'start' | 'end'; actionsPosition: 'left' | 'right' })}
-	<div class="relative {config.justify === 'start' ? 'mt-2' : ''} flex h-6 items-center justify-{config.justify}">
-		<div class="flex items-center text-xs text-muted-foreground group-hover:opacity-0 transition-opacity">
+{#snippet timestampAndActions(config: {
+	role: ChatRole;
+	justify: 'start' | 'end';
+	actionsPosition: 'left' | 'right';
+})}
+	<div
+		class="relative {config.justify === 'start'
+			? 'mt-2'
+			: ''} flex h-6 items-center justify-{config.justify}"
+	>
+		<div
+			class="flex items-center text-xs text-muted-foreground transition-opacity group-hover:opacity-0"
+		>
 			{new Date(message.timestamp).toLocaleTimeString(undefined, {
 				hour: '2-digit',
 				minute: '2-digit'
 			})}
 		</div>
 
-		<div class="absolute {config.actionsPosition}-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+		<div
+			class="absolute {config.actionsPosition}-0 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
+		>
 			{#if siblingInfo && siblingInfo.totalSiblings > 1}
-				<MessageBranchingControls 
-					{siblingInfo} 
-					{onNavigateToSibling}
-				/>
+				<MessageBranchingControls {siblingInfo} {onNavigateToSibling} />
 			{/if}
 			{@render messageActions({ role: config.role })}
 		</div>
@@ -286,18 +304,26 @@
 					<div class="space-y-2">
 						<p>This will delete <strong>{deletionInfo.totalCount} messages</strong> including:</p>
 
-						<ul class="list-disc list-inside text-sm space-y-1 ml-4">
+						<ul class="ml-4 list-inside list-disc space-y-1 text-sm">
 							{#if deletionInfo.userMessages > 0}
-								<li>{deletionInfo.userMessages} user message{deletionInfo.userMessages > 1 ? 's' : ''}</li>
+								<li>
+									{deletionInfo.userMessages} user message{deletionInfo.userMessages > 1 ? 's' : ''}
+								</li>
 							{/if}
 
 							{#if deletionInfo.assistantMessages > 0}
-								<li>{deletionInfo.assistantMessages} assistant response{deletionInfo.assistantMessages > 1 ? 's' : ''}</li>
+								<li>
+									{deletionInfo.assistantMessages} assistant response{deletionInfo.assistantMessages >
+									1
+										? 's'
+										: ''}
+								</li>
 							{/if}
 						</ul>
 
-						<p class="text-sm text-muted-foreground mt-2">
-							All messages in this branch and their responses will be permanently removed. This action cannot be undone.
+						<p class="mt-2 text-sm text-muted-foreground">
+							All messages in this branch and their responses will be permanently removed. This
+							action cannot be undone.
 						</p>
 					</div>
 				{:else}
@@ -309,7 +335,10 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
 
-			<AlertDialog.Action onclick={handleConfirmDelete} class="bg-destructive hover:bg-destructive/80 text-white">
+			<AlertDialog.Action
+				onclick={handleConfirmDelete}
+				class="bg-destructive text-white hover:bg-destructive/80"
+			>
 				{#if deletionInfo && deletionInfo.totalCount > 1}
 					Delete {deletionInfo.totalCount} Messages
 				{:else}
@@ -329,7 +358,12 @@
 	}
 
 	.processing-text {
-		background: linear-gradient(90deg, var(--muted-foreground), var(--foreground), var(--muted-foreground));
+		background: linear-gradient(
+			90deg,
+			var(--muted-foreground),
+			var(--foreground),
+			var(--muted-foreground)
+		);
 		background-size: 200% 100%;
 		background-clip: text;
 		-webkit-background-clip: text;
@@ -353,7 +387,8 @@
 		padding: 0.25rem 0.5rem;
 		background: var(--muted);
 		border-radius: 0.5rem;
-		font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
 		white-space: nowrap;
 		line-height: 1.2;
 	}

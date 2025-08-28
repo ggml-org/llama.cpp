@@ -29,25 +29,20 @@
 </script>
 
 <div class="flex items-center justify-between gap-1 {className}">
-	<ChatFormActionFileAttachments  {disabled} {onFileUpload} />
+	<ChatFormActionFileAttachments {disabled} {onFileUpload} />
 
 	<div class="flex gap-2">
 		{#if isLoading}
 			<Button
 				type="button"
 				onclick={onStop}
-				class="p-0 h-8 w-8 bg-transparent hover:bg-destructive/20"
+				class="h-8 w-8 bg-transparent p-0 hover:bg-destructive/20"
 			>
 				<span class="sr-only">Stop</span>
 				<Square class="h-8 w-8 fill-destructive stroke-destructive" />
 			</Button>
 		{:else}
-			<ChatFormActionRecord 
-				{disabled}
-				{isLoading}
-				{isRecording}
-				{onMicClick}
-			/>
+			<ChatFormActionRecord {disabled} {isLoading} {isRecording} {onMicClick} />
 
 			<Button
 				type="submit"

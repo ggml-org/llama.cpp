@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { cn, type WithElementRef } from "$lib/components/ui/utils.js";
-	import type { HTMLAttributes } from "svelte/elements";
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
 		ref = $bindable(null),
@@ -14,7 +14,7 @@
 	bind:this={ref}
 	data-slot="sidebar-menu-sub-item"
 	data-sidebar="menu-sub-item"
-	class={cn("group/menu-sub-item relative", className)}
+	class={cn('group/menu-sub-item relative', className)}
 	{...restProps}
 >
 	{@render children?.()}

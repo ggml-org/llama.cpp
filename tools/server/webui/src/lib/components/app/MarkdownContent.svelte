@@ -20,7 +20,7 @@
 
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
-	
+
 	let processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
@@ -35,60 +35,60 @@
 	function enhanceCodeBlocks(html: string): string {
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
-		
+
 		const preElements = tempDiv.querySelectorAll('pre');
-		
+
 		for (const [index, pre] of Array.from(preElements).entries()) {
 			const codeElement = pre.querySelector('code');
 			if (!codeElement) continue;
-			
+
 			let language = 'text';
 			const classList = Array.from(codeElement.classList);
-			
+
 			for (const className of classList) {
 				if (className.startsWith('language-')) {
 					language = className.replace('language-', '');
 					break;
 				}
 			}
-			
+
 			const rawCode = codeElement.textContent || '';
-			
+
 			const codeId = `code-${Date.now()}-${index}`;
-			
+
 			codeElement.setAttribute('data-code-id', codeId);
 			codeElement.setAttribute('data-raw-code', rawCode);
-			
+
 			const wrapper = document.createElement('div');
 			wrapper.className = 'code-block-wrapper';
-			
+
 			const header = document.createElement('div');
 			header.className = 'code-block-header';
-			
+
 			const languageLabel = document.createElement('span');
 			languageLabel.className = 'code-language';
 			languageLabel.textContent = language;
-			
+
 			const copyButton = document.createElement('button');
 			copyButton.className = 'copy-code-btn';
 			copyButton.setAttribute('data-code-id', codeId);
 			copyButton.setAttribute('title', 'Copy code');
 			copyButton.setAttribute('type', 'button');
-			
+
 			copyButton.innerHTML = `
 				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
 			`;
-			
+
 			header.appendChild(languageLabel);
 			header.appendChild(copyButton);
 			wrapper.appendChild(header);
-			
+
 			const clonedPre = pre.cloneNode(true) as HTMLElement;
 			wrapper.appendChild(clonedPre);
-			
+
 			pre.parentNode?.replaceChild(wrapper, pre);
 		}
-		
+
 		return tempDiv.innerHTML;
 	}
 
@@ -100,7 +100,7 @@
 			return enhanceCodeBlocks(html);
 		} catch (error) {
 			console.error('Markdown processing error:', error);
-			
+
 			// Fallback to plain text with line breaks
 			return text.replace(/\n/g, '<br>');
 		}
@@ -115,10 +115,10 @@
 			button.addEventListener('click', async (e) => {
 				e.preventDefault();
 				e.stopPropagation();
-				
+
 				const target = e.currentTarget as HTMLButtonElement;
 				const codeId = target.getAttribute('data-code-id');
-				
+
 				if (!codeId) {
 					console.error('No code ID found on button');
 					return;
@@ -130,7 +130,7 @@
 					console.error('No wrapper found');
 					return;
 				}
-				
+
 				const codeElement = wrapper.querySelector('code[data-code-id]');
 				if (!codeElement) {
 					console.error('No code element found in wrapper');
@@ -246,7 +246,9 @@
 		padding: 0.125rem 0.375rem;
 		border-radius: 0.375rem;
 		font-size: 0.875rem;
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
 	}
 
 	/* Links */
@@ -356,7 +358,9 @@
 	/* Images */
 	div :global(img) {
 		border-radius: 0.5rem;
-		box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+		box-shadow:
+			0 1px 3px 0 rgb(0 0 0 / 0.1),
+			0 1px 2px -1px rgb(0 0 0 / 0.1);
 		margin: 1.5rem 0;
 		max-width: 100%;
 		height: auto;
@@ -385,7 +389,9 @@
 	div :global(.code-language) {
 		color: var(--code-foreground);
 		font-weight: 500;
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
 		text-transform: uppercase;
 		font-size: 0.75rem;
 		letter-spacing: 0.05em;
@@ -429,7 +435,6 @@
 		border: none;
 	}
 
-
 	div :global(code) {
 		background: transparent;
 		color: var(--code-foreground);
@@ -462,7 +467,9 @@
 	}
 
 	div :global(table:hover) {
-		box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+		box-shadow:
+			0 4px 6px -1px rgb(0 0 0 / 0.1),
+			0 2px 4px -2px rgb(0 0 0 / 0.1);
 	}
 
 	div :global(th:hover),
@@ -501,7 +508,9 @@
 
 	div :global(img:hover) {
 		transform: scale(1.02);
-		box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+		box-shadow:
+			0 10px 15px -3px rgb(0 0 0 / 0.1),
+			0 4px 6px -4px rgb(0 0 0 / 0.1);
 	}
 
 	/* Image zoom overlay */
@@ -565,19 +574,19 @@
 		div :global(h1) {
 			font-size: 1.5rem;
 		}
-		
+
 		div :global(h2) {
 			font-size: 1.25rem;
 		}
-		
+
 		div :global(h3) {
 			font-size: 1.125rem;
 		}
-		
+
 		div :global(table) {
 			font-size: 0.875rem;
 		}
-		
+
 		div :global(th),
 		div :global(td) {
 			padding: 0.375rem 0.5rem;

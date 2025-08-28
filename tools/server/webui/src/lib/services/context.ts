@@ -26,7 +26,7 @@ export class ContextService {
 	async checkContextLimit(): Promise<ContextCheckResult | null> {
 		try {
 			const currentState = await slotsService.getCurrentState();
-			
+
 			if (!currentState) {
 				return null;
 			}

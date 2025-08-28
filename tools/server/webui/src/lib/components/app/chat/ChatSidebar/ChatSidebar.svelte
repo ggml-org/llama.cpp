@@ -1,7 +1,11 @@
 <script lang="ts">
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { ChatSidebarConversationItem } from '$lib/components/app';
-	import { conversations, deleteConversation, updateConversationName } from '$lib/stores/chat.svelte';
+	import {
+		conversations,
+		deleteConversation,
+		updateConversationName
+	} from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { useSidebar } from '$lib/components/ui/sidebar';
@@ -49,19 +53,15 @@
 </script>
 
 <ScrollArea class="h-[100vh]">
-	<Sidebar.Header class=" px-4 pb-2 pt-4 md:sticky top-0 bg-sidebar/50 backdrop-blur-lg z-10 gap-6">
+	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 pt-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="/" onclick={handleMobileSidebarItemClick}>
-			<h1 class="inline-flex items-center gap-1 text-xl font-semibold px-2">llama.cpp</h1>
+			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
 		</a>
 
-		<ChatSidebarActions
-			{handleMobileSidebarItemClick}
-			bind:isSearchModeActive
-			bind:searchQuery
-		/>
+		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 	</Sidebar.Header>
 
-	<Sidebar.Group class="space-y-2 mt-4 p-0 px-4">
+	<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
 		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 			<Sidebar.GroupLabel>
 				{isSearchModeActive ? 'Search results' : 'Conversations'}
@@ -89,7 +89,7 @@
 
 				{#if filteredConversations.length === 0}
 					<div class="px-2 py-4 text-center">
-						<p class="text-muted-foreground text-sm p-4 mb-4">
+						<p class="mb-4 p-4 text-sm text-muted-foreground">
 							{searchQuery.length > 0
 								? 'No results found'
 								: isSearchModeActive
@@ -98,14 +98,11 @@
 						</p>
 					</div>
 				{/if}
-
 			</Sidebar.Menu>
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
-	
-	<div class="md:sticky bottom-0 bg-sidebar z-10 px-4 py-4  bg-sidebar/50 backdrop-blur-lg">
-		<p class="text-muted-foreground text-xs">
-			Conversations are stored locally in your browser.
-		</p>
+
+	<div class="bottom-0 z-10 bg-sidebar bg-sidebar/50 px-4 py-4 backdrop-blur-lg md:sticky">
+		<p class="text-xs text-muted-foreground">Conversations are stored locally in your browser.</p>
 	</div>
 </ScrollArea>

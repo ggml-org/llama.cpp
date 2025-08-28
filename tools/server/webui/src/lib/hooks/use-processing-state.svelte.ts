@@ -11,7 +11,7 @@ export function useProcessingState() {
 		if (isPolling) return;
 
 		isPolling = true;
-		
+
 		unsubscribe = slotsService.subscribe((state) => {
 			processingState = state;
 		});
@@ -22,7 +22,7 @@ export function useProcessingState() {
 			if (currentState) {
 				processingState = currentState;
 			}
-			
+
 			// Start streaming polling only if streaming is active
 			if (slotsService.isStreaming()) {
 				slotsService.startStreamingPolling();
@@ -74,18 +74,26 @@ export function useProcessingState() {
 		const currentConfig = config(); // Get fresh config each time
 
 		if (processingState.contextUsed > 0) {
-			const contextPercent = Math.round((processingState.contextUsed / processingState.contextTotal) * 100);
-			details.push(`Context: ${processingState.contextUsed}/${processingState.contextTotal} (${contextPercent}%)`);
+			const contextPercent = Math.round(
+				(processingState.contextUsed / processingState.contextTotal) * 100
+			);
+			details.push(
+				`Context: ${processingState.contextUsed}/${processingState.contextTotal} (${contextPercent}%)`
+			);
 		}
-		
-		if (currentConfig.showTokensPerSecond && processingState.tokensPerSecond && processingState.tokensPerSecond > 0) {
+
+		if (
+			currentConfig.showTokensPerSecond &&
+			processingState.tokensPerSecond &&
+			processingState.tokensPerSecond > 0
+		) {
 			details.push(`${processingState.tokensPerSecond.toFixed(1)} tokens/sec`);
 		}
 
 		if (processingState.temperature !== 0.8) {
 			details.push(`Temperature: ${processingState.temperature.toFixed(1)}`);
 		}
-		
+
 		if (processingState.topP !== 0.95) {
 			details.push(`Top-p: ${processingState.topP.toFixed(2)}`);
 		}
@@ -102,8 +110,12 @@ export function useProcessingState() {
 	}
 
 	return {
-		get processingState() { return processingState; },
-		get isPolling() { return isPolling; },
+		get processingState() {
+			return processingState;
+		},
+		get isPolling() {
+			return isPolling;
+		},
 		startMonitoring,
 		stopMonitoring,
 		getProcessingMessage,

@@ -10,16 +10,16 @@
 		class?: string;
 	}
 
-	let {
-		siblingInfo,
-		onNavigateToSibling,
-		class: className = ''
-	}: Props = $props();
+	let { siblingInfo, onNavigateToSibling, class: className = '' }: Props = $props();
 
 	let hasPrevious = $derived(siblingInfo && siblingInfo.currentIndex > 0);
 	let hasNext = $derived(siblingInfo && siblingInfo.currentIndex < siblingInfo.totalSiblings - 1);
-	let previousSiblingId = $derived(hasPrevious ? siblingInfo!.siblingIds[siblingInfo!.currentIndex - 1] : null);
-	let nextSiblingId = $derived(hasNext ? siblingInfo!.siblingIds[siblingInfo!.currentIndex + 1] : null);
+	let previousSiblingId = $derived(
+		hasPrevious ? siblingInfo!.siblingIds[siblingInfo!.currentIndex - 1] : null
+	);
+	let nextSiblingId = $derived(
+		hasNext ? siblingInfo!.siblingIds[siblingInfo!.currentIndex + 1] : null
+	);
 
 	function handlePrevious() {
 		if (previousSiblingId) {
@@ -35,7 +35,7 @@
 </script>
 
 {#if siblingInfo && siblingInfo.totalSiblings > 1}
-	<div 
+	<div
 		class="flex items-center gap-1 text-xs text-muted-foreground {className}"
 		role="navigation"
 		aria-label="Message version {siblingInfo.currentIndex + 1} of {siblingInfo.totalSiblings}"
@@ -45,7 +45,7 @@
 				<Button
 					variant="ghost"
 					size="sm"
-					class="h-5 w-5 p-0 {!hasPrevious ? 'opacity-30 cursor-not-allowed' : ''}"
+					class="h-5 w-5 p-0 {!hasPrevious ? 'cursor-not-allowed opacity-30' : ''}"
 					onclick={handlePrevious}
 					disabled={!hasPrevious}
 					aria-label="Previous message version"
@@ -67,7 +67,7 @@
 				<Button
 					variant="ghost"
 					size="sm"
-					class="h-5 w-5 p-0 {!hasNext ? 'opacity-30 cursor-not-allowed' : ''}"
+					class="h-5 w-5 p-0 {!hasNext ? 'cursor-not-allowed opacity-30' : ''}"
 					onclick={handleNext}
 					disabled={!hasNext}
 					aria-label="Next message version"

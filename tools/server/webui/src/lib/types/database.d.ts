@@ -5,7 +5,6 @@ export interface DatabaseAppSettings {
 	temperature: number;
 }
 
-
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
@@ -40,7 +39,11 @@ export interface DatabaseMessageExtraPdfFile {
 	processedAsImages: boolean; // Whether PDF was processed as images
 }
 
-export type DatabaseMessageExtra = DatabaseMessageExtraImageFile | DatabaseMessageExtraTextFile | DatabaseMessageExtraAudioFile | DatabaseMessageExtraPdfFile;
+export type DatabaseMessageExtra =
+	| DatabaseMessageExtraImageFile
+	| DatabaseMessageExtraTextFile
+	| DatabaseMessageExtraAudioFile
+	| DatabaseMessageExtraPdfFile;
 
 export interface DatabaseMessage {
 	id: string;

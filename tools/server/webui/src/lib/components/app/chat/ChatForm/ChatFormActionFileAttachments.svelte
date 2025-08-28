@@ -13,14 +13,10 @@
 		class?: string;
 	}
 
-	let {
-		disabled = false,
-		onFileUpload,
-		class: className = ''
-	}: Props = $props();
+	let { disabled = false, onFileUpload, class: className = '' }: Props = $props();
 
 	const fileUploadTooltipText = $derived.by(() => {
-		return !supportsVision() 
+		return !supportsVision()
 			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
 			: 'Attach files';
 	});
@@ -37,7 +33,7 @@
 				<Tooltip.Trigger>
 					<Button
 						type="button"
-						class="file-upload-button text-muted-foreground bg-transparent hover:bg-foreground/10 hover:text-foreground h-8 w-8 rounded-full p-0"
+						class="file-upload-button h-8 w-8 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 						{disabled}
 					>
 						<span class="sr-only">Attach files</span>
@@ -54,9 +50,9 @@
 
 		<DropdownMenu.Content align="start" class="w-48">
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-				<Tooltip.Trigger class="w-full" >
-					<DropdownMenu.Item 
-						class="images-button flex items-center gap-2 cursor-pointer" 
+				<Tooltip.Trigger class="w-full">
+					<DropdownMenu.Item
+						class="images-button flex cursor-pointer items-center gap-2"
 						disabled={!supportsVision()}
 						onclick={() => handleFileUpload(FileTypeCategory.IMAGE)}
 					>
@@ -74,28 +70,27 @@
 			</Tooltip.Root>
 
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-				<Tooltip.Trigger class="w-full" >
+				<Tooltip.Trigger class="w-full">
+					<DropdownMenu.Item
+						class="audio-button flex cursor-pointer items-center gap-2"
+						disabled={!supportsAudio()}
+						onclick={() => handleFileUpload(FileTypeCategory.AUDIO)}
+					>
+						<Volume2 class="h-4 w-4" />
 
-				<DropdownMenu.Item 
-					class="audio-button flex items-center gap-2 cursor-pointer"
-					disabled={!supportsAudio()}
-					onclick={() => handleFileUpload(FileTypeCategory.AUDIO)}
-				>
-					<Volume2 class="h-4 w-4" />
+						<span>Audio Files</span>
+					</DropdownMenu.Item>
+				</Tooltip.Trigger>
 
-					<span>Audio Files</span>
-				</DropdownMenu.Item>
-			</Tooltip.Trigger>
-
-			{#if !supportsAudio()}
-				<Tooltip.Content>
-					<p>Audio files require audio models to be processed</p>
-				</Tooltip.Content>
-			{/if}
+				{#if !supportsAudio()}
+					<Tooltip.Content>
+						<p>Audio files require audio models to be processed</p>
+					</Tooltip.Content>
+				{/if}
 			</Tooltip.Root>
-			
-			<DropdownMenu.Item 
-				class="flex items-center gap-2 cursor-pointer" 
+
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
 				onclick={() => handleFileUpload(FileTypeCategory.TEXT)}
 			>
 				<FileText class="h-4 w-4" />
@@ -105,8 +100,8 @@
 
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger class="w-full">
-					<DropdownMenu.Item 
-						class="flex items-center gap-2 cursor-pointer" 
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
 						onclick={() => handleFileUpload(FileTypeCategory.PDF)}
 					>
 						<File class="h-4 w-4" />

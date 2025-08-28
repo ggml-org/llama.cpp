@@ -14,10 +14,15 @@
 		class?: string;
 	}
 
-	let { reasoningContent, isStreaming = false, hasRegularContent = false, class: className = '' }: Props = $props();
+	let {
+		reasoningContent,
+		isStreaming = false,
+		hasRegularContent = false,
+		class: className = ''
+	}: Props = $props();
 
 	const currentConfig = config();
-	
+
 	let isExpanded = $state(currentConfig.showThoughtInProgress);
 
 	$effect(() => {
@@ -28,20 +33,20 @@
 </script>
 
 <Collapsible.Root bind:open={isExpanded} class="mb-6 {className}">
-	<Card class="border-muted bg-muted/30 gap-0 py-0">
-		<Collapsible.Trigger class="cursor-pointer flex items-center justify-between p-3">
-			<div class="text-muted-foreground flex items-center gap-2">
+	<Card class="gap-0 border-muted bg-muted/30 py-0">
+		<Collapsible.Trigger class="flex cursor-pointer items-center justify-between p-3">
+			<div class="flex items-center gap-2 text-muted-foreground">
 				<Brain class="h-4 w-4" />
 				<span class="text-sm font-medium">
 					{isStreaming ? 'Reasoning...' : 'Reasoning'}
 				</span>
 			</div>
-			
+
 			<div
-				class={buttonVariants({ 
-					variant: "ghost", 
-					size: "sm", 
-					class: "h-6 w-6 p-0 text-muted-foreground hover:text-foreground" 
+				class={buttonVariants({
+					variant: 'ghost',
+					size: 'sm',
+					class: 'h-6 w-6 p-0 text-muted-foreground hover:text-foreground'
 				})}
 			>
 				<ChevronsUpDownIcon class="h-4 w-4" />
@@ -50,7 +55,7 @@
 		</Collapsible.Trigger>
 
 		<Collapsible.Content>
-			<div class="border-muted border-t px-3 pb-3">
+			<div class="border-t border-muted px-3 pb-3">
 				<div class="pt-3">
 					<MarkdownContent content={reasoningContent || ''} class="text-xs leading-relaxed" />
 				</div>

@@ -16,130 +16,122 @@ const GUIDE_FOR_FRONTEND = `
 -->
 `.trim();
 
-const MAX_BUNDLE_SIZE = 2 * 1024 * 1024
+const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
 function llamaCppBuildPlugin() {
-    return {
-        name: 'llamacpp:build',
-        apply: 'build' as const,
-        closeBundle() {
-            // Ensure the SvelteKit adapter has finished writing to ../public
-            setTimeout(() => {
-                try {
-                    const indexPath = resolve('../public/index.html');
-                    const gzipPath = resolve('../public/index.html.gz');
+	return {
+		name: 'llamacpp:build',
+		apply: 'build' as const,
+		closeBundle() {
+			// Ensure the SvelteKit adapter has finished writing to ../public
+			setTimeout(() => {
+				try {
+					const indexPath = resolve('../public/index.html');
+					const gzipPath = resolve('../public/index.html.gz');
 
-                    if (!existsSync(indexPath)) {
-                        return;
-                    }
+					if (!existsSync(indexPath)) {
+						return;
+					}
 
-                    let content = readFileSync(indexPath, 'utf-8');
+					let content = readFileSync(indexPath, 'utf-8');
 
-                    const faviconPath = resolve('static/favicon.svg');
-                    if (existsSync(faviconPath)) {
-                        const faviconContent = readFileSync(faviconPath, 'utf-8');
-                        const faviconBase64 = Buffer.from(faviconContent).toString('base64');
-                        const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
-                        
-                        content = content.replace(
-                            /href="[^"]*favicon\.svg"/g,
-                            `href="${faviconDataUrl}"`
-                        );
-                        
-                        console.log('✓ Inlined favicon.svg as base64 data URL');
-                    }
+					const faviconPath = resolve('static/favicon.svg');
+					if (existsSync(faviconPath)) {
+						const faviconContent = readFileSync(faviconPath, 'utf-8');
+						const faviconBase64 = Buffer.from(faviconContent).toString('base64');
+						const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
 
-                    content = content.replace(/\r/g, '');
-                    content = GUIDE_FOR_FRONTEND + '\n' + content;
+						content = content.replace(/href="[^"]*favicon\.svg"/g, `href="${faviconDataUrl}"`);
 
-                    const compressed = fflate.gzipSync(Buffer.from(content, 'utf-8'), { level: 9 });
+						console.log('✓ Inlined favicon.svg as base64 data URL');
+					}
 
-                    compressed[0x4] = 0;
-                    compressed[0x5] = 0;
-                    compressed[0x6] = 0;
-                    compressed[0x7] = 0;
-                    compressed[0x9] = 0;
+					content = content.replace(/\r/g, '');
+					content = GUIDE_FOR_FRONTEND + '\n' + content;
 
-                    if (compressed.byteLength > MAX_BUNDLE_SIZE) {
-                        throw new Error(
-                            `Bundle size is too large (${Math.ceil(compressed.byteLength / 1024)} KB).\n` +
-                                `Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.ts.\n`
-                        );
-                    }
+					const compressed = fflate.gzipSync(Buffer.from(content, 'utf-8'), { level: 9 });
 
-                    writeFileSync(gzipPath, compressed);
-                    console.log('✓ Created index.html.gz');
-                } catch (error) {
-                    console.error('Failed to create gzip file:', error);
-                }
-            }, 100);
-        }
-    };
+					compressed[0x4] = 0;
+					compressed[0x5] = 0;
+					compressed[0x6] = 0;
+					compressed[0x7] = 0;
+					compressed[0x9] = 0;
+
+					if (compressed.byteLength > MAX_BUNDLE_SIZE) {
+						throw new Error(
+							`Bundle size is too large (${Math.ceil(compressed.byteLength / 1024)} KB).\n` +
+								`Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.ts.\n`
+						);
+					}
+
+					writeFileSync(gzipPath, compressed);
+					console.log('✓ Created index.html.gz');
+				} catch (error) {
+					console.error('Failed to create gzip file:', error);
+				}
+			}, 100);
+		}
+	};
 }
 
 export default defineConfig({
-    plugins: [
-        tailwindcss(),
-        sveltekit(),
-        devtoolsJson(),
-        llamaCppBuildPlugin(),
-    ],
-    test: {
-        projects: [
-            {
-                extends: './vite.config.ts',
-                test: {
-                    name: 'client',
-                    environment: 'browser',
-                    browser: {
-                        enabled: true,
-                        provider: 'playwright',
-                        instances: [{ browser: 'chromium' }]
-                    },
-                    include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
-                    exclude: ['src/lib/server/**'],
-                    setupFiles: ['./vitest-setup-client.ts']
-                }
-            },
-            {
-                extends: './vite.config.ts',
-                test: {
-                    name: 'server',
-                    environment: 'node',
-                    include: ['src/**/*.{test,spec}.{js,ts}'],
-                    exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
-                }
-            },
-            {
-                extends: './vite.config.ts',
-                test: {
-                    name: 'ui',
-                    environment: 'browser',
-                    browser: {
-                        enabled: true,
-                        provider: 'playwright',
-                        instances: [{ browser: 'chromium', headless: true }]
-                    },
-                    include: ['src/**/*.stories.{js,ts,svelte}'],
-                    setupFiles: ['./.storybook/vitest.setup.ts']
-                },
-                plugins: [
-                    storybookTest({
-                        storybookScript: 'pnpm run storybook --no-open',
-                    }),
-                ]
-            }
-        ]
-    },
-    server: {
-        proxy: {
-        '/v1': 'http://localhost:8080',
-        '/props': 'http://localhost:8080',
-        '/slots': 'http://localhost:8080',
-        },
-        headers: {
-        'Cross-Origin-Embedder-Policy': 'require-corp',
-        'Cross-Origin-Opener-Policy': 'same-origin',
-        },
-    },
+	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	test: {
+		projects: [
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'client',
+					environment: 'browser',
+					browser: {
+						enabled: true,
+						provider: 'playwright',
+						instances: [{ browser: 'chromium' }]
+					},
+					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+					exclude: ['src/lib/server/**'],
+					setupFiles: ['./vitest-setup-client.ts']
+				}
+			},
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'server',
+					environment: 'node',
+					include: ['src/**/*.{test,spec}.{js,ts}'],
+					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
+				}
+			},
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'ui',
+					environment: 'browser',
+					browser: {
+						enabled: true,
+						provider: 'playwright',
+						instances: [{ browser: 'chromium', headless: true }]
+					},
+					include: ['src/**/*.stories.{js,ts,svelte}'],
+					setupFiles: ['./.storybook/vitest.setup.ts']
+				},
+				plugins: [
+					storybookTest({
+						storybookScript: 'pnpm run storybook --no-open'
+					})
+				]
+			}
+		]
+	},
+	server: {
+		proxy: {
+			'/v1': 'http://localhost:8080',
+			'/props': 'http://localhost:8080',
+			'/slots': 'http://localhost:8080'
+		},
+		headers: {
+			'Cross-Origin-Embedder-Policy': 'require-corp',
+			'Cross-Origin-Opener-Policy': 'same-origin'
+		}
+	}
 });

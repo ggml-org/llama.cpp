@@ -22,7 +22,10 @@ export class DatabaseService {
 		return await db.conversations.orderBy('lastModified').reverse().toArray();
 	}
 
-	static async updateConversation(id: string, updates: Partial<Omit<DatabaseConversation, 'id'>>): Promise<void> {
+	static async updateConversation(
+		id: string,
+		updates: Partial<Omit<DatabaseConversation, 'id'>>
+	): Promise<void> {
 		await db.conversations.update(id, {
 			...updates,
 			lastModified: Date.now()
@@ -36,9 +39,7 @@ export class DatabaseService {
 		});
 	}
 
-	static async addMessage(
-		message: Omit<DatabaseMessage, 'id'>
-	): Promise<DatabaseMessage> {
+	static async addMessage(message: Omit<DatabaseMessage, 'id'>): Promise<DatabaseMessage> {
 		const newMessage: DatabaseMessage = {
 			...message,
 			id: crypto.randomUUID()
@@ -61,7 +62,7 @@ export class DatabaseService {
 
 	/**
 	 * Deletes a message and removes it from its parent's children array.
-	 * 
+	 *
 	 * @param messageId - ID of the message to delete
 	 */
 	static async deleteMessage(messageId: string): Promise<void> {
@@ -86,20 +87,23 @@ export class DatabaseService {
 	/**
 	 * Deletes a message and all its descendant messages (cascading deletion).
 	 * This removes the entire branch starting from the specified message.
-	 * 
+	 *
 	 * @param conversationId - ID of the conversation containing the message
 	 * @param messageId - ID of the root message to delete (along with all descendants)
 	 * @returns Array of all deleted message IDs
 	 */
-	static async deleteMessageCascading(conversationId: string, messageId: string): Promise<string[]> {
+	static async deleteMessageCascading(
+		conversationId: string,
+		messageId: string
+	): Promise<string[]> {
 		return await db.transaction('rw', db.messages, async () => {
 			// Get all messages in the conversation to find descendants
 			const allMessages = await db.messages.where('convId').equals(conversationId).toArray();
-			
+
 			// Find all descendant messages
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
-			
+
 			// Get the message to delete for parent cleanup
 			const message = await db.messages.get(messageId);
 			if (message && message.parent) {
@@ -112,7 +116,7 @@ export class DatabaseService {
 
 			// Delete all messages in the branch
 			await db.messages.bulkDelete(allToDelete);
-			
+
 			return allToDelete;
 		});
 	}
@@ -146,7 +150,7 @@ export class DatabaseService {
 	/**
 	 * Gets the conversation path from root to the current leaf node.
 	 * Uses the conversation's currNode to determine the active branch.
-	 * 
+	 *
 	 * @param convId - Conversation ID
 	 * @returns Array of messages in the current conversation path
 	 */
@@ -164,10 +168,9 @@ export class DatabaseService {
 		}
 
 		// If no currNode is set, use the latest message as leaf
-		const leafNodeId = conversation.currNode || 
-			allMessages.reduce((latest, msg) => 
-				msg.timestamp > latest.timestamp ? msg : latest
-			).id;
+		const leafNodeId =
+			conversation.currNode ||
+			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
 
 		return filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 	}
@@ -175,7 +178,7 @@ export class DatabaseService {
 	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
 	 * Also updates the conversation's currNode to point to the new message.
-	 * 
+	 *
 	 * @param message - Message to add (without id)
 	 * @param parentId - Parent message ID to attach to
 	 * @returns The created message
@@ -223,7 +226,7 @@ export class DatabaseService {
 	/**
 	 * Updates the conversation's current node (active branch).
 	 * This determines which conversation path is currently being viewed.
-	 * 
+	 *
 	 * @param convId - Conversation ID
 	 * @param nodeId - Message ID to set as current node
 	 */
@@ -236,7 +239,7 @@ export class DatabaseService {
 	/**
 	 * Creates a root message for a new conversation.
 	 * Root messages are not displayed but serve as the tree root for branching.
-	 * 
+	 *
 	 * @param convId - Conversation ID
 	 * @returns The created root message
 	 */
@@ -260,14 +263,12 @@ export class DatabaseService {
 	/**
 	 * Gets all leaf nodes (messages with no children) in a conversation.
 	 * Useful for finding all possible conversation endpoints.
-	 * 
+	 *
 	 * @param convId - Conversation ID
 	 * @returns Array of leaf node message IDs
 	 */
 	static async getConversationLeafNodes(convId: string): Promise<string[]> {
 		const allMessages = await this.getConversationMessages(convId);
-		return allMessages
-			.filter(msg => msg.children.length === 0)
-			.map(msg => msg.id);
+		return allMessages.filter((msg) => msg.children.length === 0).map((msg) => msg.id);
 	}
 }

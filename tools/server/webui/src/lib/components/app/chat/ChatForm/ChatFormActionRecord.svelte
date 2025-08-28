@@ -27,9 +27,9 @@
 			<Button
 				type="button"
 				class="h-8 w-8 rounded-full p-0 {isRecording
-					? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-					: 'text-muted-foreground bg-transparent hover:bg-foreground/10 hover:text-foreground'} {!supportsAudio()
-					? 'opacity-50 cursor-not-allowed'
+					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
+					: 'bg-transparent text-muted-foreground hover:bg-foreground/10 hover:text-foreground'} {!supportsAudio()
+					? 'cursor-not-allowed opacity-50'
 					: ''}"
 				disabled={disabled || isLoading || !supportsAudio()}
 				onclick={onMicClick}

@@ -66,13 +66,13 @@ class ServerStore {
 
 		try {
 			const response = await fetch('/slots');
-			
+
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented - server started without --slots flag');
 				this._slotsEndpointAvailable = false;
 				return;
 			}
-			
+
 			this._slotsEndpointAvailable = true;
 		} catch (error) {
 			console.warn('Unable to test slots endpoint availability:', error);
@@ -89,12 +89,12 @@ class ServerStore {
 			const props = await ChatService.getServerProps();
 			this._serverProps = props;
 			console.log('Server properties loaded:', props);
-			
+
 			// Check slots endpoint availability after server props are loaded
 			await this.checkSlotsEndpointAvailability();
 		} catch (error) {
 			let errorMessage = 'Failed to connect to server';
-			
+
 			if (error instanceof Error) {
 				// Handle specific error types with user-friendly messages
 				if (error.name === 'TypeError' && error.message.includes('fetch')) {
@@ -113,7 +113,7 @@ class ServerStore {
 					errorMessage = 'Access denied - check server permissions';
 				}
 			}
-			
+
 			this._error = errorMessage;
 			console.error('Error fetching server properties:', error);
 		} finally {

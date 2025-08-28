@@ -21,10 +21,7 @@
 	});
 </script>
 
-<div 
-	class="slots-info-container"
-	class:visible={showSlotsInfo}
->
+<div class="slots-info-container" class:visible={showSlotsInfo}>
 	<div class="slots-info-content">
 		{#each processingDetails as detail (detail)}
 			<span class="slots-info-detail">{detail}</span>
@@ -44,7 +41,9 @@
 		margin-bottom: 1rem;
 		opacity: 0;
 		transform: translateY(-100%);
-		transition: opacity 300ms ease-out, transform 300ms ease-out;
+		transition:
+			opacity 300ms ease-out,
+			transform 300ms ease-out;
 	}
 
 	.slots-info-container.visible {
@@ -68,7 +67,8 @@
 		padding: 0.25rem 0.75rem;
 		background: var(--muted);
 		border-radius: 0.375rem;
-		font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
 		white-space: nowrap;
 	}
 
@@ -76,7 +76,7 @@
 		.slots-info-content {
 			gap: 0.5rem;
 		}
-		
+
 		.slots-info-detail {
 			font-size: 0.7rem;
 			padding: 0.2rem 0.5rem;

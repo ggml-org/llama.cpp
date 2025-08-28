@@ -13,12 +13,14 @@ type TextContent = {
 
 if (browser) {
 	// Import worker as text and create blob URL for inline bundling
-	import('pdfjs-dist/build/pdf.worker.min.mjs?raw').then((workerModule) => {
-		const workerBlob = new Blob([workerModule.default], { type: 'application/javascript' });
-		pdfjs.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
-	}).catch(() => {
-		console.warn('Failed to load PDF.js worker, PDF processing may not work');
-	});
+	import('pdfjs-dist/build/pdf.worker.min.mjs?raw')
+		.then((workerModule) => {
+			const workerBlob = new Blob([workerModule.default], { type: 'application/javascript' });
+			pdfjs.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
+		})
+		.catch(() => {
+			console.warn('Failed to load PDF.js worker, PDF processing may not work');
+		});
 }
 
 /**
@@ -43,7 +45,6 @@ async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
 	});
 }
 
-
 /**
  * Extract text content from a PDF file
  * @param file - The PDF file to process
@@ -53,28 +54,28 @@ export async function convertPDFToText(file: File): Promise<string> {
 	if (!browser) {
 		throw new Error('PDF processing is only available in the browser');
 	}
-	
+
 	try {
 		const buffer = await getFileAsBuffer(file);
 		const pdf = await pdfjs.getDocument(buffer).promise;
 		const numPages = pdf.numPages;
-		
+
 		const textContentPromises: Promise<TextContent>[] = [];
 		for (let i = 1; i <= numPages; i++) {
-			textContentPromises.push(
-				pdf.getPage(i).then((page: any) => page.getTextContent())
-			);
+			textContentPromises.push(pdf.getPage(i).then((page: any) => page.getTextContent()));
 		}
-		
+
 		const textContents = await Promise.all(textContentPromises);
 		const textItems = textContents.flatMap((textContent: TextContent) =>
 			textContent.items.map((item) => item.str ?? '')
 		);
-		
+
 		return textItems.join('\n');
 	} catch (error) {
 		console.error('Error converting PDF to text:', error);
-		throw new Error(`Failed to convert PDF to text: ${error instanceof Error ? error.message : 'Unknown error'}`);
+		throw new Error(
+			`Failed to convert PDF to text: ${error instanceof Error ? error.message : 'Unknown error'}`
+		);
 	}
 }
 
@@ -88,7 +89,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	if (!browser) {
 		throw new Error('PDF processing is only available in the browser');
 	}
-	
+
 	try {
 		const buffer = await getFileAsBuffer(file);
 		const doc = await pdfjs.getDocument(buffer).promise;
@@ -99,16 +100,16 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 			const viewport = page.getViewport({ scale });
 			const canvas = document.createElement('canvas');
 			const ctx = canvas.getContext('2d');
-			
+
 			canvas.width = viewport.width;
 			canvas.height = viewport.height;
-			
+
 			if (!ctx) {
 				throw new Error('Failed to get 2D context from canvas');
 			}
-			
-			const task = page.render({ 
-				canvasContext: ctx, 
+
+			const task = page.render({
+				canvasContext: ctx,
 				viewport: viewport,
 				canvas: canvas
 			});
@@ -122,7 +123,9 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 		return await Promise.all(pages);
 	} catch (error) {
 		console.error('Error converting PDF to images:', error);
-		throw new Error(`Failed to convert PDF to images: ${error instanceof Error ? error.message : 'Unknown error'}`);
+		throw new Error(
+			`Failed to convert PDF to images: ${error instanceof Error ? error.message : 'Unknown error'}`
+		);
 	}
 }
 

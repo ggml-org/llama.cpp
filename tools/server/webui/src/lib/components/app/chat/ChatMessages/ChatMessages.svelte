@@ -20,11 +20,11 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	let lastUpdateTime = $state(0);
-	
+
 	function refreshAllMessages() {
 		const conversation = activeConversation();
 		if (conversation) {
-			DatabaseService.getConversationMessages(conversation.id).then(messages => {
+			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
 				lastUpdateTime = Date.now();
 			});
@@ -32,17 +32,19 @@
 			allConversationMessages = [];
 		}
 	}
-	
+
 	// Single effect that tracks both conversation and message changes
 	$effect(() => {
 		const conversation = activeConversation();
 		const currentActiveMessages = activeMessages();
-		
+
 		// Track message count and timestamps to detect changes
 		const messageCount = currentActiveMessages.length;
-		const lastMessageTimestamp = currentActiveMessages.length > 0 ? 
-			Math.max(...currentActiveMessages.map(m => m.timestamp || 0)) : 0;
-		
+		const lastMessageTimestamp =
+			currentActiveMessages.length > 0
+				? Math.max(...currentActiveMessages.map((m) => m.timestamp || 0))
+				: 0;
+
 		if (conversation) {
 			refreshAllMessages();
 		}
@@ -56,7 +58,7 @@
 		// Force dependency on lastUpdateTime to ensure reactivity
 		const _ = lastUpdateTime;
 
-		return messages.map(message => {
+		return messages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
 			return {
 				message,

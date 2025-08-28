@@ -14,20 +14,18 @@
 		class?: string;
 	}
 
-	let { 
-		message = 'Initializing connection to llama.cpp server...', 
-		class: className = '' 
-	}: Props = $props();
+	let { message = 'Initializing connection to llama.cpp server...', class: className = '' }: Props =
+		$props();
 </script>
 
 <div class="flex h-full items-center justify-center {className}">
 	<div class="text-center">
 		<div class="mb-4" in:fade={{ duration: 300 }}>
 			<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-				<Server class="h-8 w-8 text-muted-foreground animate-pulse" />
+				<Server class="h-8 w-8 animate-pulse text-muted-foreground" />
 			</div>
 			<h2 class="mb-2 text-xl font-semibold">Connecting to Server</h2>
-			<p class="text-muted-foreground text-sm">
+			<p class="text-sm text-muted-foreground">
 				{message}
 			</p>
 		</div>

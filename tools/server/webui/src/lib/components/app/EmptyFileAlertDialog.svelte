@@ -20,7 +20,7 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<FileX class="text-destructive h-5 w-5" />
+				<FileX class="h-5 w-5 text-destructive" />
 				Empty Files Detected
 			</AlertDialog.Title>
 			<AlertDialog.Description>
@@ -29,9 +29,9 @@
 		</AlertDialog.Header>
 
 		<div class="space-y-3 text-sm">
-			<div class="bg-muted rounded-lg p-3">
+			<div class="rounded-lg bg-muted p-3">
 				<div class="mb-2 font-medium">Empty Files:</div>
-				<ul class="text-muted-foreground list-inside list-disc space-y-1">
+				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
 					{#each emptyFiles as fileName}
 						<li class="font-mono text-sm">{fileName}</li>
 					{/each}
@@ -40,7 +40,7 @@
 
 			<div>
 				<div class="mb-2 font-medium">What happened:</div>
-				<ul class="text-muted-foreground list-inside list-disc space-y-1">
+				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
 					<li>Empty files cannot be processed or sent to the AI model</li>
 					<li>These files have been automatically removed from your attachments</li>
 					<li>You can try uploading files with content instead</li>

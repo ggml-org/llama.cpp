@@ -92,7 +92,6 @@ export class SlotsService {
 		}, waitTime);
 	}
 
-
 	/**
 	 * Perform the actual slots state update
 	 */
@@ -121,12 +120,12 @@ export class SlotsService {
 	private async fetchAndNotify(): Promise<void> {
 		try {
 			const response = await fetch(`/slots`);
-			
+
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented');
 				return;
 			}
-			
+
 			if (!response.ok) {
 				console.warn('Failed to fetch slots data:', response.statusText);
 				return;
@@ -134,10 +133,10 @@ export class SlotsService {
 
 			const slots: ApiSlotData[] = await response.json();
 			const processingState = this.parseProcessingState(slots);
-			
+
 			this.lastKnownState = processingState;
-			
-			this.callbacks.forEach(callback => {
+
+			this.callbacks.forEach((callback) => {
 				try {
 					callback(processingState);
 				} catch (error) {
@@ -150,7 +149,7 @@ export class SlotsService {
 	}
 
 	private parseProcessingState(slots: ApiSlotData[]): ApiProcessingState {
-		const activeSlot = slots.find(slot => slot.id_task !== -1) || slots[0];
+		const activeSlot = slots.find((slot) => slot.id_task !== -1) || slots[0];
 
 		if (!activeSlot) {
 			return {
@@ -168,7 +167,7 @@ export class SlotsService {
 		}
 
 		let status: ApiProcessingState['status'] = 'idle';
-		
+
 		if (activeSlot.is_processing) {
 			status = 'generating';
 		} else if (activeSlot.next_token.n_decoded === 0 && activeSlot.id_task !== -1) {
@@ -182,45 +181,51 @@ export class SlotsService {
 
 		const currentTime = Date.now();
 		const currentTokens = activeSlot.next_token.n_decoded;
-		
+
 		if (this.isStreamingActive) {
 			if (this.streamStartTokens === 0 && currentTokens > 0) {
 				this.streamStartTokens = currentTokens;
 				this.streamStartTime = currentTime;
 			}
-			
+
 			let calculatedRate = 0;
-			
+
 			// Method 1: Use recent interval (preferred for accuracy)
 			if (this.lastTimestamp > 0 && currentTokens > this.lastTokenCount) {
 				const timeDiff = (currentTime - this.lastTimestamp) / 1000;
 				const tokenDiff = currentTokens - this.lastTokenCount;
-				
+
 				if (timeDiff > 0.02) {
 					calculatedRate = tokenDiff / timeDiff;
 				}
 			}
-			
+
 			// Method 2: Use total stream time (fallback for early display)
-			if (calculatedRate === 0 && this.streamStartTime > 0 && currentTokens > this.streamStartTokens) {
+			if (
+				calculatedRate === 0 &&
+				this.streamStartTime > 0 &&
+				currentTokens > this.streamStartTokens
+			) {
 				const totalTimeDiff = (currentTime - this.streamStartTime) / 1000;
 				const totalTokenDiff = currentTokens - this.streamStartTokens;
-				
-				if (totalTimeDiff > 0.1) { // At least 100ms of streaming
+
+				if (totalTimeDiff > 0.1) {
+					// At least 100ms of streaming
 					calculatedRate = totalTokenDiff / totalTimeDiff;
 				}
 			}
-			
+
 			if (calculatedRate > 0) {
 				this.tokenRateHistory.push(calculatedRate);
 				if (this.tokenRateHistory.length > 5) {
 					this.tokenRateHistory.shift();
 				}
-				
-				this.currentTokensPerSecond = this.tokenRateHistory.reduce((sum, rate) => sum + rate, 0) / this.tokenRateHistory.length;
+
+				this.currentTokensPerSecond =
+					this.tokenRateHistory.reduce((sum, rate) => sum + rate, 0) / this.tokenRateHistory.length;
 			}
 		}
-		
+
 		if (this.isStreamingActive && currentTokens >= this.lastTokenCount) {
 			this.lastTokenCount = currentTokens;
 			this.lastTimestamp = currentTime;
@@ -247,19 +252,19 @@ export class SlotsService {
 
 		// For non-streaming state, check server store availability
 		const isAvailable = slotsEndpointAvailable();
-		
+
 		if (!isAvailable) {
 			return null;
 		}
 
 		try {
 			const response = await fetch(`/slots`);
-			
+
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented');
 				return null;
 			}
-			
+
 			if (!response.ok) {
 				return null;
 			}

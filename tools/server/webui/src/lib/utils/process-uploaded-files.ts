@@ -2,10 +2,7 @@ import { isPdfMimeType } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { 
-    FileTypeCategory, 
-    getFileTypeCategory 
-} from '$lib/constants/supported-file-types';
+import { FileTypeCategory, getFileTypeCategory } from '$lib/constants/supported-file-types';
 
 function readFileAsDataURL(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -58,7 +55,10 @@ export async function processFilesToChatUploaded(files: File[]): Promise<ChatUpl
 				}
 
 				results.push({ ...base, preview });
-			} else if (getFileTypeCategory(file.type) === FileTypeCategory.TEXT || isTextFileByName(file.name)) {
+			} else if (
+				getFileTypeCategory(file.type) === FileTypeCategory.TEXT ||
+				isTextFileByName(file.name)
+			) {
 				try {
 					const textContent = await readFileAsUTF8(file);
 					results.push({ ...base, textContent });

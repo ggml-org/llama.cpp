@@ -19,7 +19,7 @@ export function parseThinkingContent(content: string): {
 
 		return {
 			cleanContent,
-			thinking: thinkingContent,
+			thinking: thinkingContent
 		};
 	}
 

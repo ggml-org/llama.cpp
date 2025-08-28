@@ -20,7 +20,9 @@ class ChatStore {
 	currentResponse = $state('');
 	isInitialized = $state(false);
 	isLoading = $state(false);
-	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(null);
+	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(
+		null
+	);
 	private chatService = new ChatService();
 
 	constructor() {
@@ -70,10 +72,14 @@ class ChatStore {
 			}
 
 			this.activeConversation = conversation;
-			
+
 			if (conversation.currNode) {
 				const allMessages = await DatabaseService.getConversationMessages(convId);
-				this.activeMessages = filterByLeafNodeId(allMessages, conversation.currNode, false) as DatabaseMessage[];
+				this.activeMessages = filterByLeafNodeId(
+					allMessages,
+					conversation.currNode,
+					false
+				) as DatabaseMessage[];
 			} else {
 				// Load all messages for conversations without currNode (backward compatibility)
 				this.activeMessages = await DatabaseService.getConversationMessages(convId);
@@ -103,14 +109,16 @@ class ChatStore {
 
 		try {
 			let parentId: string | null = null;
-			
+
 			if (parent === '-1') {
 				if (this.activeMessages.length > 0) {
 					parentId = this.activeMessages[this.activeMessages.length - 1].id;
 				} else {
-					const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-					const rootMessage = allMessages.find(m => m.parent === null && m.type === 'root');
-					
+					const allMessages = await DatabaseService.getConversationMessages(
+						this.activeConversation.id
+					);
+					const rootMessage = allMessages.find((m) => m.parent === null && m.type === 'root');
+
 					if (!rootMessage) {
 						const rootId = await DatabaseService.createRootMessage(this.activeConversation.id);
 						parentId = rootId;
@@ -122,16 +130,19 @@ class ChatStore {
 				parentId = parent;
 			}
 
-			const message = await DatabaseService.createMessageBranch({
-				convId: this.activeConversation.id,
-				role,
-				content,
-				type,
-				timestamp: Date.now(),
-				thinking: '',
-				children: [],
-				extra: extras
-			}, parentId);
+			const message = await DatabaseService.createMessageBranch(
+				{
+					convId: this.activeConversation.id,
+					role,
+					content,
+					type,
+					timestamp: Date.now(),
+					thinking: '',
+					children: [],
+					extra: extras
+				},
+				parentId
+			);
 
 			this.activeMessages.push(message);
 
@@ -160,7 +171,7 @@ class ChatStore {
 		let streamedContent = '';
 
 		const currentConfig = config();
-		
+
 		const apiOptions = {
 			stream: true,
 			// Generation parameters
@@ -189,131 +200,125 @@ class ChatStore {
 			// Sampler configuration
 			samplers: currentConfig.samplers || 'top_k;tfs_z;typical_p;top_p;min_p;temperature',
 			// Custom parameters
-			custom: currentConfig.custom || '',
+			custom: currentConfig.custom || ''
 		};
-	
+
 		let streamedReasoningContent = '';
 
 		// Start slots polling when streaming begins
 		slotsService.startStreamingPolling();
 
-		await this.chatService.sendMessage(
-			allMessages,
-			{
-				...apiOptions,
+		await this.chatService.sendMessage(allMessages, {
+			...apiOptions,
 
-				onChunk: (chunk: string) => {
-					streamedContent += chunk;
-					this.currentResponse = streamedContent;
+			onChunk: (chunk: string) => {
+				streamedContent += chunk;
+				this.currentResponse = streamedContent;
 
-					// Parse thinking content during streaming
-					const partialThinking = extractPartialThinking(streamedContent);
+				// Parse thinking content during streaming
+				const partialThinking = extractPartialThinking(streamedContent);
 
-					const messageIndex = this.activeMessages.findIndex(
-						(m) => m.id === assistantMessage.id
-					);
+				const messageIndex = this.activeMessages.findIndex((m) => m.id === assistantMessage.id);
 
-					if (messageIndex !== -1) {
-						// Update message with parsed content
-						this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-					}
+				if (messageIndex !== -1) {
+					// Update message with parsed content
+					this.activeMessages[messageIndex].content =
+						partialThinking.remainingContent || streamedContent;
+				}
 
-					slotsService.updateSlotsState();
-				},
+				slotsService.updateSlotsState();
+			},
 
-				onReasoningChunk: (reasoningChunk: string) => {
-					streamedReasoningContent += reasoningChunk;
+			onReasoningChunk: (reasoningChunk: string) => {
+				streamedReasoningContent += reasoningChunk;
 
-					const messageIndex = this.activeMessages.findIndex(
-						(m) => m.id === assistantMessage.id
-					);
+				const messageIndex = this.activeMessages.findIndex((m) => m.id === assistantMessage.id);
 
-					if (messageIndex !== -1) {
-						// Update message with reasoning content
-						this.activeMessages[messageIndex].thinking = streamedReasoningContent;
-					}
+				if (messageIndex !== -1) {
+					// Update message with reasoning content
+					this.activeMessages[messageIndex].thinking = streamedReasoningContent;
+				}
 
-					slotsService.updateSlotsState();
-				},
+				slotsService.updateSlotsState();
+			},
 
-				onComplete: async (finalContent?: string, reasoningContent?: string) => {
-					// Stop slots polling when streaming completes
-					slotsService.stopStreamingPolling();
+			onComplete: async (finalContent?: string, reasoningContent?: string) => {
+				// Stop slots polling when streaming completes
+				slotsService.stopStreamingPolling();
 
-					// Update assistant message in database
-					await DatabaseService.updateMessage(assistantMessage.id, {
-						content: finalContent || streamedContent,
-						thinking: reasoningContent || streamedReasoningContent
-					});
+				// Update assistant message in database
+				await DatabaseService.updateMessage(assistantMessage.id, {
+					content: finalContent || streamedContent,
+					thinking: reasoningContent || streamedReasoningContent
+				});
 
-					// Call custom completion handler if provided
-					if (onComplete) {
-						await onComplete(streamedContent);
-					}
+				// Call custom completion handler if provided
+				if (onComplete) {
+					await onComplete(streamedContent);
+				}
 
+				this.isLoading = false;
+				this.currentResponse = '';
+			},
+
+			onError: (error: Error) => {
+				// Stop slots polling on any error
+				slotsService.stopStreamingPolling();
+
+				// Don't log or show error if it's an AbortError (user stopped generation)
+				if (error.name === 'AbortError' || error instanceof DOMException) {
 					this.isLoading = false;
 					this.currentResponse = '';
-				},
+					return;
+				}
 
-				onError: (error: Error) => {
-					// Stop slots polling on any error
-					slotsService.stopStreamingPolling();
-
-					// Don't log or show error if it's an AbortError (user stopped generation)
-					if (error.name === 'AbortError' || error instanceof DOMException) {
-						this.isLoading = false;
-						this.currentResponse = '';
-						return;
-					}
-
-					// Handle context errors specially
-					if (error.name === 'ContextError') {
-						console.warn('Context error detected:', error.message);
-						this.isLoading = false;
-						this.currentResponse = '';
-
-						// Remove the assistant message that was created but failed
-						const messageIndex = this.activeMessages.findIndex(
-							(m: DatabaseMessage) => m.id === assistantMessage.id
-						);
-
-						if (messageIndex !== -1) {
-							// Remove from UI
-							this.activeMessages.splice(messageIndex, 1);
-							// Remove from database
-							DatabaseService.deleteMessage(assistantMessage.id).catch(console.error);
-						}
-
-						this.maxContextError = {
-							message: error.message,
-							estimatedTokens: 0, // Server-side error, we don't have client estimates
-							maxContext: serverStore.serverProps?.default_generation_settings.n_ctx ?? 4096 // Use server's actual n_ctx, fallback to 4096
-						};
-
-						if (onError) {
-							onError(error);
-						}
-						return;
-					}
-
-					console.error('Streaming error:', error);
+				// Handle context errors specially
+				if (error.name === 'ContextError') {
+					console.warn('Context error detected:', error.message);
 					this.isLoading = false;
 					this.currentResponse = '';
 
+					// Remove the assistant message that was created but failed
 					const messageIndex = this.activeMessages.findIndex(
 						(m: DatabaseMessage) => m.id === assistantMessage.id
 					);
 
 					if (messageIndex !== -1) {
-						this.activeMessages[messageIndex].content = `Error: ${error.message}`;
+						// Remove from UI
+						this.activeMessages.splice(messageIndex, 1);
+						// Remove from database
+						DatabaseService.deleteMessage(assistantMessage.id).catch(console.error);
 					}
+
+					this.maxContextError = {
+						message: error.message,
+						estimatedTokens: 0, // Server-side error, we don't have client estimates
+						maxContext: serverStore.serverProps?.default_generation_settings.n_ctx ?? 4096 // Use server's actual n_ctx, fallback to 4096
+					};
 
 					if (onError) {
 						onError(error);
 					}
+					return;
+				}
+
+				console.error('Streaming error:', error);
+				this.isLoading = false;
+				this.currentResponse = '';
+
+				const messageIndex = this.activeMessages.findIndex(
+					(m: DatabaseMessage) => m.id === assistantMessage.id
+				);
+
+				if (messageIndex !== -1) {
+					this.activeMessages[messageIndex].content = `Error: ${error.message}`;
+				}
+
+				if (onError) {
+					onError(error);
 				}
 			}
-		);
+		});
 	}
 
 	/**
@@ -449,22 +454,23 @@ class ChatStore {
 	}
 
 	// Allow external modules to set context error without importing heavy utils here
-	setMaxContextError(error: { message: string; estimatedTokens: number; maxContext: number } | null): void {
+	setMaxContextError(
+		error: { message: string; estimatedTokens: number; maxContext: number } | null
+	): void {
 		this.maxContextError = error;
 	}
 
-	private async savePartialResponseIfNeeded() {		
+	private async savePartialResponseIfNeeded() {
 		if (!this.currentResponse.trim() || !this.activeMessages.length) {
 			return;
 		}
 
 		const lastMessage = this.activeMessages[this.activeMessages.length - 1];
-		
+
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
 				const partialThinking = extractPartialThinking(this.currentResponse);
-				
-				
+
 				const updateData: { content: string; thinking?: string } = {
 					content: partialThinking.remainingContent || this.currentResponse
 				};
@@ -472,7 +478,7 @@ class ChatStore {
 				if (partialThinking.thinking) {
 					updateData.thinking = partialThinking.thinking;
 				}
-				
+
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
 
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
@@ -487,14 +493,16 @@ class ChatStore {
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		if (!this.activeConversation) return;
-		
+
 		// If currently loading, gracefully abort the ongoing generation
 		if (this.isLoading) {
 			this.stopGeneration();
 		}
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex(
+				(m: DatabaseMessage) => m.id === messageId
+			);
 
 			if (messageIndex === -1) {
 				console.error('Message not found for update');
@@ -503,7 +511,7 @@ class ChatStore {
 
 			const messageToUpdate = this.activeMessages[messageIndex];
 			const originalContent = messageToUpdate.content;
-			
+
 			if (messageToUpdate.role !== 'user') {
 				console.error('Only user messages can be edited');
 				return;
@@ -554,7 +562,7 @@ class ChatStore {
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
-				
+
 				const messageIndex = this.activeMessages.findIndex(
 					(m: DatabaseMessage) => m.id === messageId
 				);
@@ -575,14 +583,16 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex(
+				(m: DatabaseMessage) => m.id === messageId
+			);
 			if (messageIndex === -1) {
 				console.error('Message not found for regeneration');
 				return;
 			}
 
 			const messageToRegenerate = this.activeMessages[messageIndex];
-			
+
 			if (messageToRegenerate.role !== 'assistant') {
 				console.error('Only assistant messages can be regenerated');
 				return;
@@ -603,9 +613,11 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+				const allMessages = await DatabaseService.getConversationMessages(
+					this.activeConversation.id
+				);
 				const assistantMessage = await this.addMessage('assistant', '');
-				
+
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
@@ -661,15 +673,15 @@ class ChatStore {
 	/**
 	 * Gets information about what messages will be deleted when deleting a specific message.
 	 * This is used to inform the user about cascading deletion.
-	 * 
+	 *
 	 * @param messageId - ID of the message to be deleted
 	 * @returns Object with deletion info including count and types of messages
 	 */
-	async getDeletionInfo(messageId: string): Promise<{ 
-		totalCount: number; 
-		userMessages: number; 
-		assistantMessages: number; 
-		messageTypes: string[] 
+	async getDeletionInfo(messageId: string): Promise<{
+		totalCount: number;
+		userMessages: number;
+		assistantMessages: number;
+		messageTypes: string[];
 	}> {
 		if (!this.activeConversation) {
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
@@ -678,13 +690,13 @@ class ChatStore {
 		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
-		
-		const messagesToDelete = allMessages.filter(m => allToDelete.includes(m.id));
-		
+
+		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
+
 		let userMessages = 0;
 		let assistantMessages = 0;
 		const messageTypes: string[] = [];
-		
+
 		for (const msg of messagesToDelete) {
 			if (msg.role === 'user') {
 				userMessages++;
@@ -694,7 +706,7 @@ class ChatStore {
 				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
 			}
 		}
-		
+
 		return {
 			totalCount: allToDelete.length,
 			userMessages,
@@ -709,31 +721,37 @@ class ChatStore {
 
 			// Get all messages to find siblings before deletion
 			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-			const messageToDelete = allMessages.find(m => m.id === messageId);
-			
+			const messageToDelete = allMessages.find((m) => m.id === messageId);
+
 			if (!messageToDelete) {
 				console.error('Message to delete not found');
 				return;
 			}
 
 			// Check if the deleted message is in the current conversation path
-			const currentPath = filterByLeafNodeId(allMessages, this.activeConversation.currNode || '', false);
-			const isInCurrentPath = currentPath.some(m => m.id === messageId);
-			
+			const currentPath = filterByLeafNodeId(
+				allMessages,
+				this.activeConversation.currNode || '',
+				false
+			);
+			const isInCurrentPath = currentPath.some((m) => m.id === messageId);
+
 			// If the deleted message is in the current path, we need to update currNode
 			if (isInCurrentPath && messageToDelete.parent) {
 				// Find all siblings (messages with same parent)
-				const siblings = allMessages.filter(m => m.parent === messageToDelete.parent && m.id !== messageId);
-				
+				const siblings = allMessages.filter(
+					(m) => m.parent === messageToDelete.parent && m.id !== messageId
+				);
+
 				if (siblings.length > 0) {
 					// Find the latest sibling (highest timestamp)
-					const latestSibling = siblings.reduce((latest, sibling) => 
+					const latestSibling = siblings.reduce((latest, sibling) =>
 						sibling.timestamp > latest.timestamp ? sibling : latest
 					);
-					
+
 					// Find the leaf node for this sibling branch to get the complete conversation path
 					const leafNodeId = findLeafNode(allMessages, latestSibling.id);
-					
+
 					// Update conversation to use the leaf node of the latest remaining sibling
 					await DatabaseService.updateCurrentNode(this.activeConversation.id, leafNodeId);
 					this.activeConversation.currNode = leafNodeId;
@@ -784,14 +802,13 @@ class ChatStore {
 		}
 
 		// Get current leaf node or use latest message
-		const leafNodeId = this.activeConversation.currNode ||
-			allMessages.reduce((latest, msg) => 
-				msg.timestamp > latest.timestamp ? msg : latest
-			).id;
+		const leafNodeId =
+			this.activeConversation.currNode ||
+			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
 
 		// Get conversation path for current branch
 		const currentPath = filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
-		
+
 		// Force reactive update by clearing and reassigning
 		this.activeMessages.length = 0;
 		this.activeMessages.push(...currentPath);
@@ -799,7 +816,7 @@ class ChatStore {
 
 	/**
 	 * Navigates to a specific sibling branch by updating currNode and refreshing messages.
-	 * 
+	 *
 	 * @param siblingId - The sibling message ID to navigate to
 	 */
 	async navigateToSibling(siblingId: string): Promise<void> {
@@ -807,10 +824,10 @@ class ChatStore {
 
 		// Update conversation's current node
 		await DatabaseService.updateCurrentNode(this.activeConversation.id, siblingId);
-		
+
 		// Update local state
 		this.activeConversation.currNode = siblingId;
-		
+
 		// Refresh active messages to show new branch
 		await this.refreshActiveMessages();
 	}
@@ -818,7 +835,7 @@ class ChatStore {
 	/**
 	 * Edits a message by creating a new branch with the edited content.
 	 * This preserves the original message and creates a sibling with new content.
-	 * 
+	 *
 	 * @param messageId - ID of message to edit
 	 * @param newContent - New content for the message
 	 */
@@ -826,7 +843,9 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex(
+				(m: DatabaseMessage) => m.id === messageId
+			);
 			if (messageIndex === -1) {
 				console.error('Message not found for editing');
 				return;
@@ -840,14 +859,16 @@ class ChatStore {
 
 			// Use the same parent as the original message, or find appropriate parent if undefined
 			let parentId = messageToEdit.parent;
-			
+
 			// If parent is undefined/null, find the appropriate parent
 			if (parentId === undefined || parentId === null) {
 				// Get all messages to find root or previous message
-				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-				
+				const allMessages = await DatabaseService.getConversationMessages(
+					this.activeConversation.id
+				);
+
 				// Find root message
-				const rootMessage = allMessages.find(m => m.type === 'root' && m.parent === null);
+				const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 				if (rootMessage) {
 					parentId = rootMessage.id;
 				} else {
@@ -857,16 +878,19 @@ class ChatStore {
 			}
 
 			// Create new message branch with edited content (use snapshot to avoid proxy cloning issues)
-			const newMessage = await DatabaseService.createMessageBranch({
-				convId: messageToEdit.convId,
-				type: messageToEdit.type,
-				timestamp: Date.now(),
-				role: messageToEdit.role,
-				content: newContent,
-				thinking: messageToEdit.thinking || '',
-				children: [],
-				extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined
-			}, parentId);
+			const newMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: messageToEdit.convId,
+					type: messageToEdit.type,
+					timestamp: Date.now(),
+					role: messageToEdit.role,
+					content: newContent,
+					thinking: messageToEdit.thinking || '',
+					children: [],
+					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined
+				},
+				parentId
+			);
 
 			// Update conversation's current node to the new message
 			await DatabaseService.updateCurrentNode(this.activeConversation.id, newMessage.id);
@@ -890,14 +914,16 @@ class ChatStore {
 	/**
 	 * Regenerates an assistant message by creating a new branch with a new response.
 	 * This preserves the original response and creates a sibling with new content.
-	 * 
+	 *
 	 * @param messageId - ID of assistant message to regenerate
 	 */
 	async regenerateMessageWithBranching(messageId: string): Promise<void> {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex(
+				(m: DatabaseMessage) => m.id === messageId
+			);
 			if (messageIndex === -1) {
 				console.error('Message not found for regeneration');
 				return;
@@ -910,7 +936,7 @@ class ChatStore {
 			}
 
 			// Find parent message (should be user message)
-			const parentMessage = this.activeMessages.find(m => m.id === messageToRegenerate.parent);
+			const parentMessage = this.activeMessages.find((m) => m.id === messageToRegenerate.parent);
 			if (!parentMessage) {
 				console.error('Parent message not found for regeneration');
 				return;
@@ -921,15 +947,18 @@ class ChatStore {
 			this.currentResponse = '';
 
 			// Create new assistant message branch with empty content
-			const newAssistantMessage = await DatabaseService.createMessageBranch({
-				convId: this.activeConversation.id,
-				type: 'text',
-				timestamp: Date.now(),
-				role: 'assistant',
-				content: '',
-				thinking: '',
-				children: []
-			}, parentMessage.id);
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: this.activeConversation.id,
+					type: 'text',
+					timestamp: Date.now(),
+					role: 'assistant',
+					content: '',
+					thinking: '',
+					children: []
+				},
+				parentMessage.id
+			);
 
 			// Update conversation's current node to the new message
 			await DatabaseService.updateCurrentNode(this.activeConversation.id, newAssistantMessage.id);
@@ -943,8 +972,12 @@ class ChatStore {
 
 			// Stream new response to the new assistant message
 			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-			const conversationPath = filterByLeafNodeId(allMessages, parentMessage.id, false) as DatabaseMessage[];
-			
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				parentMessage.id,
+				false
+			) as DatabaseMessage[];
+
 			await this.streamChatCompletion(conversationPath, newAssistantMessage);
 		} catch (error) {
 			console.error('Failed to regenerate message with branching:', error);
@@ -955,7 +988,7 @@ class ChatStore {
 	/**
 	 * Generates a new assistant response for a given user message.
 	 * Creates a new assistant message branch and streams the response.
-	 * 
+	 *
 	 * @param userMessageId - ID of user message to respond to
 	 */
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
@@ -967,18 +1000,25 @@ class ChatStore {
 		try {
 			// Get conversation path up to the user message
 			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-			const conversationPath = filterByLeafNodeId(allMessages, userMessageId, false) as DatabaseMessage[];
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				userMessageId,
+				false
+			) as DatabaseMessage[];
 
 			// Create new assistant message branch
-			const assistantMessage = await DatabaseService.createMessageBranch({
-				convId: this.activeConversation.id,
-				type: 'text',
-				timestamp: Date.now(),
-				role: 'assistant',
-				content: '',
-				thinking: '',
-				children: []
-			}, userMessageId);
+			const assistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: this.activeConversation.id,
+					type: 'text',
+					timestamp: Date.now(),
+					role: 'assistant',
+					content: '',
+					thinking: '',
+					children: []
+				},
+				userMessageId
+			);
 
 			// Add assistant message to active messages immediately for UI reactivity
 			this.activeMessages.push(assistantMessage);
@@ -1013,7 +1053,8 @@ export const setMaxContextError = chatStore.setMaxContextError.bind(chatStore);
 export const refreshActiveMessages = chatStore.refreshActiveMessages.bind(chatStore);
 export const navigateToSibling = chatStore.navigateToSibling.bind(chatStore);
 export const editMessageWithBranching = chatStore.editMessageWithBranching.bind(chatStore);
-export const regenerateMessageWithBranching = chatStore.regenerateMessageWithBranching.bind(chatStore);
+export const regenerateMessageWithBranching =
+	chatStore.regenerateMessageWithBranching.bind(chatStore);
 export const deleteMessage = chatStore.deleteMessage.bind(chatStore);
 export const getDeletionInfo = chatStore.getDeletionInfo.bind(chatStore);
 export const updateConversationName = chatStore.updateConversationName.bind(chatStore);

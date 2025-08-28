@@ -1,22 +1,28 @@
 <script lang="ts">
-	import { ChatAttachmentsList, ChatFormActions, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
+	import {
+		ChatAttachmentsList,
+		ChatFormActions,
+		ChatFormFileInputInvisible,
+		ChatFormHelperText,
+		ChatFormTextarea
+	} from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
-	import { 
-		TextMimeType, 
-		ImageExtension, 
-		ImageMimeType, 
+	import {
+		TextMimeType,
+		ImageExtension,
+		ImageMimeType,
 		AudioExtension,
 		AudioMimeType,
-		PdfExtension, 
-		PdfMimeType, 
-		TextExtension 
+		PdfExtension,
+		PdfMimeType,
+		TextExtension
 	} from '$lib/constants/supported-file-types';
 	import { config } from '$lib/stores/settings.svelte';
-	import { 
-		AudioRecorder, 
-		convertToWav, 
-		createAudioFile, 
-		isAudioRecordingSupported 
+	import {
+		AudioRecorder,
+		convertToWav,
+		createAudioFile,
+		isAudioRecordingSupported
 	} from '$lib/utils/audio-recording';
 	import { onMount } from 'svelte';
 
@@ -41,7 +47,7 @@
 		onSend,
 		onStop,
 		showHelperText = true,
-		uploadedFiles = $bindable([]),
+		uploadedFiles = $bindable([])
 	}: Props = $props();
 
 	let audioRecorder: AudioRecorder | undefined;
@@ -58,25 +64,13 @@
 	function getAcceptStringForFileType(fileType: 'image' | 'audio' | 'file' | 'pdf'): string {
 		switch (fileType) {
 			case 'image':
-				return [
-					...Object.values(ImageExtension),
-					...Object.values(ImageMimeType)
-				].join(',');
+				return [...Object.values(ImageExtension), ...Object.values(ImageMimeType)].join(',');
 			case 'audio':
-				return [
-					...Object.values(AudioExtension),
-					...Object.values(AudioMimeType)
-				].join(',');
+				return [...Object.values(AudioExtension), ...Object.values(AudioMimeType)].join(',');
 			case 'pdf':
-				return [
-					...Object.values(PdfExtension),
-					...Object.values(PdfMimeType)
-				].join(',');
+				return [...Object.values(PdfExtension), ...Object.values(PdfMimeType)].join(',');
 			case 'file':
-				return [
-					...Object.values(TextExtension),
-					TextMimeType.PLAIN
-				].join(',');
+				return [...Object.values(TextExtension), TextMimeType.PLAIN].join(',');
 			default:
 				return '';
 		}
@@ -92,7 +86,7 @@
 		} else {
 			fileAcceptString = undefined;
 		}
-		
+
 		// Use setTimeout to ensure the accept attribute is applied before opening dialog
 		setTimeout(() => {
 			fileInputRef?.click();
@@ -164,7 +158,7 @@
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
-				
+
 				onFileUpload?.([audioFile]);
 				isRecording = false;
 			} catch (error) {
@@ -220,7 +214,11 @@
 	});
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} bind:accept={fileAcceptString} onFileSelect={handleFileSelect} />
+<ChatFormFileInputInvisible
+	bind:this={fileInputRef}
+	bind:accept={fileAcceptString}
+	onFileSelect={handleFileSelect}
+/>
 
 <form
 	onsubmit={handleSubmit}
@@ -236,7 +234,7 @@
 			bind:this={textareaRef}
 			bind:value={message}
 			onKeydown={handleKeydown}
-			disabled={disabled}
+			{disabled}
 		/>
 
 		<ChatFormActions
