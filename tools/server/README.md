@@ -1143,6 +1143,8 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `parse_tool_calls`: Whether to parse the generated tool call.
 
+`parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
