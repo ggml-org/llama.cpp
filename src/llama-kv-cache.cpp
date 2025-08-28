@@ -540,7 +540,7 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 
     for (const auto & ubatch : ubatches) {
         // only find a suitable slot for the ubatch. don't modify the cells yet
-        const auto sinfo_new = find_slot(ubatch, true);
+        const auto sinfo_new = find_slot(ubatch, false);
         if (sinfo_new.empty()) {
             success = false;
             break;
