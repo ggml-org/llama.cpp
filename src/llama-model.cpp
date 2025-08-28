@@ -7589,7 +7589,6 @@ struct llm_build_modern_bert : public llm_graph_context {
                     LLM_NORM, il);
                 cb(x_attn_in, "attn_pre_norm", il);
             } else {
-                LLAMA_LOG_INFO("Identity Tensor\n");
                 cb(x_attn_in, "attn_pre_norm_identity", il);
             }
 
