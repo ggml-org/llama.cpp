@@ -30,7 +30,6 @@ function llamaCppBuildPlugin() {
                     const gzipPath = resolve('../public/index.html.gz');
 
                     if (!existsSync(indexPath)) {
-                        console.warn('⚠️  index.html not found, skipping gzip compression');
                         return;
                     }
 
@@ -114,7 +113,7 @@ export default defineConfig({
             {
                 extends: './vite.config.ts',
                 test: {
-                    name: 'storybook',
+                    name: 'ui',
                     environment: 'browser',
                     browser: {
                         enabled: true,
