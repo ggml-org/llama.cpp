@@ -10,7 +10,15 @@ if (MINGW)
 endif()
 
 set(TARGET_SRCS
-    server.cpp
+    main.cpp
+    server_app.hpp
+    server_app.cpp
+    http_routes.hpp  
+    http_routes.cpp
+    model_utils.hpp
+    model_utils.cpp
+    json_utils.hpp
+    json_utils.cpp
     utils.hpp
 )
 set(PUBLIC_ASSETS
