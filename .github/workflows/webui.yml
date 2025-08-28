@@ -64,8 +64,12 @@ jobs:
                   restore-keys: |
                       ${{ runner.os }}-node-modules-
 
-            - name: Run type checking and linting
+            - name: Run type checking
               run: npm run check
+              working-directory: tools/server/webui
+
+            - name: Run linting
+              run: npm run lint
               working-directory: tools/server/webui
 
     build:
