@@ -133,7 +133,6 @@ class ModelBase:
                 self.ftype = gguf.LlamaFileType.MOSTLY_BF16
 
         # Configure GGUF Writer
-        print(f"arch: {gguf.MODEL_ARCH_NAMES[self.model_arch]}")
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
