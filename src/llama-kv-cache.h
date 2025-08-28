@@ -21,9 +21,6 @@ class llama_kv_cache : public llama_memory_i {
 public:
     static uint32_t get_padding(const llama_cparams & cparams);
 
-    // this callback is used to filter out layers that should not be included in the cache
-    using layer_filter_cb = std::function<bool(int32_t il)>;
-
     struct stream_copy_info {
         bool empty() const {
             assert(ssrc.size() == sdst.size());
@@ -41,8 +38,8 @@ public:
         using idx_vec_t = std::vector<uint32_t>;
 
         // number of streams: ns = s1 - s0 + 1
-        llama_seq_id s0;
-        llama_seq_id s1;
+        uint32_t s0;
+        uint32_t s1;
 
         std::vector<llama_seq_id> strm; // [ns]
         std::vector<idx_vec_t>    idxs; // [ns]
@@ -82,18 +79,19 @@ public:
     using slot_info_vec_t = std::vector<slot_info>;
 
     llama_kv_cache(
-            const llama_model &  model,
-              layer_filter_cb && filter,
-                    ggml_type    type_k,
-                    ggml_type    type_v,
-                         bool    v_trans,
-                         bool    offload,
-                         bool    unified,
-                     uint32_t    kv_size,
-                     uint32_t    n_seq_max,
-                     uint32_t    n_pad,
-                     uint32_t    n_swa,
-               llama_swa_type    swa_type);
+            const llama_model & model,
+                    ggml_type   type_k,
+                    ggml_type   type_v,
+                         bool   v_trans,
+                         bool   offload,
+                         bool   unified,
+                     uint32_t   kv_size,
+                     uint32_t   n_seq_max,
+                     uint32_t   n_pad,
+                     uint32_t   n_swa,
+               llama_swa_type   swa_type,
+        const layer_filter_cb & filter,
+        const  layer_reuse_cb & reuse);
 
     ~llama_kv_cache() = default;
 
@@ -141,10 +139,7 @@ public:
     // graph_build API
     //
 
-    uint32_t get_n_kv() const;
-
-    // TODO: temporary
-    bool get_supports_set_rows() const;
+    uint32_t get_n_kv(const slot_info & sinfo) const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -216,10 +211,6 @@ private:
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
-
-    // env: LLAMA_SET_ROWS (temporary)
-    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
-    bool supports_set_rows = true;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
@@ -319,9 +310,6 @@ public:
     //
 
     uint32_t get_n_kv() const;
-
-    // TODO: temporary
-    bool get_supports_set_rows() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;

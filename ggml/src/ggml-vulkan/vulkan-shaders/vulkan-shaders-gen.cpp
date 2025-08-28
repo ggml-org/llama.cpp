@@ -68,6 +68,12 @@ const std::vector<std::string> type_names = {
     "bf16",
 };
 
+enum MatMulIdType {
+    NONE,
+    DEFAULT,
+    SUBGROUP,
+};
+
 namespace {
 void execute_command(const std::string& command, std::string& stdout_str, std::string& stderr_str) {
 #ifdef _WIN32
@@ -293,7 +299,7 @@ void string_to_spv(const std::string& _name, const std::string& in_fname, const 
     compiles.push_back(std::async(string_to_spv_func, _name, in_fname, defines, fp16, coopmat, coopmat2, f16acc));
 }
 
-void matmul_shaders(bool fp16, bool matmul_id, bool coopmat, bool coopmat2, bool f16acc) {
+void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool coopmat2, bool f16acc) {
     std::string load_vec = coopmat2 ? "1" : fp16 ? "8" : "4";
     std::string aligned_b_type_f32 = coopmat2 ? "float" : fp16 ? "mat2x4" : "vec4";
     std::string aligned_b_type_f16 = coopmat2 ? "float16_t" : fp16 ? "f16mat2x4" : "f16vec4";
@@ -303,9 +309,13 @@ void matmul_shaders(bool fp16, bool matmul_id, bool coopmat, bool coopmat2, bool
     };
     std::string shader_name = "matmul";
 
-    if (matmul_id) {
+    if (matmul_id_type == MatMulIdType::DEFAULT) {
         base_dict["MUL_MAT_ID"] = "1";
         shader_name = "matmul_id";
+    } else if (matmul_id_type == MatMulIdType::SUBGROUP) {
+        base_dict["MUL_MAT_ID"] = "1";
+        base_dict["MUL_MAT_ID_USE_SUBGROUPS"] = "1";
+        shader_name = "matmul_id_subgroup";
     }
 
     if (fp16) {
@@ -389,7 +399,7 @@ void matmul_shaders(bool fp16, bool matmul_id, bool coopmat, bool coopmat2, bool
         }
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
-        if (!coopmat && !coopmat2 && !matmul_id && (tname == "q4_0" || tname == "q4_1" || tname == "q5_0" || tname == "q5_1" || tname == "q8_0")) {
+        if (!coopmat && !coopmat2 && matmul_id_type == MatMulIdType::NONE && (tname == "q4_0" || tname == "q4_1" || tname == "q5_0" || tname == "q5_1" || tname == "q8_0")) {
             string_to_spv(shader_name + "_" + tname + "_q8_1", "mul_mmq.comp", merge_maps(base_dict, {{"FLOAT_TYPE", FLOAT_TYPE(tname)}, {data_a_key, "1"}, {"D_TYPE", "float"},}), fp16, coopmat, coopmat2, f16acc);
         }
 #endif
@@ -401,26 +411,28 @@ void process_shaders() {
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}};
 
     // matmul
-    for (const auto& matmul_id : {false, true}) {
+    for (const MatMulIdType& matmul_id_type : {MatMulIdType::NONE, MatMulIdType::DEFAULT, MatMulIdType::SUBGROUP}) {
         // No coopmats
         // fp32
-        matmul_shaders(false, matmul_id, false, false, false);
+        matmul_shaders(false, matmul_id_type, false, false, false);
 
         // fp16, fp32acc and fp16acc
-        matmul_shaders(true, matmul_id, false, false, false);
-        matmul_shaders(true, matmul_id, false, false, true);
+        matmul_shaders(true, matmul_id_type, false, false, false);
+        matmul_shaders(true, matmul_id_type, false, false, true);
 
+        if (matmul_id_type != MatMulIdType::DEFAULT) {
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-        // Coopmat, fp32acc and fp16acc
-        matmul_shaders(true, matmul_id, true, false, false);
-        matmul_shaders(true, matmul_id, true, false, true);
+            // Coopmat, fp32acc and fp16acc
+            matmul_shaders(true, matmul_id_type, true, false, false);
+            matmul_shaders(true, matmul_id_type, true, false, true);
 #endif
 
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-        // Coopmat2, fp32acc and fp16acc
-        matmul_shaders(true, matmul_id, false, true, false);
-        matmul_shaders(true, matmul_id, false, true, true);
+            // Coopmat2, fp32acc and fp16acc
+            matmul_shaders(true, matmul_id_type, false, true, false);
+            matmul_shaders(true, matmul_id_type, false, true, true);
 #endif
+        }
     }
 
     // flash attention
@@ -503,6 +515,7 @@ void process_shaders() {
     string_to_spv("norm_f32", "norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("group_norm_f32", "group_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("rms_norm_f32", "rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("rms_norm_partials_f32", "rms_norm_partials.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("rms_norm_back_f32", "rms_norm_back.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("l2_norm_f32", "l2_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 
@@ -538,13 +551,15 @@ void process_shaders() {
         s += std::string(dst_f16 ? "_f16" : "_f32");
         return s;
     };
-    for (std::string op : {"add", "sub", "mul", "div"}) {
+    for (std::string op : {"add", "sub", "mul", "div", "add_rms", }) {
     for (auto src0_f16 : {false, true}) {
     for (auto src1_f16 : {false, true}) {
     for (auto dst_f16  : {false, true}) {
     for (auto rte      : {false, true}) {
+        auto source = op == "add_rms" ? std::string("add") : op;
         auto name = op + get_suffix(src0_f16, src1_f16, dst_f16) + (rte ? "_rte" : "");
-        string_to_spv(name.c_str(), op + ".comp", {{"A_TYPE", get_type_str(src0_f16)}, {"B_TYPE", get_type_str(src1_f16)}, {"D_TYPE", get_type_str(dst_f16)}, {"FLOAT_TYPE", "float"}, {"RTE16", rte ? "1" : "0"}});
+        auto add_rms = op == "add_rms" ? "1" : "0";
+        string_to_spv(name.c_str(), source + ".comp", {{"A_TYPE", get_type_str(src0_f16)}, {"B_TYPE", get_type_str(src1_f16)}, {"D_TYPE", get_type_str(dst_f16)}, {"FLOAT_TYPE", "float"}, {"RTE16", rte ? "1" : "0"}, {"ADD_RMS" , add_rms}});
     }
     }
     }
@@ -687,7 +702,8 @@ void process_shaders() {
 
     string_to_spv("add_id_f32", "add_id.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
 
-    string_to_spv("multi_add_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"RTE16", "1"}});
+    string_to_spv("multi_add_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"RTE16", "1"}, {"ADD_RMS" , "0"}});
+    string_to_spv("multi_add_rms_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"RTE16", "1"}, {"ADD_RMS" , "1"}});
 
     for (auto &c : compiles) {
         c.wait();
@@ -745,7 +761,7 @@ void write_output_files() {
     }
 
     std::string suffixes[2] = {"_f32", "_f16"};
-    for (const char *op : {"add", "sub", "mul", "div"}) {
+    for (const char *op : {"add", "sub", "mul", "div", "add_rms"}) {
         fprintf(hdr, "extern unsigned char *%s_data[2][2][2][2];\n", op);
         fprintf(hdr, "extern uint64_t %s_len[2][2][2][2];\n", op);
         std::string data = "unsigned char *" + std::string(op) + "_data[2][2][2][2] = ";

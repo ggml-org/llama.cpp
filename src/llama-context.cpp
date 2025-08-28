@@ -103,16 +103,6 @@ llama_context::llama_context(
     cparams.kv_unified = params.kv_unified;
 
     {
-        const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : supports_set_rows;
-
-        if (!supports_set_rows && !cparams.kv_unified) {
-            LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);
-            cparams.kv_unified = true;
-        }
-    }
-
-    {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
         graph_reuse_disable = LLAMA_GRAPH_REUSE_DISABLE ? (atoi(LLAMA_GRAPH_REUSE_DISABLE) != 0) : graph_reuse_disable;
 
@@ -280,7 +270,7 @@ llama_context::llama_context(
     }
 
     // reserve worst-case graph
-    if (!hparams.vocab_only && memory) {
+    if (!hparams.vocab_only) {
         const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -292,11 +282,13 @@ llama_context::llama_context(
         int n_splits_tg = -1;
         int n_nodes_tg  = -1;
 
-        // simulate full KV cache
-
-        const auto mctx = memory->init_full();
-        if (!mctx) {
-            throw std::runtime_error("failed to initialize KV cache");
+        llama_memory_context_ptr mctx;
+        if (memory) {
+            LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
+            mctx = memory->init_full();
+            if (!mctx) {
+                throw std::runtime_error("failed to initialize memory module");
+            }
         }
 
         cross.v_embd.clear();
@@ -888,12 +880,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!supports_set_rows) {
-        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-        // overlap with device computation.
-        ggml_backend_sched_reset(sched.get());
-    }
-
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
@@ -1056,7 +1042,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
         if (!res) {
-            // the last ubatch failed or was aborted -> remove all positions of that ubatch from the KV cache
+            // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
             llama_pos pos_min[LLAMA_MAX_SEQ];
             for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
                 pos_min[s] = std::numeric_limits<llama_pos>::max();
@@ -1073,7 +1059,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     continue;
                 }
 
-                LLAMA_LOG_WARN("%s: removing KV cache entries for seq_id = %d, pos = [%d, +inf)\n", __func__, s, pos_min[s]);
+                LLAMA_LOG_WARN("%s: removing memory module entries for seq_id = %d, pos = [%d, +inf)\n", __func__, s, pos_min[s]);
 
                 memory->seq_rm(s, pos_min[s], -1);
             }
@@ -1223,12 +1209,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
-
-    if (!supports_set_rows) {
-        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-        // overlap with device computation.
-        ggml_backend_sched_reset(sched.get());
-    }
 
     return 0;
 }
@@ -1857,7 +1837,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     }
 
     if (memory != nullptr) {
-        LLAMA_LOG_DEBUG("%s: - writing KV self\n", __func__);
+        LLAMA_LOG_DEBUG("%s: - writing memory module\n", __func__);
         memory->state_write(io);
     }
 
@@ -1943,7 +1923,7 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
     }
 
     if (memory) {
-        LLAMA_LOG_DEBUG("%s: - reading KV self\n", __func__);
+        LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
         memory->state_read(io);
     }

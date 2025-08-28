@@ -2209,6 +2209,26 @@ struct test_count_equal : public test_case {
     double max_nmse_err() override {
         return 0.0;
     }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F32) {
+                // initialize with unique values to avoid ties
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<float> data(t->ne[0]);
+                    for (int i = 0; i < t->ne[0]; i++) {
+                        data[i] = i;
+                    }
+                    std::shuffle(data.begin(), data.end(), rng);
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
 };
 
 // GGML_OP_REPEAT
@@ -2769,6 +2789,49 @@ struct test_norm : public test_case {
     }
 };
 
+// GGML_OP_NORM + GGML_OP_MUL + GGML_OP_ADD
+struct test_norm_mul_add : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    float eps;
+    const bool broadcast;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "NORM_MUL_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne, eps, broadcast);
+    }
+
+    test_norm_mul_add(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {128, 2, 1, 1},
+            float eps = 1e-5f,
+            bool broadcast = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        std::array<int64_t, 4> broadcast_dims = {ne[0], ne[1] * 2, ne[2] * 2, ne[3] * 2};
+
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
+        ggml_tensor * w = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a); ggml_set_param(w); ggml_set_param(b);
+        ggml_set_name(a, "a"); ggml_set_name(w, "w"); ggml_set_name(b, "b");
+
+        // Use a, w and b early to avoid OP_NONE in graph
+        a = ggml_add(ctx, ggml_add(ctx, a, w), b);
+
+        ggml_tensor * n = ggml_norm(ctx, a, eps);
+        ggml_tensor * m = ggml_mul(ctx, n, w);
+        ggml_tensor * out = ggml_add(ctx, m, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
 // GGML_OP_RMS_NORM
 struct test_rms_norm : public test_case {
     const ggml_type type;
@@ -2858,6 +2921,7 @@ struct test_rms_norm_mul_add : public test_case {
     const std::array<int64_t, 4> ne;
     const float eps;
     const bool broadcast;
+    const bool multi_add; // test a sequence of adds feeding into rms_norm
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -2867,13 +2931,13 @@ struct test_rms_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, eps, broadcast);
+        return VARS_TO_STR5(type, ne, eps, broadcast, multi_add);
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
-            float eps = 1e-6f, bool broadcast = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+            float eps = 1e-6f, bool broadcast = false, bool multi_add = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0]*2, ne[1]*3, ne[2]*3, ne[3]*4};
@@ -2891,6 +2955,9 @@ struct test_rms_norm_mul_add : public test_case {
 
         // Use a, b and c early, so we don't end up with an OP_NONE between rms_norm and mul
         a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        if (multi_add) {
+            a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        }
         ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
         ggml_set_name(out, "out");
 
@@ -4300,19 +4367,31 @@ struct test_sum : public test_case {
 struct test_sum_rows : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const bool permute;
+    const bool slice;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR4(type, ne, permute, slice);
     }
 
     test_sum_rows(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            bool permute = false, bool slice = false)
+        : type(type), ne(ne), permute(permute), slice(slice) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
+
+        if (slice) {
+            a = ggml_view_4d(ctx, a,
+                             ne[0], ne[1], ne[2] / 2, ne[3] - 1,
+                             a->nb[1], a->nb[2] * 2, a->nb[3], /*offset=*/a->nb[3]);
+        }
+        if (permute) {
+            a = ggml_permute(ctx, a, 0, 2, 3, 1);
+        }
 
         ggml_tensor * out = ggml_sum_rows(ctx, a);
         ggml_set_name(out, "out");
@@ -4435,6 +4514,44 @@ struct test_group_norm : public test_case {
         ggml_tensor * out = ggml_group_norm(ctx, a, num_groups, eps);
         ggml_set_name(out, "out");
 
+        return out;
+    }
+};
+
+// GGML_OP_GROUP_NORM + GGML_OP_MUL + GGML_OP_ADD
+struct test_group_norm_mul_add : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    int num_groups;
+    float eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GROUP_NORM_MUL_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne, num_groups, eps);
+    }
+
+    test_group_norm_mul_add(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {128, 1, 1, 1},
+            int num_groups = 4,
+            float eps = 1e-5f)
+        : type(type), ne(ne), num_groups(num_groups), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * w = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a); ggml_set_param(w); ggml_set_param(b);
+        ggml_set_name(a, "a"); ggml_set_name(w, "w"); ggml_set_name(b, "b");
+        ggml_tensor * n = ggml_group_norm(ctx, a, num_groups, eps);
+        ggml_tensor * m = ggml_mul(ctx, n, w);
+        ggml_tensor * out = ggml_add(ctx, m, b);
+        ggml_set_name(out, "out");
         return out;
     }
 };
@@ -5829,6 +5946,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
+        test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, false));
+        test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
+    }
+    for (uint32_t n : {1, 511, 1025, 8192, 33*512}) {
+        for (bool multi_add : {false, true}) {
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add));
+        }
     }
 
     test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, {64, 5, 4, 3}, 1e-12f));
@@ -5976,6 +6100,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // test large experts*tokens
     for (bool b : {false, true}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, b, 32, 1024, 16));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 2, 2, b, 32, 8192, 64));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, b, 50, 200, 64));
     }
 
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 1, 1, false, 8, 16, 1));
@@ -6195,6 +6321,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_sum());
     test_cases.emplace_back(new test_sum_rows());
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, false));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, false, true));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, true));
     test_cases.emplace_back(new test_mean());
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
@@ -6207,6 +6336,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
+    test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
+    test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad_reflect_1d());
@@ -6215,8 +6346,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
 
-    for (int hsk : { 64, 80, 128, 192, 256, 576 }) {
-        for (int hsv : { 64, 80, 128, 192, 256, 512 }) {
+    for (int hsk : { 40, 64, 80, 128, 192, 256, 576 }) {
+        for (int hsv : { 40, 64, 80, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 576 && hsk != hsv) continue;
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
@@ -6350,6 +6481,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (ggml_type type_a : all_types) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
+            }
+        }
+    }
+
+    // qwen3-30b-a3b
+    for (int bs : {1, 4, 8, 512}) {
+        for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 128, 8, false, 768, bs, 2048, 1));
+            }
+        }
+    }
+
+    // gpt-oss-20b
+    for (int bs : {1, 4, 8, 512}) {
+        for (ggml_type type_a : {GGML_TYPE_MXFP4}) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 2880, bs, 2880, 1));
             }
         }
     }
