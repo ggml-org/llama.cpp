@@ -1269,6 +1269,14 @@ inline static vfloat32m2_t ggml_v_expf_m2(vfloat32m2_t x, int vl) {
         vl);
 }
 
+// computes silu x/(1+exp(-x)) in single precision vector
+inline static vfloat32m2_t ggml_v_silu_m2(vfloat32m2_t x, int vl) {
+    const vfloat32m2_t neg_x = __riscv_vfneg_v_f32m2(x, vl);
+    const vfloat32m2_t exp_neg_x = ggml_v_expf_m2(neg_x, vl);
+    const vfloat32m2_t one_plus_exp_neg_x = __riscv_vfadd_vf_f32m2(exp_neg_x, 1.0f, vl);
+    return __riscv_vfdiv_vv_f32m2(x, one_plus_exp_neg_x, vl);
+}
+
 #endif // __ARM_NEON / __AVX2__ / __SSE2__ / __riscv_v_intrinsic
 
 inline static void ggml_vec_silu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
