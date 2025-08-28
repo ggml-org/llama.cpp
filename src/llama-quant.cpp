@@ -649,6 +649,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q8_0
     };
 
+    constexpr double epsilon = 1e-12;
+
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
         const size_t row_sz = ggml_row_size(typ, n_per_row);
@@ -1193,7 +1195,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double err = cur.error - nxt.error;
             err = std::max(err, 0.0);
             double ratio = err / (double)(delta_bytes * 8ull);
-            if (ratio > best.ratio + eps || (std::abs(ratio - best.ratio) <= eps && delta_bytes < best.delta_bytes)) {
+            if (ratio > best.ratio + epsilon || (std::abs(ratio - best.ratio) <= epsilon && delta_bytes < best.delta_bytes)) {
                 best = upgrade{ i, j, err, delta_bytes, ratio };
             }
         }
@@ -1208,7 +1210,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t now_bytes = current_total_bytes();
         size_t next_bytes = now_bytes + up.delta_bytes;
         double bpw_next = (double)next_bytes * 8.0 / (double)tw;
-        if (bpw_next <= target_bpw + 1e-12) {
+        if (bpw_next <= target_bpw + epsilon) {
             all[up.idx].choice = up.next;
             bpw_now = bpw_next;
         } else {
@@ -1241,7 +1243,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double ratio = err / (double)(delta_bytes * 8ull);
 
             double over_gap = std::abs(bpw_over - (double)target_bpw);
-            if (over_gap < best_over_gap - 1e-12 || (std::abs(over_gap - best_over_gap) <= 1e-12 && ratio > best_over.ratio)) {
+            if (over_gap < best_over_gap - epsilon || (std::abs(over_gap - best_over_gap) <= epsilon && ratio > best_over.ratio)) {
                 best_over_gap = over_gap;
                 best_over = upgrade{ i, j, err, delta_bytes, ratio };
             }
