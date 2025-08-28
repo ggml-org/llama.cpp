@@ -159,6 +159,7 @@
 					id={item.id}
 					name={item.name}
 					type={item.type}
+					size={item.size}
 					{readonly}
 					onRemove={onFileRemove}
 					textContent={item.textContent}
