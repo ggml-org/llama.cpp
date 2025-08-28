@@ -141,9 +141,6 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
-    // TODO: temporary
-    bool get_supports_set_rows() const;
-
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -214,10 +211,6 @@ private:
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
-
-    // env: LLAMA_SET_ROWS (temporary)
-    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
-    bool supports_set_rows = true;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
@@ -317,9 +310,6 @@ public:
     //
 
     uint32_t get_n_kv() const;
-
-    // TODO: temporary
-    bool get_supports_set_rows() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
