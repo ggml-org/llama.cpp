@@ -248,7 +248,7 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
         _mm_storeu_ps(y + i, ggml_v_silu(_mm_loadu_ps(x + i)));
     }
 #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
-    int vlen = svcntw();
+    const int vlen = svcntw();
     for (; i < n; i += vlen) {
         svbool_t pg = svwhilelt_b32_s32(i, n);
         svst1_f32(pg, y + i, ggml_v_silu(pg, svld1_f32(pg, x + i)));
