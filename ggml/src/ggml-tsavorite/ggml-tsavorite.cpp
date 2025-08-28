@@ -416,6 +416,11 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           kernel_pipeline->kernel_name = "TXE_SQRT";
           flag = true;
           break;
+      case GGML_TSAVORITE_KERNEL_TYPE_SQR:
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sqr_host;
+          kernel_pipeline->kernel_name = "TXE_SQR";
+          flag = true;
+          break;
       case GGML_TSAVORITE_KERNEL_TYPE_NEG:
           kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_neg_host;
           kernel_pipeline->kernel_name = "TXE_NEG";
@@ -589,6 +594,7 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_MULT,               true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_DIV,                true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SQRT,               true);
+    GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SQR,                true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_NEG,                true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_ABS,                true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SIN,                true);
@@ -693,6 +699,7 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_MUL:
   case GGML_OP_DIV:
   case GGML_OP_SQRT:
+  case GGML_OP_SQR:
   case GGML_OP_SIN:
     break;
   case GGML_OP_UNARY:
@@ -841,6 +848,10 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
       break;
     case GGML_OP_SQRT:
       kernel_type = GGML_TSAVORITE_KERNEL_TYPE_SQRT;
+      num_of_input_tensors = TSAVORITE_UNARY_INPUT_TENSORS;
+      break;
+    case GGML_OP_SQR:
+      kernel_type = GGML_TSAVORITE_KERNEL_TYPE_SQR;
       num_of_input_tensors = TSAVORITE_UNARY_INPUT_TENSORS;
       break;
     case GGML_OP_SIN:
@@ -1822,6 +1833,7 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_DIV:
   case GGML_OP_MUL:
   case GGML_OP_SQRT:
+  case GGML_OP_SQR:
   case GGML_OP_SIN:
     break;
   case GGML_OP_UNARY:
