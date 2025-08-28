@@ -1,5 +1,4 @@
 import { ChatService } from '$lib/services/chat';
-import { slotsService } from '$lib/services/slots';
 
 /**
  * Server properties store
