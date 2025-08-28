@@ -1272,8 +1272,18 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             int tmp, tmp2;
             float ftmp, ft2;
+            const uint8_t * restrict q40;
+            const uint8_t * restrict q41;
+            const uint8_t * restrict q42;
+            const uint8_t * restrict q43;
+            const int8_t  * restrict q80;
+            const int8_t  * restrict q81;
+            const int8_t  * restrict q82;
+            const int8_t  * restrict q83;
+            int s0, s1, s2, s3;
 
             __asm__ __volatile__(
+                "li %[s1], 8\n\t"
                 "vsetivli zero, 4, e32, m1, ta, ma\n\t"
                 "vle32.v v1, (%[s6b])\n\t"
                 "vslide1down.vx v1, v1, zero\n\t"
@@ -1287,14 +1297,13 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 "vslide1up.vx v5, v4, zero\n\t" // {0, 4}
                 "vsrl.vi v6, v1, 6\n\t"
                 "vsrl.vv v7, v2, v5\n\t"
+                "vsse32.v v8, (%[utmp]), %[s1]\n\t"
                 "vand.vx v0, v6, %[kmask3]\n\t"
                 "vand.vx v2, v7, %[kmask2]\n\t"
                 "vsll.vi v6, v0, 4\n\t"
-                "li %[t2], 8\n\t"
-                "addi %[t1], %[utmp], 4\n\t"
+                "addi %[s0], %[utmp], 4\n\t"
                 "vor.vv v1, v6, v2\n\t"
-                "vsse32.v v8, (%[utmp]), %[t2]\n\t"
-                "vsse32.v v1, (%[t1]), %[t2]\n\t"
+                "vsse32.v v1, (%[s0]), %[s1]\n\t"
                 "vsetivli zero, 8, e16, m1, ta, ma\n\t"
                 "vle32.v v2, (%[bsums])\n\t"
                 "vnsrl.wi v0, v2, 0\n\t"
@@ -1307,107 +1316,84 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 "vredsum.vs v0, v6, v16\n\t"
                 "vredsum.vs v0, v7, v0\n\t"
                 "vfcvt.f.x.v v0, v0\n\t"
-                "vfmv.f.s %[ftmp], v0"
-                : [t1] "=&r" (tmp), [t2] "=&r" (tmp2), [ftmp] "=&f" (ftmp)
-                : [bsums] "r" (y[i].bsums), [mins] "r" (mins), [utmp] "r" (utmp)
-                , [s6b] "r" (&x[i]), [kmask1] "r" (kmask1)
-                , [kmask2] "r" (kmask2), [kmask3] "r" (kmask3)
-                : "memory"
-                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
-                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
-                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
-                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
-            );
-            sumf -= dmin * ftmp;
-
-            const uint8_t * restrict q40 = x[i].qs + 0;
-            const uint8_t * restrict q41 = x[i].qs + 16;
-            const uint8_t * restrict q42 = x[i].qs + 32;
-            const uint8_t * restrict q43 = x[i].qs + 48;
-            const int8_t  * restrict q80;
-            const int8_t  * restrict q81;
-            const int8_t  * restrict q82;
-            const int8_t  * restrict q83;
-
-            ftmp = 0;
-            const uint8_t * scale = scales;
-
-            int s0, s1, s2, s3;
-            __asm__ __volatile__(
+                "vfmv.f.s %[ftmp], v0\n\t"
                 "vsetivli zero, 16, e8, m1, ta, ma\n\t"
-                "vle8.v v0, (%[q40])\n\t"
-                "addi %[q80], %[ys], 0\n\t"
-                "addi %[q40], %[q40], 64\n\t"
+                "vle8.v v0, (%[xs])\n\t"
+                "fnmsub.s %[sumf], %[dmin], %[ftmp], %[sumf]\n\t"
+                "addi %[q40], %[xs], 64\n\t"
+                "addi %[q41], %[xs], 16\n\t"
+                "addi %[q42], %[xs], 32\n\t"
+                "addi %[q43], %[xs], 48\n\t"
+                "addi %[q80], %[ys], 64\n\t"
                 "vle8.v v1, (%[q41])\n\t"
+                "vle8.v v2, (%[q42])\n\t"
                 "addi %[q81], %[ys], 16\n\t"
                 "addi %[q41], %[q41], 64\n\t"
-                "vle8.v v2, (%[q42])\n\t"
                 "addi %[q82], %[ys], 32\n\t"
-                "addi %[q42], %[q42], 64\n\t"
                 "vle8.v v3, (%[q43])\n\t"
+                "vle8.v v8, (%[ys])\n\t"
+                "addi %[q42], %[q42], 64\n\t"
                 "addi %[q83], %[ys], 48\n\t"
                 "addi %[q43], %[q43], 64\n\t"
-                "vle8.v v8, (%[q80])\n\t"
                 "vsrl.vi v4, v0, 4\n\t"
-                "addi %[q80], %[q80], 64\n\t"
                 "vle8.v v9, (%[q81])\n\t"
+                "vle8.v v10, (%[q82])\n\t"
                 "vand.vi v0, v0, 0xF\n\t"
                 "addi %[q81], %[q81], 64\n\t"
-                "vle8.v v10, (%[q82])\n\t"
                 "vsrl.vi v5, v1, 4\n\t"
                 "addi %[q82], %[q82], 64\n\t"
                 "vle8.v v11, (%[q83])\n\t"
+                "vle8.v v12, (%[q80])\n\t"
                 "vand.vi v1, v1, 0xF\n\t"
                 "addi %[q83], %[q83], 64\n\t"
-                "vle8.v v12, (%[q80])\n\t"
                 "vsrl.vi v6, v2, 4\n\t"
                 "addi %[q80], %[q80], 64\n\t"
                 "vle8.v v13, (%[q81])\n\t"
+                "vle8.v v14, (%[q82])\n\t"
                 "vand.vi v2, v2, 0xF\n\t"
                 "addi %[q81], %[q81], 64\n\t"
-                "vle8.v v14, (%[q82])\n\t"
                 "vsrl.vi v7, v3, 4\n\t"
                 "addi %[q82], %[q82], 64\n\t"
+                "vwmul.vv v16, v0, v8\n\t"
                 "vle8.v v15, (%[q83])\n\t"
+                "vle8.v v0, (%[q40])\n\t"
                 "vand.vi v3, v3, 0xF\n\t"
                 "addi %[q83], %[q83], 64\n\t"
-                "vwmul.vv v16, v0, v8\n\t"
                 "vwmul.vv v24, v2, v12\n\t"
                 "vwmul.vv v20, v4, v10\n\t"
                 "vwmul.vv v28, v6, v14\n\t"
                 "vwmacc.vv v16, v1, v9\n\t"
+                "vle8.v v1, (%[q41])\n\t"
+                "vle8.v v2, (%[q42])\n\t"
                 "vwmacc.vv v24, v3, v13\n\t"
                 "vwmacc.vv v20, v5, v11\n\t"
                 "vwmacc.vv v28, v7, v15\n\t"
-                "vle8.v v0, (%[q40])\n\t"
                 "addi %[q40], %[q80], 64\n\t"
-                "vle8.v v1, (%[q41])\n\t"
                 "addi %[q41], %[q81], 64\n\t"
-                "vle8.v v2, (%[q42])\n\t"
-                "addi %[q42], %[q82], 64\n\t"
                 "vle8.v v3, (%[q43])\n\t"
-                "addi %[q43], %[q83], 64\n\t"
                 "vle8.v v8, (%[q80])\n\t"
+                "addi %[q42], %[q82], 64\n\t"
+                "addi %[q43], %[q83], 64\n\t"
                 "vsrl.vi v4, v0, 4\n\t"
                 "vle8.v v9, (%[q81])\n\t"
-                "vand.vi v0, v0, 0xF\n\t"
                 "vle8.v v10, (%[q82])\n\t"
+                "vand.vi v0, v0, 0xF\n\t"
                 "vsrl.vi v5, v1, 4\n\t"
-                "vle8.v v11, (%[q83])\n\t"
-                "vand.vi v1, v1, 0xF\n\t"
-                "vle8.v v12, (%[q40])\n\t"
-                "vsrl.vi v6, v2, 4\n\t"
-                "vle8.v v13, (%[q41])\n\t"
-                "vand.vi v2, v2, 0xF\n\t"
-                "vle8.v v14, (%[q42])\n\t"
                 "vsrl.vi v7, v3, 4\n\t"
-                "vle8.v v15, (%[q43])\n\t"
                 "vand.vi v3, v3, 0xF\n\t"
+                "vle8.v v11, (%[q83])\n\t"
+                "vle8.v v12, (%[q40])\n\t"
+                "vand.vi v1, v1, 0xF\n\t"
+                "vsrl.vi v6, v2, 4\n\t"
+                "vand.vi v2, v2, 0xF\n\t"
                 "vwmul.vv v18, v0, v8\n\t"
+                "vle8.v v13, (%[q41])\n\t"
+                "vle8.v v14, (%[q42])\n\t"
                 "vwmul.vv v26, v2, v12\n\t"
                 "vwmul.vv v22, v4, v10\n\t"
                 "vwmul.vv v30, v6, v14\n\t"
                 "vwmacc.vv v18, v1, v9\n\t"
+                "vle8.v v15, (%[q43])\n\t"
                 "vwmacc.vv v26, v3, v13\n\t"
                 "vwmacc.vv v22, v5, v11\n\t"
                 "vwmacc.vv v30, v7, v15\n\t"
@@ -1444,12 +1430,14 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 "vfmv.f.s %[ftmp], v1\n\t"
                 "fadd.s %[ft2], %[ft2], %[ftmp]\n\t"
                 "fmadd.s %[sumf], %[d], %[ft2], %[sumf]"
-                : [tmp] "=&r" (tmp), [ftmp] "=&f" (ftmp), [sumf] "+&f" (sumf), [ft2] "=&f" (ft2)
+                : [ftmp] "=&f" (ftmp), [sumf] "+&f" (sumf), [ft2] "=&f" (ft2)
                 , [s0] "=&r" (s0), [s1] "=&r" (s1), [s2] "=&r" (s2), [s3] "=&r" (s3)
-                , [q40] "+&r" (q40), [q41] "+&r" (q41), [q42] "+&r" (q42), [q43] "+&r" (q43)
+                , [q40] "=&r" (q40), [q41] "=&r" (q41), [q42] "=&r" (q42), [q43] "=&r" (q43)
                 , [q80] "=&r" (q80), [q81] "=&r" (q81), [q82] "=&r" (q82), [q83] "=&r" (q83)
-                , [scale] "+&r" (scale)
-                : [d] "f" (d), [ys] "r" (y[i].qs)
+                : [d] "f" (d), [ys] "r" (y[i].qs), [xs] "r" (x[i].qs), [scale] "r" (scales)
+                , [bsums] "r" (y[i].bsums), [mins] "r" (mins), [utmp] "r" (utmp)
+                , [s6b] "r" (&x[i]), [kmask1] "r" (kmask1), [dmin] "f" (dmin)
+                , [kmask2] "r" (kmask2), [kmask3] "r" (kmask3)
                 : "memory"
                 , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
                 , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
