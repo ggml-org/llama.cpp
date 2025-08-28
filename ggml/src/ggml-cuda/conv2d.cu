@@ -88,10 +88,10 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
         kernel_bounds bounds = calculate_kernel_bounds(out_x, out_y, P);
 
         for (int64_t ky = bounds.y_min; ky < bounds.y_max; ++ky) {
-            int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
+            const int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
 
             for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
-                int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
+                const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
 
                 T input_val;
                 if (std::is_same<T, half>::value) {
@@ -111,9 +111,7 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
 }
 
 template <typename T>
-static void conv2d_cuda(const float * X_D, const T * K_D, float * Y_D, const conv_params P, cudaStream_t st)
-
-{
+static void conv2d_cuda(const float * X_D, const T * K_D, float * Y_D, const conv_params P, cudaStream_t st) {
     const int blocks = (P.TOTAL + CUDA_CONV2D_BLOCK_SIZE - 1) / CUDA_CONV2D_BLOCK_SIZE;
     conv2d_kernel<T, whcn_layout><<<blocks, CUDA_CONV2D_BLOCK_SIZE, 0, st>>>(X_D, K_D, Y_D, P);
 }
