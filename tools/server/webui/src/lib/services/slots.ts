@@ -1,5 +1,6 @@
 import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
 import { serverStore } from '$lib/stores/server.svelte';
+import { SLOTS_DEBOUNCE_TIME } from '$lib/constants/debounce';
 
 export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
@@ -96,7 +97,7 @@ export class SlotsService {
 		const timeSinceLastUpdate = currentTime - this.lastUpdateTime;
 
 		// For the first few calls, use shorter debouncing to get tokens/sec faster
-		const debounceTime = this.tokenRateHistory.length < 2 ? 50 : 100;
+		const debounceTime = this.tokenRateHistory.length < 2 ? 50 : SLOTS_DEBOUNCE_TIME;
 
 		if (timeSinceLastUpdate < debounceTime) {
 			if (!this.pendingUpdate) {
