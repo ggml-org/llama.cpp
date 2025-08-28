@@ -2696,11 +2696,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     for(int i = 0; i < n_layer; ++i) {
                         auto& layer = layers[i];
                         
-                        // layer 0 uses identity so we dont need weights for said layer
                         if ( i != 0 ) {
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        
                         }
                         else{
+                            // layer 0 uses identity so we dont need weights for said layer
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
                         }
 
@@ -7546,14 +7547,14 @@ struct llm_build_modern_bert : public llm_graph_context {
         const int64_t n_head        = hparams.n_head();
         const int64_t n_head_kv     = hparams.n_head_kv();
         const int64_t n_embd_head   = hparams.n_embd_head_v;
-        const int64_t n_embd_gqa    = hparams.n_embd_v_gqa(); // == n_head_kv * n_embd_head
+        const int64_t n_embd_gqa    = hparams.n_embd_v_gqa(); 
         const int64_t n_tokens      = ubatch.n_tokens;
         const int64_t n_ff          = hparams.n_ff();
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
         // RoPE params
-        const int32_t rope_type   = LLAMA_ROPE_TYPE_NEOX; // ModernBERT uses rotary
+        const int32_t rope_type   = LLAMA_ROPE_TYPE_NEOX; //  uses rotary
         const int32_t n_rot       = hparams.n_rot;
         const int32_t n_ctx_orig  = hparams.n_ctx_train;
 
@@ -7561,7 +7562,7 @@ struct llm_build_modern_bert : public llm_graph_context {
         ggml_tensor * inpL;
         ggml_tensor * inp_pos = nullptr;
 
-        // ModernBERT needs positions for RoPE
+        //  needs positions for RoPE
         inp_pos = build_inp_pos();
 
         // embeddings (token + optional type), NO absolute pos embed
@@ -7583,7 +7584,7 @@ struct llm_build_modern_bert : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * x = inpL;
 
-            // pre-attention norm (attn_norm). Layer 0 may be Identity() -> nullptr
+            // pre attention norm (attn_norm). Layer 0 may be Identity() -> nullptr
             ggml_tensor * x_attn_in = x;
             if (model.layers[il].attn_norm) {
                 x_attn_in = build_norm(x,
@@ -7592,6 +7593,7 @@ struct llm_build_modern_bert : public llm_graph_context {
                     LLM_NORM, il);
                 cb(x_attn_in, "attn_pre_norm", il);
             } else {
+                LLAMA_LOG_INFO("Identity Tensor\n");
                 cb(x_attn_in, "attn_pre_norm_identity", il);
             }
 
@@ -7601,7 +7603,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * Kcur;
             ggml_tensor * Vcur;
 
-            GGML_ASSERT(model.layers[il].wqkv); // ModernBERT uses fused QKV
+            GGML_ASSERT(model.layers[il].wqkv); // fused QKV
             qkv = build_lora_mm(model.layers[il].wqkv, x_attn_in);
             cb(qkv, "wqkv", il);
 
@@ -7615,7 +7617,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_gqa, n_tokens, qkv->nb[1], 1*sizeof(float)*(n_embd)));
             Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_gqa, n_tokens, qkv->nb[1], 1*sizeof(float)*(n_embd + n_embd_gqa)));
 
-            // Optional per Q/K 
+            // optional per Q/K 
             if (model.layers[il].attn_q_norm) {
                 Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, model.layers[il].attn_q_norm_b, LLM_NORM, il);
             }
@@ -7623,12 +7625,12 @@ struct llm_build_modern_bert : public llm_graph_context {
                 Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, model.layers[il].attn_k_norm_b, LLM_NORM, il);
             }
 
-            // Heads
+            // heads
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            // RoPE (NEOX) on Q and K
+            // RoPE (NEOX ... maybe?) on Q and K
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                                  n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
@@ -7650,99 +7652,33 @@ struct llm_build_modern_bert : public llm_graph_context {
                 il);
             cb(attn_out, "attn_out", il);
 
-            // Residual after attention
+            // residual after attention
             ggml_tensor * cur_attn = ggml_add(ctx0, attn_out, x);
 
-            // If we subselect outputs, do it at the last layer after attn resid
+            // ifwe subselect outputs, do it at the last layer after attn resid
             if (il == n_layer - 1 && inp_out_ids) {
                 cur_attn = ggml_get_rows(ctx0,  cur_attn, inp_out_ids);
                 x        = ggml_get_rows(ctx0,  x,        inp_out_ids);
             }
 
-            // pre-MLP norm (mlp_norm)
+            // pre mlp norm 
             ggml_tensor * h = build_norm(cur_attn,
                                          model.layers[il].ffn_norm,
                                          model.layers[il].ffn_norm_b,
                                          LLM_NORM, il);
             cb(h, "mlp_pre_norm", il);
 
-            // MLP (prefer GEGLU if gate exists or up has 2*n_ff rows)
-            ggml_tensor * mlp_out = nullptr;
-            ggml_tensor * ffn_gate_view = model.layers[il].ffn_gate;
-            ggml_tensor * ffn_up_view   = model.layers[il].ffn_up;
+            // GEGLU because we will split ffn_up which has shape [n_embd, n_ff * 2] and ffn_down has shape [n_ff, n_embd]
+            ggml_tensor * mlp_out = build_ffn(
+                h,
+                model.layers[il].ffn_up,               /*up_b*/   NULL,           /*up_shexp*/   NULL,
+                /*gate*/       NULL         ,          /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
+                model.layers[il].ffn_down,             /*down_b*/ NULL,           /*down_shexp*/ NULL,
+                /*act_scales*/ NULL,
+                LLM_FFN_GEGLU, LLM_FFN_PAR, il
+            );
 
-            if (ffn_gate_view == nullptr && ffn_up_view) {
-                
-                // Case A: weight stored as (2*ffn, hidden)  -> split rows into two (ffn x hidden)
-                if( ffn_up_view->ne[0] == 2 * n_ff and ffn_up_view->ne[1] == n_embd) {
-
-                    // top half, (ffn up)
-                    ffn_up_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
-                                   /*ne0*/ n_ff, /*ne1*/ n_embd,
-                                   /*nb1*/ model.layers[il].ffn_up->nb[1],
-                                   /*offset_bytes*/ (size_t)0);
-                    // bottom half (gate)
-                    ffn_gate_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
-                                                /*ne0*/ n_ff, /*ne1*/ n_embd,
-                                                /*nb1*/ model.layers[il].ffn_up->nb[1],
-                      
-                                                /*offset_bytes*/ (size_t)n_ff * model.layers[il].ffn_up->nb[1]);
-                }
-
-                /*
-                else if ( ffn_up_view->ne[0] == n_embd && ffn_up_view->ne[1] == 2 * n_ff) {
-                    // top half
-                    LLAMA_LOG_INFO("Case B:\n");
-                    ffn_up_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
-                           n_embd, n_ff,
-                           model.layers[il].ffn_up->nb[1],
-                           0);
-
-                    ffn_up_view = ggml_cont(ctx0, ffn_up_view);
-
-                    ffn_gate_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
-                                                n_embd, n_ff,
-                                                model.layers[il].ffn_up->nb[1],
-                                                n_ff * model.layers[il].ffn_up->nb[0]);
-                    ffn_gate_view = ggml_cont(ctx0, ffn_gate_view);
-                }
-                */
-                //ggml_tensor * ffn_down_view = model.layers[il].ffn_down;
-                //LLAMA_LOG_INFO("ffn shapes: Up: {%lld, %lld},  Gate: {%lld, %lld},  Down: {%lld, %lld}\n",
-                //                              ffn_up_view->ne[0], ffn_up_view->ne[1], ffn_gate_view->ne[0], ffn_gate_view->ne[1], ffn_down_view->ne[0], ffn_down_view->ne[1]);
-                /*
-            ggml_tensor * cur,
-         ggml_tensor * up,
-         ggml_tensor * up_b,
-         ggml_tensor * up_s,
-         ggml_tensor * gate,
-         ggml_tensor * gate_b,
-         ggml_tensor * gate_s,
-         ggml_tensor * down,
-         ggml_tensor * down_b,
-         ggml_tensor * down_s,
-         ggml_tensor * act_scales,*/
-                mlp_out = build_ffn(
-                    h,
-                    model.layers[il].ffn_up,               /*up_b*/   NULL,           /*up_shexp*/   NULL,
-                    NULL         ,    /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
-                    model.layers[il].ffn_down, /*down_b*/ NULL,           /*down_shexp*/ NULL,
-                    /*act_scales*/ NULL,
-                    LLM_FFN_GEGLU, LLM_FFN_PAR, il
-                );
-                cb(mlp_out, "ffn_out_geglu", il);   
-            } else {
-                mlp_out = build_ffn(
-                    h,
-                    model.layers[il].ffn_up,   NULL,    NULL,
-                    model.layers[il].ffn_gate, NULL,    NULL,
-                    model.layers[il].ffn_down, NULL,    NULL,
-                    NULL,
-                    LLM_FFN_GEGLU, LLM_FFN_PAR, il
-                );
-                cb(mlp_out, "ffn_out_geglu", il);
-            }
-
+            cb(mlp_out, "ffn_out_geglu", il);   
             // Residual after MLP
             ggml_tensor * cur_layer = ggml_add(ctx0, mlp_out, cur_attn);
 
@@ -7750,7 +7686,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             inpL = cur_layer;
         }
 
-        // 9) final model norm (final_norm)
+        // final model norm (final_norm)
         cur = build_norm(inpL, model.output_norm, model.output_norm_b, LLM_NORM, -1);
         cb(cur, "final_norm", -1);
 
