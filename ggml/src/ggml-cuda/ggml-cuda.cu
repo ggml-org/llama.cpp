@@ -12,6 +12,7 @@
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
+#include "ggml-cuda/conv2d.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/conv2d-transpose.cuh"
 #include "ggml-cuda/convert.cuh"
@@ -204,6 +205,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
     GGML_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: no\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
+
+    std::vector<std::pair<int, std::string>> turing_devices_without_mma;
     for (int id = 0; id < info.device_count; ++id) {
         int device_vmm = 0;
 
@@ -261,7 +264,25 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n",
                         id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
-#endif // defined(GGML_USE_HIP)
+        std::string device_name(prop.name);
+        if (device_name == "NVIDIA GeForce MX450") {
+            turing_devices_without_mma.push_back({ id, device_name });
+        } else if (device_name == "NVIDIA GeForce MX550") {
+            turing_devices_without_mma.push_back({ id, device_name });
+        } else if (device_name.substr(0, 21) == "NVIDIA GeForce GTX 16") {
+            turing_devices_without_mma.push_back({ id, device_name });
+        }
+#endif  // defined(GGML_USE_HIP)
+    }
+
+    if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && !turing_devices_without_mma.empty()) {
+        GGML_LOG_INFO("The following devices will have suboptimal performance due to a lack of tensor cores:\n");
+        for (size_t device_pos = 0; device_pos < turing_devices_without_mma.size(); device_pos++) {
+            GGML_LOG_INFO(
+                "  Device %d: %s\n", turing_devices_without_mma[device_pos].first, turing_devices_without_mma[device_pos].second.c_str());
+        }
+        GGML_LOG_INFO(
+            "Consider compiling with CMAKE_CUDA_ARCHITECTURES=61-virtual;80-virtual and DGGML_CUDA_FORCE_MMQ to force the use of the Pascal code for Turing.\n");
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -2431,6 +2452,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_IM2COL:
             ggml_cuda_op_im2col(ctx, dst);
             break;
+        case GGML_OP_CONV_2D:
+            ggml_cuda_op_conv2d(ctx, dst);
+            break;
         case GGML_OP_CONV_2D_DW:
             ggml_cuda_op_conv2d_dw(ctx, dst);
             break;
@@ -3086,7 +3110,7 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
         return false;
     }
 
-#if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA)
+#if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA) || defined(GGML_USE_HIP)
     cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
     if (err != cudaSuccess) {
         // clear the error
@@ -3481,6 +3505,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
         case GGML_OP_IM2COL:
+        case GGML_OP_CONV_2D:
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_2D:
         case GGML_OP_POOL_2D:

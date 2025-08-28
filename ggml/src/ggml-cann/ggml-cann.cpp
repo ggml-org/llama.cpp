@@ -2251,11 +2251,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
-    // check environment LLAMA_SET_ROWS
-    if (!cann_ctx->support_set_rows) {
-        use_cann_graph = false;
-    }
-
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());
@@ -2336,7 +2331,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2354,7 +2349,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2505,6 +2500,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         case GGML_OP_FLASH_ATTN_EXT:{
+#ifdef ASCEND_310P
+            // FA not support on 310p device
+            return false;
+#endif
             // derived from [ggml-cuda.cu]
             if(op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16){
                 return false;
@@ -2528,6 +2527,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             if (op->src[0]->ne[0] == 576) {
                 // DeepSeek MLA
+                return false;
+            }
+            if (op->src[0]->ne[0] % 16 != 0) {
+                // TODO: padding to support
                 return false;
             }
             float logitSoftcap = 0.0f;
