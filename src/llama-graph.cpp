@@ -645,8 +645,11 @@ ggml_tensor * llm_graph_context::build_ffn(
    llm_ffn_gate_type   type_gate,
                  int   il) const {
 
-    
+    LLAMA_LOG_INFO("building lora: up is {%lld, %lld}\n input is {%lld, %lld}\n", up->ne[0], up->ne[1], cur->ne[0], cur->ne[1]);
+
     ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
+    LLAMA_LOG_INFO("Building FFN\n");
+    LLAMA_LOG_INFO("built lora: tmp is {%lld, %lld}\n", tmp->ne[0], tmp->ne[1]);
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -669,6 +672,8 @@ ggml_tensor * llm_graph_context::build_ffn(
             case LLM_FFN_PAR:
                 {
                     cur = build_lora_mm(gate, cur);
+                    LLAMA_LOG_INFO("built lora: cur is {%lld, %lld}\n", cur->ne[0], cur->ne[1]);
+
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -685,6 +690,10 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     } else {
         cur = tmp;
+    }
+
+    if( gate && type_gate == LLM_FFN_PAR ) {
+        LLAMA_LOG_INFO("Gate Exists and In Paralell\n");
     }
 
     switch (type_op) {
@@ -735,6 +744,7 @@ ggml_tensor * llm_graph_context::build_ffn(
         case LLM_FFN_GEGLU:
             {
                 cur = ggml_geglu(ctx0, cur);
+                LLAMA_LOG_INFO("geglu split: cur is {%lld, %lld}\n", cur->ne[0], cur->ne[1]);
                 cb(cur, "ffn_geglu", il);
             } break;
         case LLM_FFN_REGLU:
@@ -747,12 +757,16 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     if (gate && type_gate == LLM_FFN_PAR) {
+        LLAMA_LOG_INFO("cur @ tmp: cur is {%lld, %lld}\n tmp is {%lld, %lld}\n", cur->ne[0], cur->ne[1], tmp->ne[0], tmp->ne[1]);
         cur = ggml_mul(ctx0, cur, tmp);
+        LLAMA_LOG_INFO("res is {%lld, %lld}\n", cur->ne[0], cur->ne[1]);
         cb(cur, "ffn_gate_par", il);
     }
 
     if (down) {
         cur = build_lora_mm(down, cur);
+        LLAMA_LOG_INFO("built lora: cur is {%lld, %lld}\n", cur->ne[0], cur->ne[1]);
+
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
             // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);

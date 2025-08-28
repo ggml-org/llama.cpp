@@ -7672,7 +7672,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * ffn_up_view   = model.layers[il].ffn_up;
 
             if (ffn_gate_view == nullptr && ffn_up_view) {
-
+                
                 // Case A: weight stored as (2*ffn, hidden)  -> split rows into two (ffn x hidden)
                 if( ffn_up_view->ne[0] == 2 * n_ff and ffn_up_view->ne[1] == n_embd) {
 
@@ -7685,33 +7685,49 @@ struct llm_build_modern_bert : public llm_graph_context {
                     ffn_gate_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
                                                 /*ne0*/ n_ff, /*ne1*/ n_embd,
                                                 /*nb1*/ model.layers[il].ffn_up->nb[1],
+                      
                                                 /*offset_bytes*/ (size_t)n_ff * model.layers[il].ffn_up->nb[1]);
                 }
+
+                /*
                 else if ( ffn_up_view->ne[0] == n_embd && ffn_up_view->ne[1] == 2 * n_ff) {
                     // top half
+                    LLAMA_LOG_INFO("Case B:\n");
                     ffn_up_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
                            n_embd, n_ff,
                            model.layers[il].ffn_up->nb[1],
                            0);
+
                     ffn_up_view = ggml_cont(ctx0, ffn_up_view);
 
                     ffn_gate_view = ggml_view_2d(ctx0, model.layers[il].ffn_up,
                                                 n_embd, n_ff,
                                                 model.layers[il].ffn_up->nb[1],
-                                                n_ff * sizeof(float));
+                                                n_ff * model.layers[il].ffn_up->nb[0]);
                     ffn_gate_view = ggml_cont(ctx0, ffn_gate_view);
                 }
-
-                ggml_tensor * ffn_down_view = model.layers[il].ffn_down;
-                LLAMA_LOG_INFO("ffn shapes: Up: {%lld, %lld},  Gate: {%lld, %lld},  Down: {%lld, %lld}",
-                                                ffn_up_view->ne[0], ffn_up_view->ne[1], ffn_gate_view->ne[0], ffn_gate_view->ne[1], ffn_down_view->ne[0], ffn_down_view->ne[1]);
-
+                */
+                //ggml_tensor * ffn_down_view = model.layers[il].ffn_down;
+                //LLAMA_LOG_INFO("ffn shapes: Up: {%lld, %lld},  Gate: {%lld, %lld},  Down: {%lld, %lld}\n",
+                //                              ffn_up_view->ne[0], ffn_up_view->ne[1], ffn_gate_view->ne[0], ffn_gate_view->ne[1], ffn_down_view->ne[0], ffn_down_view->ne[1]);
+                /*
+            ggml_tensor * cur,
+         ggml_tensor * up,
+         ggml_tensor * up_b,
+         ggml_tensor * up_s,
+         ggml_tensor * gate,
+         ggml_tensor * gate_b,
+         ggml_tensor * gate_s,
+         ggml_tensor * down,
+         ggml_tensor * down_b,
+         ggml_tensor * down_s,
+         ggml_tensor * act_scales,*/
                 mlp_out = build_ffn(
                     h,
-                    model.layers[il].ffn_up,   /*up_b*/   NULL,           /*up_shexp*/   NULL,
-                    ffn_gate_view         ,    /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
+                    model.layers[il].ffn_up,               /*up_b*/   NULL,           /*up_shexp*/   NULL,
+                    NULL         ,    /*gate_b*/ NULL,           /*gate_shexp*/ NULL,
                     model.layers[il].ffn_down, /*down_b*/ NULL,           /*down_shexp*/ NULL,
-                    /*expert_scores*/ NULL,
+                    /*act_scales*/ NULL,
                     LLM_FFN_GEGLU, LLM_FFN_PAR, il
                 );
                 cb(mlp_out, "ffn_out_geglu", il);   
