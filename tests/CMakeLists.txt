@@ -8,7 +8,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${source})
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE common llama-common-test)
     install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
 
@@ -97,7 +97,7 @@ function(llama_build_and_test source)
 
     add_executable(${TEST_TARGET} ${source} get-model.cpp)
     install(TARGETS ${TEST_TARGET} RUNTIME)
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE common llama-common-test)
 
     add_test(
         NAME ${TEST_TARGET}
@@ -204,6 +204,9 @@ llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
+llama_build_and_test(test-model-load-disk.cpp    LABEL "model")
+llama_build_and_test(test-model-load-memory.cpp  LABEL "model")
+llama_build_and_test(test-model-load-memory-split.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 
 if (NOT GGML_BACKEND_DL)

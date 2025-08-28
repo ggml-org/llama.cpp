@@ -7,11 +7,12 @@
 #include "llama-memory.h"
 #include "llama-vocab.h"
 
-#include <map>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 struct llama_cparams;
 struct llama_ubatch;
@@ -471,6 +472,19 @@ struct llama_model {
 
     explicit llama_model(const struct llama_model_params & params);
     ~llama_model();
+
+    /// @brief Create backend buffers for all tensors
+    bool create_backend_buffers(std::size_t                                                  size_data,
+                                const std::map<ggml_backend_buffer_type_t, ggml_context *> & ctx_map,
+                                llama_model_loader & ml, bool use_mmap_buffer, bool use_mlock, int32_t n_gpu_layers,
+                                bool do_print_backend_buffers_info = true);
+
+    /// @brief Create backend buffers for tensors on a split file idenfified by `idx`. Removes the split from the map.
+    bool create_split_backend_buffers(
+        uint16_t idx, std::map<std::pair<ggml_backend_buffer_type_t, uint16_t>, ggml_context *> & ctx_split_map,
+        llama_model_loader & ml, bool use_mmap_buffer, bool use_mlock, int32_t n_gpu_layers);
+
+    void print_backend_buffers_info(int32_t n_gpu_layers);
 
     void load_stats  (llama_model_loader & ml);
     void load_arch   (llama_model_loader & ml);

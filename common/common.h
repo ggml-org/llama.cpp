@@ -632,6 +632,8 @@ struct common_init_result {
 };
 
 struct common_init_result     common_init_from_params(common_params & params);
+struct common_init_result     common_init_from_model_and_params(llama_model * model, common_init_result iparams,
+                                                                common_params & params);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);

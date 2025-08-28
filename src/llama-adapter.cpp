@@ -393,7 +393,7 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
     // set tensor data
     {
-        llama_file gguf_file(path_lora, "rb");
+        llama_file_disk gguf_file(path_lora, "rb");
         std::vector<uint8_t> read_buf;
         auto set_tensor = [&](ggml_tensor * orig, ggml_tensor * dev) {
             size_t offs = gguf_get_data_offset(ctx_gguf.get()) + gguf_get_tensor_offset(ctx_gguf.get(), gguf_find_tensor(ctx_gguf.get(), orig->name));

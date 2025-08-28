@@ -1,6 +1,7 @@
 #include "llama-mmap.h"
 
 #include "llama-impl.h"
+#include "uint8-buff-stream.h"
 
 #include "ggml.h"
 
@@ -9,6 +10,7 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
+#include <map>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -54,9 +56,7 @@ static std::string llama_format_win_err(DWORD err) {
 }
 #endif
 
-// llama_file
-
-struct llama_file::impl {
+struct llama_file_disk::impl {
 #if defined(_WIN32)
     HANDLE fp_win32;
     std::string GetErrorMessageWin32(DWORD error_code) const {
@@ -241,13 +241,13 @@ struct llama_file::impl {
     size_t size;
 };
 
-llama_file::llama_file(const char * fname, const char * mode) : pimpl(std::make_unique<impl>(fname, mode)) {}
-llama_file::~llama_file() = default;
+llama_file_disk::llama_file_disk(const char * fname, const char * mode) : pimpl(std::make_unique<impl>(fname, mode)) {}
+llama_file_disk::~llama_file_disk() = default;
 
-size_t llama_file::tell() const { return pimpl->tell(); }
-size_t llama_file::size() const { return pimpl->size; }
+size_t llama_file_disk::tell() const { return pimpl->tell(); }
+size_t llama_file_disk::size() const { return pimpl->size; }
 
-int llama_file::file_id() const {
+int llama_file_disk::file_id() const {
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
@@ -259,13 +259,193 @@ int llama_file::file_id() const {
 #endif
 }
 
-void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
-void llama_file::read_raw(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
+void llama_file_disk::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
+void llama_file_disk::read_raw(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
 
-uint32_t llama_file::read_u32() const { return pimpl->read_u32(); }
+uint32_t llama_file_disk::read_u32() const { return pimpl->read_u32(); }
 
-void llama_file::write_raw(const void * ptr, size_t len) const { pimpl->write_raw(ptr, len); }
-void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
+void llama_file_disk::write_raw(const void * ptr, size_t len) const { pimpl->write_raw(ptr, len); }
+void llama_file_disk::write_u32(uint32_t val) const { pimpl->write_u32(val); }
+
+template <bool Writable>
+llama_file_buffer<Writable>::llama_file_buffer(std::unique_ptr<std::basic_streambuf<uint8_t>> && streambuf) :
+    streambuf(std::move(streambuf)) {}
+
+template <bool Writable> llama_file_buffer<Writable>::~llama_file_buffer() = default;
+
+template <bool Writable> size_t llama_file_buffer<Writable>::tell() const {
+    return streambuf->pubseekoff(0, std::ios_base::cur);
+}
+
+template <bool Writable> size_t llama_file_buffer<Writable>::size() const {
+    auto current_pos = streambuf->pubseekoff(0, std::ios_base::cur);
+    auto end_pos     = streambuf->pubseekoff(0, std::ios_base::end);
+    streambuf->pubseekpos(current_pos);
+    return end_pos;
+}
+
+template <bool Writable> int llama_file_buffer<Writable>::file_id() const {
+    return -1;
+}
+
+template <bool Writable> void llama_file_buffer<Writable>::seek(size_t offset, int whence) const {
+    static std::map<int, std::ios_base::seekdir> whence_to_dir = {
+        { SEEK_SET, std::ios_base::beg },
+        { SEEK_CUR, std::ios_base::cur },
+        { SEEK_END, std::ios_base::end }
+    };
+    auto result = streambuf->pubseekoff(offset, whence_to_dir.at(whence));
+    if (result == std::streampos(-1)) {
+        throw std::runtime_error("seek failed");
+    }
+}
+
+template <bool Writable> void llama_file_buffer<Writable>::read_raw(void * ptr, size_t len) const {
+    auto bytes_read = streambuf->sgetn(static_cast<uint8_t *>(ptr), len);
+    if (bytes_read != static_cast<std::streamsize>(len)) {
+        throw std::runtime_error("read beyond end of buffer");
+    }
+}
+
+template <bool Writable> uint32_t llama_file_buffer<Writable>::read_u32() const {
+    uint32_t val;
+    read_raw(&val, sizeof(val));
+    return val;
+}
+
+template <> void llama_file_buffer<false>::write_raw([[maybe_unused]] const void * ptr, size_t len) const {
+    if (len > 0) {
+        throw std::runtime_error("buffer is not writable");
+    }
+}
+
+template <> void llama_file_buffer<false>::write_u32(uint32_t val) const {
+    if (val > 0) {
+        // Cannot directly set [[noreturn]] for a function since it was defined without it.
+        throw std::runtime_error("buffer is not writable");
+    }
+}
+
+template <> void llama_file_buffer<true>::write_raw(const void * ptr, size_t len) const {
+    auto bytes_written = streambuf->sputn(static_cast<const uint8_t *>(ptr), len);
+    if (bytes_written != static_cast<std::streamsize>(len)) {
+        throw std::runtime_error("write beyond end of buffer");
+    }
+}
+
+template <> void llama_file_buffer<true>::write_u32(uint32_t val) const {
+    write_raw(&val, sizeof(val));
+}
+
+// Explicit instantiations
+template struct llama_file_buffer<false>;
+template struct llama_file_buffer<true>;
+
+// llama_future_file_buffer implementation
+
+namespace {
+std::string final_key(const std::string & promise_key, const std::string & context) {
+    return promise_key + ":" + context;
+}
+
+std::mutex promise_registry_mutex;
+
+std::map<std::string, std::promise<std::unique_ptr<llama_file_buffer<false>>>> promise_registry_ro;
+std::map<std::string, std::promise<std::unique_ptr<llama_file_buffer<true>>>>  promise_registry_rw;
+
+template <bool Writable>
+std::map<std::string, std::promise<std::unique_ptr<llama_file_buffer<Writable>>>> & promise_registry() {
+    if constexpr (Writable) {
+        return promise_registry_rw;
+    } else {
+        return promise_registry_ro;
+    }
+}
+
+/// @brief Ensures a promise exists in the registry for the given key.
+/// If it doesn't exist, creates it. Returns an iterator to the promise.
+/// Thread-safe.
+template <bool Writable>
+typename std::map<std::string, std::promise<std::unique_ptr<llama_file_buffer<Writable>>>>::iterator
+ensure_promise_registry(const std::string & key) {
+    std::lock_guard<std::mutex> lock(promise_registry_mutex);
+    auto                        it = promise_registry<Writable>().find(key);
+    if (it != promise_registry<Writable>().end()) {
+        return it;
+    }
+    auto result =
+        promise_registry<Writable>().emplace(key, std::promise<std::unique_ptr<llama_file_buffer<Writable>>>());
+    LLAMA_LOG_CMAKE_DEBUG("%s: created future file buffer %p for %s\n", __func__, (void *) &(*it), key.c_str());
+    return result.first;
+}
+}  // namespace
+
+template <bool Writable>
+llama_future_file_buffer<Writable>::llama_future_file_buffer(const std::string & promise_key,
+                                                             const std::string & context) :
+    file_buffer_future(),
+    file_buffer() {
+    std::string key              = final_key(promise_key, context);
+    file_buffer_promise_iterator = ensure_promise_registry<Writable>(key);
+    file_buffer_future           = file_buffer_promise_iterator->second.get_future();
+}
+
+template <bool Writable>
+llama_future_file_buffer<Writable>::llama_future_file_buffer(llama_future_file_buffer && other) noexcept :
+    file_buffer_promise_iterator(std::move(other.file_buffer_promise_iterator)),
+    file_buffer_future(std::move(other.file_buffer_future)),
+    file_buffer(std::move(other.file_buffer)) {
+    // Set the other object's iterator to end() to mark it as moved from
+    // to avoid early erasure at destruction of the moved other object
+    other.file_buffer_promise_iterator = promise_registry<Writable>().end();
+}
+
+template <bool Writable>
+llama_future_file_buffer<Writable> & llama_future_file_buffer<Writable>::operator=(
+    llama_future_file_buffer && other) noexcept {
+    if (this != &other) {
+        file_buffer_promise_iterator       = std::move(other.file_buffer_promise_iterator);
+        file_buffer_future                 = std::move(other.file_buffer_future);
+        file_buffer                        = std::move(other.file_buffer);
+        other.file_buffer_promise_iterator = promise_registry<Writable>().end();
+    }
+    return *this;
+}
+
+template <bool Writable> llama_future_file_buffer<Writable>::~llama_future_file_buffer() {
+    std::lock_guard<std::mutex> lock(promise_registry_mutex);
+    if (file_buffer_promise_iterator != promise_registry<Writable>().end()) {
+        promise_registry<Writable>().erase(file_buffer_promise_iterator);
+    }
+}
+
+template <bool Writable>
+bool llama_future_file_buffer<Writable>::fulfill_promise(const std::string & promise_key, const std::string & context,
+                                                         std::unique_ptr<llama_file_buffer<Writable>> && value) {
+    std::string key = final_key(promise_key, context);
+    auto        it  = ensure_promise_registry<Writable>(key);
+    if (it != promise_registry<Writable>().end()) {
+        LLAMA_LOG_CMAKE_DEBUG("fulfilling future file buffer %p for %s\n", (void *) &(*it), key.c_str());
+        it->second.set_value(std::move(value));
+        return true;
+    }
+    return false;
+}
+
+template <bool Writable>
+std::unique_ptr<llama_file_buffer<Writable>> llama_future_file_buffer<Writable>::extract() const {
+    if (file_buffer) {
+        return std::move(file_buffer);
+    }
+
+    auto future_result = file_buffer_future.get();
+    file_buffer        = std::move(future_result);
+    return std::move(file_buffer);
+}
+
+// Explicit instantiations for llama_future_file_buffer
+template struct llama_future_file_buffer<false>;
+template struct llama_future_file_buffer<true>;
 
 // llama_mmap
 

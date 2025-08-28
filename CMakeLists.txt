@@ -203,6 +203,10 @@ if (LLAMA_BUILD_COMMON)
     add_subdirectory(vendor/cpp-httplib)
 endif()
 
+if(LLAMA_BUILD_EXAMPLES OR LLAMA_BUILD_TESTS)
+    add_subdirectory(common_test)
+endif()
+
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     include(CTest)
     add_subdirectory(tests)

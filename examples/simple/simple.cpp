@@ -1,14 +1,19 @@
+#include "llama-cpp.h"
 #include "llama.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [prompt]\n", argv[0]);
+    printf("\n Optional environment variables: LLAMA_EXAMPLE_MEMORY_BUFFER LLAMA_EXAMPLE_MEMORY_BUFFER_SPLIT");
     printf("\n");
 }
+
+#ifdef LLAMA_COMMON_TEST_HEADERS
+#include "load_into_memory.h"
+#endif
 
 int main(int argc, char ** argv) {
     // path to the model gguf file
@@ -83,12 +88,13 @@ int main(int argc, char ** argv) {
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ngl;
 
+#ifdef LLAMA_COMMON_TEST_HEADERS
+    llama_model * model = memory_configuration_env_is_set() ?
+                              load_model_from_memory_configuration(model_path.c_str(), model_params) :
+                              llama_model_load_from_file(model_path.c_str(), model_params);
+#else
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
-
-    if (model == NULL) {
-        fprintf(stderr , "%s: error: unable to load model\n" , __func__);
-        return 1;
-    }
+#endif
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     // tokenize the prompt

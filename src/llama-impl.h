@@ -30,6 +30,13 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 #define LLAMA_LOG_DEBUG(...) llama_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LLAMA_LOG_CONT(...)  llama_log_internal(GGML_LOG_LEVEL_CONT , __VA_ARGS__)
 
+// Debug-only logging macro that's only enabled in debug builds at compile time
+#ifndef NDEBUG
+#define LLAMA_LOG_CMAKE_DEBUG(...) LLAMA_LOG_DEBUG(__VA_ARGS__)
+#else
+#define LLAMA_LOG_CMAKE_DEBUG(...)
+#endif
+
 //
 // helpers
 //

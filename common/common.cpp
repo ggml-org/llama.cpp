@@ -946,16 +946,7 @@ std::vector<common_file_info> fs_list_files(const std::string & path) {
 // Model utils
 //
 
-struct common_init_result common_init_from_params(common_params & params) {
-    common_init_result iparams;
-    auto mparams = common_model_params_to_llama(params);
-
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
-    if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
-        return iparams;
-    }
+struct common_init_result common_init_from_model_and_params(llama_model* model, common_init_result iparams, common_params & params) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1124,6 +1115,19 @@ struct common_init_result common_init_from_params(common_params & params) {
     iparams.context.reset(lctx);
 
     return iparams;
+}
+
+struct common_init_result common_init_from_params(common_params & params) {
+    common_init_result iparams;
+    auto               mparams = common_model_params_to_llama(params);
+
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    if (model == NULL) {
+        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        return iparams;
+    }
+
+    return common_init_from_model_and_params(model, std::move(iparams), params);
 }
 
 std::string get_model_endpoint() {

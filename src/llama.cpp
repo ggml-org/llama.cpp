@@ -9,6 +9,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "uint8-buff-stream.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -16,9 +17,15 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <stdexcept>
+#include <streambuf>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
+#endif
+
+#ifdef __cplusplus
+#include "llama-cpp.h"
 #endif
 
 //
@@ -99,7 +106,7 @@ int64_t llama_time_us(void) {
 }
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
+static int llama_model_load(llama_model_loader & ml, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -108,8 +115,6 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides);
-
         ml.print_info();
 
         model.hparams.vocab_only = params.vocab_only;
@@ -153,8 +158,7 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 }
 
 static struct llama_model * llama_model_load_from_file_impl(
-        const std::string & path_model,
-        std::vector<std::string> & splits,
+        llama_model_loader& ml,
         struct llama_model_params params) {
     ggml_time_init();
 
@@ -276,7 +280,7 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(path_model, splits, *model, params);
+    const int status = llama_model_load(ml, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -299,27 +303,81 @@ struct llama_model * llama_load_model_from_file(
     return llama_model_load_from_file(path_model, params);
 }
 
-struct llama_model * llama_model_load_from_file(
-        const char * path_model,
-        struct llama_model_params params) {
-    std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(path_model, splits, params);
+static llama_model_loader create_disk_fileloader(const char * path_model, std::vector<std::string> & splits,
+                                                 struct llama_model_params params) {
+    load_input_variant::fname_load_input loader_input{ path_model, splits };
+    return llama_model_loader(loader_input, params.use_mmap, params.check_tensors, params.kv_overrides,
+                              params.tensor_buft_overrides);
 }
 
-struct llama_model * llama_model_load_from_splits(
-        const char ** paths,
-        size_t n_paths,
-        struct llama_model_params params) {
+struct llama_model * llama_model_load_from_file(const char * path_model, struct llama_model_params params) {
+    std::vector<std::string> splits = {};
+    llama_model_loader       ml     = create_disk_fileloader(path_model, splits, params);
+    return llama_model_load_from_file_impl(ml, params);
+}
+
+namespace {
+void override_and_disable_mmap(struct llama_model_params & params) {
+    if (params.use_mmap) {
+        LLAMA_LOG_WARN("Overriding and disabling memory mapping when loading from memory buffer\n");
+        params.use_mmap = false;
+    }
+}
+}  // namespace
+
+struct llama_model * llama_model_load_from_buffer(std::vector<uint8_t> && data, struct llama_model_params params) {
+    std::unique_ptr<std::basic_streambuf<uint8_t>> streambuf = std::make_unique<Uint8BufferStreamBuf>(std::move(data));
+    override_and_disable_mmap(params);
+    llama_model_loader ml(load_input_variant::buffer_load_input{ streambuf }, params.use_mmap, params.check_tensors,
+                          params.kv_overrides, params.tensor_buft_overrides);
+    return llama_model_load_from_file_impl(ml, params);
+}
+
+namespace {
+std::vector<std::string> splits_from_c_paths(const char ** paths, size_t n_paths) {
     std::vector<std::string> splits;
     if (n_paths == 0) {
         LLAMA_LOG_ERROR("%s: list of splits is empty\n", __func__);
-        return nullptr;
+        return splits;
     }
     splits.reserve(n_paths);
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(splits.front(), splits, params);
+    return splits;
+}
+}  // namespace
+
+struct llama_model * llama_model_load_from_splits(const char ** paths, size_t n_paths,
+                                                  struct llama_model_params params) {
+    std::vector<std::string> splits = splits_from_c_paths(paths, n_paths);
+    if (splits.empty()) {
+        return nullptr;
+    }
+    llama_model_loader ml = create_disk_fileloader(splits.front().c_str(), splits, params);
+    return llama_model_load_from_file_impl(ml, params);
+}
+
+struct llama_model * llama_model_load_from_split_futures(const char ** paths, size_t n_paths, const char * context,
+                                                         const char *              tensor_list_file,
+                                                         struct llama_model_params params) {
+    std::vector<std::string> splits = splits_from_c_paths(paths, n_paths);
+    if (splits.empty()) {
+        return nullptr;
+    }
+    std::string tensor_list_file_str(tensor_list_file);
+
+    load_input_variant::buffer_future_load_input loader_input{ splits.front(), context, splits, tensor_list_file_str };
+    override_and_disable_mmap(params);
+    llama_model_loader ml(loader_input, params.use_mmap, params.check_tensors, params.kv_overrides,
+                          params.tensor_buft_overrides);
+    return llama_model_load_from_file_impl(ml, params);
+}
+
+bool llama_model_load_fulfill_split_future(const char * path, const char * context,
+                                           std::unique_ptr<std::basic_streambuf<uint8_t>> && streambuf) {
+    return llama_future_file_buffer_ro::fulfill_promise(path, context,
+                                                        std::make_unique<llama_file_buffer_ro>(std::move(streambuf)));
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
