@@ -23,6 +23,7 @@ hexagon_dsp_arch get_dsp_arch(common::rpc_interface_ptr rpc_interface, uint32_t 
 const char * get_dsp_arch_desc(hexagon_dsp_arch arch);
 
 void enable_unsigned_dsp_module(common::rpc_interface_ptr rpc_interface, uint32_t domain_id);
+void set_fast_rpc_stack_size(common::rpc_interface_ptr rpc_interface, uint32_t domain_id, uint32_t stack_size);
 
 void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len);
 

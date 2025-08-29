@@ -13,6 +13,8 @@ const uint32_t NPU_ROPE_TYPE_NEOX = 2;
 const uint32_t NPU_ROPE_TYPE_MROPE = 8;
 const uint32_t NPU_ROPE_TYPE_VISION = 24;
 
+const uint32_t NPU_THREAD_STACK_SIZE = 64 * 1024;
+
 interface npu_device : remote_handle64{
 
     typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];

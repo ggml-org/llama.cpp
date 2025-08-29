@@ -3,6 +3,8 @@
 #include "tensor.hpp"
 #include "util.hpp"
 
+#include <hexagon_types.h>
+
 namespace hexagon {
 
 using dequant_output_type = npu_device_fp16_t;
@@ -10,9 +12,10 @@ using dequant_output_type = npu_device_fp16_t;
 bool init_f16_f32_table(float * table, size_t count);
 
 typedef void (*quantize_row_type)(const float * src, void * dst, size_t count);
-typedef void (*dequantize_row_type)(const void * src, dequant_output_type * dst, size_t count);
+typedef void (*dequantize_row_type)(const void * src, dequant_output_type * dst, size_t count, HVX_Vector table);
 typedef float (*vec_dot_type)(const void * src0, const void * src1, size_t count);
 typedef bool (*can_use_aligned_vec_dot_type)(const void * src0, const void * src1, size_t count);
+typedef HVX_Vector (*load_dequant_table_type)();
 
 struct device_type_traits {
     npu_device_tensor_data_type type;
@@ -21,11 +24,12 @@ struct device_type_traits {
     size_t                      type_size;
     bool                        is_quantized;
 
-    dequantize_row_type          to_float;
-    quantize_row_type            from_float;
-    vec_dot_type                 vec_dot;
-    vec_dot_type                 vec_dot_aligned;
-    can_use_aligned_vec_dot_type can_use_aligned_vec_dot;
+    dequantize_row_type          to_float                = nullptr;
+    quantize_row_type            from_float              = nullptr;
+    vec_dot_type                 vec_dot                 = nullptr;
+    vec_dot_type                 vec_dot_aligned         = nullptr;
+    can_use_aligned_vec_dot_type can_use_aligned_vec_dot = nullptr;
+    load_dequant_table_type      load_dequant_table      = nullptr;
 };
 
 const device_type_traits & get_type_traits(npu_device_tensor_data_type type);
@@ -49,7 +53,7 @@ namespace hexagon {
 inline auto make_scoped_op_perf_timer(tensor * op, size_t tidx) {
     auto * src0 = op->get_src(0);
     auto * src1 = op->get_src(1);
-    char   buffer[1024];
+    char   buffer[512];
     if (src1 == nullptr) {
         snprintf(buffer,
                  sizeof(buffer),
@@ -96,8 +100,10 @@ inline auto make_scoped_op_perf_timer(tensor * op, size_t tidx) {
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(op, tidx, tracker_name) \
         auto __npu_op_timer_##tracker_name = hexagon::make_scoped_op_perf_timer(op, tidx)
 
-#    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(tracker_name, idx, sub_prefix)          \
-        hexagon::npu_sub_process_scoped_timer<decltype(__npu_op_timer_##tracker_name)::kBufferCount, idx> \
+#    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(tracker_name, idx, sub_prefix) \
+        hexagon::npu_sub_process_scoped_timer<                                                   \
+            std::remove_reference_t<decltype(__npu_op_timer_##tracker_name)>::kBufferCount,      \
+            idx>                                                                                 \
         __npu_op_sub_timer##sub_prefix(__npu_op_timer_##tracker_name, #sub_prefix)
 
 #else

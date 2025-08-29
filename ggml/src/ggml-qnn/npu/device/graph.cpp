@@ -91,6 +91,7 @@ void graph::compute_impl(default_thread_pool * pool, default_thread_pool::thread
 
         const bool should_sync = requires_thread_barrier(op);
         if (pool && should_sync && i < _tensor_count - 1) {
+            // For the last tensor, the thread pool will handle synchronization
             DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]sync_thread, tidx: %zu, tensor[%zu/%zu]",
                                               (void *) this,
                                               params.get_thread_index(),

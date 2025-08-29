@@ -14,7 +14,7 @@
 namespace hexagon {
 
 constexpr const size_t kMaxThreadCount   = 4;
-constexpr const size_t kDefaultStackSize = 1024 * 64;  // 64KB
+constexpr const size_t kDefaultStackSize = NPU_THREAD_STACK_SIZE;  // 64KB
 
 template <size_t _stack_size> class qurt_thread {
   public:
@@ -24,7 +24,7 @@ template <size_t _stack_size> class qurt_thread {
                          qurt_thread_func_type thread_func,
                          void *                arg,
                          unsigned short        priority) {
-        DEVICE_LOG_DEBUG("qurt_thread.create: %s", thread_name.c_str());
+        DEVICE_LOG_DEBUG("qurt_thread.create: %s\n", thread_name.c_str());
         qurt_thread_attr_init(&_attributes);
         qurt_thread_attr_set_name(&_attributes, (char *) thread_name.c_str());
         qurt_thread_attr_set_stack_addr(&_attributes, _stack);
@@ -37,26 +37,26 @@ template <size_t _stack_size> class qurt_thread {
         auto ret = qurt_thread_create(
             &_tid, &_attributes, reinterpret_cast<void (*)(void *)>(&qurt_thread::thread_func_impl), (void *) this);
         if (ret != QURT_EOK) {
-            DEVICE_LOG_ERROR("Failed to create thread: %d", (int) ret);
+            DEVICE_LOG_ERROR("Failed to create thread: %d\n", (int) ret);
             _func = nullptr;
             _arg  = nullptr;
             return;
         }
 
-        DEVICE_LOG_DEBUG("qurt_thread.created: %s, id: %d", thread_name.c_str(), (int) _tid);
+        DEVICE_LOG_DEBUG("qurt_thread.created: %s, id: %d\n", thread_name.c_str(), (int) _tid);
     }
 
     ~qurt_thread() {
-        DEVICE_LOG_DEBUG("qurt_thread.destroy: %d", (int) _tid);
+        DEVICE_LOG_DEBUG("qurt_thread.destroy: %d\n", (int) _tid);
         int  thread_exit_code = QURT_EOK;
         auto ret              = qurt_thread_join(_tid, &thread_exit_code);
         if (ret != QURT_EOK && ret != QURT_ENOTHREAD) {
-            DEVICE_LOG_ERROR("Failed to join thread: %d", (int) ret);
+            DEVICE_LOG_ERROR("Failed to join thread: %d\n", (int) ret);
             return;
         }
 
         if (thread_exit_code != QURT_EOK) {
-            DEVICE_LOG_ERROR("Thread exit code: %d", (int) thread_exit_code);
+            DEVICE_LOG_ERROR("Thread exit code: %d\n", (int) thread_exit_code);
         }
     }
 
@@ -135,7 +135,7 @@ template <size_t _ThreadCount> class thread_pool {
             auto thread = std::make_unique<thread_type>(
                 thread_name_base + std::to_string(i), &thread_pool::thread_func_impl, &_thread_params[i + 1], priority);
             if (!thread->is_valid()) {
-                DEVICE_LOG_ERROR("Failed to create thread: %zu", i);
+                DEVICE_LOG_ERROR("Failed to create thread: %zu\n", i);
                 // destroy all barriers and threads at destructor
                 return;
             }
@@ -143,11 +143,11 @@ template <size_t _ThreadCount> class thread_pool {
             _threads[i] = std::move(thread);
         }
 
-        DEVICE_LOG_DEBUG("thread_pool.created: %zu", kMaxSubThreadCount);
+        DEVICE_LOG_DEBUG("thread_pool.created: %zu\n", kMaxSubThreadCount);
     }
 
     ~thread_pool() {
-        DEVICE_LOG_DEBUG("thread_pool.destroy");
+        DEVICE_LOG_DEBUG("thread_pool.destroy\n");
         _thread_exit = true;
         qurt_barrier_wait(&_pending);  // release all task threads
 
@@ -161,7 +161,7 @@ template <size_t _ThreadCount> class thread_pool {
 
     bool sync_execute(task_type task, void * arg) {
         if (!task) {
-            DEVICE_LOG_ERROR("Invalid task");
+            DEVICE_LOG_ERROR("Invalid task\n");
             return false;
         }
 
@@ -174,7 +174,7 @@ template <size_t _ThreadCount> class thread_pool {
         qurt_barrier_wait(&_pending);
 
         task(this, &_thread_params[0], arg);
-        DEVICE_LOG_DEBUG("main_thread.task_completed: 0");
+        DEVICE_LOG_DEBUG("main_thread.task_completed: 0\n");
 
         qurt_barrier_wait(&_completed);
 
@@ -198,19 +198,19 @@ template <size_t _ThreadCount> class thread_pool {
 
         auto * param = reinterpret_cast<thread_params *>(arg);
 
-        DEVICE_LOG_DEBUG("thread_func_impl.start: %zu", param->tidx);
+        DEVICE_LOG_DEBUG("thread_func_impl.start: %zu\n", param->tidx);
 
         auto & pool = *(param->pool);
         for (;;) {
             qurt_barrier_wait(&pool._pending);
             if (pool._thread_exit) {
-                DEVICE_LOG_DEBUG("thread_func_impl.exit: %zu", param->tidx);
+                DEVICE_LOG_DEBUG("thread_func_impl.exit: %zu\n", param->tidx);
                 break;
             }
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
             auto task_begin_cycles = pool._task_begin_cycles.load();
-            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, prepare: %lluus",
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, prepare: %lluus\n",
                             param->tidx,
                             static_cast<unsigned long long>(
                                 HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
@@ -221,18 +221,18 @@ template <size_t _ThreadCount> class thread_pool {
                 task(param->pool, param, pool._arg);
             }
 
-            DEVICE_LOG_DEBUG("thread_func_impl.task_completed: %zu", param->tidx);
+            DEVICE_LOG_DEBUG("thread_func_impl.task_completed: %zu\n", param->tidx);
             qurt_barrier_wait(&pool._completed);
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
-            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, task_end: %lluus",
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, task_end: %lluus\n",
                             param->tidx,
                             static_cast<unsigned long long>(
                                 HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
 #endif
         }
 
-        DEVICE_LOG_DEBUG("thread_func_impl.end: %zu", param->tidx);
+        DEVICE_LOG_DEBUG("thread_func_impl.end: %zu\n", param->tidx);
     }
 
     std::atomic_bool                                _thread_exit                    = false;

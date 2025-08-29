@@ -149,6 +149,23 @@ void enable_unsigned_dsp_module(common::rpc_interface_ptr rpc_interface, uint32_
     }
 }
 
+void set_fast_rpc_stack_size(common::rpc_interface_ptr rpc_interface, uint32_t domain_id, uint32_t stack_size) {
+    constexpr const uint32_t FASTRPC_THREAD_PARAMS = 1;
+
+    if (!rpc_interface || !rpc_interface->is_valid()) {
+        return;
+    }
+
+    remote_rpc_thread_params tp = {};
+    tp.domain                   = domain_id;
+    tp.prio                     = -1;
+    tp.stack_size               = stack_size;
+    auto ret                    = rpc_interface->remote_session_control(FASTRPC_THREAD_PARAMS, &tp, sizeof(tp));
+    if (ret != AEE_SUCCESS) {
+        LOG_ERROR("failed to set fast RPC stack size: 0x%x\n", ret);
+    }
+}
+
 void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
     if (dst == nullptr) {
         snprintf(out, max_len, "null");
@@ -161,15 +178,30 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
         switch (dims) {
             default:
             case 4:
-                snprintf(out, max_len, "%s[%ldx%ldx%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
-                         (long) tensor->ne[1], (long) tensor->ne[2], (long) tensor->ne[3]);
+                snprintf(out,
+                         max_len,
+                         "%s[%ldx%ldx%ldx%ld]",
+                         ggml_type_name(tensor->type),
+                         (long) tensor->ne[0],
+                         (long) tensor->ne[1],
+                         (long) tensor->ne[2],
+                         (long) tensor->ne[3]);
                 break;
             case 3:
-                snprintf(out, max_len, "%s[%ldx%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
-                         (long) tensor->ne[1], (long) tensor->ne[2]);
+                snprintf(out,
+                         max_len,
+                         "%s[%ldx%ldx%ld]",
+                         ggml_type_name(tensor->type),
+                         (long) tensor->ne[0],
+                         (long) tensor->ne[1],
+                         (long) tensor->ne[2]);
                 break;
             case 2:
-                snprintf(out, max_len, "%s[%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
+                snprintf(out,
+                         max_len,
+                         "%s[%ldx%ld]",
+                         ggml_type_name(tensor->type),
+                         (long) tensor->ne[0],
                          (long) tensor->ne[1]);
                 break;
             case 1:
@@ -201,8 +233,14 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
                 print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
                 char src3_desc[256];
                 print_tensor(dst->src[3], src3_desc, sizeof(src3_desc));
-                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s, src3: %s", dst_desc, src0_desc,
-                         src1_desc, src2_desc, src3_desc);
+                snprintf(out,
+                         max_len,
+                         "dst: %s, src0: %s, src1: %s, src2: %s, src3: %s",
+                         dst_desc,
+                         src0_desc,
+                         src1_desc,
+                         src2_desc,
+                         src3_desc);
                 return;
             }
         case 3:
@@ -213,8 +251,8 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
                 print_tensor(dst->src[1], src1_desc, sizeof(src1_desc));
                 char src2_desc[256];
                 print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
-                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s", dst_desc, src0_desc, src1_desc,
-                         src2_desc);
+                snprintf(
+                    out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s", dst_desc, src0_desc, src1_desc, src2_desc);
                 return;
             }
         case 2:

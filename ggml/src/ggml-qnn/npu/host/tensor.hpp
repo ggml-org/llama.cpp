@@ -1,13 +1,13 @@
 #pragma once
 
-#include <list>
-#include <type_traits>
-#include <vector>
-
 #include "common.hpp"
 #include "ggml-impl.h"
 #include "hexagon_npu.h"
 #include "util.hpp"
+
+#include <list>
+#include <type_traits>
+#include <vector>
 
 namespace hexagon {
 
@@ -62,7 +62,7 @@ class host_tensor {
 
     ~host_tensor() {
         LOG_DEBUG("host_tensor(%p) destroy, device_tensor_handle: %p\n", (void *) this, (void *) _device_tensor_handle);
-        if (_device_tensor_handle) {
+        if (_device_tensor_handle != npu_device_INVALID_DEVICE_TENSOR_HANDLE) {
             npu_device_tensor_free(_device_handle, _device_tensor_handle);
             // TODO: figure out why the _ggml_tensor is invalid here
         }
@@ -113,8 +113,11 @@ class host_tensor {
         if (memcmp(_info_update.params, _ggml_tensor->op_params, sizeof(_info_update.params)) != 0) {
             params_changed = true;
             memcpy(_info_update.params, _ggml_tensor->op_params, sizeof(_info_update.params));
-            LOG_DEBUG("host_tensor(%p) op_params changed: [%x, %x, %x, %x]\n", (void *) this,
-                      (int) _info_update.params[0], (int) _info_update.params[1], (int) _info_update.params[2],
+            LOG_DEBUG("host_tensor(%p) op_params changed: [%x, %x, %x, %x]\n",
+                      (void *) this,
+                      (int) _info_update.params[0],
+                      (int) _info_update.params[1],
+                      (int) _info_update.params[2],
                       (int) _info_update.params[3]);
         }
 
@@ -136,19 +139,29 @@ class host_tensor {
         if (memcmp(_info_update.src_handles, src_tensor_handles, sizeof(_info_update.src_handles)) != 0) {
             params_changed = true;
             memcpy(_info_update.src_handles, src_tensor_handles, sizeof(_info_update.src_handles));
-            LOG_DEBUG("host_tensor(%p) src changed, handles: [%p, %p]\n", (void *) this,
-                      (void *) _info_update.src_handles[0], (void *) _info_update.src_handles[1]);
+            LOG_DEBUG("host_tensor(%p) src changed, handles: [%p, %p]\n",
+                      (void *) this,
+                      (void *) _info_update.src_handles[0],
+                      (void *) _info_update.src_handles[1]);
         }
 
         if (params_changed) {
             npu_device_tensor_update_params(_device_handle, _device_tensor_handle, &_info_update);
-            LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n", (void *) this,
-                      ggml_op_desc(_ggml_tensor), (int) _info_update.params[0], (int) _info_update.params[1],
-                      (int) _info_update.params[2], (int) _info_update.params[3]);
+            LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n",
+                      (void *) this,
+                      ggml_op_desc(_ggml_tensor),
+                      (int) _info_update.params[0],
+                      (int) _info_update.params[1],
+                      (int) _info_update.params[2],
+                      (int) _info_update.params[3]);
         } else {
-            LOG_DEBUG("host_tensor(%p) update_params, no changes, op: %s, params: [%x, %x, %x, %x]\n", (void *) this,
-                      ggml_op_desc(_ggml_tensor), (int) _info_update.params[0], (int) _info_update.params[1],
-                      (int) _info_update.params[2], (int) _info_update.params[3]);
+            LOG_DEBUG("host_tensor(%p) update_params, no changes, op: %s, params: [%x, %x, %x, %x]\n",
+                      (void *) this,
+                      ggml_op_desc(_ggml_tensor),
+                      (int) _info_update.params[0],
+                      (int) _info_update.params[1],
+                      (int) _info_update.params[2],
+                      (int) _info_update.params[3]);
         }
     }
 
@@ -174,9 +187,13 @@ class host_tensor {
 #endif
         }
 
-        LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n", (void *) this,
-                  ggml_op_desc(_ggml_tensor), (int) _info_update.params[0], (int) _info_update.params[1],
-                  (int) _info_update.params[2], (int) _info_update.params[3]);
+        LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n",
+                  (void *) this,
+                  ggml_op_desc(_ggml_tensor),
+                  (int) _info_update.params[0],
+                  (int) _info_update.params[1],
+                  (int) _info_update.params[2],
+                  (int) _info_update.params[3]);
         return _info_update;
     }
 
@@ -192,11 +209,21 @@ class host_tensor {
     }
 
     int get_desc(char * buffer, size_t size) const {
-        return snprintf(buffer, size, "%s[%ldx%ldx%ldx%ld], nb[%ld,%ld,%ld,%ld], %s, addr: %p, ggml: %p, handle:%p",
-                        _ggml_tensor->name, (long) _ggml_tensor->ne[0], (long) _ggml_tensor->ne[1],
-                        (long) _ggml_tensor->ne[2], (long) _ggml_tensor->ne[3], (long) _ggml_tensor->nb[0],
-                        (long) _ggml_tensor->nb[1], (long) _ggml_tensor->nb[2], (long) _ggml_tensor->nb[3],
-                        ggml_type_name(_ggml_tensor->type), (void *) this, (void *) _ggml_tensor,
+        return snprintf(buffer,
+                        size,
+                        "%s[%ldx%ldx%ldx%ld], nb[%ld,%ld,%ld,%ld], %s, addr: %p, ggml: %p, handle:%p",
+                        _ggml_tensor->name,
+                        (long) _ggml_tensor->ne[0],
+                        (long) _ggml_tensor->ne[1],
+                        (long) _ggml_tensor->ne[2],
+                        (long) _ggml_tensor->ne[3],
+                        (long) _ggml_tensor->nb[0],
+                        (long) _ggml_tensor->nb[1],
+                        (long) _ggml_tensor->nb[2],
+                        (long) _ggml_tensor->nb[3],
+                        ggml_type_name(_ggml_tensor->type),
+                        (void *) this,
+                        (void *) _ggml_tensor,
                         (void *) _device_tensor_handle);
     }
 

@@ -17,21 +17,30 @@
 namespace {
 
 struct npu_device_context {
+    std::unique_ptr<hexagon::power_utils>         power_utils;       // Power management utilities
     std::unique_ptr<hexagon::default_thread_pool> thread_pool;
     std::unique_ptr<float[]>                      f16_to_f32_table;  // TODO: store vtcm?
 
     bool init() {
         if (!init_ltu()) {
-            DEVICE_LOG_ERROR("Failed to initialize LTU");
+            DEVICE_LOG_ERROR("Failed to initialize LTU\n");
             return false;
         }
 
         if (!init_thread_pool()) {
-            DEVICE_LOG_ERROR("Failed to initialize thread pool");
+            DEVICE_LOG_ERROR("Failed to initialize thread pool\n");
             return false;
         }
 
-        DEVICE_LOG_DEBUG("NPU device context initialized");
+        power_utils = std::make_unique<hexagon::power_utils>();
+        if (power_utils && power_utils->is_valid()) {
+            power_utils->set_dvcs_performance_mode(true);
+            DEVICE_LOG_DEBUG("Power utilities initialized with DVCS performance mode enabled\n");
+        } else {
+            DEVICE_LOG_ERROR("Failed to initialize power utilities\n");
+        }
+
+        DEVICE_LOG_DEBUG("NPU device context initialized\n");
         return true;
     }
 
@@ -41,29 +50,29 @@ struct npu_device_context {
 
         f16_to_f32_table = std::make_unique<float[]>(kLtuCount);
         if (!f16_to_f32_table) {
-            DEVICE_LOG_ERROR("Failed to allocate memory for f16_to_f32 table");
+            DEVICE_LOG_ERROR("Failed to allocate memory for f16_to_f32 table\n");
             return false;
         }
 
         hexagon::init_f16_f32_table(f16_to_f32_table.get(), kLtuCount);
-        DEVICE_LOG_DEBUG("f16_to_f32 table initialized");
+        DEVICE_LOG_DEBUG("f16_to_f32 table initialized\n");
         return true;
     }
 
     bool init_thread_pool() {
         if (thread_pool) {
-            DEVICE_LOG_DEBUG("Thread pool already initialized");
+            DEVICE_LOG_DEBUG("Thread pool already initialized\n");
             return true;
         }
 
         auto pool = std::make_unique<hexagon::default_thread_pool>();
         if (!pool) {
-            DEVICE_LOG_ERROR("Failed to create thread pool");
+            DEVICE_LOG_ERROR("Failed to create thread pool\n");
             return false;
         }
 
         thread_pool = std::move(pool);
-        DEVICE_LOG_DEBUG("Thread pool initialized");
+        DEVICE_LOG_DEBUG("Thread pool initialized\n");
         return true;
     }
 };
@@ -102,25 +111,25 @@ int npu_device_open(const char * uri, remote_handle64 * h) {
     // TODO: should we have a device context here?
     auto * context = new npu_device_context();
     if (!context->init()) {
-        DEVICE_LOG_ERROR("Failed to initialize npu_device_context");
+        DEVICE_LOG_ERROR("Failed to initialize npu_device_context\n");
         delete context;
         return AEE_EFAILED;
     }
 
     *h = reinterpret_cast<remote_handle64>(context);
-    DEVICE_LOG_INFO("NPU device context created: %p", (void *) *h);
+    DEVICE_LOG_INFO("NPU device context created: %p\n", (void *) *h);
     return AEE_SUCCESS;
 }
 
 int npu_device_close(remote_handle64 h) {
     auto * context = device_context_from_handle(h);
     if (!context) {
-        DEVICE_LOG_ERROR("Invalid npu_device_context handle");
+        DEVICE_LOG_ERROR("Invalid npu_device_context handle\n");
         return AEE_EINVHANDLE;
     }
 
     delete context;
-    DEVICE_LOG_INFO("NPU device context destroyed: %p", (void *) h);
+    DEVICE_LOG_INFO("NPU device context destroyed: %p\n", (void *) h);
     return AEE_SUCCESS;
 }
 
@@ -139,7 +148,7 @@ AEEResult npu_device_device_support_op(remote_handle64                   _h,
     NPU_UNUSED(_h);
 
     if (!srcs || srcsLen <= 0 || !dst || !is_supported) {
-        DEVICE_LOG_ERROR("npu_device_device_support_op: Invalid arguments");
+        DEVICE_LOG_ERROR("npu_device_device_support_op: Invalid arguments\n");
         return AEE_EINVARGS;
     }
 
@@ -185,7 +194,7 @@ AEEResult npu_device_tensors_free(remote_handle64                    _h,
                                   int                                tensor_handlesLen) {
     NPU_UNUSED(_h);
     if (!tensor_handles || tensor_handlesLen < 0) {
-        DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid arguments");
+        DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid arguments\n");
         return AEE_EINVARGS;
     }
 
@@ -194,7 +203,7 @@ AEEResult npu_device_tensors_free(remote_handle64                    _h,
         if (tensor) {
             delete tensor;
         } else {
-            DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid tensor handle at index %d", i);
+            DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid tensor handle at index %d\n", i);
         }
     }
 
@@ -250,13 +259,13 @@ AEEResult npu_device_graph_set_tensor_with_param(remote_handle64                
 AEEResult npu_device_graph_compute(remote_handle64 _h, npu_device_graph_handle_t graph_handle) {
     auto dev_ctx = device_context_from_handle(_h);
     if (!dev_ctx) {
-        DEVICE_LOG_DEBUG("Invalid npu_device_context handle");
+        DEVICE_LOG_DEBUG("Invalid npu_device_context handle\n");
         return AEE_EINVHANDLE;
     }
 
     auto * graph = graph_from_handle(graph_handle);
     if (!graph) {
-        DEVICE_LOG_ERROR("Invalid graph handle");
+        DEVICE_LOG_ERROR("Invalid graph handle\n");
         return AEE_EINVHANDLE;
     }
 

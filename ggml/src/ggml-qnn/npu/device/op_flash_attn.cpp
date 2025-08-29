@@ -13,7 +13,7 @@ inline float f16_to_f32(const npu_device_fp16_t src) {
 }
 
 // From: ggml/src/ggml-cpu/ops.cpp
-template <bool _IsKvF16>
+template <bool _IsKvF16, bool _HasMask>
 void flash_attn_impl(hexagon::tensor *         out,
                      const hexagon::tensor *   q,
                      const hexagon::tensor *   k,
@@ -24,11 +24,17 @@ void flash_attn_impl(hexagon::tensor *         out,
     static_assert(3 <= hexagon::kMaxParamsCount, "flash_attn op params count exceeds max params count");
 
     constexpr const npu_device_tensor_data_type kKvDataType = _IsKvF16 ? NPU_DATA_TYPE_F16 : NPU_DATA_TYPE_F32;
+    constexpr const bool                        kHasMask    = _HasMask;
 
     if (k->get_type() != kKvDataType || v->get_type() != k->get_type()) {
         DEVICE_LOG_ERROR("flash_attn_impl: k and v must have same type, got k: %s, v: %s\n",
                          hexagon::get_type_name(k->get_type()),
                          hexagon::get_type_name(v->get_type()));
+        return;
+    }
+
+    if (kHasMask != (mask != nullptr)) {
+        DEVICE_LOG_ERROR("flash_attn_impl: mask is required when kHasMask is true\n");
         return;
     }
 
@@ -96,7 +102,7 @@ void flash_attn_impl(hexagon::tensor *         out,
     const uint8_t * q_ptr     = q->get_read_buffer();
     const uint8_t * k_ptr     = k->get_read_buffer();
     const uint8_t * v_ptr     = v->get_read_buffer();
-    const uint8_t * mask_ptr  = mask ? mask->get_read_buffer() : nullptr;
+    const uint8_t * mask_ptr  = kHasMask ? mask->get_read_buffer() : nullptr;
     const uint8_t * sinks_ptr = sinks ? sinks->get_read_buffer() : nullptr;
     float *         VKQ32     = reinterpret_cast<float *>(cache_ptr);          // FP32 VKQ accumulator
     auto * VKQ16 = reinterpret_cast<npu_device_fp16_t *>(VKQ32 + aligned_dv);  // (temporary) FP16 VKQ accumulator
@@ -125,10 +131,16 @@ void flash_attn_impl(hexagon::tensor *         out,
         }
 
         const npu_device_fp16_t * mp =
-            mask_ptr ? reinterpret_cast<const npu_device_fp16_t *>(mask_ptr + iq1 * mask->get_nb(1) +
+            kHasMask ? reinterpret_cast<const npu_device_fp16_t *>(mask_ptr + iq1 * mask->get_nb(1) +
                                                                    (iq2 % mask->get_ne(2)) * mask->get_nb(2) +
                                                                    (iq3 % mask->get_ne(3)) * mask->get_nb(3)) :
                        nullptr;
+
+        q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK);
+
+        if (kHasMask) {
+            hexagon::l2fetch_row(reinterpret_cast<const uint8_t *>(mp), mask->get_nb(1));
+        }
 
         // k indices
         const int ik3 = iq3 / rk3;
@@ -138,8 +150,6 @@ void flash_attn_impl(hexagon::tensor *         out,
         const int iv3 = iq3 / rv3;
         const int iv2 = iq2 / rv2;
 
-        q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK);
-
         // online softmax / attention
         // loop over n_kv and n_head_kv
         // ref: https://arxiv.org/pdf/2112.05682.pdf
@@ -147,7 +157,7 @@ void flash_attn_impl(hexagon::tensor *         out,
         const auto * v_plane_ptr = v_ptr + iv2 * v->get_nb(2) + iv3 * v->get_nb(3);
         for (int64_t ic = 0; ic < k->get_ne(1); ++ic) {
             DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(flash_attn, 0, loop);
-            float mv = mp ? (slope * f16_to_f32(mp[ic])) : 0.0f;
+            float mv = kHasMask ? (slope * f16_to_f32(mp[ic])) : 0.0f;
             if (mv == -INFINITY) {
                 continue;
             }
@@ -282,9 +292,17 @@ bool flash_attn_f32(tensor * out, compute_params * params) {
     const auto * mask  = out->get_src(3);
     const auto * sinks = out->get_src(4);
     if (k->get_type() == NPU_DATA_TYPE_F16) {
-        flash_attn_impl<true>(out, q, k, v, mask, sinks, params);
+        if (mask) {
+            flash_attn_impl<true, true>(out, q, k, v, mask, sinks, params);
+        } else {
+            flash_attn_impl<true, false>(out, q, k, v, mask, sinks, params);
+        }
     } else {
-        flash_attn_impl<false>(out, q, k, v, mask, sinks, params);
+        if (mask) {
+            flash_attn_impl<false, true>(out, q, k, v, mask, sinks, params);
+        } else {
+            flash_attn_impl<false, false>(out, q, k, v, mask, sinks, params);
+        }
     }
     return true;
 }
@@ -338,8 +356,8 @@ bool is_flash_attn_supported(const npu_device_tensor_op_spec * op_spec,
 
     if (dst->ne[0] != v->ne[0] || dst->ne[2] != q->ne[1]) {
         DEVICE_LOG_DEBUG(
-            "[%s]dst shape does not match q and v: dst ne: %ld, %ld, %ld, %ld, q ne: %ld, %ld, %ld, %ld, "
-            "v ne: %ld, %ld, %ld, %ld\n",
+            "[%s]dst shape does not match q and v: dst ne: %lld, %lld, %lld, %lld, q ne: %lld, %lld, %lld, %lld, "
+            "v ne: %lld, %lld, %lld, %lld\n",
             op_get_name(op),
             dst->ne[0],
             dst->ne[1],
@@ -359,24 +377,25 @@ bool is_flash_attn_supported(const npu_device_tensor_op_spec * op_spec,
     if (is_transposed_or_permuted(dst->nb)) {
         DEVICE_LOG_DEBUG("[%s]dst cannot be transposed or permuted, nb: %zu, %zu, %zu, %zu\n",
                          op_get_name(op),
-                         dst->nb[0],
-                         dst->nb[1],
-                         dst->nb[2],
-                         dst->nb[3]);
+                         (size_t) dst->nb[0],
+                         (size_t) dst->nb[1],
+                         (size_t) dst->nb[2],
+                         (size_t) dst->nb[3]);
         return false;
     }
 
     if (q->ne[0] != k->ne[0]) {
-        DEVICE_LOG_DEBUG("[%s]q and k shapes do not match: q ne: %ld, %ld, %ld, %ld, k ne: %ld, %ld, %ld, %ld\n",
-                         op_get_name(op),
-                         q->ne[0],
-                         q->ne[1],
-                         q->ne[2],
-                         q->ne[3],
-                         k->ne[0],
-                         k->ne[1],
-                         k->ne[2],
-                         k->ne[3]);
+        DEVICE_LOG_DEBUG(
+            "[%s]q and k shapes do not match: q ne: %lld, %lld, %lld, %lld, k ne: %lld, %lld, %lld, %lld\n",
+            op_get_name(op),
+            q->ne[0],
+            q->ne[1],
+            q->ne[2],
+            q->ne[3],
+            k->ne[0],
+            k->ne[1],
+            k->ne[2],
+            k->ne[3]);
         return false;
     }
 

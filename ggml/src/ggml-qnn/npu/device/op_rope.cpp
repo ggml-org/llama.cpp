@@ -165,7 +165,7 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
     }
 
     if (n_dims % 2 || (_IsVision && n_dims != out->get_ne(0) / 2)) {
-        DEVICE_LOG_ERROR("[ROPE]invalid n_dims for vision ROPE: %d, expected: %d\n", n_dims, out->get_ne(0) / 2);
+        DEVICE_LOG_ERROR("[ROPE]invalid n_dims for vision ROPE: %d, expected: %lld\n", n_dims, out->get_ne(0) / 2);
         return false;  // invalid n_dims for vision ROPE
     }
 

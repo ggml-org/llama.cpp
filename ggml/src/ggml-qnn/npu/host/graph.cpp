@@ -90,13 +90,16 @@ bool host_graph::compute() {
         return false;
     }
 
+    LOG_DEBUG("[%p]host_graph::compute started\n", (void *) this);
     SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]compute, handle(%p)", (void *) this, (void *) _graph_handle);
     auto status = npu_device_graph_compute(_device_handle, _graph_handle);
     if (status != AEE_SUCCESS) {
         LOG_ERROR("Failed to compute host_graph: 0x%x\n", (int) status);
+        LOG_DEBUG("[%p]host_graph::compute finished with failure\n", (void *) this);
         return false;
     }
 
+    LOG_DEBUG("[%p]host_graph::compute finished\n", (void *) this);
     return true;
 }
 

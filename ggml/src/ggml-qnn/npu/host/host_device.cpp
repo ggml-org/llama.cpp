@@ -242,6 +242,7 @@ bool npu_device::init_rpc_mem() {
 
 bool npu_device::init_device_lib() {
     if (!_device_handle) {
+        set_fast_rpc_stack_size(_rpc_interface, _dsp_domain_id, NPU_THREAD_STACK_SIZE);
         auto         arch            = get_dsp_arch(_rpc_interface, _dsp_domain_id);
         const auto & device_lib_info = get_device_library_info(arch);
         std::string  device_lib_uri  = device_lib_info.device_lib_uri;

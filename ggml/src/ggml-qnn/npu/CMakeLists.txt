@@ -220,7 +220,7 @@ else()
         target_compile_options(hexagon_npu_skel_OBJS PUBLIC
             -fsanitize=address -fno-omit-frame-pointer
         )
-        target_link_libraries(hexagon_npu_skel_OBJS PUBLIC
+        target_link_options(hexagon_npu_skel_OBJS PUBLIC
             -fsanitize=address
         )
     endif()
@@ -248,9 +248,9 @@ else()
 
     add_library(hexagon_npu_skel SHARED $<TARGET_OBJECTS:hexagon_npu_skel_OBJS>)
     target_link_libraries(hexagon_npu_skel
-        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++abi.a
-        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++.a
-        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc.a
+        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++abi.so.1
+        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++.so.1
+        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc.so
     )
     set_target_properties(hexagon_npu_skel PROPERTIES OUTPUT_NAME "hexagon_npu_skel_${HEXAGON_ARCH}")
     target_link_libraries(hexagon_npu_skel qprintf_static)

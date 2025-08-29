@@ -8,17 +8,16 @@
 #include <HAP_power.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
-#define DEVICE_LOG_ERROR(...) FARF(FATAL, __VA_ARGS__)
-#define DEVICE_LOG_WARN(...)  FARF(ERROR, __VA_ARGS__)
-#define DEVICE_LOG_INFO(...)  FARF(HIGH, __VA_ARGS__)
+#define DEVICE_LOG_ERROR(...) hexagon::log_error(__VA_ARGS__)
+#define DEVICE_LOG_WARN(...)  hexagon::log_message(__VA_ARGS__)
+#define DEVICE_LOG_INFO(...)  hexagon::log_message(__VA_ARGS__)
 
 #ifdef _DEBUG
-#    undef FARF_LOW
-#    define FARF_LOW              1
-#    define DEVICE_LOG_DEBUG(...) FARF(LOW, __VA_ARGS__)
+#    define DEVICE_LOG_DEBUG(...) hexagon::log_message(__VA_ARGS__)
 #else
 #    define DEVICE_LOG_DEBUG(...) (void) 0
 #endif
@@ -39,6 +38,20 @@
 #define NPU_UNUSED(x) (void) (x)
 
 namespace hexagon {
+
+__attribute__((format(printf, 1, 2))) inline void log_error(const char * format, ...) {
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(stderr, format, args);
+    va_end(args);
+}
+
+__attribute__((format(printf, 1, 2))) inline void log_message(const char * format, ...) {
+    va_list args;
+    va_start(args, format);
+    std::vprintf(format, args);
+    va_end(args);
+}
 
 inline constexpr const char * op_get_name(npu_device_tensor_op op) {
     switch (op) {
@@ -137,23 +150,22 @@ class power_utils {
             return;
         }
 
-        HAP_power_request_t request = {};
-        request.type                = HAP_power_set_DCVS_v3;
-        request.dcvs_v3.dcvs_enable = enable ? TRUE : FALSE;
+        HAP_power_request_t request     = {};
+        request.type                    = HAP_power_set_DCVS_v3;
+        request.dcvs_v3.set_dcvs_enable = enable ? TRUE : FALSE;
+        request.dcvs_v3.dcvs_enable     = enable ? TRUE : FALSE;
+        request.dcvs_v3.set_core_params = TRUE;
         if (enable) {
-            request.dcvs_v3.dcvs_option = HAP_DCVS_V2_PERFORMANCE_MODE;
-            /*
-             * sleep_latency : To request for sleep latency in micro-seconds.
-             *                 Sleep latency is the minimum time before which the DSP sleeps
-             *                 Set latency to 65535 to reset it to the default value
-             */
-            request.dcvs_v3.set_latency = TRUE;
-            request.dcvs_v3.latency     = 1000;
-
-            request.dcvs_v3.set_bus_params           = TRUE;
-            request.dcvs_v3.bus_params.min_corner    = HAP_DCVS_VCORNER_SVS;
-            request.dcvs_v3.bus_params.max_corner    = HAP_DCVS_VCORNER_TURBO;
-            request.dcvs_v3.bus_params.target_corner = HAP_DCVS_VCORNER_NOM;
+            request.dcvs_v3.dcvs_option               = HAP_DCVS_V2_PERFORMANCE_MODE;
+            request.dcvs_v3.set_bus_params            = TRUE;
+            request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
+            request.dcvs_v3.set_sleep_disable         = TRUE;
+            request.dcvs_v3.sleep_disable             = TRUE;
         }
 
         auto ret = HAP_power_set(_context_ptr, &request);
@@ -359,7 +371,7 @@ template <size_t _buffer_count, size_t _sub_idx> class npu_sub_process_scoped_ti
 inline auto make_scoped_perf_timer(const char * format, ...) {
     va_list args;
     va_start(args, format);
-    char buffer[1024];
+    char buffer[512];
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     return npu_scoped_timer<1024>(buffer);

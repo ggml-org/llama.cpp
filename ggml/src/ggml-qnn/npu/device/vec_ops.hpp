@@ -8,12 +8,18 @@
 
 namespace hexagon {
 
+constexpr const size_t kBytesPerVector = sizeof(HVX_Vector);  // 128 for v73
+constexpr const size_t kAlignMask      = kBytesPerVector - 1;
+
 template <typename T, int N> struct HEXAGON_pack {
     T val[N];
 };
 
-using HVX_Vector_x2     = std::pair<HVX_Vector, HVX_Vector>;
+using HVX_Vector_x2     = HEXAGON_pack<HVX_Vector, 2>;
+using HVX_Vector_x3     = HEXAGON_pack<HVX_Vector, 3>;
+using HVX_Vector_x4     = HEXAGON_pack<HVX_Vector, 4>;
 using HVX_VectorPair_x4 = HEXAGON_pack<HVX_VectorPair, 4>;
+using HVX_VectorPred_x3 = HEXAGON_pack<HVX_VectorPred, 3>;
 
 typedef union {
     HVX_VectorPair VV;
@@ -24,8 +30,14 @@ typedef union {
     } V;
 } HVX_DV;
 
-constexpr const size_t kBytesPerVector = sizeof(HVX_Vector);  // 128 for v73
-constexpr const size_t kAlignMask      = kBytesPerVector - 1;
+typedef union {
+    HVX_Vector v;
+    float      f32[kBytesPerVector / sizeof(float)];
+    uint32_t   u32[kBytesPerVector / sizeof(uint32_t)];
+    __fp16 f16[kBytesPerVector / sizeof(__fp16)];
+    uint16_t u16[kBytesPerVector / sizeof(uint16_t)];
+    uint8_t  u8[kBytesPerVector];
+} HVX_VectorAlias;
 
 inline size_t get_aligned_size(size_t size) {
     return (size + kAlignMask) & ~kAlignMask;
@@ -383,22 +395,35 @@ _TReturn type_erase_dot_func(const void * src0, const void * src1, size_t count)
 inline HVX_Vector vec_silu_f32_f32(HVX_Vector x, HVX_VectorPair_x4 coeff) {
     using namespace hexagon::vec::math;
 
-    HVX_Vector one = Q6_V_vsplat_R(0x3F800000);
+    constexpr float kMaxExp = 88.02f;  // log(INF)
+
+    const HVX_Vector max_exp = Q6_V_vsplat_R(reinterpret_cast<const uint32_t &>(kMaxExp));
+    HVX_Vector       one     = Q6_V_vsplat_R(0x3F800000);
 
     // x/(1.0f + expf(-x));
-    HVX_Vector exp_neg_x = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(Q6_V_vzero(), x));
-    HVX_Vector denom     = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(qhmath_hvx_exp_vf(exp_neg_x), one));
-    return qhmath_hvx_div_vf(x, denom, coeff);
+    HVX_Vector     exp_neg_x = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(Q6_V_vzero(), x));
+    HVX_VectorPred pred0     = Q6_Q_vcmp_gt_VsfVsf(exp_neg_x, max_exp);
+    HVX_Vector     denom     = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(qhmath_hvx_exp_vf(exp_neg_x), one));
+    HVX_Vector     out       = qhmath_hvx_div_vf(x, denom, coeff);
+    out                      = Q6_V_vmux_QVV(pred0, Q6_V_vzero(), out);
+    return out;
 }
 
 inline HVX_Vector vec_silu_f16_f16(HVX_Vector x, HVX_VectorPair_x4 coeff) {
     using namespace hexagon::vec::math;
-    HVX_Vector one = Q6_Vh_vsplat_R(0x3c00);
+
+    constexpr __fp16 kMaxExp = 11.0898664f;  // log(INF)
+
+    const HVX_Vector max_exp = Q6_Vh_vsplat_R(reinterpret_cast<const uint16_t &>(kMaxExp));
+    HVX_Vector       one     = Q6_Vh_vsplat_R(0x3c00);
 
     // x/(1.0f + expf(-x));
-    HVX_Vector exp_neg_x = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(Q6_V_vzero(), x));
-    HVX_Vector denom     = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_VhfVhf(qhmath_hvx_exp_vhf(exp_neg_x), one));
-    return qhmath_hvx_div_vhf(x, denom, coeff);
+    HVX_Vector     exp_neg_x = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(Q6_V_vzero(), x));
+    HVX_VectorPred pred0     = Q6_Q_vcmp_gt_VhfVhf(exp_neg_x, max_exp);
+    HVX_Vector     denom     = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_VhfVhf(qhmath_hvx_exp_vhf(exp_neg_x), one));
+    HVX_Vector     out       = qhmath_hvx_div_vhf(x, denom, coeff);
+    out                      = Q6_V_vmux_QVV(pred0, Q6_V_vzero(), out);
+    return out;
 }
 
 inline HVX_Vector vec_swiglu_f32_f32(HVX_Vector x, HVX_Vector g, HVX_VectorPair_x4 coeff) {

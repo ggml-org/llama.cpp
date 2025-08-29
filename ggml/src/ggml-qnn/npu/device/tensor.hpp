@@ -20,30 +20,30 @@ class tensor {
         void * mmap_address = nullptr;
         auto   ret          = HAP_mmap_get(_info.buffer_fd, &mmap_address, &phy_address);
         if (ret != AEE_SUCCESS) {
-            DEVICE_LOG_ERROR("Failed to mmap tensor buffer: %d", (int) ret);
+            DEVICE_LOG_ERROR("Failed to mmap tensor buffer: %d\n", (int) ret);
             return;
         }
 
         _data = static_cast<uint8_t *>(mmap_address);
-        DEVICE_LOG_INFO("tensor(%p[%ldx%ldx%ldx%ld]), fd: %d, offset: %zu, mmap_addr: %p, phy_addr: 0x%lx\n",
-                        (void *) this,
-                        (long) _info.ne[0],
-                        (long) _info.ne[1],
-                        (long) _info.ne[2],
-                        (long) _info.ne[3],
-                        _info.buffer_fd,
-                        _info.offset,
-                        (void *) mmap_address,
-                        phy_address);
+        DEVICE_LOG_DEBUG("tensor(%p[%ldx%ldx%ldx%ld]), fd: %d, offset: %zu, mmap_addr: %p, phy_addr: 0x%lx\n",
+                         (void *) this,
+                         (long) _info.ne[0],
+                         (long) _info.ne[1],
+                         (long) _info.ne[2],
+                         (long) _info.ne[3],
+                         (int) _info.buffer_fd,
+                         (size_t) _info.offset,
+                         (void *) mmap_address,
+                         (long) phy_address);
     }
 
     ~tensor() noexcept {
         auto ret = HAP_mmap_put(_info.buffer_fd);
         if (ret != AEE_SUCCESS) {
-            DEVICE_LOG_ERROR("Failed to unmap tensor buffer: %d", (int) ret);
+            DEVICE_LOG_ERROR("Failed to unmap tensor buffer: %d\n", (int) ret);
         }
 
-        DEVICE_LOG_INFO("~tensor(%p) fd: %d", (void *) this, _info.buffer_fd);
+        DEVICE_LOG_DEBUG("~tensor(%p) fd: %d\n", (void *) this, _info.buffer_fd);
     }
 
     void flush() const {
@@ -131,7 +131,7 @@ class tensor {
 
     uint8_t * get_write_buffer() const {
         if (_info.is_constant) {
-            DEVICE_LOG_ERROR("Attempt to write to a constant tensor: %p", (void *) this);
+            DEVICE_LOG_ERROR("Attempt to write to a constant tensor: %p\n", (void *) this);
             return nullptr;  // Do not allow writing to constant tensors
         }
 
