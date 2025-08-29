@@ -1,0 +1,75 @@
+[[docs:funcstructs:ggml-impl.h]]
+== ggml-impl.h
+
+
+[[docs:funcstructs:ggml-impl.h:struct-ggml_hash_set]]
+=== struct ggml_hash_set
+
+[source,C++]
+----
+struct ggml_hash_set {
+    size_t size;
+    ggml_bitset_t * used;       // whether or not the keys are in use i.e. set
+    struct ggml_tensor ** keys; // actual tensors in the set, keys[i] is only defined if ggml_bitset_get(used, i)
+};
+----
+
+Hash table with linear probing. Used with the following functions (note that there are no functions for deleting individual keys):
+
+* [.codebit]#`struct ggml_hash_set ggml_hash_set_new(size_t size)`#: (declared in ggml-impl.h, defined in ggml.c)
+* [.codebit]#`void ggml_hash_set_free(struct ggml_hash_set * hash_set)`#: frees allocated memory (declared in ggml-impl.h, defined in ggml.c)
+* [.codebit]#`size_t ggml_hash_size(size_t min_sz)`#: "returns the minimum size for a hash set that can hold min_sz elements", i.e. the smallest prime number greater than min_sz (declared in ggml-impl.h, defined in ggml.c)
+* [.codebit]#`void ggml_hash_set_reset(struct ggml_hash_set * hash_set)`#: marks all keys as unused (declared in ggml-impl.h, defined in ggml.c)
+* [.codebit]#`static bool ggml_hash_contains(const struct ggml_hash_set * hash_set, struct ggml_tensor * key)`#: (declared and defined in ggml-impl.h)
+* [.codebit]#`static size_t ggml_hash_find(const struct ggml_hash_set * hash_set, const struct ggml_tensor * key)`#: "returns GGML_HASHSET_FULL if table is full, otherwise the current index of the key or where it should be inserted" (declared and defined in ggml-impl.h)
+* [.codebit]#`static size_t ggml_hash_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key)`#: "returns GGML_HASHSET_ALREADY_EXISTS if key already exists, index otherwise, asserts if table is full" (declared and defined in ggml-impl.h)
+* [.codebit]#`static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct ggml_tensor * key)`#: (declared and defined in ggml-impl.h)
+
+[[docs:funcstructs:ggml-impl.h:ggml_hash]]
+=== ggml_hash
+
+Signature:
+[.codebit]#`static inline size_t ggml_hash(const struct ggml_tensor * p)`#
+
+[source,C++]
+----
+// the last 4 bits are always zero due to alignment
+return (size_t)(uintptr_t)p >> 4;
+----
+
+
+[[docs:funcstructs:ggml-impl.h:enum-ggml_cgraph_eval_order]]
+=== enum ggml_cgraph_eval_order
+
+[source,C++]
+----
+enum ggml_cgraph_eval_order {
+    GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT = 0,
+    GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT,
+    GGML_CGRAPH_EVAL_ORDER_COUNT
+};
+----
+
+Computation graph evaluation order. Default is [.codebit]#`GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT`# (see [.codebit]#`ggml_new_graph_custom(...)`#).
+
+
+[[docs:funcstructs:ggml-impl.h:struct-ggml_cgraph]]
+=== struct ggml_cgraph
+
+[source,C++]
+----
+struct ggml_cgraph {
+    int size;    // maximum number of nodes/leafs/grads/grad_accs
+    int n_nodes; // number of nodes currently in use
+    int n_leafs; // number of leafs currently in use
+
+    struct ggml_tensor ** nodes;     // tensors with data that can change if the graph is evaluated
+    struct ggml_tensor ** grads;     // the outputs of these tensors are the gradients of the nodes
+    struct ggml_tensor ** grad_accs; // accumulators for node gradients
+    struct ggml_tensor ** leafs;     // tensors with constant data
+
+    struct ggml_hash_set visited_hash_set;
+
+    enum ggml_cgraph_eval_order order;
+};
+----
