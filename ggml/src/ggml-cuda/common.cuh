@@ -563,6 +563,33 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 #endif // CUDART_VERSION >= 12050
 }
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+static void init_fastdiv_values(uint32_t d, uint32_t & mp, uint32_t & L) {
+    // compute L = ceil(log2(d));
+    L = 0;
+    while (L < 32 && (uint32_t{ 1 } << L) < d) {
+        L++;
+    }
+
+    mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
+}
+
+static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, uint32_t mp, uint32_t L) {
+    // Compute high 32 bits of n * mp
+    uint32_t hi = __umulhi(n, mp);
+    // Apply the formula
+    return (hi + n) >> L;
+}
+
+static __device__ __forceinline__ uint32_t modulo(uint32_t n, uint32_t divisor, int mp, uint32_t L) {
+    return n - fastdiv(n, mp, L) * divisor;
+}
+
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
 
 static __device__ __forceinline__ float get_alibi_slope(
