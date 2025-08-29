@@ -619,3 +619,5 @@ export class ChatService {
 		return [systemMsg, ...messages];
 	}
 }
+
+export const chatService = new ChatService();

@@ -1,6 +1,5 @@
 import { DatabaseStore } from '$lib/stores/database';
-import { ChatService } from '$lib/services/chat';
-import { slotsService } from '$lib/services/slots';
+import { chatService, slotsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
 import type {
 	DatabaseConversation,
@@ -58,7 +57,6 @@ class ChatStore {
 	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(
 		null
 	);
-	private chatService = new ChatService();
 
 	constructor() {
 		if (browser) {
@@ -270,7 +268,7 @@ class ChatStore {
 		// Start slots polling when streaming begins
 		slotsService.startStreamingPolling();
 
-		await this.chatService.sendMessage(allMessages, {
+		await chatService.sendMessage(allMessages, {
 			...this.getApiOptions(),
 
 			onChunk: (chunk: string) => {
@@ -527,7 +525,7 @@ class ChatStore {
 	 */
 	stopGeneration() {
 		slotsService.stopStreamingPolling();
-		this.chatService.abort();
+		chatService.abort();
 		this.savePartialResponseIfNeeded();
 		this.isLoading = false;
 		this.currentResponse = '';
@@ -540,7 +538,7 @@ class ChatStore {
 		if (!this.isLoading) return;
 
 		slotsService.stopStreamingPolling();
-		this.chatService.abort();
+		chatService.abort();
 		await this.savePartialResponseIfNeeded();
 		this.isLoading = false;
 		this.currentResponse = '';

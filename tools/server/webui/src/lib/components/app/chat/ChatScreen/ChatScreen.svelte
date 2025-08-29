@@ -28,7 +28,7 @@
 		stopGeneration,
 		setMaxContextError
 	} from '$lib/stores/chat.svelte';
-	import { contextService } from '$lib/services/context';
+	import { contextService } from '$lib/services';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { AUTO_SCROLL_INTERVAL, AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
