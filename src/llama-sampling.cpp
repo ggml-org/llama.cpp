@@ -594,8 +594,8 @@ static const char * llama_sampler_dist_name(const struct llama_sampler * /*smpl*
 static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_dist *) smpl->ctx;
 
-    // sorting is not necessary here, but for now we are doing it
-    llama_sampler_softmax_impl(cur_p, true);
+    // sorting is not necessary here
+    llama_sampler_softmax_impl(cur_p, false);
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
 }
