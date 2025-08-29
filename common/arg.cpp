@@ -1775,6 +1775,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--t-max-predict-ms"}, "MILLISECONDS",
+        string_format("time limit in ms for prediction phase; triggers if generation exceeds this time and a new-line was generated (default: %ld)", params.t_max_predict_ms),
+        [](common_params & params, const std::string & value) {
+            params.t_max_predict_ms = std::stoll(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-s", "--seed"}, "SEED",
         string_format("RNG seed (default: %d, use random seed for %d)", params.sampling.seed, LLAMA_DEFAULT_SEED),
         [](common_params & params, const std::string & value) {
