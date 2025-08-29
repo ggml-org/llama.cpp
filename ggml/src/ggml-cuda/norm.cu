@@ -187,7 +187,7 @@ static __global__ void rms_norm_f32(const float * x, float *       dst,
             dst[col] = scale * x[col] * mul[mul_col];
         } else if constexpr (do_add) {
             const int add_col = col % add_ncols;
-            dst[col] += add[add_col];
+            dst[col] = scale * x[col] + add[add_col];
         } else {
             dst[col] = scale * x[col];
         }
