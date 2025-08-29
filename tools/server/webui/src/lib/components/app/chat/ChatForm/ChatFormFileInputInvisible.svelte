@@ -3,22 +3,22 @@
 
 	interface Props {
 		accept?: string;
+		class?: string;
 		multiple?: boolean;
 		onFileSelect?: (files: File[]) => void;
-		class?: string;
 	}
 
 	let {
 		accept = $bindable(),
+		class: className = '',
 		multiple = true,
-		onFileSelect,
-		class: className = ''
+		onFileSelect
 	}: Props = $props();
 
 	let fileInputElement: HTMLInputElement | undefined;
 
 	// Use modality-aware accept string by default, but allow override
-	const finalAccept = $derived(accept ?? generateModalityAwareAcceptString());
+	let finalAccept = $derived(accept ?? generateModalityAwareAcceptString());
 
 	export function click() {
 		fileInputElement?.click();

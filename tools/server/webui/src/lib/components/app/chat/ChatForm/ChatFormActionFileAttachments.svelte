@@ -8,12 +8,12 @@
 	import { supportsAudio, supportsVision } from '$lib/stores/server.svelte';
 
 	interface Props {
+		class?: string;
 		disabled?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
-		class?: string;
 	}
 
-	let { disabled = false, onFileUpload, class: className = '' }: Props = $props();
+	let { class: className = '', disabled = false, onFileUpload }: Props = $props();
 
 	const fileUploadTooltipText = $derived.by(() => {
 		return !supportsVision()
@@ -32,9 +32,9 @@
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger>
 					<Button
-						type="button"
 						class="file-upload-button h-8 w-8 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 						{disabled}
+						type="button"
 					>
 						<span class="sr-only">Attach files</span>
 

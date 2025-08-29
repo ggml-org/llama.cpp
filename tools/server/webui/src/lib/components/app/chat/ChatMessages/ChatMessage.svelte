@@ -7,15 +7,14 @@
 		ChatMessageThinkingBlock,
 		MarkdownContent
 	} from '$lib/components/app';
-	import { inputClasses } from '$lib/constants/input-classes';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { inputClasses } from '$lib/constants/input-classes';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { getDeletionInfo, isLoading } from '$lib/stores/chat.svelte';
+	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
-	import { getDeletionInfo } from '$lib/stores/chat.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import type { Component } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import MessageBranchingControls from './MessageBranchingControls.svelte';
@@ -23,23 +22,23 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		siblingInfo?: MessageSiblingInfo | null;
 		onCopy?: (message: DatabaseMessage) => void;
 		onDelete?: (message: DatabaseMessage) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
+		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
+		siblingInfo?: MessageSiblingInfo | null;
 	}
 
 	let {
 		class: className = '',
 		message,
-		siblingInfo = null,
 		onCopy,
 		onDelete,
-		onNavigateToSibling,
 		onEditWithBranching,
-		onRegenerateWithBranching
+		onNavigateToSibling,
+		onRegenerateWithBranching,
+		siblingInfo = null
 	}: Props = $props();
 
 	let showDeleteDialog = $state(false);
@@ -77,14 +76,24 @@
 		return message.content?.replace('<|channel|>analysis', '');
 	});
 
+	function handleCancelEdit() {
+		isEditing = false;
+		editedContent = message.content;
+	}
+
+	function handleConfirmDelete() {
+		onDelete?.(message);
+		showDeleteDialog = false;
+	}
+
 	async function handleCopy() {
 		await copyToClipboard(message.content, 'Message copied to clipboard');
 		onCopy?.(message);
 	}
 
-	function handleCancelEdit() {
-		isEditing = false;
-		editedContent = message.content;
+	async function handleDelete() {
+		deletionInfo = await getDeletionInfo(message.id);
+		showDeleteDialog = true;
 	}
 
 	function handleEdit() {
@@ -121,47 +130,39 @@
 		}
 		isEditing = false;
 	}
-
-	async function handleDelete() {
-		deletionInfo = await getDeletionInfo(message.id);
-		showDeleteDialog = true;
-	}
-
-	function handleConfirmDelete() {
-		onDelete?.(message);
-		showDeleteDialog = false;
-	}
 </script>
 
 {#if message.role === 'user'}
 	<div
+		aria-label="User message with actions"
 		class="group flex flex-col items-end gap-2 {className}"
 		role="group"
-		aria-label="User message with actions"
 	>
 		{#if isEditing}
 			<div class="w-full max-w-[80%]">
 				<textarea
 					bind:this={textareaElement}
 					bind:value={editedContent}
-					onkeydown={handleEditKeydown}
 					class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {inputClasses}"
+					onkeydown={handleEditKeydown}
 					placeholder="Edit your message..."
 				></textarea>
 
 				<div class="mt-2 flex justify-end gap-2">
-					<Button variant="outline" size="sm" class="h-8 px-3" onclick={handleCancelEdit}>
+					<Button class="h-8 px-3" onclick={handleCancelEdit} size="sm" variant="outline" >
 						<X class="mr-1 h-3 w-3" />
+
 						Cancel
 					</Button>
 
 					<Button
-						size="sm"
 						class="h-8 px-3"
 						onclick={handleSaveEdit}
 						disabled={!editedContent.trim() || editedContent === message.content}
+						size="sm"
 					>
 						<Check class="mr-1 h-3 w-3" />
+
 						Send
 					</Button>
 				</div>
