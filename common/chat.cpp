@@ -1188,11 +1188,11 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
 
 static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    
+
     // Generate the prompt using the apply() function with the template
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_NEMOTRON_V2;
-    
+
     // Handle thinking tags appropriately based on inputs.enable_thinking
     if (string_ends_with(data.prompt, "<think>\n")) {
         if (!inputs.enable_thinking) {
@@ -1201,7 +1201,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
             data.thinking_forced_open = true;
         }
     }
-    
+
     // When tools are present, build grammar for the <TOOLCALL> format
     if (!inputs.tools.is_null() && inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -1212,7 +1212,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
                 std::string name = function.at("name");
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
-                
+
                 // Build tool call rule for Nemotron format
                 tool_rules.push_back(builder.add_rule(name + "-call", builder.add_schema(name + "-args", {
                     {"type", "object"},
@@ -1223,17 +1223,17 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
                     {"required", json::array({"name", "arguments"})},
                 })));
             });
-            
+
             // Create tool call rule - Nemotron uses <TOOLCALL>[...] format
             auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
             auto tool_list = builder.add_rule("tool_list", "\"[\" space " + tool_call + " (\",\" space " + tool_call + ")* space \"]\"");
-            
+
             // Grammar rule for <TOOLCALL> format
             builder.add_rule("root",
                 std::string(data.thinking_forced_open ? "( \"\" space )? " : "") +
                 "\"<TOOLCALL>\" space " + tool_list + " \"</TOOLCALL>\"");
         });
-        
+
         // Define triggers for <TOOLCALL> token
         data.grammar_triggers.push_back({
             COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
@@ -1248,7 +1248,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
             });
         }
     }
-    
+
     // Set preserved tokens for all special tokens
     data.preserved_tokens = {
         "<think>",
@@ -1260,7 +1260,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
         "<AVAILABLE_TOOLS>",
         "</AVAILABLE_TOOLS>"
     };
-    
+
     return data;
 }
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {
