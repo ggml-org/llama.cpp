@@ -30,7 +30,7 @@ import java.util.Locale
 @Composable
 fun PerformanceTopBar(
     title: String,
-    memoryMetrics: MemoryMetrics,
+    memoryMetrics: MemoryMetrics?,
     temperatureDisplay: Pair<TemperatureMetrics, Boolean>?,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
@@ -70,7 +70,9 @@ fun PerformanceTopBar(
             }
 
             // Memory indicator
-            MemoryIndicator(memoryUsage = memoryMetrics)
+            memoryMetrics?.let {
+                MemoryIndicator(memoryUsage = it)
+            }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,

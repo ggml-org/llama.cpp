@@ -27,7 +27,7 @@ sealed class TopBarConfig {
     data class Performance(
         override val title: String,
         override val navigationIcon: NavigationIcon,
-        val memoryMetrics: MemoryMetrics,
+        val memoryMetrics: MemoryMetrics?,
         val temperatureInfo: Pair<TemperatureMetrics, Boolean>?,
     ) : TopBarConfig()
 

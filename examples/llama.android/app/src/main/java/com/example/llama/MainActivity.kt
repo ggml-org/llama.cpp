@@ -98,6 +98,7 @@ fun AppContent(
     val engineState by mainViewModel.engineState.collectAsState()
 
     // Metric states for scaffolds
+    val isMonitoringEnabled by settingsViewModel.isMonitoringEnabled.collectAsState()
     val memoryUsage by settingsViewModel.memoryUsage.collectAsState()
     val temperatureInfo by settingsViewModel.temperatureMetrics.collectAsState()
     val useFahrenheit by settingsViewModel.useFahrenheitUnit.collectAsState()
@@ -251,7 +252,7 @@ fun AppContent(
                     navigationIcon = NavigationIcon.Back {
                         modelLoadingViewModel.onBackPressed { navigationActions.navigateUp() }
                     },
-                    memoryMetrics = memoryUsage,
+                    memoryMetrics = if (isMonitoringEnabled) memoryUsage else null,
                     temperatureInfo = null
                 )
             )
@@ -268,8 +269,8 @@ fun AppContent(
                     navigationIcon = NavigationIcon.Back {
                         benchmarkViewModel.onBackPressed { navigationActions.navigateUp() }
                     },
-                    memoryMetrics = memoryUsage,
-                    temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+                    memoryMetrics = if (isMonitoringEnabled) memoryUsage else null,
+                    temperatureInfo = if (isMonitoringEnabled) Pair(temperatureInfo, useFahrenheit) else null
                 ),
                 bottomBarConfig = BottomBarConfig.Benchmark(
                     engineIdle = !engineState.isUninterruptible,
@@ -314,8 +315,8 @@ fun AppContent(
                     navigationIcon = NavigationIcon.Back {
                         conversationViewModel.onBackPressed { navigationActions.navigateUp() }
                     },
-                    memoryMetrics = memoryUsage,
-                    temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+                    memoryMetrics = if (isMonitoringEnabled) memoryUsage else null,
+                    temperatureInfo = if (isMonitoringEnabled) Pair(temperatureInfo, useFahrenheit) else null,
                 ),
                 bottomBarConfig = BottomBarConfig.Conversation(
                     isEnabled = !modelThinkingOrSpeaking,
@@ -402,7 +403,7 @@ fun AppContent(
                 topBarConfig = TopBarConfig.Storage(
                     title = "Models Management",
                     navigationIcon = NavigationIcon.Back { navigationActions.navigateUp() },
-                    storageMetrics = storageMetrics
+                    storageMetrics = if (isMonitoringEnabled) storageMetrics else null,
                 ),
                 bottomBarConfig = bottomBarConfig
             )

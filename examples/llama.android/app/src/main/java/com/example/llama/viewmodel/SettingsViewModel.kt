@@ -13,6 +13,7 @@ import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.monitoring.TemperatureMetrics
 import com.example.llama.monitoring.TemperatureWarningLevel
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -87,30 +88,34 @@ class SettingsViewModel @Inject constructor(
     /**
      * Starts monitoring device performance.
      */
+    private var monitoringJob: Job? = null
     private fun startMonitoring() {
         val interval = _monitoringInterval.value
 
+        monitoringJob?.cancel()
         viewModelScope.launch {
-            modelRepository.getStorageMetrics().collect { metrics ->
-                _storageMetrics.value = metrics
+            launch {
+                modelRepository.getStorageMetrics().collect { metrics ->
+                    _storageMetrics.value = metrics
+                }
             }
-        }
 
-        viewModelScope.launch {
-            performanceMonitor.monitorMemoryUsage(interval).collect { metrics ->
-                _memoryUsage.value = metrics
+            launch {
+                performanceMonitor.monitorMemoryUsage(interval).collect { metrics ->
+                    _memoryUsage.value = metrics
+                }
             }
-        }
 
-        viewModelScope.launch {
-            performanceMonitor.monitorBattery(interval * 2).collect { metrics ->
-                _batteryInfo.value = metrics
+            launch {
+                performanceMonitor.monitorBattery(interval * 2).collect { metrics ->
+                    _batteryInfo.value = metrics
+                }
             }
-        }
 
-        viewModelScope.launch {
-            performanceMonitor.monitorTemperature(interval * 2).collect { metrics ->
-                _temperatureMetrics.value = metrics
+            launch {
+                performanceMonitor.monitorTemperature(interval * 2).collect { metrics ->
+                    _temperatureMetrics.value = metrics
+                }
             }
         }
     }
@@ -120,12 +125,11 @@ class SettingsViewModel @Inject constructor(
      */
     fun setMonitoringEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            userPreferences.setPerformanceMonitoringEnabled(enabled)
-            _isMonitoringEnabled.value = enabled
-
-            if (enabled && !isMonitoringActive()) {
+            if (enabled && !_isMonitoringEnabled.value) {
                 startMonitoring()
             }
+            _isMonitoringEnabled.value = enabled
+            userPreferences.setPerformanceMonitoringEnabled(enabled)
         }
     }
 
@@ -144,21 +148,13 @@ class SettingsViewModel @Inject constructor(
      */
     fun setMonitoringInterval(intervalMs: Long) {
         viewModelScope.launch {
-            userPreferences.setMonitoringInterval(intervalMs)
-            _monitoringInterval.value = intervalMs
-
             // Restart monitoring with new interval if active
-            if (isMonitoringActive()) {
+            if (_isMonitoringEnabled.value) {
                 startMonitoring()
             }
+            userPreferences.setMonitoringInterval(intervalMs)
+            _monitoringInterval.value = intervalMs
         }
-    }
-
-    /**
-     * Checks if monitoring is currently active.
-     */
-    private fun isMonitoringActive(): Boolean {
-        return _isMonitoringEnabled.value
     }
 
     /**
