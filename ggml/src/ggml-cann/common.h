@@ -368,17 +368,18 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
-    void* init_ptr = nullptr;
-    void* sin_ptr = nullptr;
-    void* cos_ptr = nullptr;
-    int64_t max_prompt_length = 65536;
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
     std::unique_ptr<ggml_cann_graph> cann_graph;
 #endif
     cann_task_queue task_queue;
     bool async_mode;
-    bool support_set_rows;
+    // Rope Cache
+    void* rope_init_ptr = nullptr;
+    void* rope_sin_ptr = nullptr;
+    void* rope_cos_ptr = nullptr;
+    int64_t max_prompt_length = 0;
+    // Constant Pool
     void* f32_zero_cache = nullptr;
     void* f32_one_cache = nullptr;
     int64_t f32_zero_cache_element = 0;
@@ -398,14 +399,6 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-
-        support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
-        GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
-
-        if (!support_set_rows) {
-            GGML_LOG_INFO("%s: CANN Graph currently only supports execution when LLAMA_SET_ROWS is ON. "
-                    "Falling back to eager mode.\n", __func__);
-        }
     }
 
     /**
@@ -422,14 +415,20 @@ struct ggml_backend_cann_context {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
         }
-        if(init_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(init_ptr));
+        if(rope_init_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_init_ptr));
         }
-        if(sin_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(sin_ptr));
+        if(rope_sin_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_sin_ptr));
         }
-        if(cos_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(cos_ptr));
+        if(rope_cos_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_cos_ptr));
+        }
+        if(f32_zero_cache != nullptr) {
+            ACL_CHECK(aclrtFree(f32_zero_cache));
+        }
+        if(f32_one_cache != nullptr) {
+            ACL_CHECK(aclrtFree(f32_one_cache));
         }
     }
 

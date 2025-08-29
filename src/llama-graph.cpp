@@ -314,8 +314,6 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     res &= self_kq_mask->ne[0] == mctx->get_n_kv();
     res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
 
-    res &= mctx->get_supports_set_rows(); // TODO: tmp
-
     return res;
 }
 
@@ -349,8 +347,6 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
     res &= self_kq_mask_swa->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
-
-    res &= mctx->get_base()->get_supports_set_rows(); // TODO: tmp
 
     return res;
 }
@@ -1376,7 +1372,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
-    assert(!ubatch.equal_seqs());
+    assert(!ubatch.equal_seqs() || (k_cur->ne[3] == 1 && k_cur->ne[3] == ubatch.n_seqs_unq));
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;

@@ -9003,8 +9003,7 @@ static void ggml_compute_forward_ssm_scan_f32(
     GGML_ASSERT(src4->nb[0] == sizeof(float));
     GGML_ASSERT(src5->nb[0] == sizeof(float));
     GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
-    // allows optimizing the modulo since n_group should be a power of 2
-    GGML_ASSERT((ng & -ng) == ng);
+    GGML_ASSERT(nh % ng == 0);
 
     // heads per thread
     const int dh = (nh + nth - 1)/nth;
@@ -9035,6 +9034,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
                     const float dt_soft_plus = dt[h] <= 20.0f ? log1pf(expf(dt[h])) : dt[h];
                     const float dA = expf(dt_soft_plus * A[h]);
+                    const int g = h / (nh / ng); // repeat_interleave
 
                     // dim
                     for (int i1 = 0; i1 < nr; ++i1) {
@@ -9057,8 +9057,8 @@ static void ggml_compute_forward_ssm_scan_f32(
                             // TODO: maybe unroll more?
                             for (int j = 0; j < 1; j++) {
                                 GGML_F32_VEC t0 = GGML_F32_VEC_LOAD(s0 + i + j*ggml_f32_epr + ii*nc);
-                                GGML_F32_VEC t1 = GGML_F32_VEC_LOAD(B + i + j*ggml_f32_epr + (h & (ng - 1))*nc);
-                                GGML_F32_VEC t2 = GGML_F32_VEC_LOAD(C + i + j*ggml_f32_epr + (h & (ng - 1))*nc);
+                                GGML_F32_VEC t1 = GGML_F32_VEC_LOAD(B + i + j*ggml_f32_epr + g*nc);
+                                GGML_F32_VEC t2 = GGML_F32_VEC_LOAD(C + i + j*ggml_f32_epr + g*nc);
 
                                 t0 = GGML_F32_VEC_MUL(t0, adA);
                                 t1 = GGML_F32_VEC_MUL(t1, axdt);
@@ -9072,6 +9072,9 @@ static void ggml_compute_forward_ssm_scan_f32(
                         }
 
                         sumf = GGML_F32xt_REDUCE_ONE(sum);
+    #elif defined(__riscv_v_intrinsic)
+                        // todo: RVV implementation
+                        const int np = 0;
     #else
                         const int np = (nc & ~(GGML_F32_STEP - 1));
 
@@ -9087,8 +9090,8 @@ static void ggml_compute_forward_ssm_scan_f32(
                         for (int i = 0; i < np; i += GGML_F32_STEP) {
                             for (int j = 0; j < GGML_F32_ARR; j++) {
                                 ax[j] = GGML_F32_VEC_LOAD(s0 + i + j*GGML_F32_EPR + ii*nc);
-                                ay[j] = GGML_F32_VEC_LOAD(B + i + j*GGML_F32_EPR + (h & (ng - 1))*nc);
-                                az[j] = GGML_F32_VEC_LOAD(C + i + j*GGML_F32_EPR + (h & (ng - 1))*nc);
+                                ay[j] = GGML_F32_VEC_LOAD(B + i + j*GGML_F32_EPR + g*nc);
+                                az[j] = GGML_F32_VEC_LOAD(C + i + j*GGML_F32_EPR + g*nc);
 
                                 ax[j] = GGML_F32_VEC_MUL(ax[j], adA);
                                 ay[j] = GGML_F32_VEC_MUL(ay[j], axdt);
@@ -9110,7 +9113,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                         // d_state
                         for (int i0 = np; i0 < nc; ++i0) {
                             const int i = i0 + ii*nc;
-                            const int ig = i0 + (h & (ng - 1))*nc;
+                            const int ig = i0 + g*nc;
                             // state = prev_state * dA + dB * x
                             const float state = (s0[i] * dA) + (B[ig] * x_dt);
                             // y = rowwise_dotprod(state, C)
@@ -9127,6 +9130,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
                     const float dt_soft_plus = dt[h] <= 20.0f ? log1pf(expf(dt[h])) : dt[h];
+                    const int g = h / (nh / ng); // repeat_interleave
 
                     // dim
                     for (int i1 = 0; i1 < nr; ++i1) {
@@ -9141,8 +9145,8 @@ static void ggml_compute_forward_ssm_scan_f32(
                         // TODO: what happens when (d_state % svcntw()) != 0?
                         for (int64_t k = 0; k < nc; k += svcntw()) {
                             svfloat32_t vA = GGML_F32_VEC_LOAD(&A[h*nc + k]);
-                            svfloat32_t vB = GGML_F32_VEC_LOAD(&B[k + (h & (ng - 1))*nc]);
-                            svfloat32_t vC = GGML_F32_VEC_LOAD(&C[k + (h & (ng - 1))*nc]);
+                            svfloat32_t vB = GGML_F32_VEC_LOAD(&B[k + g*nc]);
+                            svfloat32_t vC = GGML_F32_VEC_LOAD(&C[k + g*nc]);
                             svfloat32_t vs0 = GGML_F32_VEC_LOAD(&s0[ii*nc + k]);
 
                             svfloat32_t t1 = GGML_F32_VEC_MUL(vdt_soft_plus, vA);
@@ -9162,7 +9166,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                         // d_state
                         for (int i0 = 0; i0 < nc; ++i0) {
                             const int i = i0 + ii*nc;
-                            const int ig = i0 + (h & (ng - 1))*nc;
+                            const int ig = i0 + g*nc;
                             // state = prev_state * dA + dB * x
                             const float state = (s0[i] * expf(dt_soft_plus * A[i0 + h*nc])) + (B[ig] * x_dt);
                             // y = rowwise_dotprod(state, C)
@@ -10023,8 +10027,8 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     int64_t h_stride_2d = head_size * head_size;
 
     #if defined(GGML_SIMD)
-        #if defined(__ARM_FEATURE_SVE)
-            // scalar Route to scalar implementation       //TODO: Write SVE code
+        #if defined(__ARM_FEATURE_SVE) || defined(__riscv_v_intrinsic)
+            // scalar Route to scalar implementation       //TODO: Write SVE code and RVV code
             for (int64_t t = 0; t < T; t++) {
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
