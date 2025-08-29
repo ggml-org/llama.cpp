@@ -2271,23 +2271,13 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     ggml_tensor* src1 = dst->src[1];  // position
     ggml_tensor* src2 = dst->src[2];  // freq_factors
 
-    // get first layer in current device.
-    int layer = 0;
-    const char* dash = std::strchr(dst->name, '-');
-    if (dash) {
-        layer = std::strtol(dash + 1, nullptr, 10);
-    }
-
-    // remember the first layer.
-    if(ctx.rope_cache.first_layer == -1)
-        ctx.rope_cache.first_layer = layer;
-
-    // only init cache when freq_factors is not null or first layer.
-    // dash == nullptr means we are in test-backend-ops
-    if(dash != nullptr && src2 == nullptr && layer != ctx.rope_cache.first_layer) {
+    if(src2 == nullptr && ctx.rope_cache.cached) {
         // use cache.
         return;
     }
+
+    // Other layers use cache except first layer.
+    ctx.rope_cache.cached = true;
 
     int64_t theta_scale_length = src0->ne[0] / 2;
     int64_t theta_scale_ne[] = {theta_scale_length, 1, 1, 1};
@@ -2309,22 +2299,30 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
 
     // theta_scale arange, [0,1,...,ne00/2 - 1]
     aclTensor* acl_theta_scale_tensor = nullptr;
-    // init theta scale, just one time
-    // dash == nullptr means we are in test-backend-ops
-    if (ctx.rope_cache.theta_scale_cache == nullptr || dash == nullptr) {
+    // cache theta scale
+    if (src2 != nullptr || ctx.rope_cache.theta_scale_length != theta_scale_length ||
+        // theta_scale and freq_scale should not change during the current token inference process, 
+        // so we can directly use == here instead of comparing the absolute difference.
+        ctx.rope_cache.theta_scale != theta_scale ||
+        ctx.rope_cache.freq_scale != freq_scale) {
+
+        ctx.rope_cache.theta_scale_length = theta_scale_length;
+        ctx.rope_cache.theta_scale = theta_scale;
+        ctx.rope_cache.freq_scale = freq_scale;
+
         if (ctx.rope_cache.theta_scale_cache != nullptr) {
             ACL_CHECK(aclrtFree(ctx.rope_cache.theta_scale_cache));
         }
         ACL_CHECK(aclrtMalloc(&ctx.rope_cache.theta_scale_cache, theta_scale_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
 
         acl_theta_scale_tensor =
-        ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float_t),
-                                theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
+            ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float_t),
+                                    theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
 
         float start = 0;
         float step = 1;
-        float stop = src0->ne[0] / 2;
-        float n_elements = src0->ne[0] / 2;
+        float stop = theta_scale_length;
+        float n_elements = theta_scale_length;
         aclnn_arange(ctx, acl_theta_scale_tensor, start, stop, step, n_elements);
 
         // power
@@ -2340,8 +2338,8 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     } else {
         // use cache
         acl_theta_scale_tensor =
-        ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float_t),
-                                theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
+            ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float_t),
+                                    theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
     }
 
     // freq_factors

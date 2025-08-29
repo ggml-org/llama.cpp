@@ -376,8 +376,11 @@ struct ggml_cann_rope_cache {
     void* theta_scale_cache = nullptr;
     void* sin_cache = nullptr;
     void* cos_cache = nullptr;
-    int first_layer = -1;
+    bool cached = false;
     int64_t position_length = 0;
+    int64_t theta_scale_length = 0;
+    float theta_scale = 0.0f;
+    float freq_scale = 0.0f;
 };
 
 struct ggml_cann_tensor_cache {
