@@ -3,7 +3,6 @@ package com.example.llama.ui.components
 import android.llama.cpp.ArmFeature
 import android.llama.cpp.ArmFeaturesMapper.DisplayItem
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButton
@@ -17,7 +16,6 @@ import kotlin.math.sqrt
 /**
  * ARM Features visualization using segmented buttons.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArmFeaturesVisualizer(
     supportedFeatures: List<DisplayItem>,

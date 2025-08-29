@@ -25,39 +25,37 @@ object ArmFeaturesMapper {
 
     /**
      * All ARM features supported by the library, in order of introduction.
-     *
-     * TODO-han.yin: fix the broken hyperlinks above!
      */
     val allFeatures = listOf(
         ArmFeature(
             name = "ASIMD",
             displayName = "ASIMD",
             description = "Advanced SIMD (NEON) - baseline vectorization",
-            armDocUrl = "https://developer.arm.com/architectures/instruction-sets/simd-isas/neon"
+            armDocUrl = "https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/matrix-matrix-multiplication-neon-sve-and-sme-compared"
         ),
         ArmFeature(
             name = "DOTPROD",
             displayName = "DOTPROD",
             description = "Dot Product instructions for neural networks",
-            armDocUrl = "https://developer.arm.com/architectures/instruction-sets/intrinsics/dotprod"
+            armDocUrl = "https://community.arm.com/arm-community-blogs/b/tools-software-ides-blog/posts/exploring-the-arm-dot-product-instructions"
         ),
         ArmFeature(
             name = "I8MM",
             displayName = "I8MM",
             description = "Integer 8-bit Matrix Multiplication",
-            armDocUrl = "https://developer.arm.com/documentation/102107/latest/Matrix-multiplication-instructions"
+            armDocUrl = "https://community.arm.com/arm-community-blogs/b/ai-blog/posts/optimize-llama-cpp-with-arm-i8mm-instruction"
         ),
         ArmFeature(
             name = "SVE",
             displayName = "SVE",
             description = "Scalable Vector Extension",
-            armDocUrl = "https://developer.arm.com/architectures/instruction-sets/simd-isas/sve"
+            armDocUrl = "https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/sve2"
         ),
         ArmFeature(
             name = "SME",
             displayName = "SME",
             description = "Scalable Matrix Extension",
-            armDocUrl = "https://developer.arm.com/architectures/instruction-sets/simd-isas/sme"
+            armDocUrl = "https://newsroom.arm.com/blog/scalable-matrix-extension"
         )
     )
 

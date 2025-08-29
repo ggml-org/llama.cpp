@@ -124,37 +124,31 @@ fun SettingsGeneralScreen(
         }
 
         // ARM Features Visualizer with Tier Information description
-        SettingsCategory(title = "About your device") {
-            Text(
-                text = "ARM Capabilities",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Text(
-                text = "Hardware-accelerated AI features",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            detectedTier?.let { tier ->
-                Spacer(modifier = Modifier.height(8.dp))
-
-                supportedFeatures?.let {
-                    ArmFeaturesVisualizerClickable(supportedFeatures = supportedFeatures)
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
+        detectedTier?.let { tier ->
+            SettingsCategory(title = "About your device") {
                 Text(
-                    text = "Optimization Tier: ${tier.name}",
+                    text = "AI Accelerated by Arm®",
                     style = MaterialTheme.typography.titleMedium
                 )
 
+                Spacer(modifier = Modifier.height(4.dp))
+
                 Text(
-                    text = tier.description,
+                    text = "Available hardware capabilities on your device are highlighted below:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                )
+
+                supportedFeatures?.let {
+                    ArmFeaturesVisualizerClickable(supportedFeatures = it)
+                }
+
+                Text(
+                    text = "Tap a feature above to learn more about how it accelerates Generative AI!",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                 )
             }
         }
