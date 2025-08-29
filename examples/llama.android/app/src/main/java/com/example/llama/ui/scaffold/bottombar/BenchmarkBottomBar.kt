@@ -27,22 +27,25 @@ fun BenchmarkBottomBar(
     showModelCard: Boolean,
     onToggleModelCard: (Boolean) -> Unit,
 ) {
+    val controlTint =
+        if (engineIdle) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+
     BottomAppBar(
         actions = {
             IconButton(onClick = onRerun) {
                 Icon(
                     imageVector = Icons.Default.Replay,
                     contentDescription = "Run the benchmark again",
-                    tint =
-                        if (engineIdle) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    tint = controlTint
                 )
             }
 
             IconButton(onClick = onClear) {
                 Icon(
                     imageVector = Icons.Default.ClearAll,
-                    contentDescription = "Clear benchmark results"
+                    contentDescription = "Clear benchmark results",
+                    tint = controlTint
                 )
             }
 

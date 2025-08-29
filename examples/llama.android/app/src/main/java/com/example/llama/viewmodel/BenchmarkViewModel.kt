@@ -4,6 +4,7 @@ import android.llama.cpp.isUninterruptible
 import androidx.lifecycle.viewModelScope
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.engine.BenchmarkService
+import com.example.llama.ui.scaffold.ScaffoldEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,7 @@ class BenchmarkViewModel @Inject constructor(
     val benchmarkResults: StateFlow<List<BenchmarkResult>> = _benchmarkResults.asStateFlow()
 
      // UI state: Model card
-    private val _showModelCard = MutableStateFlow(true)
+    private val _showModelCard = MutableStateFlow(false)
     val showModelCard = _showModelCard.asStateFlow()
 
     fun toggleModelCard(show: Boolean) {
@@ -68,10 +69,37 @@ class BenchmarkViewModel @Inject constructor(
         return true
     }
 
-    override suspend fun performCleanup() = clearResults()
+    override suspend fun performCleanup() { clearResults(null) }
 
-    fun clearResults() {
-        _benchmarkResults.value = emptyList()
+    fun clearResults(onScaffoldEvent: ((ScaffoldEvent) -> Unit)?) =
+        if (engineState.value.isUninterruptible) {
+            false
+        } else {
+            _benchmarkResults.value = emptyList()
+            onScaffoldEvent?.invoke(ScaffoldEvent.ShowSnackbar(
+                message = "All benchmark results cleared."
+            ))
+            true
+        }
+
+    /**
+     * Rerun the benchmark
+     */
+    fun rerunBenchmark(onScaffoldEvent: (ScaffoldEvent) -> Unit) {
+        if (engineState.value.isUninterruptible) {
+            onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+                message = "Benchmark already in progress!\n" +
+                    "Please wait for the current run to complete."
+            ))
+        } else {
+            runBenchmark()
+        }
+    }
+
+    fun shareResult(onScaffoldEvent: (ScaffoldEvent) -> Unit) {
+        _benchmarkResults.value.lastOrNull()?.let{
+            onScaffoldEvent(ScaffoldEvent.ShareText(it.text))
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 package com.example.llama.ui.screens
 
+import android.content.Intent
 import android.llama.cpp.InferenceEngine.State
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,11 +21,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,10 +44,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.ui.components.ModelCardContentArchitectureRow
@@ -47,6 +57,7 @@ import com.example.llama.ui.components.ModelCardContentContextRow
 import com.example.llama.ui.components.ModelCardContentField
 import com.example.llama.ui.components.ModelCardCoreExpandable
 import com.example.llama.ui.components.ModelUnloadDialogHandler
+import com.example.llama.ui.scaffold.ScaffoldEvent
 import com.example.llama.util.TableData
 import com.example.llama.util.formatMilliSeconds
 import com.example.llama.util.parseMarkdownTable
@@ -57,9 +68,12 @@ import com.example.llama.viewmodel.BenchmarkViewModel
 @Composable
 fun BenchmarkScreen(
     loadingMetrics: ModelLoadingMetrics,
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
     onNavigateBack: () -> Unit,
     viewModel: BenchmarkViewModel
 ) {
+    val context = LocalContext.current
+
     // View model states
     val engineState by viewModel.engineState.collectAsState()
     val unloadDialogState by viewModel.unloadModelState.collectAsState()
@@ -86,6 +100,12 @@ fun BenchmarkScreen(
         viewModel.onBackPressed(onNavigateBack)
     }
 
+    val onInfo = {
+        Toast.makeText(context, "Please refer to this post for more details on the benchmark methodology", Toast.LENGTH_SHORT).show()
+        val intent = Intent(Intent.ACTION_VIEW, "https://blog.steelph0enix.dev/posts/llama-cpp-guide/#llama-bench".toUri())
+        context.startActivity(intent)
+    }
+
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -96,7 +116,11 @@ fun BenchmarkScreen(
             verticalArrangement = Arrangement.Bottom,
         ) {
             items(items = benchmarkResults) {
-                BenchmarkResultCard(it)
+                BenchmarkResultCard(
+                    result = it,
+                    onRerun = { viewModel.rerunBenchmark(onScaffoldEvent) },
+                    onInfo = onInfo,
+                )
             }
         }
 
@@ -186,7 +210,11 @@ private fun ModelCardWithLoadingMetrics(
 
 
 @Composable
-fun BenchmarkResultCard(result: BenchmarkResult) {
+fun BenchmarkResultCard(
+    result: BenchmarkResult,
+    onRerun: () -> Unit,
+    onInfo: () -> Unit,
+) {
     val rawTable = parseMarkdownTable(result.text.trimIndent())
     val model = rawTable.getColumn("model").firstOrNull() ?: "Unknown"
     val parameters = rawTable.getColumn("params").firstOrNull() ?: "-"
@@ -236,6 +264,28 @@ fun BenchmarkResultCard(result: BenchmarkResult) {
             BenchmarkResultTable(rawTable)
 
             ModelCardContentField("Time spent: ", formatMilliSeconds(result.duration))
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row {
+                OutlinedButton(onClick = onRerun) {
+                    Icon(
+                        imageVector = Icons.Default.Replay,
+                        contentDescription = "Run the benchmark again"
+                    )
+                    Text("Run again", modifier = Modifier.padding(start = 6.dp))
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                FilledTonalButton(onClick = onInfo) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "Information about what the result means"
+                    )
+                    Text("How to interpret", modifier = Modifier.padding(start = 6.dp))
+                }
+            }
         }
     }
 }

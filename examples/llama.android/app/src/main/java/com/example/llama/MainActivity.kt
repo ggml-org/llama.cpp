@@ -259,9 +259,7 @@ fun AppContent(
 
         // Benchmark screen
         currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) -> {
-            val engineState by benchmarkViewModel.engineState.collectAsState()
             val showModelCard by benchmarkViewModel.showModelCard.collectAsState()
-            val benchmarkResults by benchmarkViewModel.benchmarkResults.collectAsState()
 
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
@@ -274,22 +272,9 @@ fun AppContent(
                 ),
                 bottomBarConfig = BottomBarConfig.Benchmark(
                     engineIdle = !engineState.isUninterruptible,
-                    onShare = {
-                        benchmarkResults.lastOrNull()?.let {
-                            handleScaffoldEvent(ScaffoldEvent.ShareText(it.text))
-                        }
-                    },
-                    onRerun = {
-                        if (engineState.isUninterruptible) {
-                            handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
-                                message = "Benchmark already in progress!\n" +
-                                    "Please wait for the current run to complete."
-                            ))
-                        } else {
-                            benchmarkViewModel.runBenchmark()
-                        }
-                    },
-                    onClear = benchmarkViewModel::clearResults,
+                    onShare = { benchmarkViewModel.shareResult(handleScaffoldEvent) },
+                    onRerun = { benchmarkViewModel.rerunBenchmark(handleScaffoldEvent) },
+                    onClear = { benchmarkViewModel.clearResults(handleScaffoldEvent) },
                     showModelCard = showModelCard,
                     onToggleModelCard = benchmarkViewModel::toggleModelCard,
                 )
@@ -478,6 +463,7 @@ fun AppContent(
 
                     BenchmarkScreen(
                         loadingMetrics = metrics,
+                        onScaffoldEvent = handleScaffoldEvent,
                         onNavigateBack = { navigationActions.navigateUp() },
                         viewModel = benchmarkViewModel
                     )
