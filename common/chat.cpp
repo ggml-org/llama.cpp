@@ -2060,29 +2060,6 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     }
 }
 
-static void purge_healing_marker(json & json_obj, const std::string & healing_marker) {
-    if (json_obj.is_array()) {
-        // Check if the last element is the healing marker and remove it
-        if (!json_obj.empty() && json_obj.back().is_string() && json_obj.back() == healing_marker) {
-            json_obj.erase(json_obj.size() - 1);
-        }
-    } else if (json_obj.is_object()) {
-        // Remove healing marker if it's a key
-        if (json_obj.contains(healing_marker)) {
-            json_obj.erase(healing_marker);
-        }
-
-        // Remove healing marker if it's a value
-        for (auto it = json_obj.begin(); it != json_obj.end();) {
-            if (it.value().is_string() && it.value() == healing_marker) {
-                it = json_obj.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-}
-
 static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
     // Parse thinking tags first - this handles the main reasoning content
     builder.try_parse_reasoning("<seed:think>", "</seed:think>");
