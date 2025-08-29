@@ -4387,6 +4387,7 @@ struct ggml_tensor * ggml_im2col_3d(
     const int64_t IW = b->ne[0];
 
     const int64_t OC = a->ne[3] / IC;
+    UNUSED(OC);
     const int64_t KD = a->ne[2];
     const int64_t KH = a->ne[1];
     const int64_t KW = a->ne[0];

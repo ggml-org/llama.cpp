@@ -7066,6 +7066,7 @@ static void ggml_compute_forward_im2col_3d_f16(
     const int64_t IW = ne10;
 
     const int64_t OC = ne03 / IC;
+    GGML_UNUSED(OC);
     const int64_t KD = ne02;
     const int64_t KH = ne01;
     const int64_t KW = ne00;
@@ -7156,6 +7157,7 @@ static void ggml_compute_forward_im2col_3d_f32(
     const int64_t IW = ne10;
 
     const int64_t OC = ne03 / IC;
+    GGML_UNUSED(OC);
     const int64_t KD = ne02;
     const int64_t KH = ne01;
     const int64_t KW = ne00;

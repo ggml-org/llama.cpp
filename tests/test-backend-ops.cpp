@@ -4196,7 +4196,7 @@ struct test_conv_3d : public test_case {
         return (uint64_t)N * OC * OD * OH * OW * (2 * IC * KD * KH * KW - 1);
     }
 
-    test_conv_3d_direct(
+    test_conv_3d(
         int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW,
         int64_t OC, int64_t KD, int64_t KH, int64_t KW,
         int s0, int s1, int s2,
