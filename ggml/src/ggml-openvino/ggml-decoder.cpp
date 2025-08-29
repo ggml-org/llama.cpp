@@ -370,7 +370,8 @@ std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const
     return kv_param_res_names;
 }
 
-std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(struct ggml_cgraph* cgraph) {
+std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(
+    struct ggml_cgraph* cgraph, std::set<ggml_type> types_to_dequantize) {
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
     static std::mutex weights_mutex;
     auto* nodes = cgraph->nodes;
@@ -395,7 +396,7 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                         }
                     }
                     if (should_create) {
-                        auto weight_node = create_weight_node(src);
+                        auto weight_node = create_weight_node(src, types_to_dequantize.count(src->type) > 0);
                         weight_node->set_friendly_name(src_name);
                         {
                             std::lock_guard<std::mutex> lock(weights_mutex);
@@ -409,7 +410,7 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
     return model_weights;
 }
 
-std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
+std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor, bool to_dequantize) {
     std::set<ggml_type> weight_types = {
         GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
@@ -422,15 +423,17 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
     auto ne_total = ggml_nelements(tensor);
 
     OPENVINO_ASSERT(node_shape[0] == 1, "Got 3D weights, expect all weights to be 2D: ", tensor->name);
+    node_shape.erase(node_shape.begin());
 
     // F16 and F32 case
     if (node_type != ov::element::dynamic) {
         ov::Tensor weights(node_type, node_shape);
         memcpy(weights.data(), tensor->data, ne_total * node_type.size());
         std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
-        if (node_type == ov::element::f16) {
-            weight_node = std::make_shared<ov::op::v0::Convert>(weight_node, ov::element::f32);
-        }
+        // Disabled because it triggers a bug in NPUW, no performance impact on CPU GPU
+        // if (node_type == ov::element::f16) {
+        //     weight_node = std::make_shared<ov::op::v0::Convert>(weight_node, ov::element::f32);
+        // }
         weight_node->set_friendly_name(tensor->name);
         return weight_node;
     }
@@ -440,7 +443,15 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
         tensor->extra == nullptr,
         "Unsupported weight tensor: " + std::string(tensor->name) + " Possibly this is a repacked quantized weights");
 
-    node_shape.erase(node_shape.begin());
+    if (to_dequantize) {
+        std::vector<float> weights_f32(ne_total);
+        ggml_get_type_traits(tensor->type)->to_float(tensor->data, weights_f32.data(), ggml_nelements(tensor));
+        ov::Tensor weights(ov::element::f16, node_shape);
+        ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), ggml_nelements(tensor));
+        std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
+        weight_node->set_friendly_name(tensor->name);
+        return weight_node;
+    }
 
     uint64_t weights_per_byte;
     if (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_1 || tensor->type == GGML_TYPE_Q4_K) {
