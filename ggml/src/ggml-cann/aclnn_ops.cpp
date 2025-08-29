@@ -2301,7 +2301,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     aclTensor* acl_theta_scale_tensor = nullptr;
     // cache theta scale
     if (src2 != nullptr || ctx.rope_cache.theta_scale_length != theta_scale_length ||
-        // theta_scale and freq_scale should not change during the current token inference process, 
+        // theta_scale and freq_scale should not change during the current token inference process,
         // so we can directly use == here instead of comparing the absolute difference.
         ctx.rope_cache.theta_scale != theta_scale ||
         ctx.rope_cache.freq_scale != freq_scale) {
