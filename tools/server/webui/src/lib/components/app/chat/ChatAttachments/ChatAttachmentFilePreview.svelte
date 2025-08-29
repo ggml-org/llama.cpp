@@ -2,6 +2,7 @@
 	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FileTypeCategory, TextMimeType } from '$lib/constants/supported-file-types';
+	import { formatFileSize, getFileTypeLabel, getPreviewText } from '$lib/utils/file-preview';
 
 	interface Props {
 		class?: string;
@@ -26,22 +27,6 @@
 		textContent,
 		type
 	}: Props = $props();
-
-	function formatFileSize(bytes: number): string {
-		if (bytes === 0) return '0 Bytes';
-		const k = 1024;
-		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
-		return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-	}
-
-	function getFileTypeLabel(fileType: string): string {
-		return fileType.split('/').pop()?.toUpperCase() || 'FILE';
-	}
-
-	function getPreviewText(content: string): string {
-		return content.length > 150 ? content.substring(0, 150) : content;
-	}
 </script>
 
 {#if type === TextMimeType.PLAIN || type === FileTypeCategory.TEXT}

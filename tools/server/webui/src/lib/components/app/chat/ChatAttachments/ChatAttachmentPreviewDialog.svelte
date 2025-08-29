@@ -8,6 +8,7 @@
 		ApplicationMimeType,
 		getFileTypeCategory
 	} from '$lib/constants/supported-file-types';
+	import { formatFileSize } from '$lib/utils/file-preview';
 
 	interface Props {
 		open: boolean;
@@ -44,7 +45,7 @@
 					: attachment?.type === 'audioFile'
 						? attachment.mimeType || 'audio'
 						: attachment?.type === 'pdfFile'
-							? 'application/pdf'
+							? ApplicationMimeType.PDF
 							: type || 'unknown')
 	);
 
@@ -87,15 +88,6 @@
 	let pdfImagesLoading = $state(false);
 	let pdfImagesError = $state<string | null>(null);
 
-	function formatFileSize(bytes: number): string {
-		if (bytes === 0) return '0 Bytes';
-
-		const k = 1024;
-		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-		return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-	}
 
 	async function loadPdfImages() {
 		if (!isPdf || pdfImages.length > 0 || pdfImagesLoading) return;
