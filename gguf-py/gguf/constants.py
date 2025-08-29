@@ -367,6 +367,7 @@ class MODEL_ARCH(IntEnum):
     T5ENCODER        = auto()
     JAIS             = auto()
     NEMOTRON         = auto()
+    NEMOTRON_H       = auto()
     EXAONE           = auto()
     EXAONE4          = auto()
     GRANITE          = auto()
@@ -700,6 +701,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.T5ENCODER:        "t5encoder",
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.NEMOTRON:         "nemotron",
+    MODEL_ARCH.NEMOTRON_H:       "nemotron_h",
     MODEL_ARCH.EXAONE:           "exaone",
     MODEL_ARCH.EXAONE4:          "exaone4",
     MODEL_ARCH.GRANITE:          "granite",
@@ -2294,6 +2296,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_ROT_EMBD,
         MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.NEMOTRON_H: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
