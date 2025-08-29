@@ -30,13 +30,17 @@ class BenchmarkViewModel @Inject constructor(
     private val _benchmarkResults = MutableStateFlow<List<BenchmarkResult>>(emptyList())
     val benchmarkResults: StateFlow<List<BenchmarkResult>> = _benchmarkResults.asStateFlow()
 
-     // UI state: Model card
+    // UI state: Model card
     private val _showModelCard = MutableStateFlow(false)
     val showModelCard = _showModelCard.asStateFlow()
 
     fun toggleModelCard(show: Boolean) {
         _showModelCard.value = show
     }
+
+    // UI state: Share FAB
+    private val _showShareFab = MutableStateFlow(false)
+    val showShareFab = _showShareFab.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -61,10 +65,12 @@ class BenchmarkViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            _showShareFab.value = false
             val benchmarkStartTs = System.currentTimeMillis()
             benchmarkService.benchmark(pp, tg, pl, nr)
             val benchmarkEndTs = System.currentTimeMillis()
             _benchmarkDuration.emit(benchmarkEndTs - benchmarkStartTs)
+            _showShareFab.value = true
         }
         return true
     }
@@ -76,6 +82,7 @@ class BenchmarkViewModel @Inject constructor(
             false
         } else {
             _benchmarkResults.value = emptyList()
+            _showShareFab.value = false
             onScaffoldEvent?.invoke(ScaffoldEvent.ShowSnackbar(
                 message = "All benchmark results cleared."
             ))

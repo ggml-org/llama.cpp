@@ -259,6 +259,7 @@ fun AppContent(
 
         // Benchmark screen
         currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) -> {
+            val showShareFab by benchmarkViewModel.showShareFab.collectAsState()
             val showModelCard by benchmarkViewModel.showModelCard.collectAsState()
 
             ScaffoldConfig(
@@ -272,6 +273,7 @@ fun AppContent(
                 ),
                 bottomBarConfig = BottomBarConfig.Benchmark(
                     engineIdle = !engineState.isUninterruptible,
+                    showShareFab = showShareFab,
                     onShare = { benchmarkViewModel.shareResult(handleScaffoldEvent) },
                     onRerun = { benchmarkViewModel.rerunBenchmark(handleScaffoldEvent) },
                     onClear = { benchmarkViewModel.clearResults(handleScaffoldEvent) },

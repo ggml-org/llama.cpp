@@ -87,6 +87,7 @@ sealed class BottomBarConfig {
     }
 
     data class Benchmark(
+        val showShareFab: Boolean,
         val engineIdle: Boolean,
         val onShare: () -> Unit,
         val onRerun: () -> Unit,

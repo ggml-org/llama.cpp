@@ -104,6 +104,7 @@ fun AppScaffold(
 
             is BottomBarConfig.Benchmark -> {
                 BenchmarkBottomBar(
+                    showShareFab = config.showShareFab,
                     engineIdle = config.engineIdle,
                     onShare = config.onShare,
                     onRerun = config.onRerun,

@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 @Composable
 fun BenchmarkBottomBar(
     engineIdle: Boolean,
+    showShareFab: Boolean,
     onShare: () -> Unit,
     onRerun: () -> Unit,
     onClear: () -> Unit,
@@ -59,7 +60,7 @@ fun BenchmarkBottomBar(
         floatingActionButton = {
             // Only show FAB if the benchmark result is ready
             AnimatedVisibility(
-                visible = engineIdle,
+                visible = showShareFab,
                 enter = scaleIn() + fadeIn(),
                 exit = scaleOut() + fadeOut()
             ) {
