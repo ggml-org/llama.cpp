@@ -181,15 +181,18 @@ static __global__ void rms_norm_f32(const float *  x,
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if constexpr (block_size > WARP_SIZE) {
-        static_assert(block_size == 1024, "unexpected block_size");
+        static_assert((block_size <= 1024) && (block_size % 32 == 0), "unexpected block_size");
         __shared__ float s_sum[32];
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int        warp_id = tid / WARP_SIZE;
+        const int        lane_id = tid % WARP_SIZE;
         if (lane_id == 0) {
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = 0.0f;
+        if (lane_id < (block_size / WARP_SIZE)) {
+            tmp = s_sum[lane_id];
+        }
         tmp = warp_reduce_sum(tmp);
     }
 
@@ -370,8 +373,8 @@ static void rms_norm_f32_cuda(
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
     const dim3 blocks_num(nrows, nchannels, nsamples);
     if (ncols < 1024) {
-        const dim3 block_dims(WARP_SIZE, 1, 1);
-        rms_norm_f32<WARP_SIZE, false><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        const dim3 block_dims(256, 1, 1);
+        rms_norm_f32<256, false><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
         rms_norm_f32<1024, false><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
@@ -420,8 +423,8 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         uint32_t mp_mul_samples, L_mul_samples;
         init_fastdiv_values(mul_nsamples, mp_mul_samples, L_mul_samples);
         if (ncols < 1024) {
-            const dim3 block_dims(WARP_SIZE, 1, 1);
-            rms_norm_f32<WARP_SIZE, true><<<blocks_num, block_dims, 0, stream>>>(x,
+            const dim3 block_dims(256, 1, 1);
+            rms_norm_f32<256, true><<<blocks_num, block_dims, 0, stream>>>(x,
                                                                                  dst,
                                                                                  ncols,
                                                                                  stride_row,
@@ -489,8 +492,8 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         uint32_t mp_add_samples, L_add_samples;
         init_fastdiv_values(add_nsamples, mp_add_samples, L_add_samples);
         if (ncols < 1024) {
-            const dim3 block_dims(WARP_SIZE, 1, 1);
-            rms_norm_f32<WARP_SIZE, true, true><<<blocks_num, block_dims, 0, stream>>>(x,
+            const dim3 block_dims(256, 1, 1);
+            rms_norm_f32<256, true, true><<<blocks_num, block_dims, 0, stream>>>(x,
                                                                                        dst,
                                                                                        ncols,
                                                                                        stride_row,
