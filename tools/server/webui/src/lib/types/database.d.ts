@@ -1,9 +1,3 @@
-export interface DatabaseAppSettings {
-	id: string;
-	theme: 'light' | 'dark' | 'system';
-	model: string;
-	temperature: number;
-}
 
 export interface DatabaseConversation {
 	currNode: string | null;

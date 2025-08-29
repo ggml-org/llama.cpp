@@ -1,8 +1,33 @@
 import { config } from '$lib/stores/settings.svelte';
 
 /**
- * Service class for handling chat completions with the llama.cpp server.
- * Provides methods for sending messages, handling streaming responses, and managing chat sessions.
+ * ChatService - Low-level API communication layer for llama.cpp server interactions
+ * 
+ * This service handles direct communication with the llama.cpp server's chat completion API.
+ * It provides the network layer abstraction for AI model interactions while remaining
+ * stateless and focused purely on API communication.
+ * 
+ * **Architecture & Relationship with ChatStore:**
+ * - **ChatService** (this class): Stateless API communication layer
+ *   - Handles HTTP requests/responses with llama.cpp server
+ *   - Manages streaming and non-streaming response parsing
+ *   - Provides request abortion capabilities
+ *   - Converts database messages to API format
+ *   - Handles error translation and context detection
+ * 
+ * - **ChatStore**: Stateful orchestration and UI state management
+ *   - Uses ChatService for all AI model communication
+ *   - Manages conversation state, message history, and UI reactivity
+ *   - Coordinates with DatabaseStore for persistence
+ *   - Handles complex workflows like branching and regeneration
+ * 
+ * **Key Responsibilities:**
+ * - Message format conversion (DatabaseMessage → API format)
+ * - Streaming response handling with real-time callbacks
+ * - Reasoning content extraction and processing
+ * - File attachment processing (images, PDFs, audio, text)
+ * - Context error detection and reporting
+ * - Request lifecycle management (abort, cleanup)
  */
 export class ChatService {
 	private abortController: AbortController | null = null;

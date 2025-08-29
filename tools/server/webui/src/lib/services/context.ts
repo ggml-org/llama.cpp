@@ -9,7 +9,36 @@ export interface ContextCheckResult {
 }
 
 /**
- * Enhanced context service that uses real-time slots data for accurate context checking
+ * ContextService - Context window management and limit checking
+ * 
+ * This service provides context window monitoring and limit checking using real-time
+ * server data from the slots service. It helps prevent context overflow by tracking
+ * current usage and calculating available space for new content.
+ * 
+ * **Architecture & Relationships:**
+ * - **ContextService** (this class): Context limit monitoring
+ *   - Uses SlotsService for real-time context usage data
+ *   - Calculates available tokens with configurable reserves
+ *   - Provides context limit checking and error messaging
+ *   - Helps prevent context window overflow
+ * 
+ * - **SlotsService**: Provides current context usage from server slots
+ * - **ChatStore**: Uses context checking before sending messages
+ * - **UI Components**: Display context usage warnings and limits
+ * 
+ * **Key Features:**
+ * - **Real-time Context Checking**: Uses live server data for accuracy
+ * - **Token Reservation**: Reserves tokens for response generation
+ * - **Limit Detection**: Prevents context window overflow
+ * - **Usage Reporting**: Detailed context usage statistics
+ * - **Error Messaging**: User-friendly context limit messages
+ * - **Configurable Reserves**: Adjustable token reservation for responses
+ * 
+ * **Context Management:**
+ * - Monitors current context usage from active slots
+ * - Calculates available space considering reserved tokens
+ * - Provides early warning before context limits are reached
+ * - Helps optimize conversation length and content
  */
 export class ContextService {
 	private reserveTokens: number;

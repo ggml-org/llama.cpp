@@ -1,6 +1,34 @@
 /**
- * Settings store using Svelte 5 runes for reactive state management
- * Provides configuration persistence and theme management
+ * SettingsStore - Application configuration and theme management
+ * 
+ * This store manages all application settings including AI model parameters, UI preferences,
+ * and theme configuration. It provides persistent storage through localStorage with reactive
+ * state management using Svelte 5 runes.
+ * 
+ * **Architecture & Relationships:**
+ * - **SettingsStore** (this class): Configuration state management
+ *   - Manages AI model parameters (temperature, max tokens, etc.)
+ *   - Handles theme switching and persistence
+ *   - Provides localStorage synchronization
+ *   - Offers reactive configuration access
+ * 
+ * - **ChatService**: Reads model parameters for API requests
+ * - **UI Components**: Subscribe to theme and configuration changes
+ * 
+ * **Key Features:**
+ * - **Model Parameters**: Temperature, max tokens, top-p, top-k, repeat penalty
+ * - **Theme Management**: Auto, light, dark theme switching
+ * - **Persistence**: Automatic localStorage synchronization
+ * - **Reactive State**: Svelte 5 runes for automatic UI updates
+ * - **Default Handling**: Graceful fallback to defaults for missing settings
+ * - **Batch Updates**: Efficient multi-setting updates
+ * - **Reset Functionality**: Restore defaults for individual or all settings
+ * 
+ * **Configuration Categories:**
+ * - Generation parameters (temperature, tokens, sampling)
+ * - UI preferences (theme, display options)
+ * - System settings (model selection, prompts)
+ * - Advanced options (seed, penalties, context handling)
  */
 
 import { browser } from '$app/environment';

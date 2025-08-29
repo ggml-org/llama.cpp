@@ -4,21 +4,54 @@ import { filterByLeafNodeId, findDescendantMessages } from '$lib/utils/branching
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
 	messages!: EntityTable<DatabaseMessage, string>;
-	settings!: EntityTable<DatabaseAppSettings, string>;
 
 	constructor() {
 		super('LlamacppWebui');
 
 		this.version(1).stores({
 			conversations: 'id, lastModified, currNode, name',
-			messages: 'id, convId, type, role, timestamp, parent, children',
-			settings: 'id'
+			messages: 'id, convId, type, role, timestamp, parent, children'
 		});
 	}
 }
 
 const db = new LlamacppDatabase();
 
+/**
+ * DatabaseStore - Persistent data layer for conversation and message management
+ * 
+ * This service provides a comprehensive data access layer built on IndexedDB using Dexie.
+ * It handles all persistent storage operations for conversations, messages, and application settings
+ * with support for complex conversation branching and message threading.
+ * 
+ * **Architecture & Relationships:**
+ * - **DatabaseStore** (this class): Stateless data persistence layer
+ *   - Manages IndexedDB operations through Dexie ORM
+ *   - Handles conversation and message CRUD operations
+ *   - Supports complex branching with parent-child relationships
+ *   - Provides transaction safety for multi-table operations
+ * 
+ * - **ChatStore**: Primary consumer for conversation state management
+ *   - Uses DatabaseStore for all persistence operations
+ *   - Coordinates UI state with database state
+ *   - Handles conversation lifecycle and message branching
+ * 
+ * **Key Features:**
+ * - **Conversation Management**: Create, read, update, delete conversations
+ * - **Message Branching**: Support for tree-like conversation structures
+ * - **Transaction Safety**: Atomic operations for data consistency
+ * - **Path Resolution**: Navigate conversation branches and find leaf nodes
+ * - **Cascading Deletion**: Remove entire conversation branches
+ * 
+ * **Database Schema:**
+ * - `conversations`: Conversation metadata with current node tracking
+ * - `messages`: Individual messages with parent-child relationships
+ * 
+ * **Branching Model:**
+ * Messages form a tree structure where each message can have multiple children,
+ * enabling conversation branching and alternative response paths. The conversation's
+ * `currNode` tracks the currently active branch endpoint.
+ */
 export class DatabaseStore {
 	
 	/**
@@ -270,32 +303,6 @@ export class DatabaseStore {
 		return filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 	}
 
-	/**
-	 * Gets the app settings
-	 * 
-	 * @returns {Promise<DatabaseAppSettings>} Promise that resolves to the app settings
-	 */
-	static async getSettings(): Promise<DatabaseAppSettings> {
-		let settings = await db.settings.get('default');
-
-		if (!settings) {
-			settings = {
-				id: 'default',
-				theme: 'system',
-				model: 'llama-3.2-3b-instruct',
-				temperature: 0.7,
-				maxTokens: 2048,
-				topP: 0.9,
-				topK: 40,
-				repeatPenalty: 1.1,
-				seed: -1,
-				systemPrompt: 'You are a helpful AI assistant.'
-			};
-			await db.settings.add(settings);
-		}
-
-		return settings;
-	}
 
 	/**
 	 * Updates a conversation.
@@ -341,13 +348,4 @@ export class DatabaseStore {
 		await db.messages.update(id, updates);
 	}
 
-	/**
-	 * Updates the app settings
-	 * 
-	 * @param {Partial<Omit<DatabaseAppSettings, 'id'>>} updates - Partial updates to apply
-	 * @returns {Promise<void>} Promise that resolves when the settings are updated
-	 */
-	static async updateSettings(updates: Partial<Omit<DatabaseAppSettings, 'id'>>): Promise<void> {
-		await db.settings.update('default', updates);
-	}
 }

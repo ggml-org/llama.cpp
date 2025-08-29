@@ -15,7 +15,6 @@ import type {
 import type { ChatMessageType, ChatRole, ChatUploadedFile } from '$lib/types/chat';
 
 import type {
-	DatabaseAppSettings,
 	DatabaseConversation,
 	DatabaseMessage,
 	DatabaseMessageExtra,
@@ -51,7 +50,6 @@ declare global {
 		ChatMessageType,
 		ChatRole,
 		ChatUploadedFile,
-		DatabaseAppSettings,
 		DatabaseConversation,
 		DatabaseMessage,
 		DatabaseMessageExtra,

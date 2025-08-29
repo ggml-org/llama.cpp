@@ -66,6 +66,11 @@ export function filterByLeafNodeId(
 		if (currentNode.type !== 'root' || includeRoot) {
 			result.push(currentNode);
 		}
+
+		// Stop traversal if parent is null (reached root)
+		if (currentNode.parent === null) {
+			break;
+		}
 		currentNode = nodeMap.get(currentNode.parent);
 	}
 
@@ -162,9 +167,20 @@ export function getMessageSiblings(
 		return null;
 	}
 
+	// Handle null parent (root message) case
+	if (message.parent === null) {
+		// No parent means this is likely a root node with no siblings
+		return {
+			message,
+			siblingIds: [messageId],
+			currentIndex: 0,
+			totalSiblings: 1
+		};
+	}
+
 	const parentNode = nodeMap.get(message.parent);
 	if (!parentNode) {
-		// No parent means this is likely a root node with no siblings
+		// Parent not found - treat as single message
 		return {
 			message,
 			siblingIds: [messageId],
