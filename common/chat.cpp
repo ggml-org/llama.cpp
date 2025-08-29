@@ -1409,9 +1409,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
         {"thinking", inputs.enable_thinking},
     };
 
-    auto prompt = apply(tmpl, inputs, 
+    auto prompt = apply(tmpl, inputs,
                        /* messages_override= */ inputs.messages,
-                       /* tools_override= */ std::nullopt, 
+                       /* tools_override= */ std::nullopt,
                        additional_context);
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
@@ -2321,7 +2321,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // DeepSeek V3.1: detect based on specific patterns in the template
-    if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos && 
+    if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos &&
         params.json_schema.is_null()) {
         return common_chat_params_init_deepseek_v3_1(tmpl, params);
     }
