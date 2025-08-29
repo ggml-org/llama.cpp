@@ -53,6 +53,7 @@
 extern "C" {
 #endif
 
+#define TSAVORITE_KERNEL_SIZE 64
 #define TSAVORITE_DEVICE_MAX_BUF_LEN 1024 * 1024 * 128
 
 enum ggml_tsavorite_input_tensors_count {
