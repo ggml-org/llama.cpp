@@ -1338,10 +1338,6 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
     // when the scheduler is reset, we cannnot reuse the old graph, so we reset the previous graph result to prevent that
     gf_res_prev->reset();
 
-    // store the n_outputs as it is, and restore it afterwards
-    // TODO: not sure if needed, might simplify in the future by removing this
-    const auto save_n_outputs = this->n_outputs;
-
     this->n_outputs = n_outputs;
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
@@ -1354,8 +1350,6 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
     res->reset();
 
     auto * gf = model.build_graph(gparams);
-
-    this->n_outputs = save_n_outputs;
 
     // initialize scheduler with the specified graph
     if (!ggml_backend_sched_reserve(sched.get(), gf)) {
