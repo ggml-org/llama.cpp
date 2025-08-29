@@ -185,7 +185,7 @@ export const AppContextProvider = ({
       type: 'text',
       timestamp: pendingId,
       role: 'assistant',
-      content: null,
+      content: config.assistantPrefill,
       parent: leafNodeId,
       children: [],
     };
@@ -201,6 +201,9 @@ export const AppContextProvider = ({
       ];
       if (config.excludeThoughtOnReq) {
         messages = filterThoughtFromMsgs(messages);
+      }
+      if (config.assistantPrefill.length !== 0) {
+          messages.push({ role: 'assistant', content: config.assistantPrefill })
       }
       if (isDev) console.log({ messages });
 

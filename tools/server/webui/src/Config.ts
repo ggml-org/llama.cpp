@@ -13,6 +13,7 @@ export const CONFIG_DEFAULT = {
   // Do not use nested objects, keep it single level. Prefix the key if you need to group them.
   apiKey: '',
   systemMessage: '',
+  assistantPrefill: '',
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
@@ -45,6 +46,7 @@ export const CONFIG_DEFAULT = {
 export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
+  assistantPrefill: 'Text to start the model response with.',
   pasteLongTextToFileLen:
     'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:

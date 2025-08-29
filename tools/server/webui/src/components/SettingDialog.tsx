@@ -93,6 +93,11 @@ const SETTING_SECTIONS: SettingSection[] = [
         label: 'System Message (will be disabled if left empty)',
         key: 'systemMessage',
       },
+      {
+        type: SettingInputType.LONG_INPUT,
+        label: 'Model response prefill',
+        key: 'assistantPrefill',
+      },
       ...BASIC_KEYS.map(
         (key) =>
           ({
@@ -478,12 +483,12 @@ function SettingsModalLongInput({
   return (
     <label className="form-control">
       <div className="label inline text-sm">{label || configKey}</div>
-      <textarea
+      <div><textarea
         className="textarea textarea-bordered h-24 mb-2"
         placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-      />
+      /></div>
     </label>
   );
 }
