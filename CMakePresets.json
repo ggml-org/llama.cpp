@@ -30,6 +30,8 @@
     { "name": "static",   "hidden": true, "cacheVariables": { "GGML_STATIC":      "ON" } },
     { "name": "sycl_f16", "hidden": true, "cacheVariables": { "GGML_SYCL_F16":    "ON" } },
     { "name": "vulkan",   "hidden": true, "cacheVariables": { "GGML_VULKAN":      "ON" } },
+    { "name": "remoting_frontend",   "hidden": true, "cacheVariables": { "GGML_REMOTING_FRONTEND":      "ON" } },
+    { "name": "remoting_backend",   "hidden": true, "cacheVariables": { "GGML_REMOTING_BACKEND":      "ON" } },
 
     {
         "name": "x64-windows-llvm", "hidden": true,
