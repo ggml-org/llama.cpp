@@ -11,7 +11,7 @@ import {
 	AudioExtension,
 	AudioMimeType,
 	PdfExtension,
-	PdfMimeType,
+	ApplicationMimeType,
 	TextExtension,
 	TextMimeType
 } from '$lib/constants/supported-file-types';
@@ -166,7 +166,7 @@ export function generateModalityAwareAcceptString(): string {
 	acceptedExtensions.push(...Object.values(TextExtension));
 	acceptedMimeTypes.push(...Object.values(TextMimeType));
 	acceptedExtensions.push(...Object.values(PdfExtension));
-	acceptedMimeTypes.push(...Object.values(PdfMimeType));
+	acceptedMimeTypes.push(...Object.values(ApplicationMimeType));
 
 	// Include images only if vision is supported
 	if (hasVision) {

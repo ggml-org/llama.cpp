@@ -14,7 +14,7 @@
 		AudioExtension,
 		AudioMimeType,
 		PdfExtension,
-		PdfMimeType,
+		ApplicationMimeType,
 		TextExtension,
 		FileTypeCategory
 	} from '$lib/constants/supported-file-types';
@@ -69,7 +69,7 @@
 			case FileTypeCategory.AUDIO:
 				return [...Object.values(AudioExtension), ...Object.values(AudioMimeType)].join(',');
 			case FileTypeCategory.PDF:
-				return [...Object.values(PdfExtension), ...Object.values(PdfMimeType)].join(',');
+				return [...Object.values(PdfExtension), ...Object.values(ApplicationMimeType)].join(',');
 			case FileTypeCategory.TEXT:
 				return [...Object.values(TextExtension), TextMimeType.PLAIN].join(',');
 			default:

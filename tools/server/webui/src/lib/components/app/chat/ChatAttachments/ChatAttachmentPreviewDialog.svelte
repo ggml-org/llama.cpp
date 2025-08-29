@@ -5,7 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import {
 		FileTypeCategory,
-		PdfMimeType,
+		ApplicationMimeType,
 		getFileTypeCategory
 	} from '$lib/constants/supported-file-types';
 
@@ -69,7 +69,7 @@
 	let isImage = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image'
 	);
-	let isPdf = $derived(displayType === PdfMimeType.PDF);
+	let isPdf = $derived(displayType === ApplicationMimeType.PDF);
 	let isText = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text'
 	);
@@ -124,7 +124,7 @@
 						byteNumbers[i] = byteCharacters.charCodeAt(i);
 					}
 					const byteArray = new Uint8Array(byteNumbers);
-					file = new File([byteArray], displayName, { type: PdfMimeType.PDF });
+					file = new File([byteArray], displayName, { type: ApplicationMimeType.PDF });
 				}
 			}
 

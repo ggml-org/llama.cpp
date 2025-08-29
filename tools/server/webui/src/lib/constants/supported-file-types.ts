@@ -136,7 +136,7 @@ export enum AudioMimeType {
 	WEBM_OPUS = 'audio/webm;codecs=opus'
 }
 
-export enum PdfMimeType {
+export enum ApplicationMimeType {
 	PDF = 'application/pdf'
 }
 
@@ -215,7 +215,7 @@ export const AUDIO_FILE_TYPES = {
 export const PDF_FILE_TYPES = {
 	[PdfFileType.PDF]: {
 		extensions: [PdfExtension.PDF],
-		mimeTypes: [PdfMimeType.PDF]
+		mimeTypes: [ApplicationMimeType.PDF]
 	}
 } as const;
 
@@ -349,7 +349,7 @@ export const ALL_SUPPORTED_EXTENSIONS = [
 export const ALL_SUPPORTED_MIME_TYPES = [
 	...Object.values(ImageMimeType),
 	...Object.values(AudioMimeType),
-	...Object.values(PdfMimeType),
+	...Object.values(ApplicationMimeType),
 	...Object.values(TextMimeType)
 ] as const;
 

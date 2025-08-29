@@ -4,7 +4,7 @@
  */
 
 import { browser } from '$app/environment';
-import { ImageMimeType, PdfMimeType } from '$lib/constants/supported-file-types';
+import { ImageMimeType, ApplicationMimeType } from '$lib/constants/supported-file-types';
 import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {
@@ -137,7 +137,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
  * @returns True if the file is a PDF
  */
 export function isPdfFile(file: File): boolean {
-	return file.type === PdfMimeType.PDF;
+	return file.type === ApplicationMimeType.PDF;
 }
 
 /**
@@ -145,6 +145,6 @@ export function isPdfFile(file: File): boolean {
  * @param mimeType - The MIME type to check
  * @returns True if the MIME type is application/pdf
  */
-export function isPdfMimeType(mimeType: string): boolean {
-	return mimeType === PdfMimeType.PDF;
+export function isApplicationMimeType(mimeType: string): boolean {
+	return mimeType === ApplicationMimeType.PDF;
 }
