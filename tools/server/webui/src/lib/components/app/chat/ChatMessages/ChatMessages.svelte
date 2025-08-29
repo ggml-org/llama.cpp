@@ -1,14 +1,14 @@
 <script lang="ts">
+	import { ChatMessage } from '$lib/components/app';
+	import { DatabaseService } from '$lib/services/database';
 	import {
+		activeConversation,
 		deleteMessage,
 		navigateToSibling,
 		editMessageWithBranching,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
-	import { activeConversation } from '$lib/stores/chat.svelte';
-	import { ChatMessage } from '$lib/components/app';
 	import { getMessageSiblings } from '$lib/utils/branching';
-	import { DatabaseService } from '$lib/services/database';
 
 	interface Props {
 		class?: string;
@@ -22,6 +22,7 @@
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
+
 		if (conversation) {
 			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;

@@ -1,23 +1,10 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Check, X, Trash2 } from '@lucide/svelte';
-	import { Card } from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
-	import {
-		ChatAttachmentsList,
-		ChatMessageThinkingBlock,
-		MarkdownContent
-	} from '$lib/components/app';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { inputClasses } from '$lib/constants/input-classes';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { getDeletionInfo, isLoading } from '$lib/stores/chat.svelte';
+	import { getDeletionInfo } from '$lib/stores/chat.svelte';
 	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
-	import type { Component } from 'svelte';
-	import { fade } from 'svelte/transition';
-	import MessageBranchingControls from './MessageBranchingControls.svelte';
+	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
+	import ChatMessageUser from './ChatMessageUser.svelte';
 
 	interface Props {
 		class?: string;
@@ -41,18 +28,16 @@
 		siblingInfo = null
 	}: Props = $props();
 
-	let showDeleteDialog = $state(false);
-	let editedContent = $state(message.content);
-	let isEditing = $state(false);
 	let deletionInfo = $state<{
 		totalCount: number;
 		userMessages: number;
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
+	let editedContent = $state(message.content);
+	let isEditing = $state(false);
+	let showDeleteDialog = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
-
-	const processingState = useProcessingState();
 
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
@@ -81,14 +66,14 @@
 		editedContent = message.content;
 	}
 
-	function handleConfirmDelete() {
-		onDelete?.(message);
-		showDeleteDialog = false;
-	}
-
 	async function handleCopy() {
 		await copyToClipboard(message.content, 'Message copied to clipboard');
 		onCopy?.(message);
+	}
+
+	function handleConfirmDelete() {
+		onDelete?.(message);
+		showDeleteDialog = false;
 	}
 
 	async function handleDelete() {
@@ -99,6 +84,7 @@
 	function handleEdit() {
 		isEditing = true;
 		editedContent = message.content;
+
 		setTimeout(() => {
 			if (textareaElement) {
 				textareaElement.focus();
@@ -108,6 +94,10 @@
 				);
 			}
 		}, 0);
+	}
+
+	function handleEditedContentChange(content: string) {
+		editedContent = content;
 	}
 
 	function handleEditKeydown(event: KeyboardEvent) {
@@ -128,276 +118,50 @@
 		if (editedContent.trim() !== message.content) {
 			onEditWithBranching?.(message, editedContent.trim());
 		}
+
 		isEditing = false;
+	}
+
+	function handleShowDeleteDialogChange(show: boolean) {
+		showDeleteDialog = show;
 	}
 </script>
 
 {#if message.role === 'user'}
-	<div
-		aria-label="User message with actions"
-		class="group flex flex-col items-end gap-2 {className}"
-		role="group"
-	>
-		{#if isEditing}
-			<div class="w-full max-w-[80%]">
-				<textarea
-					bind:this={textareaElement}
-					bind:value={editedContent}
-					class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {inputClasses}"
-					onkeydown={handleEditKeydown}
-					placeholder="Edit your message..."
-				></textarea>
-
-				<div class="mt-2 flex justify-end gap-2">
-					<Button class="h-8 px-3" onclick={handleCancelEdit} size="sm" variant="outline" >
-						<X class="mr-1 h-3 w-3" />
-
-						Cancel
-					</Button>
-
-					<Button
-						class="h-8 px-3"
-						onclick={handleSaveEdit}
-						disabled={!editedContent.trim() || editedContent === message.content}
-						size="sm"
-					>
-						<Check class="mr-1 h-3 w-3" />
-
-						Send
-					</Button>
-				</div>
-			</div>
-		{:else}
-			{#if message.extra && message.extra.length > 0}
-				<div class="mb-2 max-w-[80%]">
-					<ChatAttachmentsList attachments={message.extra} readonly={true} imageHeight="h-80" />
-				</div>
-			{/if}
-
-			{#if message.content.trim()}
-				<Card class="max-w-[80%] rounded-2xl bg-primary px-2.5 py-1.5 text-primary-foreground">
-					<div class="text-md whitespace-pre-wrap">
-						{message.content}
-					</div>
-				</Card>
-			{/if}
-
-			{#if message.timestamp}
-				{@render timestampAndActions({ role: 'user', justify: 'end', actionsPosition: 'right' })}
-			{/if}
-		{/if}
-	</div>
+	<ChatMessageUser
+		bind:textareaElement
+		class={className}
+		{deletionInfo}
+		{editedContent}
+		{isEditing}
+		{message}
+		onCancelEdit={handleCancelEdit}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onEditKeydown={handleEditKeydown}
+		onEditedContentChange={handleEditedContentChange}
+		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
 {:else}
-	<div
-		class="text-md group w-full leading-7.5 {className}"
-		role="group"
-		aria-label="Assistant message with actions"
-	>
-		{#if thinkingContent}
-			<ChatMessageThinkingBlock
-				reasoningContent={thinkingContent}
-				isStreaming={!message.timestamp}
-				hasRegularContent={!!messageContent?.trim()}
-			/>
-		{/if}
-
-		{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
-			<div class="mt-6 w-full max-w-[48rem]" in:fade>
-				<div class="processing-container">
-					<span class="processing-text">
-						{processingState.getProcessingMessage()}
-					</span>
-				</div>
-			</div>
-		{/if}
-
-		{#if message.role === 'assistant'}
-			<MarkdownContent content={messageContent} />
-		{:else}
-			<div class="text-sm whitespace-pre-wrap">
-				{messageContent}
-			</div>
-		{/if}
-
-		{#if message.timestamp}
-			{@render timestampAndActions({
-				role: 'assistant',
-				justify: 'start',
-				actionsPosition: 'left'
-			})}
-		{/if}
-	</div>
+	<ChatMessageAssistant
+		class={className}
+		{deletionInfo}
+		{message}
+		{messageContent}
+		onDelete={handleDelete}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		{onNavigateToSibling}
+		onRegenerate={handleRegenerate}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{siblingInfo}
+		{showDeleteDialog}
+		{thinkingContent}
+	/>
 {/if}
-
-{#snippet messageActions(config?: { role: ChatRole })}
-	<div
-		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
-	>
-		{@render actionButton({ icon: Copy, tooltip: 'Copy', onclick: handleCopy })}
-
-		{#if config?.role === 'user'}
-			{@render actionButton({ icon: Edit, tooltip: 'Edit', onclick: handleEdit })}
-		{:else if config?.role === 'assistant'}
-			{@render actionButton({ icon: RefreshCw, tooltip: 'Regenerate', onclick: handleRegenerate })}
-		{/if}
-
-		{@render actionButton({ icon: Trash2, tooltip: 'Delete', onclick: handleDelete })}
-	</div>
-{/snippet}
-
-{#snippet actionButton(config: { icon: Component; tooltip: string; onclick: () => void })}
-	<Tooltip.Root>
-		<Tooltip.Trigger>
-			<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={config.onclick}>
-				{@const IconComponent = config.icon}
-				<IconComponent class="h-3 w-3" />
-			</Button>
-		</Tooltip.Trigger>
-
-		<Tooltip.Content>
-			<p>{config.tooltip}</p>
-		</Tooltip.Content>
-	</Tooltip.Root>
-{/snippet}
-
-{#snippet timestampAndActions(config: {
-	role: ChatRole;
-	justify: 'start' | 'end';
-	actionsPosition: 'left' | 'right';
-})}
-	<div
-		class="relative {config.justify === 'start'
-			? 'mt-2'
-			: ''} flex h-6 items-center justify-{config.justify}"
-	>
-		<div
-			class="flex items-center text-xs text-muted-foreground transition-opacity group-hover:opacity-0"
-		>
-			{new Date(message.timestamp).toLocaleTimeString(undefined, {
-				hour: '2-digit',
-				minute: '2-digit'
-			})}
-		</div>
-
-		<div
-			class="absolute {config.actionsPosition}-0 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
-		>
-			{#if siblingInfo && siblingInfo.totalSiblings > 1}
-				<MessageBranchingControls {siblingInfo} {onNavigateToSibling} />
-			{/if}
-			{@render messageActions({ role: config.role })}
-		</div>
-	</div>
-{/snippet}
-
-<AlertDialog.Root bind:open={showDeleteDialog}>
-	<AlertDialog.Content
-		onkeydown={(e) => {
-			if (e.key === 'Enter') {
-				e.preventDefault();
-				handleConfirmDelete();
-			}
-		}}
-	>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Delete Message</AlertDialog.Title>
-			<AlertDialog.Description>
-				{#if deletionInfo && deletionInfo.totalCount > 1}
-					<div class="space-y-2">
-						<p>This will delete <strong>{deletionInfo.totalCount} messages</strong> including:</p>
-
-						<ul class="ml-4 list-inside list-disc space-y-1 text-sm">
-							{#if deletionInfo.userMessages > 0}
-								<li>
-									{deletionInfo.userMessages} user message{deletionInfo.userMessages > 1 ? 's' : ''}
-								</li>
-							{/if}
-
-							{#if deletionInfo.assistantMessages > 0}
-								<li>
-									{deletionInfo.assistantMessages} assistant response{deletionInfo.assistantMessages >
-									1
-										? 's'
-										: ''}
-								</li>
-							{/if}
-						</ul>
-
-						<p class="mt-2 text-sm text-muted-foreground">
-							All messages in this branch and their responses will be permanently removed. This
-							action cannot be undone.
-						</p>
-					</div>
-				{:else}
-					Are you sure you want to delete this message? This action cannot be undone.
-				{/if}
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-
-			<AlertDialog.Action
-				onclick={handleConfirmDelete}
-				class="bg-destructive text-white hover:bg-destructive/80"
-			>
-				{#if deletionInfo && deletionInfo.totalCount > 1}
-					Delete {deletionInfo.totalCount} Messages
-				{:else}
-					Delete
-				{/if}
-			</AlertDialog.Action>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
-
-<style>
-	.processing-container {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.5rem;
-	}
-
-	.processing-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
-		background-size: 200% 100%;
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		animation: shine 1s linear infinite;
-		font-weight: 500;
-		font-size: 0.875rem;
-	}
-
-	.processing-details {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.5rem;
-		margin-top: 0;
-	}
-
-	.processing-detail {
-		color: var(--muted-foreground);
-		font-size: 0.75rem;
-		padding: 0.25rem 0.5rem;
-		background: var(--muted);
-		border-radius: 0.5rem;
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
-		white-space: nowrap;
-		line-height: 1.2;
-	}
-
-	@keyframes shine {
-		to {
-			background-position: -200% 0;
-		}
-	}
-</style>
