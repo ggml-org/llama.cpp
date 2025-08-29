@@ -136,13 +136,13 @@ export class SlotsService {
 
 			this.lastKnownState = processingState;
 
-			this.callbacks.forEach((callback) => {
+			for (const callback of this.callbacks) {
 				try {
 					callback(processingState);
 				} catch (error) {
 					console.error('Error in slots callback:', error);
 				}
-			});
+			}
 		} catch (error) {
 			console.warn('Error fetching slots:', error);
 		}

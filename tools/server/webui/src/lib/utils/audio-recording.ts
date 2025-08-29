@@ -105,7 +105,10 @@ export class AudioRecorder {
 
 	private cleanup(): void {
 		if (this.stream) {
-			this.stream.getTracks().forEach((track) => track.stop());
+			for (const track of this.stream.getTracks()) {
+				track.stop();
+			}
+
 			this.stream = null;
 		}
 		this.mediaRecorder = null;

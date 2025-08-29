@@ -177,13 +177,13 @@
 		slotsService['parseProcessingState'] = () => mockProcessingState;
 		
 		// Trigger the processing state callbacks manually
-		slotsService['callbacks'].forEach(callback => {
+		for (const callback of slotsService['callbacks']) {
 			try {
 				callback(mockProcessingState);
 			} catch (error) {
 				console.error('Error in slots callback:', error);
 			}
-		});
+		}
 		
 		// Restore original method
 		slotsService['parseProcessingState'] = originalParseProcessingState;
