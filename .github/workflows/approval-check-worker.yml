@@ -1,0 +1,19 @@
+name: Approval Check Worker
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+ 
+jobs:
+  check-approvals:
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+      issues: write
+      
+    uses: tetherto/qvac-devops/.github/workflows/approval-check-worker.yml@production-workflows-tag
+    secrets: inherit
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      pr_sha: ${{ github.event.pull_request.head.sha }}
