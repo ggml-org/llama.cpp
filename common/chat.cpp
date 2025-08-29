@@ -623,6 +623,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
         case COMMON_CHAT_FORMAT_SEED_OSS: return "Seed-OSS";
+        case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1182,6 +1183,84 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
         {"tools_in_user_message", false},
         {"builtin_tools", builtin_tools.empty() ? json() : builtin_tools},
     });
+    return data;
+}
+
+static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    
+    // Generate the prompt using the apply() function with the template
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_NEMOTRON_V2;
+    
+    // Handle thinking tags appropriately based on inputs.enable_thinking
+    if (string_ends_with(data.prompt, "<think>\n")) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+    
+    // When tools are present, build grammar for the <TOOLCALL> format
+    if (!inputs.tools.is_null() && inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+                
+                // Build tool call rule for Nemotron format
+                tool_rules.push_back(builder.add_rule(name + "-call", builder.add_schema(name + "-args", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"name", {{"const", name}}},
+                        {"arguments", parameters},
+                    }},
+                    {"required", json::array({"name", "arguments"})},
+                })));
+            });
+            
+            // Create tool call rule - Nemotron uses <TOOLCALL>[...] format
+            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
+            auto tool_list = builder.add_rule("tool_list", "\"[\" space " + tool_call + " (\",\" space " + tool_call + ")* space \"]\"");
+            
+            // Grammar rule for <TOOLCALL> format
+            builder.add_rule("root",
+                std::string(data.thinking_forced_open ? "( \"\" space )? " : "") +
+                "\"<TOOLCALL>\" space " + tool_list + " \"</TOOLCALL>\"");
+        });
+        
+        // Define triggers for <TOOLCALL> token
+        data.grammar_triggers.push_back({
+            COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+            "<TOOLCALL>"
+        });
+    } else {
+        // Handle thinking tags for non-tool responses
+        if (data.thinking_forced_open && inputs.enable_thinking) {
+            data.grammar_lazy = false;
+            data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+                builder.add_rule("root", "\"</think>\" space");
+            });
+        }
+    }
+    
+    // Set preserved tokens for all special tokens
+    data.preserved_tokens = {
+        "<think>",
+        "</think>",
+        "<TOOLCALL>",
+        "</TOOLCALL>",
+        "<TOOL_RESPONSE>",
+        "</TOOL_RESPONSE>",
+        "<AVAILABLE_TOOLS>",
+        "</AVAILABLE_TOOLS>"
+    };
+    
     return data;
 }
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {
@@ -2060,6 +2139,34 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     }
 }
 
+static void common_chat_parse_nemotron_v2(common_chat_msg_parser & builder) {
+    // Parse thinking tags
+    builder.try_parse_reasoning("<think>", "</think>");
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    // Look for tool calls
+    static const common_regex tool_call_regex(regex_escape("<TOOLCALL>"));
+    if (auto res = builder.try_find_regex(tool_call_regex)) {
+        builder.move_to(res->groups[0].end);
+
+        // Expect JSON array of tool calls
+        auto tool_calls_data = builder.consume_json();
+        if (tool_calls_data.json.is_array()) {
+            if (!builder.try_consume_literal("</TOOLCALL>")) {
+                throw common_chat_msg_partial_exception("Incomplete tool call");
+            }
+            builder.add_tool_calls(tool_calls_data.json);
+        } else {
+            throw common_chat_msg_partial_exception("Incomplete tool call");
+        }
+    } else {
+        builder.add_content(builder.consume_rest());
+    }
+}
+
 static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
     // Parse thinking tags first - this handles the main reasoning content
     builder.try_parse_reasoning("<seed:think>", "</seed:think>");
@@ -2293,6 +2400,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_seed_oss(tmpl, params, inputs);
     }
 
+    // Nemotron v2
+    if (src.find("<SPECIAL_10>") != std::string::npos) {
+        return common_chat_params_init_nemotron_v2(tmpl, params);
+    }
+
     // Use generic handler when mixing tools + JSON schema.
     // TODO: support that mix in handlers below.
     if ((params.tools.is_array() && params.json_schema.is_object())) {
@@ -2453,6 +2565,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_SEED_OSS:
             common_chat_parse_seed_oss(builder);
+            break;
+        case COMMON_CHAT_FORMAT_NEMOTRON_V2:
+            common_chat_parse_nemotron_v2(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
