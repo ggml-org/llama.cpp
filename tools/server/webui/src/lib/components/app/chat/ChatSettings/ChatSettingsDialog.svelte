@@ -7,10 +7,10 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { setMode } from 'mode-watcher';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
-	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { supportsVision } from '$lib/stores/server.svelte';
+	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
+	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -19,94 +19,6 @@
 	}
 
 	let { onOpenChange, open = false }: Props = $props();
-
-	let localConfig: SettingsConfigType = $state({ ...config() });
-	let originalTheme: string = $state('');
-
-	$effect(() => {
-		if (open) {
-			localConfig = { ...config() };
-			originalTheme = config().theme as string;
-		}
-	});
-
-	function handleThemeChange(newTheme: string) {
-		localConfig.theme = newTheme;
-
-		setMode(newTheme as 'light' | 'dark' | 'system');
-	}
-
-	const defaultConfig = SETTING_CONFIG_DEFAULT;
-
-	function handleSave() {
-		// Validate custom JSON if provided
-		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
-			try {
-				JSON.parse(localConfig.custom);
-			} catch (error) {
-				alert('Invalid JSON in custom parameters. Please check the format and try again.');
-				console.error(error);
-				return;
-			}
-		}
-
-		// Convert numeric strings to numbers for numeric fields
-		const processedConfig = { ...localConfig };
-		const numericFields = [
-			'temperature',
-			'top_k',
-			'top_p',
-			'min_p',
-			'max_tokens',
-			'pasteLongTextToFileLen',
-			'dynatemp_range',
-			'dynatemp_exponent',
-			'typical_p',
-			'xtc_probability',
-			'xtc_threshold',
-			'repeat_last_n',
-			'repeat_penalty',
-			'presence_penalty',
-			'frequency_penalty',
-			'dry_multiplier',
-			'dry_base',
-			'dry_allowed_length',
-			'dry_penalty_last_n'
-		];
-
-		for (const field of numericFields) {
-			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
-				const numValue = Number(processedConfig[field]);
-				if (!isNaN(numValue)) {
-					processedConfig[field] = numValue;
-				} else {
-					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
-					return;
-				}
-			}
-		}
-
-		updateMultipleConfig(processedConfig);
-		onOpenChange?.(false);
-	}
-
-	function handleReset() {
-		resetConfig();
-
-		localConfig = { ...SETTING_CONFIG_DEFAULT };
-
-		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
-		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
-	}
-
-	function handleClose() {
-		if (localConfig.theme !== originalTheme) {
-			setMode(originalTheme as 'light' | 'dark' | 'system');
-		}
-		onOpenChange?.(false);
-	}
-
-	let activeSection = $state('General');
 
 	const settingSections: Array<{
 		title: string;
@@ -294,9 +206,96 @@
 		// }
 	];
 
+	let activeSection = $state('General');
+	let localConfig: SettingsConfigType = $state({ ...config() });
+	let originalTheme: string = $state('');
+
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
+
+	$effect(() => {
+		if (open) {
+			localConfig = { ...config() };
+			originalTheme = config().theme as string;
+		}
+	});
+
+	function handleThemeChange(newTheme: string) {
+		localConfig.theme = newTheme;
+
+		setMode(newTheme as 'light' | 'dark' | 'system');
+	}
+
+	const defaultConfig = SETTING_CONFIG_DEFAULT;
+
+	function handleClose() {
+		if (localConfig.theme !== originalTheme) {
+			setMode(originalTheme as 'light' | 'dark' | 'system');
+		}
+		onOpenChange?.(false);
+	}
+
+	function handleReset() {
+		resetConfig();
+
+		localConfig = { ...SETTING_CONFIG_DEFAULT };
+
+		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
+		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
+	}
+
+	function handleSave() {
+		// Validate custom JSON if provided
+		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
+			try {
+				JSON.parse(localConfig.custom);
+			} catch (error) {
+				alert('Invalid JSON in custom parameters. Please check the format and try again.');
+				console.error(error);
+				return;
+			}
+		}
+
+		// Convert numeric strings to numbers for numeric fields
+		const processedConfig = { ...localConfig };
+		const numericFields = [
+			'temperature',
+			'top_k',
+			'top_p',
+			'min_p',
+			'max_tokens',
+			'pasteLongTextToFileLen',
+			'dynatemp_range',
+			'dynatemp_exponent',
+			'typical_p',
+			'xtc_probability',
+			'xtc_threshold',
+			'repeat_last_n',
+			'repeat_penalty',
+			'presence_penalty',
+			'frequency_penalty',
+			'dry_multiplier',
+			'dry_base',
+			'dry_allowed_length',
+			'dry_penalty_last_n'
+		];
+
+		for (const field of numericFields) {
+			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
+				const numValue = Number(processedConfig[field]);
+				if (!isNaN(numValue)) {
+					processedConfig[field] = numValue;
+				} else {
+					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+					return;
+				}
+			}
+		}
+
+		updateMultipleConfig(processedConfig);
+		onOpenChange?.(false);
+	}
 </script>
 
 <Dialog.Root {open} onOpenChange={handleClose}>
@@ -315,6 +314,7 @@
 							onclick={() => (activeSection = section.title)}
 						>
 							<section.icon class="h-4 w-4" />
+
 							<span class="ml-2">{section.title}</span>
 						</button>
 					{/each}
@@ -365,6 +365,7 @@
 										(opt: { value: string; label: string; icon?: Component }) =>
 											opt.value === localConfig[field.key]
 									)}
+
 									<label for={field.key} class="block text-sm font-medium">
 										{field.label}
 									</label>
@@ -386,6 +387,7 @@
 													{@const IconComponent = selectedOption.icon}
 													<IconComponent class="h-4 w-4" />
 												{/if}
+
 												{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
 											</div>
 										</Select.Trigger>
@@ -457,6 +459,6 @@
 			</ScrollArea>
 		</div>
 
-		<ChatSettingsFooter onSave={handleSave} onReset={handleReset} onClose={handleClose} />
+		<ChatSettingsFooter onClose={handleClose} onReset={handleReset} onSave={handleSave} />
 	</Dialog.Content>
 </Dialog.Root>

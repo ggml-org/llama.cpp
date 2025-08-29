@@ -3,9 +3,9 @@
 	import { Server, Eye, Mic } from '@lucide/svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 
-	const props = $derived(serverStore.serverProps);
-	const model = $derived(serverStore.modelName);
-	const modalities = $derived(serverStore.supportedModalities);
+	let modalities = $derived(serverStore.supportedModalities);
+	let model = $derived(serverStore.modelName);
+	let props = $derived(serverStore.serverProps);
 </script>
 
 {#if props}
@@ -13,6 +13,7 @@
 		{#if model}
 			<Badge variant="outline" class="text-xs">
 				<Server class="mr-1 h-3 w-3" />
+
 				<span class="block max-w-[50vw] truncate">{model}</span>
 			</Badge>
 		{/if}
@@ -32,6 +33,7 @@
 						{:else if modality === 'audio'}
 							<Mic class="mr-1 h-3 w-3" />
 						{/if}
+
 						{modality}
 					</Badge>
 				{/each}

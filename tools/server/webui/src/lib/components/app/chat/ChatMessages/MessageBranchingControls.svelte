@@ -1,69 +1,74 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { MessageSiblingInfo } from '$lib/utils/branching';
 
 	interface Props {
+		class?: string;
 		siblingInfo: MessageSiblingInfo | null;
 		onNavigateToSibling?: (siblingId: string) => void;
-		class?: string;
 	}
 
-	let { siblingInfo, onNavigateToSibling, class: className = '' }: Props = $props();
+	let {
+		class: className = '',
+		siblingInfo,
+		onNavigateToSibling
+	}: Props = $props();
 
 	let hasPrevious = $derived(siblingInfo && siblingInfo.currentIndex > 0);
 	let hasNext = $derived(siblingInfo && siblingInfo.currentIndex < siblingInfo.totalSiblings - 1);
-	let previousSiblingId = $derived(
-		hasPrevious ? siblingInfo!.siblingIds[siblingInfo!.currentIndex - 1] : null
-	);
 	let nextSiblingId = $derived(
 		hasNext ? siblingInfo!.siblingIds[siblingInfo!.currentIndex + 1] : null
 	);
-
-	function handlePrevious() {
-		if (previousSiblingId) {
-			onNavigateToSibling?.(previousSiblingId);
-		}
-	}
+	let previousSiblingId = $derived(
+		hasPrevious ? siblingInfo!.siblingIds[siblingInfo!.currentIndex - 1] : null
+	);
 
 	function handleNext() {
 		if (nextSiblingId) {
 			onNavigateToSibling?.(nextSiblingId);
 		}
 	}
+
+	function handlePrevious() {
+		if (previousSiblingId) {
+			onNavigateToSibling?.(previousSiblingId);
+		}
+	}
 </script>
 
 {#if siblingInfo && siblingInfo.totalSiblings > 1}
 	<div
+		aria-label="Message version {siblingInfo.currentIndex + 1} of {siblingInfo.totalSiblings}"
 		class="flex items-center gap-1 text-xs text-muted-foreground {className}"
 		role="navigation"
-		aria-label="Message version {siblingInfo.currentIndex + 1} of {siblingInfo.totalSiblings}"
 	>
-		<Tooltip>
-			<TooltipTrigger>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
 				<Button
-					variant="ghost"
-					size="sm"
-					class="h-5 w-5 p-0 {!hasPrevious ? 'cursor-not-allowed opacity-30' : ''}"
-					onclick={handlePrevious}
-					disabled={!hasPrevious}
 					aria-label="Previous message version"
+					class="h-5 w-5 p-0 {!hasPrevious ? 'cursor-not-allowed opacity-30' : ''}"
+					disabled={!hasPrevious}
+					onclick={handlePrevious}
+					size="sm"
+					variant="ghost"
 				>
 					<ChevronLeft class="h-3 w-3" />
 				</Button>
-			</TooltipTrigger>
-			<TooltipContent>
+			</Tooltip.Trigger>
+
+			<Tooltip.Content>
 				<p>Previous version</p>
-			</TooltipContent>
-		</Tooltip>
+			</Tooltip.Content>
+		</Tooltip.Root>
 
 		<span class="px-1 font-mono text-xs">
 			{siblingInfo.currentIndex + 1}/{siblingInfo.totalSiblings}
 		</span>
 
-		<Tooltip>
-			<TooltipTrigger>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
 				<Button
 					variant="ghost"
 					size="sm"
@@ -74,10 +79,11 @@
 				>
 					<ChevronRight class="h-3 w-3" />
 				</Button>
-			</TooltipTrigger>
-			<TooltipContent>
+			</Tooltip.Trigger>
+
+			<Tooltip.Content>
 				<p>Next version</p>
-			</TooltipContent>
-		</Tooltip>
+			</Tooltip.Content>
+		</Tooltip.Root>
 	</div>
 {/if}

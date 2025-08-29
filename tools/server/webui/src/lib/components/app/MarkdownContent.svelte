@@ -40,6 +40,7 @@
 
 		for (const [index, pre] of Array.from(preElements).entries()) {
 			const codeElement = pre.querySelector('code');
+
 			if (!codeElement) continue;
 
 			let language = 'text';
@@ -53,7 +54,6 @@
 			}
 
 			const rawCode = codeElement.textContent || '';
-
 			const codeId = `code-${Date.now()}-${index}`;
 
 			codeElement.setAttribute('data-code-id', codeId);

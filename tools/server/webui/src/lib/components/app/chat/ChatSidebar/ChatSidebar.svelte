@@ -1,15 +1,15 @@
 <script lang="ts">
-	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ChatSidebarConversationItem } from '$lib/components/app';
+	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
+	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+	import { useSidebar } from '$lib/components/ui/sidebar';
 	import {
 		conversations,
 		deleteConversation,
 		updateConversationName
 	} from '$lib/stores/chat.svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { useSidebar } from '$lib/components/ui/sidebar';
-	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = useSidebar();

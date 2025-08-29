@@ -4,9 +4,9 @@
 
 	const processingState = useProcessingState();
 
-	let showSlotsInfo = $derived(isLoading());
-
 	let processingDetails = $derived(processingState.getProcessingDetails());
+
+	let showSlotsInfo = $derived(isLoading());
 
 	// Monitor during loading and add delay before stopping to capture final updates
 	$effect(() => {

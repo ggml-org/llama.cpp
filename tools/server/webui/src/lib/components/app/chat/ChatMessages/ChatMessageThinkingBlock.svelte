@@ -8,17 +8,17 @@
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
-		reasoningContent: string | null;
-		isStreaming?: boolean;
-		hasRegularContent?: boolean;
 		class?: string;
+		hasRegularContent?: boolean;
+		isStreaming?: boolean;
+		reasoningContent: string | null;
 	}
 
 	let {
-		reasoningContent,
-		isStreaming = false,
+		class: className = '',
 		hasRegularContent = false,
-		class: className = ''
+		isStreaming = false,
+		reasoningContent
 	}: Props = $props();
 
 	const currentConfig = config();
@@ -37,6 +37,7 @@
 		<Collapsible.Trigger class="flex cursor-pointer items-center justify-between p-3">
 			<div class="flex items-center gap-2 text-muted-foreground">
 				<Brain class="h-4 w-4" />
+
 				<span class="text-sm font-medium">
 					{isStreaming ? 'Reasoning...' : 'Reasoning'}
 				</span>
@@ -50,6 +51,7 @@
 				})}
 			>
 				<ChevronsUpDownIcon class="h-4 w-4" />
+
 				<span class="sr-only">Toggle reasoning content</span>
 			</div>
 		</Collapsible.Trigger>

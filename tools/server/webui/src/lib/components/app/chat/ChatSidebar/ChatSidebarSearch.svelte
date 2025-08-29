@@ -28,5 +28,5 @@
 		class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"
 	/>
 
-	<Input bind:value type="search" {placeholder} class="pl-10" oninput={handleInput} />
+	<Input bind:value class="pl-10" oninput={handleInput} {placeholder} type="search" />
 </div>

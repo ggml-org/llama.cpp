@@ -5,27 +5,27 @@
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
 
 	interface Props {
-		conversation: DatabaseConversation;
 		isActive?: boolean;
-		onSelect?: (id: string) => void;
-		onEdit?: (id: string, name: string) => void;
+		conversation: DatabaseConversation;
 		onDelete?: (id: string) => void;
+		onEdit?: (id: string, name: string) => void;
+		onSelect?: (id: string) => void;
 		showLastModified?: boolean;
 	}
 
 	let {
 		conversation,
-		isActive = false,
-		onSelect,
-		onEdit,
 		onDelete,
+		onEdit,
+		onSelect,
+		isActive = false,
 		showLastModified = false
 	}: Props = $props();
 
-	let showDeleteDialog = $state(false);
-	let showEditDialog = $state(false);
-	let showDropdown = $state(false);
 	let editedName = $state('');
+	let showDeleteDialog = $state(false);
+	let showDropdown = $state(false);
+	let showEditDialog = $state(false);
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -40,8 +40,13 @@
 		return `${days}d ago`;
 	}
 
-	function handleSelect() {
-		onSelect?.(conversation.id);
+	function handleConfirmDelete() {
+		onDelete?.(conversation.id);
+	}
+
+	function handleConfirmEdit() {
+		if (!editedName.trim()) return;
+		onEdit?.(conversation.id, editedName);
 	}
 
 	function handleEdit(event: Event) {
@@ -50,13 +55,8 @@
 		showEditDialog = true;
 	}
 
-	function handleConfirmEdit() {
-		if (!editedName.trim()) return;
-		onEdit?.(conversation.id, editedName);
-	}
-
-	function handleConfirmDelete() {
-		onDelete?.(conversation.id);
+	function handleSelect() {
+		onSelect?.(conversation.id);
 	}
 </script>
 
@@ -95,6 +95,7 @@
 			<DropdownMenu.Content align="end" class="z-999 w-48">
 				<DropdownMenu.Item onclick={handleEdit} class="flex items-center gap-2">
 					<Pencil class="h-4 w-4" />
+
 					Edit
 				</DropdownMenu.Item>
 
@@ -109,6 +110,7 @@
 					}}
 				>
 					<Trash2 class="h-4 w-4" />
+
 					Delete
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
@@ -126,11 +128,13 @@
 			>
 				<AlertDialog.Header>
 					<AlertDialog.Title>Delete Conversation</AlertDialog.Title>
+
 					<AlertDialog.Description>
 						Are you sure you want to delete "{conversation.name}"? This action cannot be undone and
 						will permanently remove all messages in this conversation.
 					</AlertDialog.Description>
 				</AlertDialog.Header>
+
 				<AlertDialog.Footer>
 					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
 
@@ -146,6 +150,7 @@
 			<AlertDialog.Content>
 				<AlertDialog.Header>
 					<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
+
 					<AlertDialog.Description>
 						<Input
 							class="mt-4 text-foreground"
@@ -162,8 +167,10 @@
 						/>
 					</AlertDialog.Description>
 				</AlertDialog.Header>
+
 				<AlertDialog.Footer>
 					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+
 					<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
 				</AlertDialog.Footer>
 			</AlertDialog.Content>

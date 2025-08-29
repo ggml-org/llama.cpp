@@ -36,10 +36,10 @@
 
 			<Input
 				bind:ref={searchInput}
+				bind:value={searchQuery}
 				onkeydown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 				placeholder="Search conversations..."
 				class="pl-8"
-				bind:value={searchQuery}
 			/>
 
 			<X
@@ -51,8 +51,8 @@
 		<Button
 			class="w-full justify-start gap-2"
 			href="/?new_chat=true"
-			variant="ghost"
 			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
 		>
 			<SquarePen class="h-4 w-4" />
 
@@ -61,10 +61,10 @@
 
 		<Button
 			class="w-full justify-start gap-2"
-			variant="ghost"
 			onclick={() => {
 				isSearchModeActive = true;
 			}}
+			variant="ghost"
 		>
 			<Search class="h-4 w-4" />
 

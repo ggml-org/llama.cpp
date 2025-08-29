@@ -109,19 +109,19 @@
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
 				<ChatMessageActions
-					{message}
-					role="user"
-					justify="end"
 					actionsPosition="right"
-					{siblingInfo}
-					{showDeleteDialog}
 					{deletionInfo}
-					{onCopy}
-					{onEdit}
-					onDelete={onDelete}
+					justify="end"
+					{message}
 					{onConfirmDelete}
+					{onCopy}
+					{onDelete}
+					{onEdit}
 					{onNavigateToSibling}
 					{onShowDeleteDialogChange}
+					{siblingInfo}
+					{showDeleteDialog}
+					role="user"
 				/>
 			</div>
 		{/if}

@@ -6,34 +6,19 @@
 	import { fade, fly } from 'svelte/transition';
 
 	interface Props {
-		/**
-		 * The error message to display
-		 */
-		error: string;
-		/**
-		 * Whether to show the retry button
-		 */
-		showRetry?: boolean;
-		/**
-		 * Whether to show troubleshooting information
-		 */
-		showTroubleshooting?: boolean;
-		/**
-		 * Custom retry handler - if not provided, will use default server retry
-		 */
-		onRetry?: () => void;
-		/**
-		 * Additional CSS classes
-		 */
 		class?: string;
+		error: string;
+		onRetry?: () => void;
+		showRetry?: boolean;
+		showTroubleshooting?: boolean;
 	}
 
 	let {
+		class: className = '',
 		error,
+		onRetry,
 		showRetry = true,
 		showTroubleshooting = true,
-		onRetry,
-		class: className = ''
 	}: Props = $props();
 
 	const isServerLoading = $derived(serverLoading());
@@ -55,10 +40,13 @@
 			>
 				<AlertTriangle class="h-8 w-8 text-destructive" />
 			</div>
+
 			<h2 class="mb-2 text-xl font-semibold">Server Connection Error</h2>
+
 			<p class="mb-4 text-sm text-muted-foreground">
 				{error}
 			</p>
+
 			<div class="mb-4">
 				<ServerStatus showActions={true} class="justify-center" />
 			</div>
@@ -69,9 +57,11 @@
 				<Button onclick={handleRetryConnection} disabled={isServerLoading} class="w-full">
 					{#if isServerLoading}
 						<RefreshCw class="mr-2 h-4 w-4 animate-spin" />
+
 						Connecting...
 					{:else}
 						<RefreshCw class="mr-2 h-4 w-4" />
+
 						Retry Connection
 					{/if}
 				</Button>
@@ -84,6 +74,7 @@
 					<summary class="cursor-pointer text-muted-foreground hover:text-foreground">
 						Troubleshooting
 					</summary>
+
 					<div class="mt-2 space-y-3 text-xs text-muted-foreground">
 						<div class="space-y-2">
 							<p class="mb-4 font-medium">Start the llama-server:</p>
@@ -100,7 +91,9 @@
 						</div>
 						<ul class="list-disc space-y-1 pl-4">
 							<li>Check that the server is accessible at the correct URL</li>
+
 							<li>Verify your network connection</li>
+
 							<li>Check server logs for any error messages</li>
 						</ul>
 					</div>
