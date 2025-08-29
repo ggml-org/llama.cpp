@@ -96,7 +96,7 @@ DEFAULT_HIDE_LLAMA_BENCH = ["model_filename"]  # Always hide these properties by
 DEFAULT_SHOW_TEST_BACKEND_OPS = ["backend_name", "op_name"]  # Always show these properties by default.
 DEFAULT_HIDE_TEST_BACKEND_OPS = ["error_message"]  # Always hide these properties by default.
 
-GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon "]  # Strip prefixes for smaller tables.
+GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon ", "AMD Instinct "]  # Strip prefixes for smaller tables.
 MODEL_SUFFIX_REPLACE = {" - Small": "_S", " - Medium": "_M", " - Large": "_L"}
 
 DESCRIPTION = """Creates tables from llama-bench or test-backend-ops data written to multiple JSON/CSV files, a single JSONL file or SQLite database. Example usage (Linux):
