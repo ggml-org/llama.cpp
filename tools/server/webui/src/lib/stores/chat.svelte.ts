@@ -1,4 +1,4 @@
-import { DatabaseService } from '$lib/services/database';
+import { DatabaseStore } from '$lib/stores/database';
 import { ChatService } from '$lib/services/chat';
 import { slotsService } from '$lib/services/slots';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -44,12 +44,12 @@ class ChatStore {
 	}
 
 	async loadConversations() {
-		this.conversations = await DatabaseService.getAllConversations();
+		this.conversations = await DatabaseStore.getAllConversations();
 	}
 
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
+		const conversation = await DatabaseStore.createConversation(conversationName);
 
 		this.conversations.unshift(conversation);
 
@@ -65,7 +65,7 @@ class ChatStore {
 
 	async loadConversation(convId: string): Promise<boolean> {
 		try {
-			const conversation = await DatabaseService.getConversation(convId);
+			const conversation = await DatabaseStore.getConversation(convId);
 
 			if (!conversation) {
 				return false;
@@ -74,7 +74,7 @@ class ChatStore {
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
-				const allMessages = await DatabaseService.getConversationMessages(convId);
+				const allMessages = await DatabaseStore.getConversationMessages(convId);
 				this.activeMessages = filterByLeafNodeId(
 					allMessages,
 					conversation.currNode,
@@ -82,7 +82,7 @@ class ChatStore {
 				) as DatabaseMessage[];
 			} else {
 				// Load all messages for conversations without currNode (backward compatibility)
-				this.activeMessages = await DatabaseService.getConversationMessages(convId);
+				this.activeMessages = await DatabaseStore.getConversationMessages(convId);
 			}
 
 			this.maxContextError = null;
@@ -114,13 +114,13 @@ class ChatStore {
 				if (this.activeMessages.length > 0) {
 					parentId = this.activeMessages[this.activeMessages.length - 1].id;
 				} else {
-					const allMessages = await DatabaseService.getConversationMessages(
+					const allMessages = await DatabaseStore.getConversationMessages(
 						this.activeConversation.id
 					);
 					const rootMessage = allMessages.find((m) => m.parent === null && m.type === 'root');
 
 					if (!rootMessage) {
-						const rootId = await DatabaseService.createRootMessage(this.activeConversation.id);
+						const rootId = await DatabaseStore.createRootMessage(this.activeConversation.id);
 						parentId = rootId;
 					} else {
 						parentId = rootMessage.id;
@@ -130,7 +130,7 @@ class ChatStore {
 				parentId = parent;
 			}
 
-			const message = await DatabaseService.createMessageBranch(
+			const message = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
 					role,
@@ -146,7 +146,7 @@ class ChatStore {
 
 			this.activeMessages.push(message);
 
-			await DatabaseService.updateCurrentNode(this.activeConversation.id, message.id);
+			await DatabaseStore.updateCurrentNode(this.activeConversation.id, message.id);
 			this.activeConversation.currNode = message.id;
 
 			this.updateConversationTimestamp();
@@ -247,7 +247,7 @@ class ChatStore {
 				slotsService.stopStreamingPolling();
 
 				// Update assistant message in database
-				await DatabaseService.updateMessage(assistantMessage.id, {
+				await DatabaseStore.updateMessage(assistantMessage.id, {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent
 				});
@@ -287,7 +287,7 @@ class ChatStore {
 						// Remove from UI
 						this.activeMessages.splice(messageIndex, 1);
 						// Remove from database
-						DatabaseService.deleteMessage(assistantMessage.id).catch(console.error);
+						DatabaseStore.deleteMessage(assistantMessage.id).catch(console.error);
 					}
 
 					this.maxContextError = {
@@ -376,7 +376,7 @@ class ChatStore {
 				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
-			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const assistantMessage = await this.addMessage('assistant', '');
 
 			if (!assistantMessage) {
@@ -393,7 +393,7 @@ class ChatStore {
 					if (userMessageIndex !== -1) {
 						this.activeMessages.splice(userMessageIndex, 1);
 						// Remove from database
-						DatabaseService.deleteMessage(userMessage.id).catch(console.error);
+						DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
 					}
 				}
 			});
@@ -411,7 +411,7 @@ class ChatStore {
 
 				if (userMessageIndex !== -1) {
 					this.activeMessages.splice(userMessageIndex, 1);
-					DatabaseService.deleteMessage(userMessage!.id).catch(console.error);
+					DatabaseStore.deleteMessage(userMessage!.id).catch(console.error);
 				}
 			}
 
@@ -479,7 +479,7 @@ class ChatStore {
 					updateData.thinking = partialThinking.thinking;
 				}
 
-				await DatabaseService.updateMessage(lastMessage.id, updateData);
+				await DatabaseStore.updateMessage(lastMessage.id, updateData);
 
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
 			} catch (error) {
@@ -521,11 +521,11 @@ class ChatStore {
 
 			// Update the message in database immediately to ensure consistency
 			// This prevents issues with rapid consecutive edits during regeneration
-			await DatabaseService.updateMessage(messageId, { content: newContent });
+			await DatabaseStore.updateMessage(messageId, { content: newContent });
 
 			const messagesToRemove = this.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) {
-				await DatabaseService.deleteMessage(message.id);
+				await DatabaseStore.deleteMessage(message.id);
 			}
 
 			this.activeMessages = this.activeMessages.slice(0, messageIndex + 1);
@@ -601,7 +601,7 @@ class ChatStore {
 			const messagesToRemove = this.activeMessages.slice(messageIndex);
 
 			for (const message of messagesToRemove) {
-				await DatabaseService.deleteMessage(message.id);
+				await DatabaseStore.deleteMessage(message.id);
 			}
 
 			this.activeMessages = this.activeMessages.slice(0, messageIndex);
@@ -613,7 +613,7 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseService.getConversationMessages(
+				const allMessages = await DatabaseStore.getConversationMessages(
 					this.activeConversation.id
 				);
 				const assistantMessage = await this.addMessage('assistant', '');
@@ -638,7 +638,7 @@ class ChatStore {
 
 	async updateConversationName(convId: string, name: string): Promise<void> {
 		try {
-			await DatabaseService.updateConversation(convId, { name });
+			await DatabaseStore.updateConversation(convId, { name });
 
 			const convIndex = this.conversations.findIndex((c) => c.id === convId);
 
@@ -656,7 +656,7 @@ class ChatStore {
 
 	async deleteConversation(convId: string): Promise<void> {
 		try {
-			await DatabaseService.deleteConversation(convId);
+			await DatabaseStore.deleteConversation(convId);
 
 			this.conversations = this.conversations.filter((c) => c.id !== convId);
 
@@ -687,7 +687,7 @@ class ChatStore {
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
 		}
 
-		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+		const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 
@@ -720,7 +720,7 @@ class ChatStore {
 			if (!this.activeConversation) return;
 
 			// Get all messages to find siblings before deletion
-			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const messageToDelete = allMessages.find((m) => m.id === messageId);
 
 			if (!messageToDelete) {
@@ -753,20 +753,20 @@ class ChatStore {
 					const leafNodeId = findLeafNode(allMessages, latestSibling.id);
 
 					// Update conversation to use the leaf node of the latest remaining sibling
-					await DatabaseService.updateCurrentNode(this.activeConversation.id, leafNodeId);
+					await DatabaseStore.updateCurrentNode(this.activeConversation.id, leafNodeId);
 					this.activeConversation.currNode = leafNodeId;
 				} else {
 					// No siblings left, navigate to parent if it exists
 					if (messageToDelete.parent) {
 						const parentLeafId = findLeafNode(allMessages, messageToDelete.parent);
-						await DatabaseService.updateCurrentNode(this.activeConversation.id, parentLeafId);
+						await DatabaseStore.updateCurrentNode(this.activeConversation.id, parentLeafId);
 						this.activeConversation.currNode = parentLeafId;
 					}
 				}
 			}
 
 			// Use cascading deletion to remove the message and all its descendants
-			await DatabaseService.deleteMessageCascading(this.activeConversation.id, messageId);
+			await DatabaseStore.deleteMessageCascading(this.activeConversation.id, messageId);
 
 			// Refresh active messages to show the updated branch
 			await this.refreshActiveMessages();
@@ -795,7 +795,7 @@ class ChatStore {
 	async refreshActiveMessages(): Promise<void> {
 		if (!this.activeConversation) return;
 
-		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+		const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 		if (allMessages.length === 0) {
 			this.activeMessages = [];
 			return;
@@ -823,7 +823,7 @@ class ChatStore {
 		if (!this.activeConversation) return;
 
 		// Update conversation's current node
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, siblingId);
+		await DatabaseStore.updateCurrentNode(this.activeConversation.id, siblingId);
 
 		// Update local state
 		this.activeConversation.currNode = siblingId;
@@ -863,7 +863,7 @@ class ChatStore {
 			// If parent is undefined/null, find the appropriate parent
 			if (parentId === undefined || parentId === null) {
 				// Get all messages to find root or previous message
-				const allMessages = await DatabaseService.getConversationMessages(
+				const allMessages = await DatabaseStore.getConversationMessages(
 					this.activeConversation.id
 				);
 
@@ -878,7 +878,7 @@ class ChatStore {
 			}
 
 			// Create new message branch with edited content (use snapshot to avoid proxy cloning issues)
-			const newMessage = await DatabaseService.createMessageBranch(
+			const newMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: messageToEdit.convId,
 					type: messageToEdit.type,
@@ -893,7 +893,7 @@ class ChatStore {
 			);
 
 			// Update conversation's current node to the new message
-			await DatabaseService.updateCurrentNode(this.activeConversation.id, newMessage.id);
+			await DatabaseStore.updateCurrentNode(this.activeConversation.id, newMessage.id);
 			this.activeConversation.currNode = newMessage.id;
 
 			// Update conversation timestamp
@@ -947,7 +947,7 @@ class ChatStore {
 			this.currentResponse = '';
 
 			// Create new assistant message branch with empty content
-			const newAssistantMessage = await DatabaseService.createMessageBranch(
+			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
 					type: 'text',
@@ -961,7 +961,7 @@ class ChatStore {
 			);
 
 			// Update conversation's current node to the new message
-			await DatabaseService.updateCurrentNode(this.activeConversation.id, newAssistantMessage.id);
+			await DatabaseStore.updateCurrentNode(this.activeConversation.id, newAssistantMessage.id);
 			this.activeConversation.currNode = newAssistantMessage.id;
 
 			// Update conversation timestamp
@@ -971,7 +971,7 @@ class ChatStore {
 			await this.navigateToSibling(newAssistantMessage.id);
 
 			// Stream new response to the new assistant message
-			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const conversationPath = filterByLeafNodeId(
 				allMessages,
 				parentMessage.id,
@@ -999,7 +999,7 @@ class ChatStore {
 
 		try {
 			// Get conversation path up to the user message
-			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const conversationPath = filterByLeafNodeId(
 				allMessages,
 				userMessageId,
@@ -1007,7 +1007,7 @@ class ChatStore {
 			) as DatabaseMessage[];
 
 			// Create new assistant message branch
-			const assistantMessage = await DatabaseService.createMessageBranch(
+			const assistantMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
 					type: 'text',

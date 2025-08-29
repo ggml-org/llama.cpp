@@ -1,10 +1,11 @@
-import { slotsService } from '$lib/services/slots';
-import type { ApiProcessingState } from '$lib/types/api';
+import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+import { slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
+import type { ApiProcessingState } from '$lib/types/api';
 
 export function useProcessingState() {
-	let processingState = $state<ApiProcessingState | null>(null);
 	let isPolling = $state(false);
+	let processingState = $state<ApiProcessingState | null>(null);
 	let unsubscribe: (() => void) | null = null;
 
 	async function startMonitoring(): Promise<void> {
@@ -17,13 +18,12 @@ export function useProcessingState() {
 		});
 
 		try {
-			// Try to get current state immediately for UI display
 			const currentState = await slotsService.getCurrentState();
+
 			if (currentState) {
 				processingState = currentState;
 			}
 
-			// Start streaming polling only if streaming is active
 			if (slotsService.isStreaming()) {
 				slotsService.startStreamingPolling();
 			}
@@ -90,11 +90,11 @@ export function useProcessingState() {
 			details.push(`${processingState.tokensPerSecond.toFixed(1)} tokens/sec`);
 		}
 
-		if (processingState.temperature !== 0.8) {
+		if (processingState.temperature !== SETTING_CONFIG_DEFAULT.temperature) {
 			details.push(`Temperature: ${processingState.temperature.toFixed(1)}`);
 		}
 
-		if (processingState.topP !== 0.95) {
+		if (processingState.topP !== SETTING_CONFIG_DEFAULT.top_p) {
 			details.push(`Top-p: ${processingState.topP.toFixed(2)}`);
 		}
 
@@ -116,10 +116,10 @@ export function useProcessingState() {
 		get isPolling() {
 			return isPolling;
 		},
-		startMonitoring,
-		stopMonitoring,
-		getProcessingMessage,
 		getProcessingDetails,
-		shouldShowDetails
+		getProcessingMessage,
+		shouldShowDetails,
+		startMonitoring,
+		stopMonitoring
 	};
 }

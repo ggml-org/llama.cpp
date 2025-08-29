@@ -19,7 +19,9 @@ export class ContextService {
 	}
 
 	/**
-	 * Check if sending a new message would exceed context limits using real-time slots data
+	 * Checks if the context limit would be exceeded
+	 * 
+	 * @returns {Promise<ContextCheckResult | null>} Promise that resolves to the context check result or null if an error occurs
 	 */
 	async checkContextLimit(): Promise<ContextCheckResult | null> {
 		try {
@@ -48,7 +50,10 @@ export class ContextService {
 	}
 
 	/**
-	 * Get a formatted error message for context limit exceeded
+	 * Returns a formatted error message for context limit exceeded
+	 * 
+	 * @param {ContextCheckResult} result - Context check result
+	 * @returns {string} Formatted error message
 	 */
 	getContextErrorMessage(result: ContextCheckResult): string {
 		const usagePercent = Math.round((result.currentUsage / result.maxContext) * 100);
@@ -56,12 +61,13 @@ export class ContextService {
 	}
 
 	/**
-	 * Set the number of tokens to reserve for response generation
+	 * Sets the number of tokens to reserve for response generation
+	 * 
+	 * @param {number} tokens - Number of tokens to reserve
 	 */
 	setReserveTokens(tokens: number): void {
 		this.reserveTokens = tokens;
 	}
 }
 
-// Global instance
 export const contextService = new ContextService();

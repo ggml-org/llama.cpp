@@ -1,2 +1,3 @@
 export { ChatService } from './chat';
-export { DatabaseService } from './database';
+export { DatabaseStore } from '$lib/stores/database';
+export { slotsService } from './slots';

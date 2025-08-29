@@ -81,14 +81,11 @@ export class ChatService {
 			stream
 		};
 
-		// Always request reasoning content from server, but never send it back in message history
 		requestBody.reasoning_format = 'auto';
 
-		// Add generation parameters if provided
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) requestBody.max_tokens = max_tokens;
 
-		// Add sampling parameters if provided
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
 		if (top_k !== undefined) requestBody.top_k = top_k;
@@ -98,7 +95,6 @@ export class ChatService {
 		if (xtc_threshold !== undefined) requestBody.xtc_threshold = xtc_threshold;
 		if (typical_p !== undefined) requestBody.typical_p = typical_p;
 
-		// Add penalty parameters if provided
 		if (repeat_last_n !== undefined) requestBody.repeat_last_n = repeat_last_n;
 		if (repeat_penalty !== undefined) requestBody.repeat_penalty = repeat_penalty;
 		if (presence_penalty !== undefined) requestBody.presence_penalty = presence_penalty;
@@ -108,7 +104,6 @@ export class ChatService {
 		if (dry_allowed_length !== undefined) requestBody.dry_allowed_length = dry_allowed_length;
 		if (dry_penalty_last_n !== undefined) requestBody.dry_penalty_last_n = dry_penalty_last_n;
 
-		// Add sampler configuration if provided
 		if (samplers !== undefined) {
 			requestBody.samplers =
 				typeof samplers === 'string'
@@ -116,10 +111,8 @@ export class ChatService {
 					: samplers;
 		}
 
-		// Add timing parameters if provided
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 
-		// Add custom parameters if provided
 		if (custom) {
 			try {
 				const customParams = typeof custom === 'string' ? JSON.parse(custom) : custom;
@@ -182,29 +175,29 @@ export class ChatService {
 				return;
 			}
 
-			// Handle network errors with user-friendly messages
-			let friendlyError: Error;
+			let userFriendlyError: Error;
+
 			if (error instanceof Error) {
 				if (error.name === 'TypeError' && error.message.includes('fetch')) {
-					friendlyError = new Error(
+					userFriendlyError = new Error(
 						'Unable to connect to server - please check if the server is running'
 					);
 				} else if (error.message.includes('ECONNREFUSED')) {
-					friendlyError = new Error('Connection refused - server may be offline');
+					userFriendlyError = new Error('Connection refused - server may be offline');
 				} else if (error.message.includes('ETIMEDOUT')) {
-					friendlyError = new Error('Request timeout - server may be overloaded');
+					userFriendlyError = new Error('Request timeout - server may be overloaded');
 				} else {
-					friendlyError = error;
+					userFriendlyError = error;
 				}
 			} else {
-				friendlyError = new Error('Unknown error occurred while sending message');
+				userFriendlyError = new Error('Unknown error occurred while sending message');
 			}
 
 			console.error('Error in sendMessage:', error);
 			if (onError) {
-				onError(friendlyError);
+				onError(userFriendlyError);
 			}
-			throw friendlyError;
+			throw userFriendlyError;
 		}
 	}
 
@@ -252,9 +245,7 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
-							// Check if we received any actual content
 							if (!hasReceivedData && fullResponse.length === 0) {
-								// Empty response - likely a context error
 								const contextError = new Error(
 									'The request exceeds the available context size. Try increasing the context size or enable context shift.'
 								);
@@ -290,7 +281,6 @@ export class ChatService {
 									}
 								);
 
-								// Only send the new regular content that was added in this chunk
 								const newRegularContent = regularContent.slice(regularContentBefore.length);
 								if (newRegularContent) {
 									onChunk?.(newRegularContent);
@@ -309,7 +299,6 @@ export class ChatService {
 				}
 			}
 
-			// If we reach here without receiving [DONE] and no data, it's likely a context error
 			if (!hasReceivedData && fullResponse.length === 0) {
 				const contextError = new Error(
 					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
@@ -345,10 +334,9 @@ export class ChatService {
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
-			// Check if response body is empty
 			const responseText = await response.text();
+
 			if (!responseText.trim()) {
-				// Empty response - likely a context error
 				const contextError = new Error(
 					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
 				);
@@ -365,7 +353,6 @@ export class ChatService {
 				console.log('Full reasoning content:', reasoningContent);
 			}
 
-			// Check if content is empty even with valid JSON structure
 			if (!content.trim()) {
 				const contextError = new Error(
 					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
@@ -379,7 +366,6 @@ export class ChatService {
 
 			return content;
 		} catch (error) {
-			// If it's already a ContextError, re-throw it
 			if (error instanceof Error && error.name === 'ContextError') {
 				throw error;
 			}
@@ -407,7 +393,6 @@ export class ChatService {
 	static convertMessageToChatServiceData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): ApiChatMessageData {
-		// If no extras, return simple text message
 		if (!message.extra || message.extra.length === 0) {
 			return {
 				role: message.role as 'user' | 'assistant' | 'system',
@@ -415,10 +400,8 @@ export class ChatService {
 			};
 		}
 
-		// Build multimodal content array
 		const contentParts: ApiChatMessageContentPart[] = [];
 
-		// Add text content first
 		if (message.content) {
 			contentParts.push({
 				type: 'text',
@@ -426,7 +409,6 @@ export class ChatService {
 			});
 		}
 
-		// Add image files
 		const imageFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
 				extra.type === 'imageFile'
@@ -439,7 +421,6 @@ export class ChatService {
 			});
 		}
 
-		// Add text files as additional text content
 		const textFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
 				extra.type === 'textFile'
@@ -452,7 +433,6 @@ export class ChatService {
 			});
 		}
 
-		// Add audio files
 		const audioFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
 				extra.type === 'audioFile'
@@ -468,7 +448,6 @@ export class ChatService {
 			});
 		}
 
-		// Add PDF files as text content
 		const pdfFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
 				extra.type === 'pdfFile'
@@ -476,7 +455,6 @@ export class ChatService {
 
 		for (const pdfFile of pdfFiles) {
 			if (pdfFile.processedAsImages && pdfFile.images) {
-				// If PDF was processed as images, add each page as an image
 				for (let i = 0; i < pdfFile.images.length; i++) {
 					contentParts.push({
 						type: 'image_url',
@@ -484,7 +462,6 @@ export class ChatService {
 					});
 				}
 			} else {
-				// If PDF was processed as text, add as text content
 				contentParts.push({
 					type: 'text',
 					text: `\n\n--- PDF File: ${pdfFile.name} ---\n${pdfFile.content}`
@@ -542,21 +519,18 @@ export class ChatService {
 		let insideThinkTag = currentInsideThinkTag;
 
 		while (i < content.length) {
-			// Check for opening <think> tag
 			if (!insideThinkTag && content.substring(i, i + 7) === '<think>') {
 				insideThinkTag = true;
 				i += 7; // Skip the <think> tag
 				continue;
 			}
 
-			// Check for closing </think> tag
 			if (insideThinkTag && content.substring(i, i + 8) === '</think>') {
 				insideThinkTag = false;
 				i += 8; // Skip the </think> tag
 				continue;
 			}
 
-			// Add character to appropriate content bucket
 			if (insideThinkTag) {
 				addThinkContent(content[i]);
 			} else {
@@ -595,17 +569,12 @@ export class ChatService {
 		const currentConfig = config();
 		const systemMessage = currentConfig.systemMessage?.toString().trim();
 
-		// If no system message is configured, return messages as-is
 		if (!systemMessage) {
-			console.log('No system message configured, returning original messages');
 			return messages;
 		}
 
-		// Check if first message is already a system message
 		if (messages.length > 0 && messages[0].role === 'system') {
-			// If the existing system message doesn't match current config, replace it
 			if (messages[0].content !== systemMessage) {
-				console.log('System message changed, replacing existing one');
 				const updatedMessages = [...messages];
 				updatedMessages[0] = {
 					role: 'system',
@@ -617,7 +586,6 @@ export class ChatService {
 			return messages;
 		}
 
-		// Inject system message at the beginning
 		const systemMsg: ApiChatMessageData = {
 			role: 'system',
 			content: systemMessage

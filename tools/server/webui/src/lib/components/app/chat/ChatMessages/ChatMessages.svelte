@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
-	import { DatabaseService } from '$lib/services/database';
+	import { DatabaseStore } from '$lib/stores/database';
 	import {
 		activeConversation,
 		deleteMessage,
@@ -24,7 +24,7 @@
 		const conversation = activeConversation();
 
 		if (conversation) {
-			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
+			DatabaseStore.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
 			});
 		} else {
