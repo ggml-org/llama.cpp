@@ -128,6 +128,77 @@ struct ring_buffer {
     std::vector<T> data;
 };
 
+static void llama_token_data_array_sort(const llama_token_data_array * cur_p, int k, std::vector<llama_token_data> & res) {
+    static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
+        return a.logit > b.logit;
+    };
+
+    constexpr int   nbuckets     = 128;
+    constexpr float bucket_low   = -10.0f;
+    constexpr float bucket_high  =  10.0f;
+    constexpr float bucket_scale = nbuckets/(bucket_high - bucket_low);
+    constexpr float bucket_inter = -bucket_low * bucket_scale;
+
+    std::vector<int> bucket_idx(cur_p->size);
+    std::vector<int> histo(nbuckets, 0);
+
+    for (int i = 0; i < (int)cur_p->size; ++i) {
+        const float val = cur_p->data[i].logit;
+        int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
+        ib = std::max(0, std::min(nbuckets - 1, ib));
+        bucket_idx[i] = ib;
+        ++histo[ib];
+    }
+    int nhave = 0;
+    int ib = nbuckets - 1;
+    for ( ; ib >= 0; --ib) {
+        nhave += histo[ib];
+        if (nhave >= k) {
+            break;
+        }
+    }
+    res.resize(nhave);
+    auto * ptr = res.data();
+    std::vector<llama_token_data*> bucket_ptrs;
+    bucket_ptrs.reserve(nbuckets - ib);
+    for (int j = nbuckets - 1; j >= ib; --j) {
+        bucket_ptrs.push_back(ptr);
+        ptr += histo[j];
+    }
+    for (int i = 0; i < (int)cur_p->size; ++i) {
+        int j = bucket_idx[i];
+        if (j >= ib) {
+            *bucket_ptrs[nbuckets - 1 - j]++ = cur_p->data[i];
+        }
+    }
+
+    ptr = res.data();
+    int ndone = 0;
+    for (int j = nbuckets - 1; j > ib; --j) {
+        std::sort(ptr, ptr + histo[j], comp);
+        ptr += histo[j];
+        ndone += histo[j];
+    }
+    std::partial_sort(ptr, ptr + k - ndone, ptr + histo[ib], comp);
+}
+
+static void llama_token_data_array_sort(llama_token_data_array * cur_p, int k) {
+    static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
+        return a.logit > b.logit;
+    };
+
+    if (k <= 128) {
+        std::partial_sort(cur_p->data, cur_p->data + k, cur_p->data + cur_p->size, comp);
+        return;
+    }
+
+    std::vector<llama_token_data> tmp_tokens;
+
+    llama_token_data_array_sort(cur_p, k, tmp_tokens);
+
+    std::memcpy(cur_p->data, tmp_tokens.data(), k*sizeof(llama_token_data));
+}
+
 static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng) {
     // iterator for the probabilities
 #ifdef __GNUC__
@@ -200,18 +271,22 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
     }
 }
 
-static void llama_sampler_softmax_impl(llama_token_data_array * cur_p) {
+static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_sort = true) {
     GGML_ASSERT(cur_p->size > 0);
 
-    // Sort the logits in descending order
-    if (!cur_p->sorted) {
-        std::sort(cur_p->data, cur_p->data + cur_p->size, [](const llama_token_data & a, const llama_token_data & b) {
-            return a.logit > b.logit;
-        });
+    // Sort the logits in descending order if requested
+    if (do_sort && !cur_p->sorted) {
+        llama_token_data_array_sort(cur_p, cur_p->size);
         cur_p->sorted = true;
     }
 
     float max_l = cur_p->data[0].logit;
+    if (!cur_p->sorted) {
+        for (size_t i = 1; i < cur_p->size; ++i) {
+            max_l = std::max(max_l, cur_p->data[i].logit);
+        }
+    }
+
     float cum_sum = 0.0f;
 
     for (size_t i = 0; i < cur_p->size; ++i) {
@@ -226,7 +301,6 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p) {
 }
 
 static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) {
-    // TODO: move bucket sort to separate function so that top_p/typical/softmax first is equally fast
     // if (k >= (int32_t)cur_p->size) {
     //     return;
     // }
@@ -239,63 +313,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
 
     // Sort scores in descending order
     if (!cur_p->sorted) {
-        auto comp = [](const llama_token_data & a, const llama_token_data & b) {
-            return a.logit > b.logit;
-        };
-        if (k <= 128) {
-            std::partial_sort(cur_p->data, cur_p->data + k, cur_p->data + cur_p->size, comp);
-        } else {
-            constexpr int   nbuckets     = 128;
-            constexpr float bucket_low   = -10.0f;
-            constexpr float bucket_high  =  10.0f;
-            constexpr float bucket_scale = nbuckets/(bucket_high - bucket_low);
-            constexpr float bucket_inter = -bucket_low * bucket_scale;
-
-            std::vector<int> bucket_idx(cur_p->size);
-            std::vector<int> histo(nbuckets, 0);
-
-            for (int i = 0; i < (int)cur_p->size; ++i) {
-                const float val = cur_p->data[i].logit;
-                int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
-                ib = std::max(0, std::min(nbuckets - 1, ib));
-                bucket_idx[i] = ib;
-                ++histo[ib];
-            }
-            int nhave = 0;
-            int ib = nbuckets - 1;
-            for ( ; ib >= 0; --ib) {
-                nhave += histo[ib];
-                if (nhave >= k) {
-                    break;
-                }
-            }
-            std::vector<llama_token_data> tmp_tokens(nhave);
-            auto * ptr = tmp_tokens.data();
-            std::vector<llama_token_data*> bucket_ptrs;
-            bucket_ptrs.reserve(nbuckets - ib);
-            for (int j = nbuckets - 1; j >= ib; --j) {
-                bucket_ptrs.push_back(ptr);
-                ptr += histo[j];
-            }
-            for (int i = 0; i < (int)cur_p->size; ++i) {
-                int j = bucket_idx[i];
-                if (j >= ib) {
-                    *bucket_ptrs[nbuckets - 1 - j]++ = cur_p->data[i];
-                }
-            }
-
-            ptr = tmp_tokens.data();
-            int ndone = 0;
-            for (int j = nbuckets - 1; j > ib; --j) {
-                std::sort(ptr, ptr + histo[j], comp);
-                ptr += histo[j];
-                ndone += histo[j];
-            }
-            std::partial_sort(ptr, ptr + k - ndone, ptr + histo[ib], comp);
-
-            std::memcpy(cur_p->data, tmp_tokens.data(), k*sizeof(llama_token_data));
-
-        }
+        llama_token_data_array_sort(cur_p, k);
         cur_p->sorted = true;
     }
 
@@ -576,7 +594,8 @@ static const char * llama_sampler_dist_name(const struct llama_sampler * /*smpl*
 static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_dist *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p);
+    // sorting is not necessary here, but for now we are doing it
+    llama_sampler_softmax_impl(cur_p, true);
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
 }
@@ -623,32 +642,6 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
             /* .seed_cur = */ seed_cur,
             /* .rng      = */ std::mt19937(seed_cur),
         }
-    );
-}
-
-// softmax
-
-static const char * llama_sampler_softmax_name(const struct llama_sampler * /*smpl*/) {
-    return "softmax";
-}
-
-static void llama_sampler_softmax_apply(struct llama_sampler * /*smpl*/, llama_token_data_array * cur_p) {
-    llama_sampler_softmax_impl(cur_p);
-}
-
-static struct llama_sampler_i llama_sampler_softmax_i = {
-    /* .name   = */ llama_sampler_softmax_name,
-    /* .accept = */ nullptr,
-    /* .apply  = */ llama_sampler_softmax_apply,
-    /* .reset  = */ nullptr,
-    /* .clone  = */ nullptr,
-    /* .free   = */ nullptr,
-};
-
-struct llama_sampler * llama_sampler_init_softmax() {
-    return llama_sampler_init(
-        /* .iface = */ &llama_sampler_softmax_i,
-        /* .ctx   = */ nullptr
     );
 }
 
@@ -699,6 +692,8 @@ struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
 struct llama_sampler_top_p {
     const float  p;
     const size_t min_keep;
+
+    std::vector<llama_token_data> buf_sort;
 };
 
 static const char * llama_sampler_top_p_name(const struct llama_sampler * /*smpl*/) {
@@ -706,20 +701,36 @@ static const char * llama_sampler_top_p_name(const struct llama_sampler * /*smpl
 }
 
 static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
-    const auto * ctx = (llama_sampler_top_p *) smpl->ctx;
+    auto * ctx = (llama_sampler_top_p *) smpl->ctx;
 
     if (ctx->p >= 1.0f) {
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p);
+    llama_sampler_softmax_impl(cur_p, false);
+
+    size_t k = cur_p->size;
+    auto * pdata = cur_p->data;
+
+    auto & buf_sort = ctx->buf_sort;
+
+    // if not sorted, try adaptive top-k sorting
+    if (!cur_p->sorted && cur_p->size > 1024) {
+        k = std::min<size_t>(256, cur_p->size);
+        llama_token_data_array_sort(cur_p, k, buf_sort);
+        pdata = buf_sort.data();
+    } else if (!cur_p->sorted) {
+        // small candidates -> sort inplace
+        llama_token_data_array_sort(cur_p, k);
+        cur_p->sorted = true;
+    }
 
     // Compute the cumulative probabilities
     float cum_sum = 0.0f;
     size_t last_idx = cur_p->size;
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cum_sum += cur_p->data[i].p;
+        cum_sum += pdata[i].p;
 
         // Check if the running sum is at least p or if we have kept at least min_keep tokens
         // we set the last index to i+1 to indicate that the current iterate should be included in the set
@@ -727,9 +738,21 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
             last_idx = i + 1;
             break;
         }
+
+        // we exceeded the current top-k heuristic -> increase k and continue
+        if (!cur_p->sorted && i == k - 1) {
+            k = cur_p->size;
+            llama_token_data_array_sort(cur_p, k, buf_sort);
+            pdata = buf_sort.data();
+        }
     }
 
     // Resize the output vector to keep only the top-p tokens
+    if (!cur_p->sorted) {
+        std::memcpy(cur_p->data, buf_sort.data(), last_idx*sizeof(llama_token_data));
+        cur_p->sorted = true;
+    }
+
     cur_p->size = last_idx;
 }
 
@@ -757,6 +780,7 @@ struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
         /* .ctx   = */ new llama_sampler_top_p {
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
+            /* .buf_sort = */ {},
         }
     );
 }
@@ -809,9 +833,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
     if (!min_p_applied) {
         // Sort the logits in descending order
         if (!cur_p->sorted) {
-            std::sort(cur_p->data, cur_p->data + cur_p->size, [](const llama_token_data & a, const llama_token_data & b) {
-                return a.logit > b.logit;
-            });
+            llama_token_data_array_sort(cur_p, cur_p->size);
             cur_p->sorted = true;
         }
 

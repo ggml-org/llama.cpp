@@ -372,7 +372,7 @@ int main(void) {
     test_sampler_queue(10000, "m", 10000, 1.0f, 1e-12);
 
     test_sampler_queue(10000, "k",   100, 1.0000f, 1.0f);
-    test_sampler_queue(10000, "p", 10000, 0.0002f, 1.0f);
+    test_sampler_queue(10000, "p", 10000, 0.0003f, 1.0f);
     test_sampler_queue(10000, "p", 10000, 0.8000f, 1.0f);
     test_sampler_queue(10000, "m", 10000, 1.0000f, 9997.9f/9999.0f);
     test_sampler_queue(10000, "m", 10000, 1.0000f, 0.1f);
