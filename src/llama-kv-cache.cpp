@@ -1020,9 +1020,14 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     auto * k = layers[ikv].k;
 
+    const int64_t n_embd_k_gqa = k_cur->ne[0]*k_cur->ne[1];
     const int64_t n_tokens = k_cur->ne[2];
 
-    k_cur = ggml_reshape_2d(ctx, k_cur, k->ne[0], n_tokens);
+    // we can merge dims 0 and 1
+    assert(k_cur->nb[0]*k_cur->ne[0] == k_cur->nb[1]);
+
+    //k_cur = ggml_reshape_2d(ctx, k_cur, k->ne[0], n_tokens);
+    k_cur = ggml_view_2d(ctx, k_cur, n_embd_k_gqa, n_tokens, k_cur->nb[2], 0);
 
     if (k->ne[2] > 1) {
         k = ggml_reshape_2d(ctx, k, k->ne[0], k->ne[1]*k->ne[2]);
@@ -1041,14 +1046,25 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     const int64_t n_embd_v_gqa = v_cur->ne[0]*v_cur->ne[1];
     const int64_t n_tokens     = v_cur->ne[2];
 
-    v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_v_gqa, n_tokens);
+    // we can merge dims 0 and 1
+    assert(v_cur->nb[0]*v_cur->ne[0] == v_cur->nb[1]);
+
+    //v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_v_gqa, n_tokens);
 
     if (!v_trans) {
+        v_cur = ggml_view_2d(ctx, v_cur, n_embd_v_gqa, n_tokens, v_cur->nb[2], 0);
+
         if (v->ne[2] > 1) {
             v = ggml_reshape_2d(ctx, v, v->ne[0], v->ne[1]*v->ne[2]);
         }
 
         return ggml_set_rows(ctx, v, v_cur, v_idxs);
+    }
+
+    if (v_cur->nb[1]*v_cur->ne[1] != v_cur->nb[2]) {
+        v_cur = ggml_cont_2d   (ctx, v_cur, n_embd_v_gqa, n_tokens);
+    } else {
+        v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_v_gqa, n_tokens);
     }
 
     // [TAG_V_CACHE_VARIABLE]
