@@ -3467,8 +3467,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 999;
-            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3483,8 +3481,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 999;
-            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3499,7 +3495,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 999;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3515,10 +3510,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 999;
             params.port = 8012;
-            params.n_gpu_layers = 999;
-            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3534,10 +3526,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 999;
             params.port = 8012;
-            params.n_gpu_layers = 999;
-            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3552,8 +3541,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF";
             params.model.hf_file = "qwen3-coder-30b-a3b-instruct-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
