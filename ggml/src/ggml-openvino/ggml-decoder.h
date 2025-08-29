@@ -117,8 +117,9 @@ public:
 
     static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
 
-    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
-    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(struct ggml_cgraph* cgraph);
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor, bool to_dequantize);
+    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(
+        struct ggml_cgraph* cgraph, std::set<ggml_type> types_to_dequantize = {});
 
     const ggml_tensor* get_tensor_used_op(const ggml_tensor* tensor) const;
     const ggml_tensor* get_tensor_from_name(const std::string& name) const;
