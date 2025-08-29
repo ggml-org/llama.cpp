@@ -21,25 +21,25 @@
      8192:   1024,
      16384:  1024
 } -%}
-{# 找到 “大于等于 thinking_budget” 的第一个档位 #}
+{# Find the first gear that is greater than or equal to the thinking_budget. #}
 {%- set ns = namespace(interval = None) -%}
 {%- for k, v in budget_reflections_v05 | dictsort -%}
     {%- if ns.interval is none and thinking_budget <= k -%}
         {%- set ns.interval = v -%}
     {%- endif -%}
 {%- endfor -%}
-{# 若超过最大档位，则用最后一个档位的值 #}
+{# If it exceeds the maximum gear, use the value of the last gear #}
 {%- if ns.interval is none -%}
     {%- set ns.interval = budget_reflections_v05[16384] -%}
 {%- endif -%}
-{# ---------- 预处理 system 消息 ---------- #}
+{# ---------- Preprocess the system message ---------- #}
 {%- if messages[0]["role"] == "system" %}
 {%- set system_message = messages[0]["content"] %}
 {%- set loop_messages = messages[1:] %}
 {%- else %}
 {%- set loop_messages = messages %}
 {%- endif %}
-{# ---------- 确保 tools 存在 ---------- #}
+{# ---------- Ensure tools exist ---------- #}
 {%- if not tools is defined or tools is none %}
 {%- set tools = [] %}
 {%- endif %}
@@ -51,7 +51,7 @@
     {%- elif t == "array" -%}list
     {%- else -%}Any{%- endif -%}
 {%- endmacro -%}
-{# ---------- 输出 system 块 ---------- #}
+{# ---------- Output the system block ---------- #}
 {%- if system_message is defined %}
 {{ bos_token + "system\n" + system_message }}
 {%- else %}
@@ -105,7 +105,7 @@ def {{ item.function.name }}(
 
 {{"工具调用请遵循如下格式:\n<seed:tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>value_1</parameter>\n<parameter=example_parameter_2>This is the value for the second parameter\nthat can span\nmultiple lines</parameter>\n</function>\n</seed:tool_call>\n"}}
 {%- endif %}
-{# 结束 system 块行尾 #}
+{# End the system block line #}
 {%- if system_message is defined or tools is iterable and tools | length > 0 %}
 {{ eos_token }}
 {%- endif %}
@@ -121,7 +121,7 @@ def {{ item.function.name }}(
 {{ eos_token }}
 {%- endif %}
 {%- endif %}
-{# ---------- 逐条写出历史消息 ---------- #}
+{# ---------- List the historical messages one by one ---------- #}
 {%- for message in loop_messages %}
 {%- if message.role == "assistant"
   and message.tool_calls is defined
@@ -157,15 +157,15 @@ def {{ item.function.name }}(
 {%- if message.content is defined and message.content is string and message.content | trim | length > 0 %}
 {{ "\n" + message.content | trim + eos_token }}
 {%- endif %}
-{# 包括 tool 角色，在这个逻辑 #}
+{# Include the tool role #}
 {%- else %}
 {{ bos_token + message.role + "\n" + message.content + eos_token }}
 {%- endif %}
 {%- endfor %}
-{# ---------- 控制模型开始续写 ---------- #}
+{# ---------- Control the model to start continuation ---------- #}
 {%- if add_generation_prompt %}
 {{ bos_token+"assistant\n" }}
 {%- if thinking_budget == 0 %}
-{{ think_begin_token+budget_begin_token }}
+{{ think_begin_token + "\n" + budget_begin_token + "The current thinking budget is 0, so I will directly start answering the question." + budget_end_token + "\n" + think_end_token }}
 {%- endif %}
 {%- endif %}
