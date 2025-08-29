@@ -2827,7 +2827,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         const ggml_tensor *add      = nullptr;
 
         if (ops.size() == 3 && ops.begin()[2] == GGML_OP_ADD) {
-            add = cgraph->nodes[node_idx+1];
+            add = cgraph->nodes[node_idx+2];
         }
 
         GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);

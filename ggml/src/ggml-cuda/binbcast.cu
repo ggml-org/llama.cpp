@@ -57,7 +57,11 @@ static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst
         const int i10 = i0 % ne10;
 
         float result = src0_row ? (float) src0_row[i0] : 0.0f;
-        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+        if constexpr (sizeof...(src1_ptrs) > 0) {
+            result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+        } else {
+            result = bin_op(result, (float)src1[i_src1 + i10]);
+        }
 
         dst_row[i0] = (dst_t) result;
     }
@@ -96,7 +100,11 @@ static __global__ void k_bin_bcast_unravel(const src0_t *   src0, const src1_t *
     const int i10 = i0 % ne10;
 
     float result = src0_row ? (float) src0_row[i0] : 0.0f;
-    result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+    if constexpr (sizeof...(src1_ptrs) > 0) {
+        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+    } else {
+        result = bin_op(result, (float)src1[i_src1 + i10]);
+    }
 
     dst_row[i0] = (dst_t) result;
 }
@@ -231,23 +239,43 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
 
         if (block_nums.z > 65535) {
             int block_num = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
-            k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
-                <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd,
-                    ne0, ne1, ne2, ne3,
-                    ne10, ne11, ne12, ne13,
-                    /* s0, */ s1, s2, s3,
-                    /* s00,*/ s01, s02, s03,
-                    /* s10,*/ s11, s12,s13,
-                    (const src1_t *) dst->src[I + 1]->data...);
+            if constexpr (sizeof...(I) > 0) {
+                k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
+                    <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd,
+                        ne0, ne1, ne2, ne3,
+                        ne10, ne11, ne12, ne13,
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12,s13,
+                        (const src1_t *) dst->src[I + 1]->data...);
+            } else {
+                k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
+                    <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd,
+                        ne0, ne1, ne2, ne3,
+                        ne10, ne11, ne12, ne13,
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12,s13);
+            }
         } else {
-            k_bin_bcast<bin_op, src0_t, src1_t, dst_t>
-                <<<block_nums, block_dims, 0, stream>>>(src0_dd, src1_dd, dst_dd,
-                    ne0, ne1, ne2, ne3,
-                    ne10, ne11, ne12, ne13,
-                    /* s0, */ s1, s2, s3,
-                    /* s00,*/ s01, s02, s03,
-                    /* s10,*/ s11, s12,s13,
-                    (const src1_t *) dst->src[I + 1]->data...);
+            if constexpr (sizeof...(I) > 0) {
+                k_bin_bcast<bin_op, src0_t, src1_t, dst_t>
+                    <<<block_nums, block_dims, 0, stream>>>(src0_dd, src1_dd, dst_dd,
+                        ne0, ne1, ne2, ne3,
+                        ne10, ne11, ne12, ne13,
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12,s13,
+                        (const src1_t *) dst->src[I + 1]->data...);
+            } else {
+                k_bin_bcast<bin_op, src0_t, src1_t, dst_t>
+                    <<<block_nums, block_dims, 0, stream>>>(src0_dd, src1_dd, dst_dd,
+                        ne0, ne1, ne2, ne3,
+                        ne10, ne11, ne12, ne13,
+                        /* s0, */ s1, s2, s3,
+                        /* s00,*/ s01, s02, s03,
+                        /* s10,*/ s11, s12,s13);
+            }
         }
     }
 }
@@ -327,7 +355,7 @@ static void ggml_cuda_op_bin_bcast(
 }
 
 void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat, 0>>(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
 }
 
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
