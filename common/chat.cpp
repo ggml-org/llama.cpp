@@ -2241,8 +2241,10 @@ static common_chat_params common_chat_params_init_seed_oss(
     return data;
 }
 
-static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
-                                                            const struct common_chat_templates_inputs & inputs) {
+static common_chat_params common_chat_templates_apply_jinja(
+    const struct common_chat_templates        * tmpls,
+    const struct common_chat_templates_inputs & inputs)
+{
     templates_params params;
     params.tools = common_chat_tools_to_json_oaicompat<json>(inputs.tools);
     const auto & tmpl = params.tools.is_array() && tmpls->template_tool_use
