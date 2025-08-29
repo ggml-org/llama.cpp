@@ -53,9 +53,6 @@ struct _txe_device_t {
       uint64_t total_tensor_count;
       // This counter increment whenever kernel call are  made
       uint64_t num_of_kernel_call;
-      // below field count all tensors whose num of elements are larger than  kernel number of
-      // elements
-      uint64_t num_of_tensor_spilt;
       // For Any application below field maintain smallest tensor num of elem
       uint64_t min_num_of_elem;
       // For Any application below field maintain largest tensor num of elem
@@ -318,11 +315,10 @@ static void ggml_tsavorite_disp_stats(struct ggml_backend_tsavorite_context *ctx
       continue;
     GGML_TSAVORITE_LOG_CONT(
         "\n %s Operation, total tensor: %lu  Number of Kernel Call: %lu  Number of tensor got "
-        "spilt: %lu Min Num of Elem %lu Max Num of Elem %lu \n",
+        "Min Num of Elem %lu Max Num of Elem %lu \n",
         ctx->kernels[i].pipeline->kernel_name.c_str(),
         device->stats.op_run_count[i].total_tensor_count,
         device->stats.op_run_count[i].num_of_kernel_call,
-        device->stats.op_run_count[i].num_of_tensor_spilt,
         device->stats.op_run_count[i].min_num_of_elem,
         device->stats.op_run_count[i].max_num_of_elem);
   }
@@ -545,7 +541,6 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
   for (uint32_t op = GGML_TSAVORITE_KERNEL_TYPE_ADD; op < GGML_TSAVORITE_KERNEL_TYPE_COUNT; ++op) {
     device->stats.op_run_count[op].total_tensor_count = 0;
     device->stats.op_run_count[op].num_of_kernel_call = 0;
-    device->stats.op_run_count[op].num_of_tensor_spilt = 0;
     device->stats.op_run_count[op].min_num_of_elem = 0;
     device->stats.op_run_count[op].max_num_of_elem = 0;
   }
@@ -916,16 +911,10 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         srcP0->data = srcP0->base = src0->data;
         srcP1->data = srcP1->base = src1->data;
         nodeP->data = nodeP->base = node->data;
-        // offset & shape size will be update base on Tensor Size
-        // TSAVORITE KERNEL CAN Take max of TSAVORITE_KERNEL_SIZE
-        // Hence we need to load tensor  data at multiple iteration
-        // for large Tensor Dataset
         srcP0->offset = 0;
         srcP1->offset = 0;
         nodeP->offset = 0;
 
-        // currently _mlir_ as restriction to hold max of 64 elements, we need to spilt the work if
-        // its more than 64, i will address this at future PR Initalizing num_elem
         num_elem_src0 = 1;
         for (int i = 0; i < GGML_MAX_DIMS && src0->nb[i] != 0; ++i)
           num_elem_src0 *= src0->ne[i];
@@ -997,31 +986,15 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           float *src1_ptr = (float *)((char *)src1->data + i13 * nb13 + i12 * nb12 + i11 * nb11);
 
           for (int64_t r = 0; r < nr0; ++r) {
-            // While loop is added to  handle the scenario when kernel number of elements
-            // less than ggml tensor number of elements.GGML tensor number of elements decided
-            // base on application like llama.cpp. Currently we have build Kernel elements
-            // statically hence we have MACRO: TSAVORITE_KERNEL_SIZE to track this
-            int count = 0;
-            while (count < ne10) {
-              int kernel_size;
-              srcP1->data =  srcP1->base = (void *)(src1_ptr + count);
-              srcP0->data =  srcP0->base = (void *)(src0_ptr + r * ne10 + count);
-              nodeP->data =  nodeP->base = (void *)(dst_ptr + r * ne10 + count);
-              if ((count + TSAVORITE_KERNEL_SIZE) > ne10)
-                kernel_size = ne10 - count;
-              else
-                kernel_size = TSAVORITE_KERNEL_SIZE;
-              count += kernel_size;
-              srcP0->shape[Rank - 1]   = kernel_size;
-              srcP1->shape[Rank - 1]   = kernel_size;
-              nodeP->shape[Rank - 1]   = kernel_size;
-              srcP0->strides[Rank - 1] = 0;
-              srcP1->strides[Rank - 1] = 0;
-              nodeP->strides[Rank - 1] = 0;
+              srcP0->shape[Rank - 1]   = ne10;
+              srcP1->shape[Rank - 1]   = ne10;
+              nodeP->shape[Rank - 1]   = ne10;
+              srcP1->data =  srcP1->base = (void *)(src1_ptr);
+              srcP0->data =  srcP0->base = (void *)(src0_ptr + r * ne10);
+              nodeP->data =  nodeP->base = (void *)(dst_ptr + r * ne10);
               // kernel call
               ctx->kernels[kernel_type].pipeline->_mlir_fptr_2_input(srcP0, srcP1, nodeP);
               ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
-            }
           }
         }
 
@@ -1054,15 +1027,9 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         --nodeP;
         srcP0->data = srcP0->base = src0->data;
         nodeP->data = nodeP->base = node->data;
-        // offset & shape size will be update base on Tensor Size
-        // TSAVORITE KERNEL CAN Take max of TSAVORITE_KERNEL_SIZE
-        // Hence we need to load tensor  data at multiple iteration
-        // for large Tensor Dataset
         srcP0->offset = 0;
         nodeP->offset = 0;
 
-        // currently _mlir_ as restriction to hold max of 64 elements, we need to spilt the work if
-        // its more than 64, i will address this at future PR Initalizing num_elem
         num_elem_src0 = 1;
         for (int i = 0; i < GGML_MAX_DIMS && src0->nb[i] != 0; ++i)
           num_elem_src0 *= src0->ne[i];
@@ -1084,32 +1051,20 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           log_data.tensor = src0;
           ggml_tsi_log_tensor_data(log_data);
         }
-        // While loop is added to  handle the scenario when kernel number of elements
-        // less than ggml tensor number of elements.GGML tensor number of elements decided
-        // base on application like llama.cpp. Currently we have build Kernel elements statically
-        // hence we have MACRO: TSAVORITE_KERNEL_SIZE to track this
-        uint32_t count = 0;
 
         if (node->op == GGML_OP_SIN) {
           ggml_tsavorite_decompose_unary_kernel(num_elem_src0, src0, node);
         }
-        while (count < num_elem_src0) {
-          int kernel_size;
-          srcP0->data = srcP0->base = (void *)((float *)src0->data + count);
-          nodeP->data = nodeP->base = (void *)((float *)node->data + count);
-          if ((count + TSAVORITE_KERNEL_SIZE) > num_elem_src0)
-            kernel_size = num_elem_src0 - count;
-          else
-            kernel_size = TSAVORITE_KERNEL_SIZE;
-          count += kernel_size;
-          srcP0->shape[Rank - 1]    = kernel_size;
-          nodeP->shape[Rank - 1]    = kernel_size;
-          srcP0->strides[Rank - 1]  = 0;
-          nodeP->strides[Rank - 1]  = 0;
-          // kernel call
-          ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input(srcP0, nodeP);
-          ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
-        }
+
+        srcP0->data = srcP0->base = (void *)((float *)src0->data);
+        nodeP->data = nodeP->base = (void *)((float *)node->data);
+        srcP0->shape[Rank - 1]    = num_elem_src0;
+        nodeP->shape[Rank - 1]    = num_elem_src0;
+        srcP0->strides[Rank - 1]  = 0;
+        nodeP->strides[Rank - 1]  = 0;
+        // kernel call
+        ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input(srcP0, nodeP);
+        ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
 
         if (ggml_tsavorite_log_type_val == GGML_TSAVORITE_LOG_DEBUG) {
           log_data.data_type = GGML_TSAVORITE_TENSOR_NODE;
@@ -1124,9 +1079,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
     }
     if (min_num_of_elem > 0) {
       ++device->stats.op_run_count[kernel_type].total_tensor_count;
-
-      if (min_num_of_elem > TSAVORITE_KERNEL_SIZE)
-        ++device->stats.op_run_count[kernel_type].num_of_tensor_spilt;
 
       if (!(device->stats.op_run_count[kernel_type].min_num_of_elem) ||
           device->stats.op_run_count[kernel_type].min_num_of_elem > min_num_of_elem)
