@@ -2,6 +2,29 @@
 #include <cstdint>
 #include <utility>
 
+static __device__ __forceinline__ float op_repeat(const float a, const float b) {
+    return b;
+    GGML_UNUSED(a);
+}
+
+static __device__ __forceinline__ float op_add(const float a, const float b) {
+    return a + b;
+}
+
+static __device__ __forceinline__ float op_sub(const float a, const float b) {
+    return a - b;
+}
+
+static __device__ __forceinline__ float op_mul(const float a, const float b) {
+    return a * b;
+}
+
+static __device__ __forceinline__ float op_div(const float a, const float b) {
+    return a / b;
+}
+
+
+
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, typename... src1_ptrs>
 static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
         const int ne0, const int ne1, const int ne2, const int ne3,
@@ -355,31 +378,30 @@ static void ggml_cuda_op_fused_binbcast_impl(ggml_backend_cuda_context & ctx, gg
 }
 
 
-template<float (*op)(const float, const float)>
-void ggml_cuda_op_fused_binbcast(ggml_backend_cuda_context & ctx, ggml_tensor * dst, int n_fuse) {
+void ggml_cuda_op_fused_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst, int n_fuse) {
     GGML_ASSERT(2 <= n_fuse && n_fuse <= 8);
 
     switch (n_fuse) {
         case 2:
-            ggml_cuda_op_fused_binbcast_impl<op, 2>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 2>(ctx, dst);
             break;
         case 3:
-            ggml_cuda_op_fused_binbcast_impl<op, 3>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 3>(ctx, dst);
             break;
         case 4:
-            ggml_cuda_op_fused_binbcast_impl<op, 4>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 4>(ctx, dst);
             break;
         case 5:
-            ggml_cuda_op_fused_binbcast_impl<op, 5>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 5>(ctx, dst);
             break;
         case 6:
-            ggml_cuda_op_fused_binbcast_impl<op, 6>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 6>(ctx, dst);
             break;
         case 7:
-            ggml_cuda_op_fused_binbcast_impl<op, 7>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 7>(ctx, dst);
             break;
         case 8:
-            ggml_cuda_op_fused_binbcast_impl<op, 8>(ctx, dst);
+            ggml_cuda_op_fused_binbcast_impl<op_add, 8>(ctx, dst);
             break;
         default:
             GGML_ASSERT(false && "Unsupported n_fuse value");
@@ -416,5 +438,3 @@ void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         } break;
     }
 }
-
-template void ggml_cuda_op_fused_binbcast<op_add>(ggml_backend_cuda_context &, ggml_tensor *, int);

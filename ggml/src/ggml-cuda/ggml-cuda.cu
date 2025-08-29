@@ -2927,7 +2927,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                                 node->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
                             }
                             cgraph->nodes[i + n_fuse - 1]->data = node->data;
-                            ggml_cuda_op_fused_binbcast<op_add>(*cuda_ctx, node, n_fuse);
+                            ggml_cuda_op_fused_add(*cuda_ctx, node, n_fuse);
                             i += n_fuse - 1;
 
                             continue;
