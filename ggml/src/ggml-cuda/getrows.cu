@@ -2,7 +2,6 @@
 #include "dequantize.cuh"
 #include "convert.cuh"
 
-#define MIN(a, b) (a) < (b) ? (a) : (b)
 #define MAX_GRIDDIM_Y 65535
 
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>

@@ -1,6 +1,5 @@
 #include "scale.cuh"
 
-#define MIN(a, b) (a) < (b) ? (a) : (b)
 #define MAX_GRIDDIM_X 0x7FFFFFFF
 
 static __global__ void scale_f32(const float * x, float * dst, const float scale, const float bias, const int64_t nelements) {
