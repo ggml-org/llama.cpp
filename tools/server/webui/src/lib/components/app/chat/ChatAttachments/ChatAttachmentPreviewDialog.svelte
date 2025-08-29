@@ -88,7 +88,6 @@
 	let pdfImagesLoading = $state(false);
 	let pdfImagesError = $state<string | null>(null);
 
-
 	async function loadPdfImages() {
 		if (!isPdf || pdfImages.length > 0 || pdfImagesLoading) return;
 

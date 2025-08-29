@@ -18,7 +18,7 @@
 		error,
 		onRetry,
 		showRetry = true,
-		showTroubleshooting = true,
+		showTroubleshooting = true
 	}: Props = $props();
 
 	const isServerLoading = $derived(serverLoading());

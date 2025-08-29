@@ -89,7 +89,7 @@
 			{deletionInfo}
 			{onCopy}
 			{onRegenerate}
-			onDelete={onDelete}
+			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}

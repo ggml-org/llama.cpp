@@ -4,23 +4,23 @@ import { SLOTS_DEBOUNCE_INTERVAL } from '$lib/constants/debounce';
 
 /**
  * SlotsService - Real-time processing state monitoring and token rate calculation
- * 
+ *
  * This service monitors the llama.cpp server's processing slots to provide real-time
  * information about generation progress, token rates, and context usage. It manages
  * streaming session tracking and provides debounced updates to prevent excessive
  * API calls during high-frequency streaming.
- * 
+ *
  * **Architecture & Relationships:**
  * - **SlotsService** (this class): Processing state monitoring
  *   - Polls `/slots` endpoint for real-time server state
  *   - Calculates token generation rates and context usage
  *   - Manages streaming session lifecycle
  *   - Provides debounced updates during streaming
- * 
+ *
  * - **ChatStore**: Uses slots service for streaming progress tracking
  * - **ServerStore**: Provides slots endpoint availability detection
  * - **UI Components**: Subscribe to processing state for progress indicators
- * 
+ *
  * **Key Features:**
  * - **Real-time Monitoring**: Live processing state during generation
  * - **Token Rate Calculation**: Accurate tokens/second measurement
@@ -29,13 +29,13 @@ import { SLOTS_DEBOUNCE_INTERVAL } from '$lib/constants/debounce';
  * - **Debounced Updates**: Prevents excessive API calls during streaming
  * - **State Parsing**: Converts raw slot data to structured processing state
  * - **Error Handling**: Graceful handling of endpoint unavailability
- * 
+ *
  * **Processing States:**
  * - `idle`: No active processing
  * - `initializing`: Setting up generation context
  * - `preparing`: Preparing for token generation
  * - `generating`: Actively generating tokens
- * 
+ *
  * **Token Rate Calculation:**
  * Uses both recent interval and total stream time for accurate rate measurement,
  * with moving average smoothing for stable display values.

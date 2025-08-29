@@ -1,4 +1,3 @@
-
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;

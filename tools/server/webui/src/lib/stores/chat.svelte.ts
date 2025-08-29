@@ -14,7 +14,7 @@ import { extractPartialThinking } from '$lib/utils/thinking';
 
 /**
  * ChatStore - Central state management for chat conversations and AI interactions
- * 
+ *
  * This store manages the complete chat experience including:
  * - Conversation lifecycle (create, load, delete, update)
  * - Message management with branching support for conversation trees
@@ -22,22 +22,22 @@ import { extractPartialThinking } from '$lib/utils/thinking';
  * - File attachment handling and processing
  * - Context error management and recovery
  * - Database persistence through DatabaseStore integration
- * 
+ *
  * **Architecture & Relationships:**
  * - **ChatService**: Handles low-level API communication with AI models
  *   - ChatStore orchestrates ChatService for streaming responses
  *   - ChatService provides abort capabilities and error handling
  *   - ChatStore manages the UI state while ChatService handles network layer
- * 
+ *
  * - **DatabaseStore**: Provides persistent storage for conversations and messages
  *   - ChatStore uses DatabaseStore for all CRUD operations
  *   - Maintains referential integrity for conversation trees
  *   - Handles message branching and parent-child relationships
- * 
+ *
  * - **SlotsService**: Monitors server resource usage during AI generation
  *   - ChatStore coordinates slots polling during streaming
  *   - Provides real-time feedback on server capacity
- * 
+ *
  * **Key Features:**
  * - Reactive state management using Svelte 5 runes ($state)
  * - Conversation branching for exploring different response paths
@@ -414,7 +414,7 @@ class ChatStore {
 	 */
 	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage | null> {
 		if (!this.activeConversation) return null;
-		
+
 		return await DatabaseStore.createMessageBranch(
 			{
 				convId: this.activeConversation.id,
@@ -1001,7 +1001,9 @@ class ChatStore {
 			}
 
 			// Find parent message in all conversation messages, not just active path
-			const conversationMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const conversationMessages = await DatabaseStore.getConversationMessages(
+				this.activeConversation.id
+			);
 			const parentMessage = conversationMessages.find((m) => m.id === messageToRegenerate.parent);
 			if (!parentMessage) {
 				console.error('Parent message not found for regeneration');
@@ -1029,7 +1031,9 @@ class ChatStore {
 			this.updateConversationTimestamp();
 			await this.refreshActiveMessages();
 
-			const allConversationMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const allConversationMessages = await DatabaseStore.getConversationMessages(
+				this.activeConversation.id
+			);
 			const conversationPath = filterByLeafNodeId(
 				allConversationMessages,
 				parentMessage.id,

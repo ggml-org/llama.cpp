@@ -2,22 +2,22 @@ import { ChatService } from '$lib/services/chat';
 
 /**
  * ServerStore - Server state management and capability detection
- * 
+ *
  * This store manages communication with the llama.cpp server to retrieve and maintain
  * server properties, model information, and capability detection. It provides reactive
  * state for server connectivity, model capabilities, and endpoint availability.
- * 
+ *
  * **Architecture & Relationships:**
  * - **ServerStore** (this class): Server state and capability management
  *   - Fetches and caches server properties from `/props` endpoint
  *   - Detects model capabilities (vision, audio support)
  *   - Tests endpoint availability (slots endpoint)
  *   - Provides reactive server state for UI components
- * 
+ *
  * - **ChatService**: Uses server properties for request validation
  * - **SlotsService**: Depends on slots endpoint availability detection
  * - **UI Components**: Subscribe to server state for capability-based rendering
- * 
+ *
  * **Key Features:**
  * - **Server Properties**: Model path, context size, build information
  * - **Capability Detection**: Vision and audio modality support
@@ -25,7 +25,7 @@ import { ChatService } from '$lib/services/chat';
  * - **Error Handling**: User-friendly error messages for connection issues
  * - **Reactive State**: Svelte 5 runes for automatic UI updates
  * - **State Management**: Loading states and error recovery
- * 
+ *
  * **Server Capabilities Detected:**
  * - Model name extraction from file path
  * - Vision support (multimodal image processing)

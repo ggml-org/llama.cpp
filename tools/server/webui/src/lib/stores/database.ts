@@ -19,41 +19,40 @@ const db = new LlamacppDatabase();
 
 /**
  * DatabaseStore - Persistent data layer for conversation and message management
- * 
+ *
  * This service provides a comprehensive data access layer built on IndexedDB using Dexie.
  * It handles all persistent storage operations for conversations, messages, and application settings
  * with support for complex conversation branching and message threading.
- * 
+ *
  * **Architecture & Relationships:**
  * - **DatabaseStore** (this class): Stateless data persistence layer
  *   - Manages IndexedDB operations through Dexie ORM
  *   - Handles conversation and message CRUD operations
  *   - Supports complex branching with parent-child relationships
  *   - Provides transaction safety for multi-table operations
- * 
+ *
  * - **ChatStore**: Primary consumer for conversation state management
  *   - Uses DatabaseStore for all persistence operations
  *   - Coordinates UI state with database state
  *   - Handles conversation lifecycle and message branching
- * 
+ *
  * **Key Features:**
  * - **Conversation Management**: Create, read, update, delete conversations
  * - **Message Branching**: Support for tree-like conversation structures
  * - **Transaction Safety**: Atomic operations for data consistency
  * - **Path Resolution**: Navigate conversation branches and find leaf nodes
  * - **Cascading Deletion**: Remove entire conversation branches
- * 
+ *
  * **Database Schema:**
  * - `conversations`: Conversation metadata with current node tracking
  * - `messages`: Individual messages with parent-child relationships
- * 
+ *
  * **Branching Model:**
  * Messages form a tree structure where each message can have multiple children,
  * enabling conversation branching and alternative response paths. The conversation's
  * `currNode` tracks the currently active branch endpoint.
  */
 export class DatabaseStore {
-	
 	/**
 	 * Adds a new message to the database.
 	 *
@@ -69,7 +68,7 @@ export class DatabaseStore {
 		await db.messages.add(newMessage);
 		return newMessage;
 	}
-	
+
 	/**
 	 * Creates a new conversation.
 	 *
@@ -87,7 +86,6 @@ export class DatabaseStore {
 		await db.conversations.add(conversation);
 		return conversation;
 	}
-
 
 	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
@@ -303,7 +301,6 @@ export class DatabaseStore {
 		return filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 	}
 
-
 	/**
 	 * Updates a conversation.
 	 *
@@ -347,5 +344,4 @@ export class DatabaseStore {
 	): Promise<void> {
 		await db.messages.update(id, updates);
 	}
-
 }

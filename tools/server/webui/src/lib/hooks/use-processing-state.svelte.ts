@@ -5,12 +5,12 @@ import type { ApiProcessingState } from '$lib/types/api';
 
 /**
  * useProcessingState - Reactive processing state hook
- * 
+ *
  * This hook provides reactive access to the processing state of the server.
  * It monitors the slots endpoint for changes and updates the processing state
  * accordingly. The hook also provides functions to start and stop monitoring,
  * as well as a function to get the current processing message and details.
- * 
+ *
  * @returns {Object} An object containing the processing state, isPolling, getProcessingMessage,
  * getProcessingDetails, shouldShowDetails, startMonitoring, and stopMonitoring.
  */
