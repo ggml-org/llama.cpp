@@ -2187,9 +2187,11 @@ static common_chat_params common_chat_params_init_without_tools(const common_cha
     return data;
 }
 
-static common_chat_params common_chat_params_init_seed_oss(  const common_chat_template &         tmpl,
-                                                            templates_params &                   params,
-                                                            const common_chat_templates_inputs & inputs) {
+static common_chat_params common_chat_params_init_seed_oss(
+    const common_chat_template         & tmpl,
+    templates_params                   & params,
+    const common_chat_templates_inputs & inputs)
+{
     common_chat_params data;
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_SEED_OSS;
