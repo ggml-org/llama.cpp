@@ -1977,7 +1977,7 @@ extern "C" {
             int                   d0,  // dilation dimension 0
             int                   d1); // dilation dimension 1
 
-    GGML_API struct ggml_tensor * ggml_conv_3d(
+    GGML_API struct ggml_tensor * ggml_conv_3d_direct(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // kernel [KW, KH, KD, IC * OC]
             struct ggml_tensor  * b,   // input  [W, H, D, C * N]

@@ -4196,7 +4196,7 @@ struct test_conv_3d : public test_case {
         return (uint64_t)N * OC * OD * OH * OW * (2 * IC * KD * KH * KW - 1);
     }
 
-    test_conv_3d(
+    test_conv_3d_direct(
         int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW,
         int64_t OC, int64_t KD, int64_t KH, int64_t KW,
         int s0, int s1, int s2,
@@ -4221,7 +4221,7 @@ struct test_conv_3d : public test_case {
         ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel);
         ggml_set_name(kernel, "kernel");
 
-        ggml_tensor * out = ggml_conv_3d(ctx, kernel, input, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+        ggml_tensor * out = ggml_conv_3d_direct(ctx, kernel, input, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
         ggml_set_name(out, "out");
         return out;
     }
