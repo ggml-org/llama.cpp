@@ -564,7 +564,7 @@ int main(int argc, char ** argv) {
     ctx_params.n_ctx                = params.n_ctx;
     ctx_params.n_batch              = params.n_batch;
     ctx_params.n_ubatch             = params.n_ubatch;
-    ctx_params.flash_attn           = params.flash_attn;
+    ctx_params.flash_attn_type      = params.flash_attn_type;
     ctx_params.no_perf              = params.no_perf;
     ctx_params.type_k               = params.cache_type_k;
     ctx_params.type_v               = params.cache_type_v;

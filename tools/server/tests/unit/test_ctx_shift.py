@@ -15,25 +15,26 @@ Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deseru
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
-    server.n_ctx = 256
+    server.n_ctx = 512
     server.n_slots = 2
+    server.n_predict = 128
 
 
 def test_ctx_shift_enabled():
     # the prompt is 301 tokens
-    # the slot context is 256/2 = 128 tokens
-    # the prompt is truncated to keep the last 109 tokens
-    # 64 tokens are generated thanks to shifting the context when it gets full
+    # the slot context is 512/2 = 256 tokens
+    # the prompt is truncated to keep the last (301 - 256/2) = 173 tokens
+    # 96 tokens are generated thanks to shifting the context when it gets full
     global server
     server.enable_ctx_shift = True
     server.start()
     res = server.make_request("POST", "/completion", data={
-        "n_predict": 64,
+        "n_predict": 96,
         "prompt": LONG_TEXT,
     })
     assert res.status_code == 200
-    assert res.body["timings"]["prompt_n"] == 109
-    assert res.body["timings"]["predicted_n"] == 64
+    assert res.body["timings"]["prompt_n"] == 173
+    assert res.body["timings"]["predicted_n"] == 96
     assert res.body["truncated"] is True
 
 

@@ -323,7 +323,7 @@ def run(
                     server.jinja = True
                     server.ctk = ctk
                     server.ctv = ctv
-                    server.fa = fa
+                    server.fa = "on" if fa else "off"
                     server.n_predict = n_predict
                     server.model_hf_repo = hf
                     server.model_hf_file = None
