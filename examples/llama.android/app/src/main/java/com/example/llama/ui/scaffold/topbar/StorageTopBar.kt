@@ -58,8 +58,8 @@ private fun StorageIndicator(storageMetrics: StorageMetrics) {
     val availableGb = storageMetrics.availableGB
 
     Row(
-        modifier = Modifier.Companion.padding(end = 8.dp),
-        verticalAlignment = Alignment.Companion.CenterVertically
+        modifier = Modifier.padding(end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Default.SdStorage,
@@ -71,10 +71,10 @@ private fun StorageIndicator(storageMetrics: StorageMetrics) {
             }
         )
 
-        Spacer(modifier = Modifier.Companion.width(2.dp))
+        Spacer(modifier = Modifier.width(2.dp))
 
         Text(
-            text = String.Companion.format(
+            text = String.format(
                 Locale.getDefault(),
                 "%.1f / %.1f GB",
                 usedGb,

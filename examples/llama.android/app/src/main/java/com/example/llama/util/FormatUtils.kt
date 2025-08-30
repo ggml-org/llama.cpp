@@ -64,15 +64,15 @@ private fun round2(v: Double): Double = round(v * 100) / 100
 fun formatFileByteSize(sizeInBytes: Long) = when {
     sizeInBytes >= 1_000_000_000 -> {
         val sizeInGb = sizeInBytes / 1_000_000_000.0
-        String.Companion.format(Locale.getDefault(), "%.1f GB", sizeInGb)
+        String.format(Locale.getDefault(), "%.1f GB", sizeInGb)
     }
     sizeInBytes >= 1_000_000 -> {
         val sizeInMb = sizeInBytes / 1_000_000.0
-        String.Companion.format(Locale.getDefault(), "%.0f MB", sizeInMb)
+        String.format(Locale.getDefault(), "%.0f MB", sizeInMb)
     }
     else -> {
         val sizeInKb = sizeInBytes / 1_000.0
-        String.Companion.format(Locale.getDefault(), "%.0f KB", sizeInKb)
+        String.format(Locale.getDefault(), "%.0f KB", sizeInKb)
     }
 }
 
@@ -81,8 +81,8 @@ fun formatFileByteSize(sizeInBytes: Long) = when {
  */
 fun formatContextLength(contextLength: Int): String {
     return when {
-        contextLength >= 1_000_000 -> String.Companion.format(Locale.getDefault(), "%.1fM", contextLength / 1_000_000.0)
-        contextLength >= 1_000 -> String.Companion.format(Locale.getDefault(), "%.0fK", contextLength / 1_000.0)
+        contextLength >= 1_000_000 -> String.format(Locale.getDefault(), "%.1fM", contextLength / 1_000_000.0)
+        contextLength >= 1_000 -> String.format(Locale.getDefault(), "%.0fK", contextLength / 1_000.0)
         else -> contextLength.toString()
     }
 }

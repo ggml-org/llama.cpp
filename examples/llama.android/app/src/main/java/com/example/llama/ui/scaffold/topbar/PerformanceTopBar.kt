@@ -66,7 +66,7 @@ fun PerformanceTopBar(
                     useFahrenheit = useFahrenheit
                 )
 
-                Spacer(modifier = Modifier.Companion.width(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
             }
 
             // Memory indicator
@@ -84,8 +84,8 @@ fun PerformanceTopBar(
 @Composable
 private fun MemoryIndicator(memoryUsage: MemoryMetrics) {
     Row(
-        modifier = Modifier.Companion.padding(end = 8.dp),
-        verticalAlignment = Alignment.Companion.CenterVertically
+        modifier = Modifier.padding(end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = Icons.Default.Memory,
@@ -100,7 +100,7 @@ private fun MemoryIndicator(memoryUsage: MemoryMetrics) {
         Spacer(modifier = Modifier.width(4.dp))
 
         Text(
-            text = String.Companion.format(
+            text = String.format(
                 Locale.getDefault(), "%.1f / %.1f GB", memoryUsage.availableGb, memoryUsage.totalGb
             ),
             style = MaterialTheme.typography.bodySmall,

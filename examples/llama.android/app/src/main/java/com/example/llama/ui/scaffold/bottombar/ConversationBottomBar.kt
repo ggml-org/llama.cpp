@@ -48,21 +48,21 @@ fun ConversationBottomBar(
     val placeholder = if (isReady) "Type your message here" else "AI is generating the response..."
 
     Column(
-        modifier = Modifier.Companion.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth()
     ) {
         Surface(
-            modifier = Modifier.Companion.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             color = BottomAppBarDefaults.containerColor,
             tonalElevation = BottomAppBarDefaults.ContainerElevation,
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
         ) {
             Box(
-                modifier = Modifier.Companion.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth()
                     .padding(start = 16.dp, top = 16.dp, end = 16.dp),
             ) {
                 OutlinedTextField(
                     state = textFieldState,
-                    modifier = Modifier.Companion.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = isReady,
                     placeholder = { Text(placeholder) },
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
@@ -74,7 +74,7 @@ fun ConversationBottomBar(
                         disabledContainerColor = MaterialTheme.colorScheme.surfaceDim,
                     ),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Companion.Send),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     onKeyboardAction = {
                         if (isReady) {
                             onSendClick()
@@ -136,8 +136,8 @@ fun ConversationBottomBar(
                         )
                     } else {
                         CircularProgressIndicator(
-                            modifier = Modifier.Companion.size(24.dp),
-                            strokeCap = StrokeCap.Companion.Round,
+                            modifier = Modifier.size(24.dp),
+                            strokeCap = StrokeCap.Round,
                             color = MaterialTheme.colorScheme.onPrimary,
                         )
                     }

@@ -136,7 +136,7 @@ fun ModelSelectionBottomBar(
                     Text(
                         text = "Filter by",
                         style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.Companion.padding(horizontal = 16.dp, vertical = 8.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
 
                     filtering.filters.forEach { (filter, isEnabled) ->

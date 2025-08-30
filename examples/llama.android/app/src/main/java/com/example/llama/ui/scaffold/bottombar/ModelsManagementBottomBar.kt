@@ -152,7 +152,7 @@ fun ModelsManagementBottomBar(
                     Text(
                         text = "Filter by",
                         style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.Companion.padding(horizontal = 16.dp, vertical = 8.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
 
                     filtering.filters.forEach { (filter, isEnabled) ->
@@ -222,8 +222,8 @@ fun ModelsManagementBottomBar(
                         Icon(
                             painter = painterResource(id = R.drawable.logo_huggingface),
                             contentDescription = "Browse and download a model from HuggingFace",
-                            modifier = Modifier.Companion.size(24.dp),
-                            tint = Color.Companion.Unspecified,
+                            modifier = Modifier.size(24.dp),
+                            tint = Color.Unspecified,
                         )
                     },
                     onClick = importing.importFromHuggingFace
