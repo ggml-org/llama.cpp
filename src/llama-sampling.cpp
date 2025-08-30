@@ -1200,7 +1200,6 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
         return;
     }
 
-    // in case it's not sorted/recalculated yet
     llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
 
     int pos_last = 0;

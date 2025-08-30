@@ -206,7 +206,7 @@ extern "C" {
         llama_token_data * data;
         size_t size;
         int64_t selected; // this is the index in the data array (i.e. not the token id)
-        bool sorted;
+        bool sorted;      // note: do not assume the data is sorted - always check this flag
     } llama_token_data_array;
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
