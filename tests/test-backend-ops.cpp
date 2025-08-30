@@ -4044,7 +4044,7 @@ struct test_im2col_3d : public test_case {
     const int d0;
     const int d1;
     const int d2;
-    
+
     const int64_t IC;
 
     std::string vars() override {
@@ -4278,7 +4278,6 @@ struct test_conv_3d : public test_case {
         return out;
     }
 };
-
 
 // GGML_OP_CONCAT
 struct test_concat : public test_case {
