@@ -1355,6 +1355,7 @@ struct vk_instance_t {
     PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
     std::vector<size_t> device_indices;
+    std::vector<bool>   device_supports_membudget;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
 
@@ -4202,15 +4203,16 @@ static void ggml_vk_instance_init() {
         vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
         vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
         vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
-
     }
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
+    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
-        size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+        size_t num_available_devices = devices.size();
 
         std::string devices(devices_env);
         std::replace(devices.begin(), devices.end(), ',', ' ');
@@ -4225,8 +4227,6 @@ static void ggml_vk_instance_init() {
             vk_instance.device_indices.push_back(tmp);
         }
     } else {
-        std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
-
         // If no vulkan devices are found, return early
         if (devices.empty()) {
             GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
@@ -4331,6 +4331,19 @@ static void ggml_vk_instance_init() {
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
 
     for (size_t i = 0; i < vk_instance.device_indices.size(); i++) {
+        vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
+        std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
+
+        bool membudget_supported = false;
+        for (const auto & ext : extensionprops) {
+            if (std::string(ext.extensionName.data()) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) {
+                membudget_supported = true;
+                break;
+            }
+        }
+
+        vk_instance.device_supports_membudget.push_back(membudget_supported);
+
         ggml_vk_print_gpu_info(i);
     }
 }
@@ -11441,23 +11454,16 @@ void ggml_backend_vk_get_device_description(int device, char * description, size
 
 void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total) {
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
+    GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());
 
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
     vk::PhysicalDeviceMemoryProperties memprops = vkdev.getMemoryProperties();
+    bool membudget_supported = vk_instance.device_supports_membudget[device];
 
-    std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
     vk::PhysicalDeviceMemoryProperties2 memprops2 = {};
-    bool membudget_extension_supported = false;
 
-    for (const auto & ext : extensionprops) {
-        if (std::string(ext.extensionName.data()) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) {
-            membudget_extension_supported = true;
-            break;
-        }
-    }
-
-    if (membudget_extension_supported) {
+    if (membudget_supported) {
         memprops2.pNext = &budgetprops;
         vkdev.getMemoryProperties2(&memprops2);
     }
@@ -11468,7 +11474,7 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
         if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
             *total = heap.size;
 
-            if (membudget_extension_supported && i < budgetprops.heapUsage.size()) {
+            if (membudget_supported && i < budgetprops.heapUsage.size()) {
                 *free = *total - budgetprops.heapUsage[i];
             } else {
                 *free = heap.size;
