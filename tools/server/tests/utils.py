@@ -148,6 +148,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.server_slots:
             server_args.append("--slots")
+        else:
+            server_args.append("--no-slots")
         if self.pooling:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
