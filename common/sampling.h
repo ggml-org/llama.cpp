@@ -86,8 +86,8 @@ uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 // helpers
 
 // access the internal list of current candidate tokens
-// if do_sort == true, the candidates will be sorted (in descending order of probability) in case they are not already sorted
-// if do_sort == false, the candidates *might* not be sorted. use the .sorted flag of the result to determine that
+// if do_sort == true, the candidates are guaranteed to be sorted afterwards (in descending order of probability)
+// the .sorted flag of the result indicates whether the returned candidates are sorted
 llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort);
 
 // get the last accepted token
