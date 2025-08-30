@@ -317,7 +317,7 @@ llama_tokens common_speculative_gen_draft(
 
         common_sampler_sample(smpl, ctx_dft, 0, true);
 
-        const auto * cur_p = common_sampler_get_candidates(smpl);
+        const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
         for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
             LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
