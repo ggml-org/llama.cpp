@@ -14,14 +14,19 @@
 #include "log.h"
 #include "regex-partial.h"
 
+template<class T>
+static void assert_equals(const char* label, const T& expected, const T& actual) {
+    if (expected != actual){
+        std::ostringstream oss;
+        if (label && *label) oss << label << '\n';
+        oss << "Expected: " << expected << "\nActual: " << actual;
+        throw std::runtime_error(oss.str());
+    }
+}
+
 template <class T>
 static void assert_equals(const T & expected, const T & actual) {
-    if (expected != actual) {
-        std::cerr << "Expected: " << expected << std::endl;
-        std::cerr << "Actual: " << actual << std::endl;
-        std::cerr << std::flush;
-        throw std::runtime_error("Test failed");
-    }
+    assert_equals("", expected, actual);
 }
 static void assert_equals(const char * expected, const std::string & actual) {
   return assert_equals<std::string>(expected, actual);
@@ -199,14 +204,6 @@ static void test(const std::string & input, bool is_partial, const std::vector<s
   assert_equals(true, js.has_value());
   assert_equals(is_partial, js->is_partial);
   assert_equals(expected, args_paths.size() == 1 && args_paths[0].empty() ? js->value.get<std::string>() : js->value.dump());
-}
-
-template<typename T>
-static void assert_equals(const char* label, const T& expected, const T& actual) {
-    if (!(expected == actual)) {
-        std::ostringstream oss; oss << label << "\nExpected: " << expected << "\nActual: " << actual;
-        throw std::runtime_error(oss.str());
-    }
 }
 
 static void test_deepseek_v3_1_tool_calls() {
