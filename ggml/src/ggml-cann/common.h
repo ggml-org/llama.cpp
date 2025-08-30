@@ -365,19 +365,9 @@ struct ggml_cann_rope_cache {
         if(theta_scale_cache != nullptr) {
             ACL_CHECK(aclrtFree(theta_scale_cache));
         }
-        if(sin_cache != nullptr) {
-            ACL_CHECK(aclrtFree(sin_cache));
-        }
-        if(cos_cache != nullptr) {
-            ACL_CHECK(aclrtFree(cos_cache));
-        }
     }
 
     void* theta_scale_cache = nullptr;
-    void* sin_cache = nullptr;
-    void* cos_cache = nullptr;
-    bool cached = false;
-    int64_t position_length = 0;
     int64_t theta_scale_length = 0;
     float theta_scale = 0.0f;
     float freq_scale = 0.0f;
