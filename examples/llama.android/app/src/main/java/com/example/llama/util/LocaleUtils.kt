@@ -6,6 +6,8 @@ package com.example.llama.util
  *
  */
 fun languageCodeToFlagEmoji(languageCode: String): String? {
+    SPECIAL_LANGUAGES[languageCode]?.let { return it }
+
     val countryCode = LANGUAGE_TO_COUNTRY[languageCode.lowercase()] ?: return null
 
     return countryCodeToFlagEmoji(countryCode)
@@ -23,6 +25,12 @@ private fun countryCodeToFlagEmoji(countryCode: String): String? {
 
     return String(Character.toChars(firstChar)) + String(Character.toChars(secondChar))
 }
+
+private val SPECIAL_LANGUAGES = mapOf(
+    "multi" to "🌐",
+    "multilingual" to "🌐",
+    "multi-lingual" to "🌐",
+)
 
 private val LANGUAGE_TO_COUNTRY by lazy {
     mapOf(

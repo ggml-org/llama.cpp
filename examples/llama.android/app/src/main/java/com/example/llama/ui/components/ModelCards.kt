@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,6 +158,10 @@ fun ModelCardFullExpandable(
     isExpanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
 ) {
+    LaunchedEffect(model) {
+        android.util.Log.w("JOJO", model.languages.toString())
+    }
+
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
         Card(
             modifier = Modifier
@@ -228,14 +233,32 @@ fun ModelCardFullExpandable(
 
                             // Row 5: Tags
                             model.tags?.let { tags ->
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Text(
+                                    text = "Tags",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Normal,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
 
                                 ModelCardContentTagsSection(tags)
                             }
 
                             // Row 6: Languages
                             model.languages?.let { languages ->
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Text(
+                                    text = "Supported languages",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Normal,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
 
                                 ModelCardContentLanguagesSections(languages)
                             }
@@ -312,6 +335,7 @@ fun ModelCardContentTagsSection(tags: List<String>) =
     ) {
         tags.forEach { tag ->
             AssistChip(
+                enabled = false,
                 onClick = { /* No action */ },
                 label = {
                     Text(
@@ -336,12 +360,12 @@ fun ModelCardContentLanguagesSections(languages: List<String>) =
     ) {
         languages.mapNotNull { languageCodeToFlagEmoji(it) }.forEach { emoji ->
             AssistChip(
+                enabled = false,
                 onClick = { /* No action */ },
                 label = {
                     Text(
                         text = emoji,
                         style = MaterialTheme.typography.bodySmall,
-                        fontStyle = FontStyle.Italic,
                         fontWeight = FontWeight.Light,
                         color = MaterialTheme.colorScheme.onSurface
                     )
