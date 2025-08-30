@@ -413,6 +413,7 @@ fun AppContent(
         AppScaffold(
             topBarconfig = scaffoldConfig.topBarConfig,
             bottomBarConfig = scaffoldConfig.bottomBarConfig,
+            onScaffoldEvent = handleScaffoldEvent,
             snackbarHostState = snackbarHostState,
         ) { paddingValues ->
             // AnimatedNavHost inside the scaffold content

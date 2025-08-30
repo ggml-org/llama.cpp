@@ -71,8 +71,8 @@ class PerformanceMonitor(@ApplicationContext private val context: Context) {
             availableMem = availableMem,
             totalMem = totalMem,
             percentUsed = percentUsed,
-            availableGb = availableGb,
-            totalGb = totalGb
+            availableGB = availableGb,
+            totalGB = totalGb
         )
     }
 

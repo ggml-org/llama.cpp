@@ -51,6 +51,7 @@ sealed class ScaffoldEvent {
 fun AppScaffold(
     topBarconfig: TopBarConfig,
     bottomBarConfig: BottomBarConfig = BottomBarConfig.None,
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     content: @Composable (PaddingValues) -> Unit
 ) {
@@ -68,6 +69,7 @@ fun AppScaffold(
                 title = topBarconfig.title,
                 memoryMetrics = topBarconfig.memoryMetrics,
                 temperatureDisplay = topBarconfig.temperatureInfo,
+                onScaffoldEvent = onScaffoldEvent,
                 onNavigateBack = topBarconfig.navigationIcon.backAction,
                 onMenuOpen = topBarconfig.navigationIcon.menuAction,
             )
@@ -75,6 +77,7 @@ fun AppScaffold(
             is TopBarConfig.Storage -> StorageTopBar(
                 title = topBarconfig.title,
                 storageMetrics = topBarconfig.storageMetrics,
+                onScaffoldEvent = onScaffoldEvent,
                 onNavigateBack = topBarconfig.navigationIcon.backAction,
             )
         }

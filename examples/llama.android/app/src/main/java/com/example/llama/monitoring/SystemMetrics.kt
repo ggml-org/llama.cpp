@@ -15,8 +15,8 @@ data class MemoryMetrics(
     val availableMem: Long,
     val totalMem: Long,
     val percentUsed: Int,
-    val availableGb: Float,
-    val totalGb: Float
+    val availableGB: Float,
+    val totalGB: Float
 )
 
 /**

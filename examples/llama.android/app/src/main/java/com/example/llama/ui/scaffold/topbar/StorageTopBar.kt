@@ -1,5 +1,6 @@
 package com.example.llama.ui.scaffold.topbar
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -17,8 +18,10 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.example.llama.monitoring.StorageMetrics
+import com.example.llama.ui.scaffold.ScaffoldEvent
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -26,6 +29,7 @@ import java.util.Locale
 fun StorageTopBar(
     title: String,
     storageMetrics: StorageMetrics?,
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
     onNavigateBack: (() -> Unit)? = null,
 ) {
     TopAppBar(
@@ -42,7 +46,7 @@ fun StorageTopBar(
         },
         actions = {
             storageMetrics?.let {
-                StorageIndicator(storageMetrics = it)
+                StorageIndicator(storageMetrics = it, onScaffoldEvent = onScaffoldEvent)
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -53,20 +57,29 @@ fun StorageTopBar(
 }
 
 @Composable
-private fun StorageIndicator(storageMetrics: StorageMetrics) {
-    val usedGb = storageMetrics.usedGB
-    val availableGb = storageMetrics.availableGB
+private fun StorageIndicator(
+    storageMetrics: StorageMetrics,
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
+) {
+
+    val usedGb = String.format(Locale.getDefault(), "%.1f", storageMetrics.usedGB)
+    val availableGb = String.format(Locale.getDefault(), "%.1f", storageMetrics.availableGB)
 
     Row(
-        modifier = Modifier.padding(end = 8.dp),
+        modifier = Modifier.padding(end = 8.dp).clickable(role = Role.Button) {
+            onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+                message = "Your models occupy $usedGb GB storage\nRemaining free space available: $availableGb GB",
+                withDismissAction = true,
+            ))
+        },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Default.SdStorage,
             contentDescription = "Storage",
             tint = when {
-                availableGb < 5.0f -> MaterialTheme.colorScheme.error
-                availableGb < 10.0f -> MaterialTheme.colorScheme.tertiary
+                storageMetrics.availableGB < 5.0f -> MaterialTheme.colorScheme.error
+                storageMetrics.availableGB < 10.0f -> MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.onSurface
             }
         )
@@ -74,12 +87,7 @@ private fun StorageIndicator(storageMetrics: StorageMetrics) {
         Spacer(modifier = Modifier.width(2.dp))
 
         Text(
-            text = String.format(
-                Locale.getDefault(),
-                "%.1f / %.1f GB",
-                usedGb,
-                availableGb
-            ),
+            text = "$usedGb / $availableGb GB",
             style = MaterialTheme.typography.bodySmall
         )
     }
