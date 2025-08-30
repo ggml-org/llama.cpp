@@ -86,7 +86,9 @@ uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 // helpers
 
 // access the internal list of current candidate tokens
-llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl);
+// if do_sort == true, the candidates will be sorted (in descending order of probability) in case they are not already sorted
+// if do_sort == false, the candidates *might* not be sorted. use the .sorted flag of the result to determine that
+llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort);
 
 // get the last accepted token
 llama_token common_sampler_last(const struct common_sampler * gsmpl);
