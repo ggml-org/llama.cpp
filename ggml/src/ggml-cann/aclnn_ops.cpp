@@ -2248,18 +2248,18 @@ static void aclnn_index_fill_tensor(ggml_backend_cann_context& ctx,
  *   5. Compute sin(θ), cos(θ) and optionally scale by attn_factor.
  *   6. Expand sin/cos values by repeat or repeat_interleave depending
  *      on whether @param is_neox is enabled.
- *   7. Store the computed values into persistent buffers
- *      (ctx.rope_cache.sin_cache / ctx.rope_cache.cos_cache).
  *
- * @param ctx         The CANN backend context, holding memory pool,
- *                    stream, and persistent buffers for rope init/cache.
- * @param dst         The destination ggml_tensor whose computation
- *                    depends on the cached RoPE values (usually Qcur/Kcur).
- * @param theta_scale Scalar exponent base for computing theta scale values.
- * @param freq_scale  Frequency scaling factor, applied to theta scale.
- * @param attn_factor Attention scaling factor, applied to sin/cos.
- * @param is_neox     Whether to use Neox-style repeat strategy
- *                    (dim expansion vs repeat_interleave).
+ * @param ctx                The CANN backend context, holding memory pool,
+ *                           stream, and persistent buffers for rope init/cache.
+ * @param dst                The destination ggml_tensor whose computation
+ *                           depends on the RoPE values (usually Qcur/Kcur).
+ * @param sin_tensor_buffer  Pre-allocated buffer for storing repeated sin values.
+ * @param cos_tensor_buffer  Pre-allocated buffer for storing repeated cos values.
+ * @param theta_scale        Scalar exponent base for computing theta scale values.
+ * @param freq_scale         Frequency scaling factor, applied to theta scale.
+ * @param attn_factor        Attention scaling factor, applied to sin/cos.
+ * @param is_neox            Whether to use Neox-style repeat strategy
+ *                           (dim expansion vs repeat_interleave).
  */
 static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
                              void* sin_tensor_buffer, void* cos_tensor_buffer,
