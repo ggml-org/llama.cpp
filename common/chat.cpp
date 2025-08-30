@@ -1204,7 +1204,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
 
     // When tools are present, build grammar for the <TOOLCALL> format, similar to CommandR, but without tool call ID
     if (!inputs.tools.is_null() && inputs.tools.is_array() && !inputs.tools.empty()) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;    
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             auto schemas = json::array();
             foreach_function(inputs.tools, [&](const json & tool) {
