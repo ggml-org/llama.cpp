@@ -1243,16 +1243,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
                             "[\\s\\S]*?(</think>\\s*)" :
                             "(?:<think>[\\s\\S]*?</think>\\s*)?") +
                 "(<TOOLCALL>)[\\s\\S]*" });
-    } else {
-        // Handle thinking tags for non-tool responses
-        if (data.thinking_forced_open && inputs.enable_thinking) {
-            data.grammar_lazy = false;
-            data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-                builder.add_rule("root", "\"</think>\" space");
-            });
-        }
     }
-    // No special tokens to preserve, all of them are standard strings
     return data;
 }
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {

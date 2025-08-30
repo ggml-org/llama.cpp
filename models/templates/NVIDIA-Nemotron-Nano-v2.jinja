@@ -52,7 +52,6 @@
 {{- '
 
 ' -}}
-
 {%- set messages = messages[1:] if messages[0]['role'] == 'system' else messages -%}
 {%- if messages[-1]['role'] == 'assistant' -%}
   {%- set ns.last_turn_assistant_content = (messages[-1]['content'] | default('', true)).strip() -%}
@@ -74,9 +73,7 @@
     {{- message['content'] -}}
     {{- ', ' if not loop.last and (messages[loop.index0 + 1].role == 'tool') else '' -}}
     {%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}
-      {{- ']</TOOL_RESPONSE>
-
-' -}}
+      {{- ']</TOOL_RESPONSE>' -}}
     {%- endif -%}
   {%- elif message['role'] == 'assistant' -%}
     {%- if content and '</think>' in content -%}
@@ -87,7 +84,6 @@
     {%- if message.tool_calls -%}
       {%- if (content | default('', true)).strip() != '' -%}
         {{- '
-
 ' -}}
       {%- endif -%}
       {{- '<TOOLCALL>[' -}}
@@ -105,7 +101,6 @@
     {%- endif -%}
     {{- '
 <SPECIAL_12>
-
 ' -}}
   {%- endif -%}
 {%- endfor -%}
@@ -117,7 +112,6 @@
     {{- '<think></think>' -}}
   {%- else -%}
     {{- '<think>
-
 ' -}}
   {%- endif -%}
   {%- if ns.last_turn_assistant_content is defined and ns.last_turn_assistant_content != '' -%}
@@ -131,7 +125,6 @@
       {{- '<think></think>' -}}
     {%- else -%}
       {{- '<think>
-
 ' -}}
     {%- endif -%}
     {{- ns.last_turn_assistant_content -}}
@@ -139,13 +132,11 @@
       {%- if continue_final_message is false -%}
         {{- '
 <SPECIAL_12>
-
 ' -}}
       {%- endif -%}
     {%- else -%}
       {{- '
 <SPECIAL_12>
-
 ' -}}
     {%- endif -%}
   {%- endif -%}
