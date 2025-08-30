@@ -332,6 +332,7 @@ llama_context::llama_context(
                         LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                             "is assigned to device %s (usually due to missing support)\n",
                             __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
+                        // FIXME: fa_device_mismatch logic is wrong for --no-kv-offload, but this is broken anyways
                         fa_device_mismatch = true;
                         break;
                     }
