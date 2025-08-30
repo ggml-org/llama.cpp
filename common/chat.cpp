@@ -1202,43 +1202,47 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
         }
     }
 
-    // When tools are present, build grammar for the <TOOLCALL> format
+    // When tools are present, build grammar for the <TOOLCALL> format, similar to CommandR, but without tool call ID
     if (!inputs.tools.is_null() && inputs.tools.is_array() && !inputs.tools.empty()) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            std::vector<std::string> tool_rules;
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;    
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            auto schemas = json::array();
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                std::string name = function.at("name");
-                auto parameters = function.at("parameters");
-                builder.resolve_refs(parameters);
-
-                // Build tool call rule for Nemotron format
-                tool_rules.push_back(builder.add_rule(name + "-call", builder.add_schema(name + "-args", {
-                    {"type", "object"},
-                    {"properties", {
-                        {"name", {{"const", name}}},
-                        {"arguments", parameters},
-                    }},
-                    {"required", json::array({"name", "arguments"})},
-                })));
+                schemas.push_back({
+                    { "type",       "object"                                                   },
+                    { "properties",
+                        {
+                            { "name",
+                            {
+                                { "type", "string" },
+                                { "const", function.at("name") },
+                            } },
+                            { "arguments", function.at("parameters") },
+                        }                                                                        },
+                    { "required",   json::array({ "name", "arguments" }) },
+                });
             });
-
-            // Create tool call rule - Nemotron uses <TOOLCALL>[...] format
-            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
-            auto tool_list = builder.add_rule("tool_list", "\"[\" space " + tool_call + " (\",\" space " + tool_call + ")* space \"]\"");
-
-            // Grammar rule for <TOOLCALL> format
+            auto schema = json{
+                        { "type",     "array"                                                         },
+                        { "items",    schemas.size() == 1 ? schemas[0] : json{ { "anyOf", schemas } } },
+                        { "minItems", 1                                                               },
+            };
+            if (!inputs.parallel_tool_calls) {
+                schema["maxItems"] = 1;
+            }
             builder.add_rule("root",
-                std::string(data.thinking_forced_open ? "( \"\" space )? " : "") +
-                "\"<TOOLCALL>\" space " + tool_list + " \"</TOOLCALL>\"");
+                                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+                                    "\"<TOOLCALL>\" " + builder.add_schema("tool_calls", schema) +
+                                    " \"</TOOLCALL>\"");
         });
-
-        // Define triggers for <TOOLCALL> token
-        data.grammar_triggers.push_back({
-            COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
-            "<TOOLCALL>"
-        });
+        data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+            // If thinking_forced_open, then we capture the </think> tag in the grammar,
+            // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
+            std::string(data.thinking_forced_open ?
+                            "[\\s\\S]*?(</think>\\s*)" :
+                            "(?:<think>[\\s\\S]*?</think>\\s*)?") +
+                "(<TOOLCALL>)[\\s\\S]*" });
     } else {
         // Handle thinking tags for non-tool responses
         if (data.thinking_forced_open && inputs.enable_thinking) {
@@ -1248,19 +1252,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
             });
         }
     }
-
-    // Set preserved tokens for all special tokens
-    data.preserved_tokens = {
-        "<think>",
-        "</think>",
-        "<TOOLCALL>",
-        "</TOOLCALL>",
-        "<TOOL_RESPONSE>",
-        "</TOOL_RESPONSE>",
-        "<AVAILABLE_TOOLS>",
-        "</AVAILABLE_TOOLS>"
-    };
-
+    // No special tokens to preserve, all of them are standard strings
     return data;
 }
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {

@@ -1793,19 +1793,9 @@ static void test_template_output_parsers() {
                       /* expect_grammar_triggered= */ false);
 
         // Test template generation for tool calls
-        test_templates(tmpls.get(), end_tokens, message_assist_call_id, tools,
-                      "{\n"
-                      "  \"tool_calls\": [\n"
-                      "    {\n"
-                      "      \"name\": \"special_function\",\n"
-                      "      \"arguments\": {\n"
-                      "        \"arg1\": 1\n"
-                      "      },\n"
-                      "      \"id\": \"123456789\"\n"
-                      "    }\n"
-                      "  ]\n"
-                      "}\n",
-                      /* expect_grammar_triggered= */ false
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                      /* expect_grammar_triggered= */ true
         );
     }
 }
