@@ -1301,7 +1301,7 @@ extern "C" {
             struct ggml_tensor  * b);
 
     // change the precision of a matrix multiplication
-    // set to GGML_PREC_F32 for higher precision (useful for phi-2)
+    // set to GGML_PREC_F32 for higher precision
     GGML_API void ggml_mul_mat_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
@@ -1312,6 +1312,12 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // change the precision of an indirect matrix multiplication
+    // set to GGML_PREC_F32 for higher precision
+    GGML_API void ggml_mul_mat_id_set_prec(
+            struct ggml_tensor * a,
+            enum ggml_prec       prec);
 
     // A: m columns, n rows,
     // B: p columns, n rows,
