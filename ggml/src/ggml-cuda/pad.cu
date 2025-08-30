@@ -17,20 +17,20 @@ static __global__ void pad_f32(const float * src, float * dst,
     }
 
     // operation
-    int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
-    if ((i0 >= lp0 && i0 < ne0 - rp0) \
-         && (i1 >= lp1 && i1 < ne1 - rp1) \
-         && (i2 >= lp2 && i2 < ne2 - rp2) \
-         && (i3 >= lp3 && i3 < ne3 - rp3)) {
-        int64_t i00 = i0 - lp0;
-        int64_t i01 = i1 - lp1;
-        int64_t i02 = i2 - lp2;
-        int64_t i03 = i3 - lp3;
-        int64_t ne02 = ne2 - lp2 - rp2;
-        int64_t ne01 = ne1 - lp1 - rp1;
-        int64_t ne00 = ne0 - lp0 - rp0;
+    const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
+    if ((i0 >= lp0 && i0 < ne0 - rp0) &&
+        (i1 >= lp1 && i1 < ne1 - rp1) &&
+        (i2 >= lp2 && i2 < ne2 - rp2) &&
+        (i3 >= lp3 && i3 < ne3 - rp3)) {
+        const int64_t i00 = i0 - lp0;
+        const int64_t i01 = i1 - lp1;
+        const int64_t i02 = i2 - lp2;
+        const int64_t i03 = i3 - lp3;
+        const int64_t ne02 = ne2 - lp2 - rp2;
+        const int64_t ne01 = ne1 - lp1 - rp1;
+        const int64_t ne00 = ne0 - lp0 - rp0;
 
-        int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
+        const int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
 
         dst[dst_idx] = src[src_idx];
     } else {
