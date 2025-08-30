@@ -231,10 +231,11 @@ class Keys:
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
 
     class Adapter:
-        TYPE               = "adapter.type"
-        LORA_ALPHA         = "adapter.lora.alpha"
-        LORA_TASK_NAME     = "adapter.lora.task_name"
-        LORA_PROMPT_PREFIX = "adapter.lora.prompt_prefix"
+        TYPE                    = "adapter.type"
+        LORA_ALPHA              = "adapter.lora.alpha"
+        LORA_TASK_NAME          = "adapter.lora.task_name"
+        LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
+        ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"
 
     class IMatrix:
         CHUNK_COUNT = "imatrix.chunk_count"
