@@ -4,7 +4,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import com.example.llama.data.model.ModelFilter
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.ModelSortOrder
-import com.example.llama.viewmodel.Preselection
+import com.example.llama.viewmodel.PreselectedModelToRun
 
 /**
  * [BottomAppBar] configurations
@@ -13,76 +13,78 @@ sealed class BottomBarConfig {
 
     object None : BottomBarConfig()
 
-    data class ModelSelection(
-        val search: SearchConfig,
-        val sorting: SortingConfig,
-        val filtering: FilteringConfig,
-        val runAction: RunActionConfig
-    ) : BottomBarConfig() {
-        data class SearchConfig(
-            val isActive: Boolean,
-            val onToggleSearch: (Boolean) -> Unit,
+    sealed class Models : BottomBarConfig() {
+
+        data class Browsing(
+            val onToggleSearching: () -> Unit,
+            val sorting: SortingConfig,
+            val filtering: FilteringConfig,
+            val runAction: RunActionConfig,
+        ) : BottomBarConfig() {
+            data class SortingConfig(
+                val currentOrder: ModelSortOrder,
+                val isMenuVisible: Boolean,
+                val toggleMenu: (Boolean) -> Unit,
+                val selectOrder: (ModelSortOrder) -> Unit
+            )
+
+            data class FilteringConfig(
+                val isActive: Boolean,
+                val filters: Map<ModelFilter, Boolean>,
+                val onToggleFilter: (ModelFilter, Boolean) -> Unit,
+                val onClearFilters: () -> Unit,
+                val isMenuVisible: Boolean,
+                val toggleMenu: (Boolean) -> Unit
+            )
+        }
+
+        data class Searching(
             val textFieldState: TextFieldState,
+            val onQuitSearching: () -> Unit,
             val onSearch: (String) -> Unit,
-        )
+            val runAction: RunActionConfig,
+        ) : BottomBarConfig()
 
-        data class SortingConfig(
-            val currentOrder: ModelSortOrder,
-            val isMenuVisible: Boolean,
-            val toggleMenu: (Boolean) -> Unit,
-            val selectOrder: (ModelSortOrder) -> Unit
-        )
+        data class Management(
+            val sorting: SortingConfig,
+            val filtering: FilteringConfig,
+            val importing: ImportConfig,
+            val onToggleDeleting: () -> Unit,
+        ) : BottomBarConfig() {
+            data class SortingConfig(
+                val currentOrder: ModelSortOrder,
+                val isMenuVisible: Boolean,
+                val toggleMenu: (Boolean) -> Unit,
+                val selectOrder: (ModelSortOrder) -> Unit
+            )
 
-        data class FilteringConfig(
-            val isActive: Boolean,
-            val filters: Map<ModelFilter, Boolean>,
-            val onToggleFilter: (ModelFilter, Boolean) -> Unit,
-            val onClearFilters: () -> Unit,
-            val isMenuVisible: Boolean,
-            val toggleMenu: (Boolean) -> Unit
-        )
+            data class FilteringConfig(
+                val isActive: Boolean,
+                val filters: Map<ModelFilter, Boolean>,
+                val onToggleFilter: (ModelFilter, Boolean) -> Unit,
+                val onClearFilters: () -> Unit,
+                val isMenuVisible: Boolean,
+                val toggleMenu: (Boolean) -> Unit
+            )
 
-        data class RunActionConfig(
-            val preselection: Preselection?,
-            val onClickRun: (Preselection) -> Unit,
-        )
-    }
+            data class ImportConfig(
+                val isMenuVisible: Boolean,
+                val toggleMenu: (Boolean) -> Unit,
+                val importFromLocal: () -> Unit,
+                val importFromHuggingFace: () -> Unit
+            )
+        }
 
-    data class ModelsManagement(
-        val sorting: SortingConfig,
-        val filtering: FilteringConfig,
-        val selection: SelectionConfig,
-        val importing: ImportConfig
-    ) : BottomBarConfig() {
-        data class SortingConfig(
-            val currentOrder: ModelSortOrder,
-            val isMenuVisible: Boolean,
-            val toggleMenu: (Boolean) -> Unit,
-            val selectOrder: (ModelSortOrder) -> Unit
-        )
-
-        data class FilteringConfig(
-            val isActive: Boolean,
-            val filters: Map<ModelFilter, Boolean>,
-            val onToggleFilter: (ModelFilter, Boolean) -> Unit,
-            val onClearFilters: () -> Unit,
-            val isMenuVisible: Boolean,
-            val toggleMenu: (Boolean) -> Unit
-        )
-
-        data class SelectionConfig(
-            val isActive: Boolean,
-            val toggleMode: (Boolean) -> Unit,
+        data class Deleting(
+            val onQuitDeleting: () -> Unit,
             val selectedModels: Map<String, ModelInfo>,
             val toggleAllSelection: (Boolean) -> Unit,
             val deleteSelected: () -> Unit
-        )
+        ) : BottomBarConfig()
 
-        data class ImportConfig(
-            val isMenuVisible: Boolean,
-            val toggleMenu: (Boolean) -> Unit,
-            val importFromLocal: () -> Unit,
-            val importFromHuggingFace: () -> Unit
+        data class RunActionConfig(
+            val preselectedModelToRun: PreselectedModelToRun?,
+            val onClickRun: (PreselectedModelToRun) -> Unit,
         )
     }
 

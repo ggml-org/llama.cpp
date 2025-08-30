@@ -1,14 +1,17 @@
 package com.example.llama.ui.scaffold.bottombar
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.FilterAltOff
 import androidx.compose.material3.BottomAppBar
@@ -23,26 +26,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import com.example.llama.R
 import com.example.llama.data.model.ModelSortOrder
 
 @Composable
-fun ModelsManagementBottomBar(
-    sortingConfig: BottomBarConfig.Models.Management.SortingConfig,
-    filteringConfig: BottomBarConfig.Models.Management.FilteringConfig,
-    importingConfig: BottomBarConfig.Models.Management.ImportConfig,
-    onToggleDeleting: () -> Unit,
+fun ModelsBrowsingBottomBar(
+    onToggleSearching: () -> Unit,
+    sortingConfig: BottomBarConfig.Models.Browsing.SortingConfig,
+    filteringConfig: BottomBarConfig.Models.Browsing.FilteringConfig,
+    runActionConfig: BottomBarConfig.Models.RunActionConfig,
 ) {
     BottomAppBar(
         actions = {
-            // Batch-deletion action
-            IconButton(onClick = onToggleDeleting) {
+            // Enter search action
+            IconButton(onClick = onToggleSearching) {
                 Icon(
-                    imageVector = Icons.Outlined.DeleteSweep,
-                    contentDescription = "Delete models"
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search models"
                 )
             }
 
@@ -98,7 +98,7 @@ fun ModelsManagementBottomBar(
                 }
             }
 
-            // Filtering action
+            // Filter action
             IconButton(onClick = { filteringConfig.toggleMenu(true) }) {
                 Icon(
                     imageVector =
@@ -150,42 +150,24 @@ fun ModelsManagementBottomBar(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { importingConfig.toggleMenu(true) },
+            // Only show FAB if a model is selected
+            AnimatedVisibility(
+                visible = runActionConfig.preselectedModelToRun != null,
+                enter = scaleIn() + fadeIn(),
+                exit = scaleOut() + fadeOut()
             ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add model"
-                )
-            }
-
-            // Add model dropdown menu
-            DropdownMenu(
-                expanded = importingConfig.isMenuVisible,
-                onDismissRequest = { importingConfig.toggleMenu(false) }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Import local model") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.FolderOpen,
-                            contentDescription = "Import a local model on the device"
-                        )
+                FloatingActionButton(
+                    onClick = {
+                        runActionConfig.preselectedModelToRun?.let {
+                            runActionConfig.onClickRun(it)
+                        }
                     },
-                    onClick = importingConfig.importFromLocal
-                )
-                DropdownMenuItem(
-                    text = { Text("Download from HuggingFace") },
-                    leadingIcon = {
-                        Icon(
-                            painter = painterResource(id = R.drawable.logo_huggingface),
-                            contentDescription = "Browse and download a model from HuggingFace",
-                            modifier = Modifier.size(24.dp),
-                            tint = Color.Unspecified,
-                        )
-                    },
-                    onClick = importingConfig.importFromHuggingFace
-                )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Run with selected model"
+                    )
+                }
             }
         }
     )

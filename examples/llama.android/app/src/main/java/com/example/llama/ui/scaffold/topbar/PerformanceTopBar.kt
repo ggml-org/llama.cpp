@@ -1,10 +1,7 @@
 package com.example.llama.ui.scaffold.topbar
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Memory
@@ -15,13 +12,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.monitoring.TemperatureMetrics
@@ -92,30 +89,32 @@ private fun MemoryIndicator(
     val availableGB = String.format(Locale.getDefault(), "%.1f", memoryUsage.availableGB)
     val totalGB = String.format(Locale.getDefault(), "%.1f", memoryUsage.totalGB)
 
-    Row(
-        modifier = Modifier.padding(end = 12.dp).clickable(role = Role.Button) {
+    OutlinedButton(
+        modifier = Modifier.padding(end = 8.dp),
+        onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = "Free RAM available: $availableGB GB\nTotal RAM on your device: $totalGB GB",
                 withDismissAction = true,
             ))
-        },
-        verticalAlignment = Alignment.CenterVertically,
+        }
     ) {
-        Icon(
-            imageVector = Icons.Default.Memory,
-            contentDescription = "RAM usage",
-            tint = when {
-                memoryUsage.availableGB < 1 -> MaterialTheme.colorScheme.error
-                memoryUsage.availableGB < 3 -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.onSurface
-            }
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Memory,
+                contentDescription = "RAM usage",
+                tint = when {
+                    memoryUsage.availableGB < 1 -> MaterialTheme.colorScheme.error
+                    memoryUsage.availableGB < 3 -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+            )
 
-        Text(
-            modifier = Modifier.padding(start = 4.dp),
-            text =  "$availableGB / $totalGB GB",
-            style = MaterialTheme.typography.bodySmall,
-        )
+            Text(
+                modifier = Modifier.padding(start = 4.dp),
+                text =  "$availableGB / $totalGB GB",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -134,36 +133,39 @@ private fun TemperatureIndicator(
     }
     val warningDismissible = temperatureMetrics.warningLevel == TemperatureWarningLevel.HIGH
 
-    Row(
-        modifier = Modifier.padding(end = 12.dp).clickable(role = Role.Button) {
+    OutlinedButton(
+        modifier = Modifier.padding(end = 8.dp),
+        onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = temperatureWarning,
                 withDismissAction = warningDismissible,
             ))
-        },
-        verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            imageVector = when (temperatureMetrics.warningLevel) {
-                TemperatureWarningLevel.HIGH -> Icons.Default.WarningAmber
-                else -> Icons.Default.Thermostat
-            },
-            contentDescription = "Device temperature",
-            tint = when (temperatureMetrics.warningLevel) {
-                TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
-                TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.onSurface
-            }
-        )
+        }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = when (temperatureMetrics.warningLevel) {
+                    TemperatureWarningLevel.HIGH -> Icons.Default.WarningAmber
+                    else -> Icons.Default.Thermostat
+                },
+                contentDescription = "Device temperature",
+                tint = when (temperatureMetrics.warningLevel) {
+                    TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
+                    TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+            )
 
-        Text(
-            modifier = Modifier.padding(start = 4.dp),
-            text = temperatureDisplay,
-            style = MaterialTheme.typography.bodySmall,
-            color = when (temperatureMetrics.warningLevel) {
-                TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
-                TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.onSurface
-            }
-        )
+            Text(
+                modifier = Modifier.padding(start = 4.dp),
+                text = temperatureDisplay,
+                style = MaterialTheme.typography.bodySmall,
+                color = when (temperatureMetrics.warningLevel) {
+                    TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
+                    TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+            )
+        }
     }
 }

@@ -3,6 +3,8 @@ package com.example.llama.ui.scaffold.topbar
 import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.monitoring.TemperatureMetrics
+import com.example.llama.ui.scaffold.ScaffoldEvent
+import com.example.llama.viewmodel.ModelScreenUiMode
 
 /**
  * [TopAppBar] configurations
@@ -23,6 +25,19 @@ sealed class TopBarConfig {
         override val navigationIcon: NavigationIcon
     ) : TopBarConfig()
 
+    // Model management top bar with a toggle to turn on/off manage mode
+    data class ModelsBrowsing(
+        override val title: String,
+        override val navigationIcon: NavigationIcon,
+        val onToggleMode: (ModelScreenUiMode) -> Unit,
+    ) : TopBarConfig()
+
+    // Model batch-deletion top bar with a toggle to turn on/off manage mode
+    data class ModelsDeleting(
+        override val title: String,
+        override val navigationIcon: NavigationIcon,
+    ) : TopBarConfig()
+
     // Performance monitoring top bar with RAM and optional temperature
     data class Performance(
         override val title: String,
@@ -32,7 +47,7 @@ sealed class TopBarConfig {
     ) : TopBarConfig()
 
     // Storage management top bar with used & total storage
-    data class Storage(
+    data class ModelsManagement(
         override val title: String,
         override val navigationIcon: NavigationIcon,
         val storageMetrics: StorageMetrics?
@@ -43,7 +58,8 @@ sealed class TopBarConfig {
  * Helper class for navigation icon configuration
  */
 sealed class NavigationIcon {
-    data class Back(val onNavigateBack: () -> Unit) : NavigationIcon()
     data class Menu(val onMenuOpen: () -> Unit) : NavigationIcon()
-    object None : NavigationIcon()
+    data class Back(val onNavigateBack: () -> Unit) : NavigationIcon()
+    data class Quit(val onQuit: () -> Unit) : NavigationIcon()
+    data object None : NavigationIcon()
 }

@@ -9,33 +9,43 @@ import android.content.IntentFilter
 import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
 import android.util.Log
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.data.model.ModelFilter
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.ModelSortOrder
 import com.example.llama.data.model.filterBy
+import com.example.llama.data.model.queryBy
 import com.example.llama.data.model.sortByOrder
-import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
-import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.data.repo.InsufficientStorageException
 import com.example.llama.data.repo.ModelRepository
+import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
+import com.example.llama.data.source.remote.HuggingFaceModel
+import com.example.llama.engine.InferenceService
+import com.example.llama.monitoring.PerformanceMonitor
 import com.example.llama.util.formatFileByteSize
 import com.example.llama.util.getFileNameFromUri
 import com.example.llama.util.getFileSizeFromUri
 import com.example.llama.viewmodel.ModelManagementState.Deletion
 import com.example.llama.viewmodel.ModelManagementState.Download
 import com.example.llama.viewmodel.ModelManagementState.Importation
+import com.example.llama.viewmodel.PreselectedModelToRun.RamWarning
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.FileNotFoundException
@@ -43,70 +53,81 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
 
+
+@OptIn(FlowPreview::class)
 @HiltViewModel
-class ModelsManagementViewModel @Inject constructor(
+class ModelsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val modelRepository: ModelRepository
+    private val modelRepository: ModelRepository,
+    private val performanceMonitor: PerformanceMonitor,
+    private val inferenceService: InferenceService,
 ) : ViewModel() {
 
-    // Data: models
-    private val _filteredModels = MutableStateFlow<List<ModelInfo>>(emptyList())
-    val filteredModels: StateFlow<List<ModelInfo>> = _filteredModels.asStateFlow()
+    // UI state: model management mode
+    private val _modelScreenUiMode = MutableStateFlow(ModelScreenUiMode.BROWSING)
+    val modelScreenUiMode = _modelScreenUiMode.asStateFlow()
 
-    // UI state: multi-selection mode
-    private val _isMultiSelectionMode = MutableStateFlow(false)
-    val isMultiSelectionMode: StateFlow<Boolean> = _isMultiSelectionMode.asStateFlow()
-
-    fun toggleSelectionMode(enabled: Boolean) {
-        _isMultiSelectionMode.value = enabled
-        if (!enabled) {
-            toggleAllSelection(selectAll = false)
-        }
-    }
-
-    // UI state: models selected in multi-selection
-    private val _selectedModels = MutableStateFlow<Map<String, ModelInfo>>(emptyMap())
-    val selectedModels: StateFlow<Map<String, ModelInfo>> = _selectedModels.asStateFlow()
-
-    fun toggleModelSelectionById(modelId: String) {
-        val current = _selectedModels.value.toMutableMap()
-        val model = _filteredModels.value.find { it.id == modelId }
-
-        if (model != null) {
-            if (current.containsKey(modelId)) {
-                current.remove(modelId)
-            } else {
-                current[modelId] = model
+    fun toggleMode(newMode: ModelScreenUiMode): Boolean {
+        val oldMode = _modelScreenUiMode.value
+        when (oldMode) {
+            ModelScreenUiMode.BROWSING -> {
+                when (newMode) {
+                    ModelScreenUiMode.SEARCHING -> {
+                        resetPreselection()
+                    }
+                    ModelScreenUiMode.MANAGING -> {
+                        resetPreselection()
+                    }
+                    ModelScreenUiMode.DELETING -> { return false }
+                    else -> { /* No-op */ }
+                }
             }
-            _selectedModels.value = current
+            ModelScreenUiMode.SEARCHING -> {
+                when (newMode) {
+                    ModelScreenUiMode.BROWSING -> {
+                        searchFieldState.clearText()
+                    }
+                    else -> { return false }
+                }
+            }
+            ModelScreenUiMode.MANAGING -> {
+                when (newMode) {
+                    ModelScreenUiMode.SEARCHING -> { return false }
+                    else -> { /* No-op */ }
+                }
+            }
+            ModelScreenUiMode.DELETING -> {
+                when (newMode) {
+                    ModelScreenUiMode.BROWSING, ModelScreenUiMode.SEARCHING -> { return false }
+                    else -> { /* No-op */ }
+                }
+            }
         }
+        _modelScreenUiMode.value = newMode
+        return true
     }
 
-    fun toggleAllSelection(selectAll: Boolean) {
-        if (selectAll) {
-            _selectedModels.value = _filteredModels.value.associateBy { it.id }
-        } else {
-            _selectedModels.value = emptyMap()
-        }
-    }
+    // UI state: search mode
+    val searchFieldState = TextFieldState()
 
     // UI state: sort menu
-    private val _sortOrder = MutableStateFlow(ModelSortOrder.NAME_ASC)
-    val sortOrder: StateFlow<ModelSortOrder> = _sortOrder.asStateFlow()
+    private val _sortOrder = MutableStateFlow(ModelSortOrder.LAST_USED)
+    val sortOrder = _sortOrder.asStateFlow()
 
     fun setSortOrder(order: ModelSortOrder) {
         _sortOrder.value = order
     }
 
     private val _showSortMenu = MutableStateFlow(false)
-    val showSortMenu: StateFlow<Boolean> = _showSortMenu.asStateFlow()
+    val showSortMenu = _showSortMenu.asStateFlow()
 
-    fun toggleSortMenu(show: Boolean) {
-        _showSortMenu.value = show
+    fun toggleSortMenu(visible: Boolean) {
+        _showSortMenu.value = visible
     }
 
-    // UI state: filters
+    // UI state: filter menu
     private val _activeFilters = MutableStateFlow<Map<ModelFilter, Boolean>>(
         ModelFilter.ALL_FILTERS.associateWith { false }
     )
@@ -127,10 +148,67 @@ class ModelsManagementViewModel @Inject constructor(
     }
 
     private val _showFilterMenu = MutableStateFlow(false)
-    val showFilterMenu: StateFlow<Boolean> = _showFilterMenu.asStateFlow()
+    val showFilterMenu = _showFilterMenu.asStateFlow()
 
     fun toggleFilterMenu(visible: Boolean) {
         _showFilterMenu.value = visible
+    }
+
+    // Data: filtered & sorted models
+    private val _filteredModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val filteredModels = _filteredModels.asStateFlow()
+
+    // Data: queried models
+    private val _queryResults = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val queryResults = _queryResults.asStateFlow()
+
+    // Data: pre-selected model in expansion mode
+    private val _preselectedModelToRun = MutableStateFlow<ModelInfo?>(null)
+    private val _showRamWarning = MutableStateFlow(false)
+    val preselectedModelToRun = combine(
+        _preselectedModelToRun,
+        performanceMonitor.monitorMemoryUsage(),
+        _showRamWarning,
+    ) { model, memory, show ->
+        if (model == null) {
+            null
+        } else {
+            if (memory.availableMem >= model.sizeInBytes + RAM_LOAD_MODEL_BUFFER_BYTES) {
+                PreselectedModelToRun(model, null)
+            } else {
+                PreselectedModelToRun(model, RamWarning(model.sizeInBytes, memory.availableMem, show))
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = null
+    )
+
+    // UI state: models selected in deleting mode
+    private val _selectedModelsToDelete = MutableStateFlow<Map<String, ModelInfo>>(emptyMap())
+    val selectedModelsToDelete: StateFlow<Map<String, ModelInfo>> = _selectedModelsToDelete.asStateFlow()
+
+    fun toggleModelSelectionById(modelId: String) {
+        val current = _selectedModelsToDelete.value.toMutableMap()
+        val model = _filteredModels.value.find { it.id == modelId }
+
+        if (model != null) {
+            if (current.containsKey(modelId)) {
+                current.remove(modelId)
+            } else {
+                current[modelId] = model
+            }
+            _selectedModelsToDelete.value = current
+        }
+    }
+
+    fun toggleAllSelectedModelsToDelete(selectAll: Boolean) {
+        if (selectAll) {
+            _selectedModelsToDelete.value = _filteredModels.value.associateBy { it.id }
+        } else {
+            _selectedModelsToDelete.value = emptyMap()
+        }
     }
 
     // UI state: import menu
@@ -156,6 +234,17 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
+    // Internal state
+    private val _managementState = MutableStateFlow<ModelManagementState>(ModelManagementState.Idle)
+    val managementState: StateFlow<ModelManagementState> = _managementState.asStateFlow()
+
+    fun resetManagementState() {
+        huggingFaceQueryJob?.let {
+            if (it.isActive) { it.cancel() }
+        }
+        _managementState.value = ModelManagementState.Idle
+    }
+
     init {
         viewModelScope.launch {
             combine(
@@ -169,20 +258,82 @@ class ModelsManagementViewModel @Inject constructor(
             }
         }
 
+        viewModelScope.launch {
+            combine(
+                modelRepository.getModels(),
+                snapshotFlow { searchFieldState.text }.debounce(QUERY_DEBOUNCE_TIMEOUT_MS)
+            ) { models, query ->
+                if (query.isBlank()) {
+                    emptyList()
+                } else {
+                    models.queryBy(query.toString()).sortedBy { it.dateLastUsed ?: it.dateAdded }
+                }
+            }.collectLatest {
+                _queryResults.value = it
+            }
+        }
+
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         context.registerReceiver(downloadReceiver, filter, RECEIVER_EXPORTED)
     }
 
-    // Internal state
-    private val _managementState = MutableStateFlow<ModelManagementState>(ModelManagementState.Idle)
-    val managementState: StateFlow<ModelManagementState> = _managementState.asStateFlow()
-
-    fun resetManagementState() {
-        huggingFaceQueryJob?.let {
-            if (it.isActive) { it.cancel() }
-        }
-        _managementState.value = ModelManagementState.Idle
+    /**
+     * Pre-select a model to expand its details and show Run FAB
+     */
+    fun preselectModel(modelInfo: ModelInfo, preselected: Boolean) {
+        _preselectedModelToRun.value = if (preselected) modelInfo else null
+        _showRamWarning.value = false
     }
+
+    /**
+     * Reset preselected model to none (before navigating away)
+     */
+    fun resetPreselection() {
+        _preselectedModelToRun.value = null
+        _showRamWarning.value = false
+    }
+
+    /**
+     * Select the currently pre-selected model
+     *
+     * @return True if RAM enough, otherwise False.
+     */
+    fun selectModel(preselectedModelToRun: PreselectedModelToRun) =
+        when (preselectedModelToRun.ramWarning?.showing) {
+            null -> {
+                inferenceService.setCurrentModel(preselectedModelToRun.modelInfo)
+                true
+            }
+            false -> {
+                _showRamWarning.value = true
+                false
+            }
+            else -> false
+        }
+
+    /**
+     * Dismiss the RAM warnings
+     */
+    fun dismissRamWarning() {
+        _showRamWarning.value = false
+    }
+
+    /**
+     * Acknowledge RAM warnings and confirm currently pre-selected model
+     *
+     * @return True if confirmed, otherwise False.
+     */
+    fun confirmSelectedModel(modelInfo: ModelInfo, ramWarning: RamWarning): Boolean =
+        if (ramWarning.showing) {
+            inferenceService.setCurrentModel(modelInfo)
+            _showRamWarning.value = false
+
+            resetPreselection()
+
+            true
+        } else {
+            false
+        }
 
     /**
      * First show confirmation instead of starting import local file immediately
@@ -198,6 +349,7 @@ class ModelsManagementViewModel @Inject constructor(
             )
         }
     }
+
 
     /**
      * Import a local model file from device storage while updating UI states with realtime progress
@@ -359,9 +511,10 @@ class ModelsManagementViewModel @Inject constructor(
                 _managementState.value = Deletion.Deleting(deleted.toFloat() / total, models)
             }
             _managementState.value = Deletion.Success(models.values.toList())
+            toggleAllSelectedModelsToDelete(false)
 
             // Reset state after a delay
-            delay(SUCCESS_RESET_TIMEOUT_MS)
+            delay(DELETE_SUCCESS_RESET_TIMEOUT_MS)
             _managementState.value = ModelManagementState.Idle
         } catch (e: Exception) {
             _managementState.value = Deletion.Error(
@@ -371,10 +524,33 @@ class ModelsManagementViewModel @Inject constructor(
     }
 
     companion object {
-        private val TAG = ModelsManagementViewModel::class.java.simpleName
+        private val TAG = ModelsViewModel::class.java.simpleName
 
-        private const val SUCCESS_RESET_TIMEOUT_MS = 1000L
+        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
+        private const val QUERY_DEBOUNCE_TIMEOUT_MS = 500L
+
+        private const val DELETE_SUCCESS_RESET_TIMEOUT_MS = 1000L
+
+        private const val RAM_LOAD_MODEL_BUFFER_BYTES = 300 * 1024
     }
+}
+
+enum class ModelScreenUiMode {
+    BROWSING,
+    SEARCHING,
+    MANAGING,
+    DELETING
+}
+
+data class PreselectedModelToRun(
+    val modelInfo: ModelInfo,
+    val ramWarning: RamWarning?,
+) {
+    data class RamWarning(
+        val requiredRam: Long,
+        val availableRam: Long,
+        val showing: Boolean,
+    )
 }
 
 sealed class ModelManagementState {

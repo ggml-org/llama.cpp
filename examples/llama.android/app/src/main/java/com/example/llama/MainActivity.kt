@@ -46,17 +46,16 @@ import com.example.llama.ui.scaffold.topbar.TopBarConfig
 import com.example.llama.ui.screens.BenchmarkScreen
 import com.example.llama.ui.screens.ConversationScreen
 import com.example.llama.ui.screens.ModelLoadingScreen
-import com.example.llama.ui.screens.ModelSelectionScreen
-import com.example.llama.ui.screens.ModelsManagementScreen
+import com.example.llama.ui.screens.ModelsScreen
 import com.example.llama.ui.screens.SettingsGeneralScreen
 import com.example.llama.ui.theme.LlamaTheme
 import com.example.llama.viewmodel.BenchmarkViewModel
 import com.example.llama.viewmodel.ConversationViewModel
 import com.example.llama.viewmodel.MainViewModel
 import com.example.llama.viewmodel.ModelLoadingViewModel
-import com.example.llama.viewmodel.ModelSelectionViewModel
-import com.example.llama.viewmodel.ModelsManagementViewModel
+import com.example.llama.viewmodel.ModelsViewModel
 import com.example.llama.viewmodel.SettingsViewModel
+import com.example.llama.viewmodel.ModelScreenUiMode
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -85,17 +84,20 @@ class MainActivity : ComponentActivity() {
 fun AppContent(
     settingsViewModel: SettingsViewModel,
     mainViewModel: MainViewModel = hiltViewModel(),
-    modelSelectionViewModel: ModelSelectionViewModel = hiltViewModel(),
+    modelsViewModel: ModelsViewModel = hiltViewModel(),
     modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
     benchmarkViewModel: BenchmarkViewModel = hiltViewModel(),
     conversationViewModel: ConversationViewModel = hiltViewModel(),
-    modelsManagementViewModel: ModelsManagementViewModel = hiltViewModel(),
+//    modelsManagementViewModel: ModelsManagementViewModel = hiltViewModel(),
 ) {
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Inference engine state
     val engineState by mainViewModel.engineState.collectAsState()
+
+    // Model state
+    val modelScreenUiMode by modelsViewModel.modelScreenUiMode.collectAsState()
 
     // Metric states for scaffolds
     val isMonitoringEnabled by settingsViewModel.isMonitoringEnabled.collectAsState()
@@ -187,60 +189,157 @@ fun AppContent(
     // Create scaffold's top & bottom bar configs based on current route
     val scaffoldConfig = when {
         // Model selection screen
-        currentRoute == AppDestinations.MODEL_SELECTION_ROUTE -> {
+        currentRoute == AppDestinations.MODELS_ROUTE -> {
             // Collect states for bottom bar
-            val isSearchActive by modelSelectionViewModel.isSearchActive.collectAsState()
-            val sortOrder by modelSelectionViewModel.sortOrder.collectAsState()
-            val showSortMenu by modelSelectionViewModel.showSortMenu.collectAsState()
-            val activeFilters by modelSelectionViewModel.activeFilters.collectAsState()
-            val showFilterMenu by modelSelectionViewModel.showFilterMenu.collectAsState()
-            val preselection by modelSelectionViewModel.preselection.collectAsState()
+            val sortOrder by modelsViewModel.sortOrder.collectAsState()
+            val showSortMenu by modelsViewModel.showSortMenu.collectAsState()
+            val activeFilters by modelsViewModel.activeFilters.collectAsState()
+            val showFilterMenu by modelsViewModel.showFilterMenu.collectAsState()
+            val preselection by modelsViewModel.preselectedModelToRun.collectAsState()
+
+            val selectedModelsToDelete by modelsViewModel.selectedModelsToDelete.collectAsState()
+            val showImportModelMenu by modelsViewModel.showImportModelMenu.collectAsState()
+
+            // Create file launcher for importing local models
+            val fileLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument()
+            ) { uri -> uri?.let { modelsViewModel.importLocalModelFileSelected(it) } }
 
             ScaffoldConfig(
                 topBarConfig =
-                    if (isSearchActive) TopBarConfig.None()
-                    else TopBarConfig.Default(
-                        title = "Pick your model",
-                        navigationIcon = NavigationIcon.Menu {
-                            modelSelectionViewModel.resetPreselection()
-                            openDrawer()
-                        }
-                    ),
-                bottomBarConfig = BottomBarConfig.ModelSelection(
-                    search = BottomBarConfig.ModelSelection.SearchConfig(
-                        isActive = isSearchActive,
-                        onToggleSearch = modelSelectionViewModel::toggleSearchState,
-                        textFieldState = modelSelectionViewModel.searchFieldState,
-                        onSearch = { /* No-op for now */ }
-                    ),
-                    sorting = BottomBarConfig.ModelSelection.SortingConfig(
-                        currentOrder = sortOrder,
-                        isMenuVisible = showSortMenu,
-                        toggleMenu = modelSelectionViewModel::toggleSortMenu,
-                        selectOrder = {
-                            modelSelectionViewModel.setSortOrder(it)
-                            modelSelectionViewModel.toggleSortMenu(false)
-                        }
-                    ),
-                    filtering = BottomBarConfig.ModelSelection.FilteringConfig(
-                        isActive = activeFilters.any { it.value },
-                        filters = activeFilters,
-                        onToggleFilter = modelSelectionViewModel::toggleFilter,
-                        onClearFilters = modelSelectionViewModel::clearFilters,
-                        isMenuVisible = showFilterMenu,
-                        toggleMenu = modelSelectionViewModel::toggleFilterMenu
-                    ),
-                    runAction = BottomBarConfig.ModelSelection.RunActionConfig(
-                        preselection = preselection,
-                        onClickRun = {
-                            if (modelSelectionViewModel.selectModel(it)) {
-                                modelSelectionViewModel.toggleSearchState(false)
-                                modelSelectionViewModel.resetPreselection()
-                                navigationActions.navigateToModelLoading()
-                            }
-                        }
-                    )
-                )
+                    when (modelScreenUiMode) {
+                        ModelScreenUiMode.BROWSING ->
+                            TopBarConfig.ModelsBrowsing(
+                                title = "Installed models",
+                                navigationIcon = NavigationIcon.Menu {
+                                    modelsViewModel.resetPreselection()
+                                    openDrawer()
+                                },
+                                onToggleMode = modelsViewModel::toggleMode,
+                            )
+                        ModelScreenUiMode.SEARCHING ->
+                            TopBarConfig.None()
+                        ModelScreenUiMode.MANAGING ->
+                            TopBarConfig.ModelsManagement(
+                                title = "Managing models",
+                                navigationIcon = NavigationIcon.Back {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
+                                },
+                                storageMetrics = if (isMonitoringEnabled) storageMetrics else null,
+                            )
+                        ModelScreenUiMode.DELETING ->
+                            TopBarConfig.ModelsDeleting(
+                                title = "Deleting models",
+                                navigationIcon = NavigationIcon.Quit {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                                },
+                            )
+                    },
+                bottomBarConfig =
+                    when (modelScreenUiMode) {
+                        ModelScreenUiMode.BROWSING ->
+                            BottomBarConfig.Models.Browsing(
+                                onToggleSearching = {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.SEARCHING)
+                                },
+                                sorting = BottomBarConfig.Models.Browsing.SortingConfig(
+                                    currentOrder = sortOrder,
+                                    isMenuVisible = showSortMenu,
+                                    toggleMenu = modelsViewModel::toggleSortMenu,
+                                    selectOrder = {
+                                        modelsViewModel.setSortOrder(it)
+                                        modelsViewModel.toggleSortMenu(false)
+                                    }
+                                ),
+                                filtering = BottomBarConfig.Models.Browsing.FilteringConfig(
+                                    isActive = activeFilters.any { it.value },
+                                    filters = activeFilters,
+                                    onToggleFilter = modelsViewModel::toggleFilter,
+                                    onClearFilters = modelsViewModel::clearFilters,
+                                    isMenuVisible = showFilterMenu,
+                                    toggleMenu = modelsViewModel::toggleFilterMenu
+                                ),
+                                runAction = BottomBarConfig.Models.RunActionConfig(
+                                    preselectedModelToRun = preselection,
+                                    onClickRun = {
+                                        if (modelsViewModel.selectModel(it)) {
+                                            modelsViewModel.resetPreselection()
+                                            navigationActions.navigateToModelLoading()
+                                        }
+                                    }
+                                ),
+                            )
+
+                        ModelScreenUiMode.SEARCHING ->
+                            BottomBarConfig.Models.Searching(
+                                textFieldState = modelsViewModel.searchFieldState,
+                                onQuitSearching = {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
+                                },
+                                onSearch = { /* No-op for now */ },
+                                runAction = BottomBarConfig.Models.RunActionConfig(
+                                    preselectedModelToRun = preselection,
+                                    onClickRun = {
+                                        if (modelsViewModel.selectModel(it)) {
+                                            modelsViewModel.resetPreselection()
+                                            navigationActions.navigateToModelLoading()
+                                        }
+                                    }
+                                ),
+                            )
+
+                        ModelScreenUiMode.MANAGING ->
+                            BottomBarConfig.Models.Management(
+                                sorting = BottomBarConfig.Models.Management.SortingConfig(
+                                    currentOrder = sortOrder,
+                                    isMenuVisible = showSortMenu,
+                                    toggleMenu = { modelsViewModel.toggleSortMenu(it) },
+                                    selectOrder = {
+                                        modelsViewModel.setSortOrder(it)
+                                        modelsViewModel.toggleSortMenu(false)
+                                    }
+                                ),
+                                filtering = BottomBarConfig.Models.Management.FilteringConfig(
+                                    isActive = activeFilters.any { it.value },
+                                    filters = activeFilters,
+                                    onToggleFilter = modelsViewModel::toggleFilter,
+                                    onClearFilters = modelsViewModel::clearFilters,
+                                    isMenuVisible = showFilterMenu,
+                                    toggleMenu = modelsViewModel::toggleFilterMenu
+                                ),
+                                importing = BottomBarConfig.Models.Management.ImportConfig(
+                                    isMenuVisible = showImportModelMenu,
+                                    toggleMenu = { show -> modelsViewModel.toggleImportMenu(show) },
+                                    importFromLocal = {
+                                        fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                                        modelsViewModel.toggleImportMenu(false)
+                                    },
+                                    importFromHuggingFace = {
+                                        modelsViewModel.queryModelsFromHuggingFace()
+                                        modelsViewModel.toggleImportMenu(false)
+                                    }
+                                ),
+                                onToggleDeleting = {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.DELETING)
+                                }
+                            )
+
+                        ModelScreenUiMode.DELETING ->
+                            BottomBarConfig.Models.Deleting(
+                                onQuitDeleting = {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                                },
+                                selectedModels = selectedModelsToDelete,
+                                toggleAllSelection = { modelsViewModel.toggleAllSelectedModelsToDelete(it) },
+                                deleteSelected = {
+                                    selectedModelsToDelete.let {
+                                        if (it.isNotEmpty()) {
+                                            modelsViewModel.batchDeletionClicked(it)
+                                        }
+                                    }
+                                },
+                            )
+                    }
             )
         }
 
@@ -327,75 +426,6 @@ fun AppContent(
                 )
             )
 
-        // Storage management screen
-        currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
-            // Collect the needed states
-            val sortOrder by modelsManagementViewModel.sortOrder.collectAsState()
-            val isMultiSelectionMode by modelsManagementViewModel.isMultiSelectionMode.collectAsState()
-            val selectedModels by modelsManagementViewModel.selectedModels.collectAsState()
-            val showSortMenu by modelsManagementViewModel.showSortMenu.collectAsState()
-            val activeFilters by modelsManagementViewModel.activeFilters.collectAsState()
-            val showFilterMenu by modelsManagementViewModel.showFilterMenu.collectAsState()
-            val showImportModelMenu by modelsManagementViewModel.showImportModelMenu.collectAsState()
-
-            // Create file launcher for importing local models
-            val fileLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenDocument()
-            ) { uri -> uri?.let { modelsManagementViewModel.importLocalModelFileSelected(it) } }
-
-            val bottomBarConfig = BottomBarConfig.ModelsManagement(
-                sorting = BottomBarConfig.ModelsManagement.SortingConfig(
-                    currentOrder = sortOrder,
-                    isMenuVisible = showSortMenu,
-                    toggleMenu = { modelsManagementViewModel.toggleSortMenu(it) },
-                    selectOrder = {
-                        modelsManagementViewModel.setSortOrder(it)
-                        modelsManagementViewModel.toggleSortMenu(false)
-                    }
-                ),
-                filtering = BottomBarConfig.ModelsManagement.FilteringConfig(
-                    isActive = activeFilters.any { it.value },
-                    filters = activeFilters,
-                    onToggleFilter = modelsManagementViewModel::toggleFilter,
-                    onClearFilters = modelsManagementViewModel::clearFilters,
-                    isMenuVisible = showFilterMenu,
-                    toggleMenu = modelsManagementViewModel::toggleFilterMenu
-                ),
-                selection = BottomBarConfig.ModelsManagement.SelectionConfig(
-                    isActive = isMultiSelectionMode,
-                    toggleMode = { modelsManagementViewModel.toggleSelectionMode(it) },
-                    selectedModels = selectedModels,
-                    toggleAllSelection = { modelsManagementViewModel.toggleAllSelection(it) },
-                    deleteSelected = {
-                        if (selectedModels.isNotEmpty()) {
-                            modelsManagementViewModel.batchDeletionClicked(selectedModels)
-                        }
-                    },
-                ),
-                importing = BottomBarConfig.ModelsManagement.ImportConfig(
-                    isMenuVisible = showImportModelMenu,
-                    toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
-                    importFromLocal = {
-                        fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
-                        modelsManagementViewModel.toggleImportMenu(false)
-                    },
-                    importFromHuggingFace = {
-                        modelsManagementViewModel.queryModelsFromHuggingFace()
-                        modelsManagementViewModel.toggleImportMenu(false)
-                    }
-                )
-            )
-
-            ScaffoldConfig(
-                topBarConfig = TopBarConfig.Storage(
-                    title = "Models Management",
-                    navigationIcon = NavigationIcon.Back { navigationActions.navigateUp() },
-                    storageMetrics = if (isMonitoringEnabled) storageMetrics else null,
-                ),
-                bottomBarConfig = bottomBarConfig
-            )
-        }
-
         // Fallback for empty screen or unknown routes
         else -> ScaffoldConfig(
             topBarConfig = TopBarConfig.Default(title = "", navigationIcon = NavigationIcon.None)
@@ -419,22 +449,22 @@ fun AppContent(
             // AnimatedNavHost inside the scaffold content
             AnimatedNavHost(
                 navController = navController,
-                startDestination = AppDestinations.MODEL_SELECTION_ROUTE,
+                startDestination = AppDestinations.MODELS_ROUTE,
                 modifier = Modifier.padding(paddingValues)
             ) {
                 // Model Selection Screen
-                composable(AppDestinations.MODEL_SELECTION_ROUTE) {
-                    ModelSelectionScreen(
+                composable(AppDestinations.MODELS_ROUTE) {
+                    ModelsScreen(
                         onManageModelsClicked = {
-                            navigationActions.navigateToModelsManagement()
+                            // TODO-han.yin: remove this after implementing onboarding flow
                         },
                         onConfirmSelection = { modelInfo, ramWarning ->
-                            if (modelSelectionViewModel.confirmSelectedModel(modelInfo, ramWarning)) {
+                            if (modelsViewModel.confirmSelectedModel(modelInfo, ramWarning)) {
                                 navigationActions.navigateToModelLoading()
-                                modelSelectionViewModel.toggleSearchState(false)
                             }
                         },
-                        viewModel = modelSelectionViewModel
+                        onScaffoldEvent = handleScaffoldEvent,
+                        viewModel = modelsViewModel
                     )
                 }
 
@@ -499,14 +529,6 @@ fun AppContent(
                         loadingMetrics = metrics,
                         onNavigateBack = { navigationActions.navigateUp() },
                         viewModel = conversationViewModel
-                    )
-                }
-
-                // Models Management Screen
-                composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
-                    ModelsManagementScreen(
-                        onScaffoldEvent = handleScaffoldEvent,
-                        viewModel = modelsManagementViewModel
                     )
                 }
 

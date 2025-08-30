@@ -67,7 +67,8 @@ import com.example.llama.viewmodel.ModelManagementState
 import com.example.llama.viewmodel.ModelManagementState.Deletion
 import com.example.llama.viewmodel.ModelManagementState.Download
 import com.example.llama.viewmodel.ModelManagementState.Importation
-import com.example.llama.viewmodel.ModelsManagementViewModel
+import com.example.llama.viewmodel.ModelScreenUiMode
+import com.example.llama.viewmodel.ModelsViewModel
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -75,16 +76,16 @@ import java.util.Locale
  * Screen for managing LLM models (view, download, delete)
  */
 @Composable
-fun ModelsManagementScreen(
+fun ModelsManagementAndDeletingScreen(
+    isDeleting: Boolean,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
-    viewModel: ModelsManagementViewModel,
+    viewModel: ModelsViewModel,
 ) {
     // Data: models
     val filteredModels by viewModel.filteredModels.collectAsState()
 
     // Selection state
-    val isMultiSelectionMode by viewModel.isMultiSelectionMode.collectAsState()
-    val selectedModels by viewModel.selectedModels.collectAsState()
+    val selectedModels by viewModel.selectedModelsToDelete.collectAsState()
 
     // Filter state
     val activeFilters by viewModel.activeFilters.collectAsState()
@@ -96,19 +97,13 @@ fun ModelsManagementScreen(
     val managementState by viewModel.managementState.collectAsState()
 
     // UI states
-    var expandedModels = remember { mutableStateMapOf<String, ModelInfo>() }
+    val expandedModels = remember { mutableStateMapOf<String, ModelInfo>() }
 
     BackHandler(
-        enabled = isMultiSelectionMode
-            || managementState is Importation.Importing
+        enabled = managementState is Importation.Importing
             || managementState is Deletion.Deleting
     ) {
-        if (isMultiSelectionMode) {
-            // Exit selection mode if in selection mode
-            viewModel.toggleSelectionMode(false)
-        } else {
-            /* Ignore back press while processing model management requests */
-        }
+        /* Ignore back press while processing model management requests */
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -134,13 +129,13 @@ fun ModelsManagementScreen(
             ) {
                 items(items = filteredModels, key = { it.id }) { model ->
                     val isSelected =
-                        if (isMultiSelectionMode) selectedModels.contains(model.id) else null
+                        if (isDeleting) selectedModels.contains(model.id) else null
 
                     ModelCardFullExpandable(
                         model = model,
                         isSelected = isSelected,
                         onSelected = {
-                            if (isMultiSelectionMode) {
+                            if (isDeleting) {
                                 viewModel.toggleModelSelectionById(model.id)
                             }
                         },
@@ -285,7 +280,7 @@ fun ModelsManagementScreen(
 
             is Deletion.Success -> {
                 LaunchedEffect(state) {
-                    viewModel.toggleSelectionMode(false)
+                    viewModel.toggleMode(ModelScreenUiMode.MANAGING)
 
                     val count = state.models.size
                     onScaffoldEvent(
@@ -641,6 +636,9 @@ private fun BatchDeleteConfirmationDialog(
                 }
             }
         },
+        containerColor = MaterialTheme.colorScheme.errorContainer,
+        titleContentColor = MaterialTheme.colorScheme.onErrorContainer,
+        textContentColor = MaterialTheme.colorScheme.onErrorContainer,
         confirmButton = {
             TextButton(
                 onClick = onConfirm,

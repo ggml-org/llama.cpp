@@ -8,7 +8,7 @@ import com.example.llama.engine.ModelLoadingMetrics
  */
 object AppDestinations {
     // Primary navigation destinations
-    const val MODEL_SELECTION_ROUTE = "model_selection"
+    const val MODELS_ROUTE = "models"
     const val MODEL_LOADING_ROUTE = "model_loading"
 
     const val CONVERSATION_ROUTE = "conversation"
@@ -19,7 +19,6 @@ object AppDestinations {
 
     // Settings destinations
     const val SETTINGS_GENERAL_ROUTE = "settings_general"
-    const val MODELS_MANAGEMENT_ROUTE = "models_management"
 }
 
 /**
@@ -28,9 +27,9 @@ object AppDestinations {
 class NavigationActions(private val navController: NavController) {
 
     fun navigateToModelSelection() {
-        navController.navigate(AppDestinations.MODEL_SELECTION_ROUTE) {
+        navController.navigate(AppDestinations.MODELS_ROUTE) {
             // Clear back stack to start fresh
-            popUpTo(AppDestinations.MODEL_SELECTION_ROUTE) { inclusive = true }
+            popUpTo(AppDestinations.MODELS_ROUTE) { inclusive = true }
         }
     }
 
@@ -53,10 +52,6 @@ class NavigationActions(private val navController: NavController) {
 
     fun navigateToSettingsGeneral() {
         navController.navigate(AppDestinations.SETTINGS_GENERAL_ROUTE)
-    }
-
-    fun navigateToModelsManagement() {
-        navController.navigate(AppDestinations.MODELS_MANAGEMENT_ROUTE)
     }
 
     fun navigateUp() {

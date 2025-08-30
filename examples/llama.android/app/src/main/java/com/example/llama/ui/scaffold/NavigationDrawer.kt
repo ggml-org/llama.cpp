@@ -122,20 +122,21 @@ private fun DrawerContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Main Navigation Items
-        Text(
-            text = "Navigation",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
-        )
+//        // Main Navigation Items
+        // TODO-han.yin: add back once we add more features
+//        Text(
+//            text = "Features",
+//            style = MaterialTheme.typography.labelMedium,
+//            color = MaterialTheme.colorScheme.onSurfaceVariant,
+//            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+//        )
 
         DrawerNavigationItem(
             icon = Icons.Default.Home,
-            label = "Home",
-            isSelected = currentRoute == AppDestinations.MODEL_SELECTION_ROUTE,
+            label = "Models",
+            isSelected = currentRoute == AppDestinations.MODELS_ROUTE,
             onClick = {
-                if (currentRoute != AppDestinations.MODEL_SELECTION_ROUTE) {
+                if (currentRoute != AppDestinations.MODELS_ROUTE) {
                     onNavigate { navigationActions.navigateToModelSelection() }
                 } else {
                     onNavigate { /* No-op: simply close drawer */ }
@@ -143,22 +144,15 @@ private fun DrawerContent(
             }
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Settings Group
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
-        )
-
-        DrawerNavigationItem(
-            icon = Icons.Default.Folder,
-            label = "Models",
-            isSelected = currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE,
-            onClick = { onNavigate { navigationActions.navigateToModelsManagement() } }
-        )
+//        Spacer(modifier = Modifier.height(24.dp))
+        //  TODO-han.yin: add back once we add more features
+//        // Settings Group
+//        Text(
+//            text = "Settings",
+//            style = MaterialTheme.typography.labelMedium,
+//            color = MaterialTheme.colorScheme.onSurfaceVariant,
+//            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+//        )
 
         DrawerNavigationItem(
             icon = Icons.Default.Settings,

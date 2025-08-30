@@ -110,7 +110,7 @@ fun ConversationScreen(
     // UI states
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
-    var isModelCardExpanded by remember { mutableStateOf(false) }
+    var isModelCardExpanded by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
 
     // Track the actual rendered size of the last message bubble
@@ -234,7 +234,7 @@ fun ModelCardWithSystemPrompt(
     model: ModelInfo,
     loadingMetrics: ModelLoadingMetrics,
     systemPrompt: String?,
-    isExpanded: Boolean = false,
+    isExpanded: Boolean = true,
     onExpanded: ((Boolean) -> Unit)? = null,
 ) = ModelCardCoreExpandable(model, isExpanded, onExpanded) {
     Spacer(modifier = Modifier.height(8.dp))

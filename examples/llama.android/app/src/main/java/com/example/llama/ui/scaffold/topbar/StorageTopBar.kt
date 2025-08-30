@@ -1,10 +1,7 @@
 package com.example.llama.ui.scaffold.topbar
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.SdStorage
@@ -12,13 +9,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.ui.scaffold.ScaffoldEvent
@@ -65,29 +62,31 @@ private fun StorageIndicator(
     val usedGb = String.format(Locale.getDefault(), "%.1f", storageMetrics.usedGB)
     val availableGb = String.format(Locale.getDefault(), "%.1f", storageMetrics.availableGB)
 
-    Row(
-        modifier = Modifier.padding(end = 8.dp).clickable(role = Role.Button) {
+    OutlinedButton(
+        modifier = Modifier.padding(end = 8.dp),
+        onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = "Your models occupy $usedGb GB storage\nRemaining free space available: $availableGb GB",
                 withDismissAction = true,
             ))
-        },
-        verticalAlignment = Alignment.CenterVertically
+        }
     ) {
-        Icon(
-            imageVector = Icons.Default.SdStorage,
-            contentDescription = "Storage",
-            tint = when {
-                storageMetrics.availableGB < 5.0f -> MaterialTheme.colorScheme.error
-                storageMetrics.availableGB < 10.0f -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.onSurface
-            }
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.SdStorage,
+                contentDescription = "Storage",
+                tint = when {
+                    storageMetrics.availableGB < 5.0f -> MaterialTheme.colorScheme.error
+                    storageMetrics.availableGB < 10.0f -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+            )
 
-        Text(
-            modifier = Modifier.padding(start = 4.dp),
-            text = "$usedGb / $availableGb GB",
-            style = MaterialTheme.typography.bodySmall
-        )
+            Text(
+                modifier = Modifier.padding(start = 4.dp),
+                text = "$usedGb / $availableGb GB",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
 }

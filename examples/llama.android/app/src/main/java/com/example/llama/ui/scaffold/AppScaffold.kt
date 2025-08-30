@@ -10,9 +10,12 @@ import androidx.compose.runtime.remember
 import com.example.llama.ui.scaffold.bottombar.BenchmarkBottomBar
 import com.example.llama.ui.scaffold.bottombar.BottomBarConfig
 import com.example.llama.ui.scaffold.bottombar.ConversationBottomBar
-import com.example.llama.ui.scaffold.bottombar.ModelSelectionBottomBar
+import com.example.llama.ui.scaffold.bottombar.ModelsBrowsingBottomBar
+import com.example.llama.ui.scaffold.bottombar.ModelsDeletingBottomBar
 import com.example.llama.ui.scaffold.bottombar.ModelsManagementBottomBar
+import com.example.llama.ui.scaffold.bottombar.ModelsSearchingBottomBar
 import com.example.llama.ui.scaffold.topbar.DefaultTopBar
+import com.example.llama.ui.scaffold.topbar.ModelsBrowsingTopBar
 import com.example.llama.ui.scaffold.topbar.NavigationIcon
 import com.example.llama.ui.scaffold.topbar.PerformanceTopBar
 import com.example.llama.ui.scaffold.topbar.StorageTopBar
@@ -65,6 +68,25 @@ fun AppScaffold(
                 onMenuOpen = topBarconfig.navigationIcon.menuAction,
             )
 
+            is TopBarConfig.ModelsBrowsing -> ModelsBrowsingTopBar(
+                title = topBarconfig.title,
+                onToggleMode = topBarconfig.onToggleMode,
+                onNavigateBack = topBarconfig.navigationIcon.backAction,
+                onMenuOpen = topBarconfig.navigationIcon.menuAction
+            )
+
+            is TopBarConfig.ModelsDeleting -> DefaultTopBar(
+                title = topBarconfig.title,
+                onQuit = topBarconfig.navigationIcon.quitAction
+            )
+
+            is TopBarConfig.ModelsManagement -> StorageTopBar(
+                title = topBarconfig.title,
+                storageMetrics = topBarconfig.storageMetrics,
+                onScaffoldEvent = onScaffoldEvent,
+                onNavigateBack = topBarconfig.navigationIcon.backAction,
+            )
+
             is TopBarConfig.Performance -> PerformanceTopBar(
                 title = topBarconfig.title,
                 memoryMetrics = topBarconfig.memoryMetrics,
@@ -73,13 +95,6 @@ fun AppScaffold(
                 onNavigateBack = topBarconfig.navigationIcon.backAction,
                 onMenuOpen = topBarconfig.navigationIcon.menuAction,
             )
-
-            is TopBarConfig.Storage -> StorageTopBar(
-                title = topBarconfig.title,
-                storageMetrics = topBarconfig.storageMetrics,
-                onScaffoldEvent = onScaffoldEvent,
-                onNavigateBack = topBarconfig.navigationIcon.backAction,
-            )
         }
     }
 
@@ -87,22 +102,35 @@ fun AppScaffold(
         when (val config = bottomBarConfig) {
             is BottomBarConfig.None -> { /* No bottom bar */ }
 
-            is BottomBarConfig.ModelSelection -> {
-                ModelSelectionBottomBar(
-                    search = config.search,
-                    sorting = config.sorting,
-                    filtering = config.filtering,
-                    runAction = config.runAction
+            is BottomBarConfig.Models.Browsing -> {
+                ModelsBrowsingBottomBar(
+                    onToggleSearching = config.onToggleSearching,
+                    sortingConfig = config.sorting,
+                    filteringConfig = config.filtering,
+                    runActionConfig = config.runAction
                 )
             }
 
-            is BottomBarConfig.ModelsManagement -> {
-                ModelsManagementBottomBar(
-                    sorting = config.sorting,
-                    filtering = config.filtering,
-                    selection = config.selection,
-                    importing = config.importing,
+            is BottomBarConfig.Models.Searching -> {
+                ModelsSearchingBottomBar(
+                    textFieldState = config.textFieldState,
+                    onQuitSearching = config.onQuitSearching,
+                    onSearch = config.onSearch,
+                    runActionConfig = config.runAction,
                 )
+            }
+
+            is BottomBarConfig.Models.Management -> {
+                ModelsManagementBottomBar(
+                    sortingConfig = config.sorting,
+                    filteringConfig = config.filtering,
+                    importingConfig = config.importing,
+                    onToggleDeleting = config.onToggleDeleting
+                )
+            }
+
+            is BottomBarConfig.Models.Deleting -> {
+                ModelsDeletingBottomBar(config)
             }
 
             is BottomBarConfig.Benchmark -> {
@@ -141,8 +169,11 @@ fun AppScaffold(
 }
 
 // Helper functions to obtain navigation actions if exist
+private val NavigationIcon.menuAction: (() -> Unit)?
+    get() = (this as? NavigationIcon.Menu)?.onMenuOpen
+
 private val NavigationIcon.backAction: (() -> Unit)?
     get() = (this as? NavigationIcon.Back)?.onNavigateBack
 
-private val NavigationIcon.menuAction: (() -> Unit)?
-    get() = (this as? NavigationIcon.Menu)?.onMenuOpen
+private val NavigationIcon.quitAction: (() -> Unit)?
+    get() = (this as? NavigationIcon.Quit)?.onQuit

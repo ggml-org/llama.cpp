@@ -32,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -149,7 +148,6 @@ fun ModelCardCoreExpandable(
  * @param isExpanded Whether additional details is expanded or shrunk
  * @param onExpanded Action to perform when the card is expanded or shrunk
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ModelCardFullExpandable(
     model: ModelInfo,
@@ -158,10 +156,6 @@ fun ModelCardFullExpandable(
     isExpanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
 ) {
-    LaunchedEffect(model) {
-        android.util.Log.w("JOJO", model.languages.toString())
-    }
-
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
         Card(
             modifier = Modifier
