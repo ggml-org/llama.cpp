@@ -671,93 +671,6 @@ static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, cons
  * Takes a prefix regex that must have 1 group to capture the function name, a closing suffix, and expects json parameters in between.
  * Aggregates the prefix, suffix and in-between text into the content.
  */
-static void parse_json_tool_calls_deepseek_v3_1(
-    common_chat_msg_parser & builder,
-    const std::optional<common_regex> & block_open,
-    const std::optional<common_regex> & function_regex_start_only,
-    const std::optional<common_regex> & function_regex,
-    const common_regex & close_regex,
-    const std::optional<common_regex> & block_close,
-    bool allow_raw_python = false,
-    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
-
-    auto parse_tool_calls = [&]() {
-        size_t from = std::string::npos;
-        auto first = true;
-        while (true) {
-            auto res = function_regex_start_only && first
-                ? builder.try_consume_regex(*function_regex_start_only)
-                : function_regex
-                    ? builder.try_find_regex(*function_regex, from)
-                    : std::nullopt;
-
-            if (res) {
-                std::string name;
-                if (get_function_name) {
-                    name = get_function_name(*res);
-                } else {
-                    GGML_ASSERT(res->groups.size() == 2);
-                    name = builder.str(res->groups[1]);
-                }
-                first = false;
-                if (name.empty()) {
-                    // get_function_name signalled us that we should skip this match and treat it as content.
-                    from = res->groups[0].begin + 1;
-                    continue;
-                }
-                builder.move_to(res->groups[0].end);
-                from = builder.pos();
-
-                auto maybe_raw_python = name == "python" && allow_raw_python;
-                if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
-                    if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
-                        if (!builder.add_tool_call(name, "", arguments->value) || arguments->is_partial) {
-                            throw common_chat_msg_partial_exception("incomplete tool call");
-                        }
-                        builder.consume_regex(close_regex);
-                        from = builder.pos(); // continue after this call
-                        continue;
-                    }
-                    throw common_chat_msg_partial_exception("incomplete tool call");
-                }
-                if (maybe_raw_python) {
-                    auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
-                    if (!builder.add_tool_call(name, "", arguments)) {
-                        throw common_chat_msg_partial_exception("incomplete tool call");
-                    }
-                    return;
-                }
-                throw common_chat_msg_partial_exception("incomplete tool call");
-            }
-            break;
-        }
-        if (block_close) {
-            // ensure we’re right after the last call header/close
-            if (from != std::string::npos) builder.move_to(from);
-            builder.consume_regex(*block_close);
-        }
-        builder.consume_spaces();
-        builder.add_content(builder.consume_rest());
-    };
-    if (block_open) {
-        if (auto res = builder.try_find_regex(*block_open)) {
-            builder.move_to(res->groups[0].end); // consume opener
-            parse_tool_calls();
-            return;
-        } else {
-            builder.add_content(builder.consume_rest());
-            return;
-        }
-    } else {
-        parse_tool_calls();
-        return;
-    }
-}
-
-/**
- * Takes a prefix regex that must have 1 group to capture the function name, a closing suffix, and expects json parameters in between.
- * Aggregates the prefix, suffix and in-between text into the content.
- */
 static void parse_json_tool_calls(
     common_chat_msg_parser & builder,
     const std::optional<common_regex> & block_open,
@@ -766,7 +679,8 @@ static void parse_json_tool_calls(
     const common_regex & close_regex,
     const std::optional<common_regex> & block_close,
     bool allow_raw_python = false,
-    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr,
+    bool update_cursor = false) {
 
     auto parse_tool_calls = [&]() {
         size_t from = std::string::npos;
@@ -777,6 +691,7 @@ static void parse_json_tool_calls(
                 : function_regex
                     ? builder.try_find_regex(*function_regex, from)
                     : std::nullopt;
+
             if (res) {
                 std::string name;
                 if (get_function_name) {
@@ -791,7 +706,12 @@ static void parse_json_tool_calls(
                     from = res->groups[0].begin + 1;
                     continue;
                 }
-                from = std::string::npos;
+                if (update_cursor) {
+                    builder.move_to(res->groups[0].end);
+                    from = builder.pos();
+                } else {
+                    from = std::string::npos;
+                }
 
                 auto maybe_raw_python = name == "python" && allow_raw_python;
                 if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
@@ -800,8 +720,16 @@ static void parse_json_tool_calls(
                             throw common_chat_msg_partial_exception("incomplete tool call");
                         }
                         builder.consume_regex(close_regex);
+                        if (update_cursor) {
+                            from = builder.pos(); // continue after this call
+                            continue;
+                        }
                     }
-                    continue;
+                    if (update_cursor) {
+                        throw common_chat_msg_partial_exception("incomplete tool call");
+                    } else {
+                        continue;
+                    }
                 }
                 if (maybe_raw_python) {
                     auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
@@ -815,6 +743,10 @@ static void parse_json_tool_calls(
             break;
         }
         if (block_close) {
+            if (update_cursor) {
+                // ensure we’re right after the last call header/close
+                if (from != std::string::npos) builder.move_to(from);
+            }
             builder.consume_regex(*block_close);
         }
         builder.consume_spaces();
@@ -822,6 +754,7 @@ static void parse_json_tool_calls(
     };
     if (block_open) {
         if (auto res = builder.try_find_regex(*block_open)) {
+            if (update_cursor) builder.move_to(res->groups[0].end); // consume opener
             parse_tool_calls();
         } else {
             builder.add_content(builder.consume_rest());
@@ -1502,13 +1435,16 @@ static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & bui
 
     LOG_DBG("%s: parse_tool_calls\n", __func__);
 
-    parse_json_tool_calls_deepseek_v3_1(
+    parse_json_tool_calls(
         builder,
         /* block_open= */ tool_calls_begin,
         /* function_regex_start_only= */ std::nullopt,
         function_regex,
         close_regex,
-        tool_calls_end);
+        tool_calls_end,
+        false,
+        nullptr,
+        true);
 }
 
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
