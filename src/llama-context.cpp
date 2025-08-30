@@ -314,6 +314,7 @@ llama_context::llama_context(
             if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
                 ggml_backend_sched_alloc_graph(sched.get(), gf);
 
+                const size_t prefix_len = strlen(LLAMA_TENSOR_NAME_FATTN) + 1;
                 bool fa_device_mismatch = false;
                 for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
                     ggml_tensor * n = ggml_graph_node(gf, i);
@@ -323,17 +324,20 @@ llama_context::llama_context(
                     ggml_backend_dev_t device_fa = ggml_backend_get_device(
                         ggml_backend_sched_get_tensor_backend(sched.get(), n));
 
-                    GGML_ASSERT(strncmp(n->name, "fattn-", 6) == 0);
-                    const int il = std::stoi(n->name + 6);
+                    GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
+                    const int il = std::stoi(n->name + prefix_len);
                     ggml_backend_dev_t device_kv = model.dev_layer(il);
                     if (device_fa != device_kv) {
+                        LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
+                            "is assigned to device %s (usually due to missing support)\n",
+                            __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
                         fa_device_mismatch = true;
                         break;
                     }
                 }
                 if (fa_device_mismatch) {
                     cparams.flash_attn = false;
-                    LLAMA_LOG_INFO("%s: Flash Attention was auto, set to disabled\n", __func__);
+                    LLAMA_LOG_WARN("%s: Flash Attention was auto, set to disabled\n", __func__);
                     if (ggml_is_quantized(params.type_v)) {
                         throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
                     }
