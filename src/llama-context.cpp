@@ -324,6 +324,7 @@ llama_context::llama_context(
                     ggml_backend_dev_t device_fa = ggml_backend_get_device(
                         ggml_backend_sched_get_tensor_backend(sched.get(), n));
 
+                    // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
                     GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
                     const int il = std::stoi(n->name + prefix_len);
                     ggml_backend_dev_t device_kv = model.dev_layer(il);
