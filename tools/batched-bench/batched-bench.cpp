@@ -57,6 +57,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
+
+    const auto get_token_rand = [n_vocab]() -> llama_token {
+        return std::rand() % n_vocab;
+    };
+
     auto * mem = llama_get_memory(ctx);
 
     const int32_t n_kv_max = llama_n_ctx(ctx);
@@ -93,7 +100,7 @@ int main(int argc, char ** argv) {
     // warm up
     {
         for (int i = 0; i < 16; ++i) {
-            common_batch_add(batch, 0, i, { 0 }, false);
+            common_batch_add(batch, get_token_rand(), i, { 0 }, false);
         }
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
@@ -117,7 +124,7 @@ int main(int argc, char ** argv) {
                 const int tg = n_tg[i_tg];
                 const int pl = n_pl[i_pl];
 
-                const int n_ctx_req = is_pp_shared ? pp + pl*tg : pl*(pp + tg);
+                const int n_ctx_req = is_pp_shared ? (params.kv_unified ? pp : pl*pp) + pl*tg : pl*(pp + tg);
 
                 if (n_ctx_req > n_kv_max) {
                     continue;
@@ -127,7 +134,7 @@ int main(int argc, char ** argv) {
 
                 for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
                     for (int i = 0; i < pp; ++i) {
-                        common_batch_add(batch, 0, i, { j }, i == pp - 1);
+                        common_batch_add(batch, get_token_rand(), i, { j }, i == pp - 1);
                     }
                 }
 
@@ -140,13 +147,24 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
 
+                const auto t_pp_end = ggml_time_us();
+
                 if (is_pp_shared) {
                     for (int32_t i = 1; i < pl; ++i) {
                         llama_memory_seq_cp(mem, 0, i, -1, -1);
                     }
-                }
 
-                const auto t_pp_end = ggml_time_us();
+                    if (!params.kv_unified) {
+                        // run one dummy token to apply the memory copy
+                        common_batch_clear(batch);
+                        common_batch_add(batch, get_token_rand(), pp + 0, { 0 }, true);
+                        if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
+                            LOG_ERR("%s: llama_decode() failed\n", __func__);
+                            return 1;
+                        }
+                        llama_memory_seq_rm(mem, 0, pp, -1);
+                    }
+                }
 
                 const auto t_tg_start = ggml_time_us();
 
@@ -154,7 +172,7 @@ int main(int argc, char ** argv) {
                     common_batch_clear(batch);
 
                     for (int j = 0; j < pl; ++j) {
-                        common_batch_add(batch, 0, pp + i, { j }, true);
+                        common_batch_add(batch, get_token_rand(), pp + i, { j }, true);
                     }
 
                     if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
@@ -173,7 +191,7 @@ int main(int argc, char ** argv) {
 
                 const float speed_pp = is_pp_shared ? pp / t_pp : pl*pp / t_pp;
                 const float speed_tg = pl*tg / t_tg;
-                const float speed    = n_kv / t;
+                const float speed    = ((is_pp_shared ? pp : pl*pp) + pl*tg) / t;
 
                 if(params.batched_bench_output_jsonl) {
                     LOG(

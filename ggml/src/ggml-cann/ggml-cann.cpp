@@ -1155,7 +1155,7 @@ namespace {
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1203,7 +1203,7 @@ static void ggml_backend_cann_buffer_set_tensor(
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, data, offset);
+            weight_format_to_nz(tensor, offset);
         }
     } else {
         void *transform_buffer = malloc(size);
@@ -2251,11 +2251,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
-    // check environment LLAMA_SET_ROWS
-    if (!cann_ctx->support_set_rows) {
-        use_cann_graph = false;
-    }
-
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());
@@ -2336,7 +2331,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2354,7 +2349,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2496,7 +2491,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return true;
         case GGML_OP_SCALE:
             float bias;
-            memcpy(&bias, (float*)op->op_params + 1, sizeof(float));
+            memcpy(&bias, (const float *)(op->op_params) + 1, sizeof(float));
             return bias == 0.0f; // TODO: support bias != 0.0f
         case GGML_OP_SOFT_MAX:
             // TODO: support attention sinks [TAG_ATTN_SINKS]
@@ -2505,6 +2500,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         case GGML_OP_FLASH_ATTN_EXT:{
+#ifdef ASCEND_310P
+            // FA not support on 310p device
+            return false;
+#endif
             // derived from [ggml-cuda.cu]
             if(op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16){
                 return false;
@@ -2530,8 +2529,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 // DeepSeek MLA
                 return false;
             }
+            if (op->src[0]->ne[0] % 16 != 0) {
+                // TODO: padding to support
+                return false;
+            }
             float logitSoftcap = 0.0f;
-            memcpy(&logitSoftcap,  (float*)op->op_params + 2, sizeof(float));
+            memcpy(&logitSoftcap, (const float *)(op->op_params) + 2, sizeof(float));
             if(logitSoftcap != 0.0f) {
                 return false;
             }
