@@ -2452,6 +2452,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_IM2COL:
             ggml_cuda_op_im2col(ctx, dst);
             break;
+        case GGML_OP_IM2COL_3D:
+            ggml_cuda_op_im2col_3d(ctx, dst);
+            break;
         case GGML_OP_CONV_2D:
             ggml_cuda_op_conv2d(ctx, dst);
             break;
@@ -3559,6 +3562,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
         case GGML_OP_IM2COL:
+        case GGML_OP_IM2COL_3D:
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_2D:

@@ -4221,7 +4221,7 @@ struct test_conv_3d : public test_case {
         ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel);
         ggml_set_name(kernel, "kernel");
 
-        ggml_tensor * out = ggml_conv_3d(ctx, kernel, input, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+        ggml_tensor * out = ggml_conv_3d_direct(ctx, kernel, input, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
         ggml_set_name(out, "out");
         return out;
     }
