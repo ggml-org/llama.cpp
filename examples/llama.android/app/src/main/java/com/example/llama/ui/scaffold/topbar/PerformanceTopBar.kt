@@ -70,8 +70,6 @@ fun PerformanceTopBar(
                     useFahrenheit = useFahrenheit,
                     onScaffoldEvent = onScaffoldEvent,
                 )
-
-                Spacer(modifier = Modifier.width(8.dp))
             }
 
             // Memory indicator
@@ -95,7 +93,7 @@ private fun MemoryIndicator(
     val totalGB = String.format(Locale.getDefault(), "%.1f", memoryUsage.totalGB)
 
     Row(
-        modifier = Modifier.padding(end = 8.dp).clickable(role = Role.Button) {
+        modifier = Modifier.padding(end = 12.dp).clickable(role = Role.Button) {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = "Free RAM available: $availableGB GB\nTotal RAM on your device: $totalGB GB",
                 withDismissAction = true,
@@ -113,9 +111,8 @@ private fun MemoryIndicator(
             }
         )
 
-        Spacer(modifier = Modifier.width(4.dp))
-
         Text(
+            modifier = Modifier.padding(start = 4.dp),
             text =  "$availableGB / $totalGB GB",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -138,7 +135,7 @@ private fun TemperatureIndicator(
     val warningDismissible = temperatureMetrics.warningLevel == TemperatureWarningLevel.HIGH
 
     Row(
-        modifier = Modifier.clickable(role = Role.Button) {
+        modifier = Modifier.padding(end = 12.dp).clickable(role = Role.Button) {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = temperatureWarning,
                 withDismissAction = warningDismissible,
@@ -158,9 +155,8 @@ private fun TemperatureIndicator(
             }
         )
 
-        Spacer(modifier = Modifier.width(2.dp))
-
         Text(
+            modifier = Modifier.padding(start = 4.dp),
             text = temperatureDisplay,
             style = MaterialTheme.typography.bodySmall,
             color = when (temperatureMetrics.warningLevel) {

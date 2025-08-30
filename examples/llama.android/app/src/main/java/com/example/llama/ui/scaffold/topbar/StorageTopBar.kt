@@ -84,9 +84,8 @@ private fun StorageIndicator(
             }
         )
 
-        Spacer(modifier = Modifier.width(2.dp))
-
         Text(
+            modifier = Modifier.padding(start = 4.dp),
             text = "$usedGb / $availableGb GB",
             style = MaterialTheme.typography.bodySmall
         )
