@@ -62,14 +62,14 @@ class ConversationViewModel @Inject constructor(
             content = content,
             timestamp = System.currentTimeMillis()
         )
-        _messages.value = _messages.value + userMessage
+        _messages.value += userMessage
 
         // Add placeholder for assistant response
         val assistantMessage = Message.Assistant.Ongoing(
             content = "",
             timestamp = System.currentTimeMillis()
         )
-        _messages.value = _messages.value + assistantMessage
+        _messages.value += assistantMessage
 
         // Clear input field
         inputFieldState.clearText()

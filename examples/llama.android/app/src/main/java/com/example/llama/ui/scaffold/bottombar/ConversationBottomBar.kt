@@ -45,7 +45,7 @@ fun ConversationBottomBar(
     onAttachFileClick: (() -> Unit)?,
     onAudioInputClick: (() -> Unit)?,
 ) {
-    val placeholder = if (isReady) "Message ${APP_NAME}..." else "Please wait for ${APP_NAME} to finish"
+    val placeholder = if (isReady) "Type your message here" else "AI is generating the response..."
 
     Column(
         modifier = Modifier.Companion.fillMaxWidth()

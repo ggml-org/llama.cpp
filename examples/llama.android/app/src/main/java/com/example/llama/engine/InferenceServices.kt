@@ -107,6 +107,7 @@ data class TokenMetrics(
     val tokensCount: Int,
     val ttftMs: Long,
     val tpsMs: Float,
+    val duration: Long,
 ) {
     val text: String
         get() = "Tokens: $tokensCount, TTFT: ${ttftMs}ms, TPS: ${"%.1f".format(tpsMs)}"
@@ -270,7 +271,8 @@ internal class InferenceServiceImpl @Inject internal constructor(
         return TokenMetrics(
             tokensCount = tokenCount,
             ttftMs = if (firstTokenTime > 0) firstTokenTime - generationStartTime else 0L,
-            tpsMs = calculateTPS(tokenCount, totalTimeMs)
+            tpsMs = calculateTPS(tokenCount, totalTimeMs),
+            duration = totalTimeMs,
         )
     }
 

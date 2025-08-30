@@ -27,11 +27,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TonalToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -55,18 +60,22 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.engine.ModelLoadingMetrics
+import com.example.llama.engine.TokenMetrics
 import com.example.llama.ui.components.ModelCardContentArchitectureRow
 import com.example.llama.ui.components.ModelCardContentContextRow
 import com.example.llama.ui.components.ModelCardContentField
 import com.example.llama.ui.components.ModelCardCoreExpandable
 import com.example.llama.ui.components.ModelUnloadDialogHandler
 import com.example.llama.util.formatMilliSeconds
+import com.example.llama.util.formatMilliSecondstructured
+import com.example.llama.util.toEnglishName
 import com.example.llama.viewmodel.ConversationViewModel
 import com.example.llama.viewmodel.Message
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 private const val AUTO_REPOSITION_INTERVAL = 150L
 
@@ -311,7 +320,7 @@ private fun MessageBubble(message: Message) {
             content = message.content,
             isThinking = false,
             isGenerating = false,
-            metrics = message.metrics.text
+            metrics = message.metrics
         )
     }
 }
@@ -319,9 +328,7 @@ private fun MessageBubble(message: Message) {
 @Composable
 private fun UserMessageBubble(content: String, formattedTime: String) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         horizontalAlignment = Alignment.End
     ) {
         // Timestamp above bubble
@@ -332,11 +339,12 @@ private fun UserMessageBubble(content: String, formattedTime: String) {
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        Row {
+        Row(modifier = Modifier.fillMaxWidth(0.9f)) {
             Spacer(modifier = Modifier.weight(1f))
 
             Card(
-                shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                modifier = Modifier,
+                shape = RoundedCornerShape(16.dp, 2.dp, 16.dp, 16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 ),
@@ -359,7 +367,7 @@ private fun AssistantMessageBubble(
     content: String,
     isThinking: Boolean,
     isGenerating: Boolean,
-    metrics: String? = null
+    metrics: TokenMetrics? = null
 ) {
     Row(
         verticalAlignment = Alignment.Top,
@@ -381,10 +389,7 @@ private fun AssistantMessageBubble(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-        ) {
+        Column(modifier = Modifier.fillMaxWidth(0.9f)) {
             // Timestamp above bubble
             if (formattedTime.isNotBlank()) {
                 Text(
@@ -396,7 +401,7 @@ private fun AssistantMessageBubble(
             }
 
             Card(
-                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                shape = RoundedCornerShape(2.dp, 16.dp, 16.dp, 16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
@@ -412,13 +417,11 @@ private fun AssistantMessageBubble(
             }
 
             // Show metrics or generation status below the bubble
-            Row(
-                modifier = Modifier
-                    .height(20.dp)
-                    .padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isGenerating) {
+            if (isGenerating) {
+                Row(
+                    modifier = Modifier.height(20.dp).padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     PulsatingDots(small = true)
 
                     Spacer(modifier = Modifier.width(4.dp))
@@ -428,13 +431,11 @@ private fun AssistantMessageBubble(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
-                } else if (metrics != null) {
-                    // Show metrics when message is complete
-                    Text(
-                        text = metrics,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    )
+                }
+            } else {
+                // Show metrics when message is complete
+                metrics?.let {
+                    ExpandableTokenMetricsBubble(metrics)
                 }
             }
         }
@@ -478,5 +479,84 @@ private fun PulsatingDots(small: Boolean = false) {
 
             Spacer(modifier = Modifier.width(2.dp))
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ExpandableTokenMetricsBubble(metrics: TokenMetrics) {
+    var showMetrics by remember { mutableStateOf(false) }
+
+    Column {
+        TonalToggleButton(
+            checked = showMetrics,
+            onCheckedChange = { showMetrics = !showMetrics }
+        ) {
+            Icon(
+                modifier = Modifier.size(16.dp),
+                imageVector = Icons.Default.Timer,
+                contentDescription = "${if (showMetrics) "Hide" else "Show"} token metrics of this assistant message"
+            )
+            Text(
+                text = "${if (showMetrics) "Hide" else "Show"} stats",
+                modifier = Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+
+        if (showMetrics) {
+            Card(
+                shape = RoundedCornerShape(2.dp, 16.dp, 16.dp, 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    val ttft = formatMilliSecondstructured(metrics.ttftMs)
+                    TokenMetricSection("1st Token", ttft.value.toString(), ttft.unit.toEnglishName())
+
+                    val tps =  String.format(Locale.getDefault(), "%.2f", metrics.tpsMs)
+                    TokenMetricSection("Decode speed", tps, "tokens/sec")
+
+                    val duration = formatMilliSecondstructured(metrics.duration)
+                    TokenMetricSection("Duration", duration.value.toString(), duration.unit.toEnglishName())
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TokenMetricSection(metricName: String, metricValue: String, metricUnit: String) {
+    Column {
+        Text(
+            text = metricName,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Normal,
+        )
+
+        Text(
+            modifier = Modifier.padding(top = 2.dp),
+            text = metricValue,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Light,
+            fontStyle = FontStyle.Italic
+        )
+
+        Text(
+            modifier = Modifier.padding(top = 2.dp),
+            text = metricUnit,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            fontWeight = FontWeight.Light,
+            fontStyle = FontStyle.Italic
+        )
     }
 }
