@@ -1161,6 +1161,7 @@ struct test {
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
+    std::vector<uint64_t>    samples_ttft_ns;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
@@ -1205,6 +1206,10 @@ struct test {
 
     uint64_t stdev_ns() const { return ::stdev(samples_ns); }
 
+    uint64_t avg_ttft_ns() const { return ::avg(samples_ttft_ns); }
+
+    uint64_t stdev_ttft_ns() const { return ::stdev(samples_ttft_ns); }
+
     std::vector<double> get_ts() const {
         int                 n_tokens = n_prompt + n_gen;
         std::vector<double> ts;
@@ -1213,9 +1218,56 @@ struct test {
         return ts;
     }
 
+    std::vector<double> get_ttft_ms() const {
+        std::vector<double> ttft_ms;
+        std::transform(samples_ttft_ns.begin(), samples_ttft_ns.end(), std::back_inserter(ttft_ms),
+                       [](uint64_t t) { return t / 1e6; });
+        return ttft_ms;
+    }
+
+    std::vector<double> get_e2e_ms() const {
+        std::vector<double> e2e_ms;
+        std::transform(samples_ns.begin(), samples_ns.end(), std::back_inserter(e2e_ms),
+                       [](uint64_t t) { return t / 1e6; });
+        return e2e_ms;
+    }
+
+    std::vector<double> get_itl_ns() const {
+        std::vector<double> itl_ns;
+        if (n_gen == 0) return itl_ns;
+
+        for (size_t i = 0; i < samples_ns.size(); i++) {
+            double e2e_ns = samples_ns[i];
+            double ttft_ns = samples_ttft_ns[i];
+            double itl = (e2e_ns - ttft_ns) / (n_gen - 1);
+            itl_ns.push_back(itl);
+        }
+        return itl_ns;
+    }
+
+    std::vector<double> get_itl_ms() const {
+        std::vector<double> itl_ns = get_itl_ns();
+        std::vector<double> itl_ms;
+        std::transform(itl_ns.begin(), itl_ns.end(), std::back_inserter(itl_ms),
+                       [](double t) { return t / 1e6; });
+        return itl_ms;
+    }
+
     double avg_ts() const { return ::avg(get_ts()); }
 
     double stdev_ts() const { return ::stdev(get_ts()); }
+
+    double avg_ttft_ms() const { return ::avg(get_ttft_ms()); }
+
+    double stdev_ttft_ms() const { return ::stdev(get_ttft_ms()); }
+
+    double avg_e2e_ms() const { return ::avg(get_e2e_ms()); }
+
+    double stdev_e2e_ms() const { return ::stdev(get_e2e_ms()); }
+
+    double avg_itl_ms() const { return ::avg(get_itl_ms()); }
+
+    double stdev_itl_ms() const { return ::stdev(get_itl_ms()); }
 
     static std::string get_backend() {
         std::vector<std::string> backends;
@@ -1231,12 +1283,13 @@ struct test {
 
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
-            "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
-            "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
-            "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
+            "build_commit", "build_number",  "cpu_info",       "gpu_info",   "backends",     "model_filename",
+            "model_type",   "model_size",    "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
+            "cpu_mask",     "cpu_strict",    "poll",           "type_k",     "type_v",       "n_gpu_layers",
+            "split_mode",   "main_gpu",      "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
+            "use_mmap",     "embeddings",    "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",      "test_time",
+            "avg_ns",       "stddev_ns",     "avg_ts",         "stddev_ts",  "avg_ttft_ms",  "stddev_ttft_ms",
+            "avg_e2e_ms",   "stddev_e2e_ms", "avg_itl_ms",     "stddev_itl_ms",
         };
         return fields;
     }
@@ -1244,17 +1297,18 @@ struct test {
     enum field_type { STRING, BOOL, INT, FLOAT };
 
     static field_type get_field_type(const std::string & field) {
-        if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
-            field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
-            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
+        if (field == "build_number" || field == "n_batch"    || field == "n_ubatch"       || field == "n_threads"     ||
+            field == "poll"         || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers"  ||
+            field == "main_gpu"     || field == "n_prompt"   || field == "n_gen"          || field == "n_depth"       ||
+            field == "avg_ns"       || field == "stddev_ns"  || field == "no_op_offload") {
             return INT;
         }
-        if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
+        if (field == "f16_kv"   || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
             field == "use_mmap" || field == "embeddings") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts"     || field == "stddev_ts"     || field == "avg_ttft_ms" || field == "stddev_ttft_ms" ||
+            field == "avg_e2e_ms" || field == "stddev_e2e_ms" || field == "avg_itl_ms"  || field == "stddev_itl_ms") {
             return FLOAT;
         }
         return STRING;
@@ -1331,7 +1385,13 @@ struct test {
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+                                            std::to_string(stdev_ts()),
+                                            std::to_string(avg_ttft_ms()),
+                                            std::to_string(stdev_ttft_ms()),
+                                            std::to_string(avg_e2e_ms()),
+                                            std::to_string(stdev_e2e_ms()),
+                                            std::to_string(avg_itl_ms()),
+                                            std::to_string(stdev_itl_ms()) };
         return values;
     }
 
@@ -1440,7 +1500,9 @@ struct json_printer : public printer {
         fprintf(fout, "  {\n");
         print_fields(test::get_fields(), t.get_values());
         fprintf(fout, "    \"samples_ns\": [ %s ],\n", join(t.samples_ns, ", ").c_str());
-        fprintf(fout, "    \"samples_ts\": [ %s ]\n", join(t.get_ts(), ", ").c_str());
+        fprintf(fout, "    \"samples_ts\": [ %s ],\n", join(t.get_ts(), ", ").c_str());
+        fprintf(fout, "    \"samples_ttft_ns\": [ %s ],\n", join(t.samples_ttft_ns, ", ").c_str());
+        fprintf(fout, "    \"samples_itl_ns\": [ %s ]\n", join(t.get_itl_ns(), ", ").c_str());
         fprintf(fout, "  }");
         fflush(fout);
     }
@@ -1460,7 +1522,9 @@ struct jsonl_printer : public printer {
         fprintf(fout, "{");
         print_fields(test::get_fields(), t.get_values());
         fprintf(fout, "\"samples_ns\": [ %s ],", join(t.samples_ns, ", ").c_str());
-        fprintf(fout, "\"samples_ts\": [ %s ]", join(t.get_ts(), ", ").c_str());
+        fprintf(fout, "\"samples_ts\": [ %s ],", join(t.get_ts(), ", ").c_str());
+        fprintf(fout, "\"samples_ttft_ns\": [ %s ],", join(t.samples_ttft_ns, ", ").c_str());
+        fprintf(fout, "\"samples_itl_ns\": [ %s ]", join(t.get_itl_ns(), ", ").c_str());
         fprintf(fout, "}\n");
         fflush(fout);
     }
@@ -1761,7 +1825,7 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
-static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static bool test_gen(llama_context * ctx, int n_gen, int n_threads, uint64_t * t_ttft) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -1778,6 +1842,12 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
         }
         llama_synchronize(ctx);
         token = std::rand() % n_vocab;
+
+        // capture the time to first token
+        // t_ttft may be a nullptr from the warmup run
+        if (i == 0 && t_ttft != nullptr && *t_ttft == 0) {
+            *t_ttft = get_time_ns();
+        }
     }
     return true;
 }
@@ -1935,7 +2005,7 @@ int main(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res = test_gen(ctx, 1, t.n_threads, nullptr);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                     exit(1);
@@ -1959,6 +2029,7 @@ int main(int argc, char ** argv) {
             }
 
             uint64_t t_start = get_time_ns();
+            uint64_t t_ttft  = 0;
 
             if (t.n_prompt > 0) {
                 if (params.progress) {
@@ -1976,11 +2047,12 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen, t.n_threads, &t_ttft);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     exit(1);
                 }
+                t.samples_ttft_ns.push_back(t_ttft - t_start);
             }
 
             uint64_t t_ns = get_time_ns() - t_start;

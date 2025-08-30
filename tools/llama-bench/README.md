@@ -5,12 +5,13 @@ Performance testing tool for llama.cpp.
 ## Table of contents
 
 1. [Syntax](#syntax)
-2. [Examples](#examples)
+2. [Metrics](#metrics)
+3. [Examples](#examples)
     1. [Text generation with different models](#text-generation-with-different-models)
     2. [Prompt processing with different batch sizes](#prompt-processing-with-different-batch-sizes)
     3. [Different numbers of threads](#different-numbers-of-threads)
     4. [Different numbers of layers offloaded to the GPU](#different-numbers-of-layers-offloaded-to-the-gpu)
-3. [Output formats](#output-formats)
+4. [Output formats](#output-formats)
     1. [Markdown](#markdown)
     2. [CSV](#csv)
     3. [JSON](#json)
@@ -78,6 +79,33 @@ Each test is repeated the number of times given by `-r`, and the results are ave
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
 
 For a description of the other options, see the [main example](../main/README.md).
+
+## Metrics
+
+Using the CSV output (`-o csv`), these metrics will be provided as average and standard deviations.
+
+### Time to First Token (TTFT)
+
+$$ T_{ttft} = t_{prompt} + t^{(1)}_{gen} $$
+
+where
+* $t_{prompt}$ : total prompt processing time
+* $t^{(1)}_{gen}$ : token generation time for the first token
+
+### End-to-End Request Latency (E2E)
+
+$$ T_{e2e} = t_{prompt} + t_{gen} $$
+
+where
+* $t_{prompt}$ : total prompt processing time
+* $t_{gen}$ : total token generation time
+
+### Inter-token Latency (ITL)
+
+$$ T_{itl} = \frac{T_{e2e} - T_{ttft}}{n\_gen - 1} $$
+
+where
+* $n\_{gen}$ : tokens to generate (`-n` flag)
 
 ## Examples
 
@@ -190,9 +218,9 @@ $ ./llama-bench -o csv
 ```
 
 ```csv
-build_commit,build_number,cpu_info,gpu_info,backends,model_filename,model_type,model_size,model_n_params,n_batch,n_ubatch,n_threads,cpu_mask,cpu_strict,poll,type_k,type_v,n_gpu_layers,split_mode,main_gpu,no_kv_offload,flash_attn,tensor_split,use_mmap,embeddings,n_prompt,n_gen,n_depth,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts
-"8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","1","0","512","0","0","2025-04-24T11:57:09Z","70285660","982040","7285.676949","100.064434"
-"8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","1","0","0","128","0","2025-04-24T11:57:10Z","1067431600","3834831","119.915244","0.430617"
+build_commit,build_number,cpu_info,gpu_info,backends,model_filename,model_type,model_size,model_n_params,n_batch,n_ubatch,n_threads,cpu_mask,cpu_strict,poll,type_k,type_v,n_gpu_layers,split_mode,main_gpu,no_kv_offload,flash_attn,tensor_split,tensor_buft_overrides,use_mmap,embeddings,no_op_offload,n_prompt,n_gen,n_depth,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts,avg_ttft_ms,stddev_ttft_ms,avg_e2e_ms,stddev_e2e_ms,avg_itl_ms,stddev_itl_ms
+"69f7e7116","6321","OpenBLAS, CPU","","BLAS","models/granite-3.3-2b-instruct-be.IQ4_XS.gguf","granite 3B IQ4_XS - 4.25 bpw","1395281392","2533539840","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","none","1","0","0","512","0","0","2025-08-28T16:57:00Z","6313008195","4119608","81.102409","0.052946","0.000000","0.000000","6313.008195","4.118842","0.000000","0.000000"
+"69f7e7116","6321","OpenBLAS, CPU","","BLAS","models/granite-3.3-2b-instruct-be.IQ4_XS.gguf","granite 3B IQ4_XS - 4.25 bpw","1395281392","2533539840","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","none","1","0","0","0","128","0","2025-08-28T16:57:38Z","5510702782","66734031","23.230240","0.280041","42.929458","0.403130","5510.702782","66.734011","43.053333","0.522383"
 ```
 
 ### JSON
@@ -204,15 +232,15 @@ $ ./llama-bench -o json
 ```json
 [
   {
-    "build_commit": "8cf427ff",
-    "build_number": 5163,
-    "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor",
-    "gpu_info": "NVIDIA GeForce RTX 4080",
-    "backends": "CUDA",
-    "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-    "model_type": "qwen2 7B Q4_K - Medium",
-    "model_size": 4677120000,
-    "model_n_params": 7615616512,
+    "build_commit": "69f7e7116",
+    "build_number": 6321,
+    "cpu_info": "OpenBLAS, CPU",
+    "gpu_info": "",
+    "backends": "BLAS",
+    "model_filename": "models/granite-3.3-2b-instruct-be.IQ4_XS.gguf",
+    "model_type": "granite 3B IQ4_XS - 4.25 bpw",
+    "model_size": 1395281392,
+    "model_n_params": 2533539840,
     "n_batch": 2048,
     "n_ubatch": 512,
     "n_threads": 8,
@@ -227,29 +255,39 @@ $ ./llama-bench -o json
     "no_kv_offload": false,
     "flash_attn": false,
     "tensor_split": "0.00",
+    "tensor_buft_overrides": "none",
     "use_mmap": true,
     "embeddings": false,
+    "no_op_offload": 0,
     "n_prompt": 512,
     "n_gen": 0,
     "n_depth": 0,
-    "test_time": "2025-04-24T11:58:50Z",
-    "avg_ns": 72135640,
-    "stddev_ns": 1453752,
-    "avg_ts": 7100.002165,
-    "stddev_ts": 140.341520,
-    "samples_ns": [ 74601900, 71632900, 71745200, 71952700, 70745500 ],
-    "samples_ts": [ 6863.1, 7147.55, 7136.37, 7115.79, 7237.21 ]
+    "test_time": "2025-08-28T17:01:34Z",
+    "avg_ns": 6276064173,
+    "stddev_ns": 34323113,
+    "avg_ts": 81.581735,
+    "stddev_ts": 0.444487,
+    "avg_ttft_ms": 0.000000,
+    "stddev_ttft_ms": 0.000000,
+    "avg_e2e_ms": 6276.064174,
+    "stddev_e2e_ms": 34.322931,
+    "avg_itl_ms": 0.000000,
+    "stddev_itl_ms": 0.000000,
+    "samples_ns": [ 6255489794, 6293138165, 6328736359, 6254136857, 6248819694 ],
+    "samples_ts": [ 81.8481, 81.3585, 80.9008, 81.8658, 81.9355 ],
+    "samples_ttft_ns": [  ],
+    "samples_itl_ns": [  ]
   },
   {
-    "build_commit": "8cf427ff",
-    "build_number": 5163,
-    "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor",
-    "gpu_info": "NVIDIA GeForce RTX 4080",
-    "backends": "CUDA",
-    "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-    "model_type": "qwen2 7B Q4_K - Medium",
-    "model_size": 4677120000,
-    "model_n_params": 7615616512,
+    "build_commit": "69f7e7116",
+    "build_number": 6321,
+    "cpu_info": "OpenBLAS, CPU",
+    "gpu_info": "",
+    "backends": "BLAS",
+    "model_filename": "models/granite-3.3-2b-instruct-be.IQ4_XS.gguf",
+    "model_type": "granite 3B IQ4_XS - 4.25 bpw",
+    "model_size": 1395281392,
+    "model_n_params": 2533539840,
     "n_batch": 2048,
     "n_ubatch": 512,
     "n_threads": 8,
@@ -264,18 +302,28 @@ $ ./llama-bench -o json
     "no_kv_offload": false,
     "flash_attn": false,
     "tensor_split": "0.00",
+    "tensor_buft_overrides": "none",
     "use_mmap": true,
     "embeddings": false,
+    "no_op_offload": 0,
     "n_prompt": 0,
     "n_gen": 128,
     "n_depth": 0,
-    "test_time": "2025-04-24T11:58:51Z",
-    "avg_ns": 1076767880,
-    "stddev_ns": 9449585,
-    "avg_ts": 118.881588,
-    "stddev_ts": 1.041811,
-    "samples_ns": [ 1075361300, 1065089400, 1071761200, 1081934900, 1089692600 ],
-    "samples_ts": [ 119.03, 120.178, 119.43, 118.307, 117.464 ]
+    "test_time": "2025-08-28T17:02:12Z",
+    "avg_ns": 5613693967,
+    "stddev_ns": 9159226,
+    "avg_ts": 22.801434,
+    "stddev_ts": 0.037157,
+    "avg_ttft_ms": 43.766002,
+    "stddev_ttft_ms": 0.161696,
+    "avg_e2e_ms": 5613.693967,
+    "stddev_e2e_ms": 9.158920,
+    "avg_itl_ms": 43.857701,
+    "stddev_itl_ms": 0.073127,
+    "samples_ns": [ 5617273869, 5609876644, 5628089934, 5607197607, 5606031783 ],
+    "samples_ts": [ 22.7869, 22.8169, 22.7431, 22.8278, 22.8325 ],
+    "samples_ttft_ns": [ 43584301, 43738022, 43642511, 43936642, 43928534 ],
+    "samples_itl_ns": [ 4.38873e+07, 4.38279e+07, 4.3972e+07, 4.38052e+07, 4.37961e+07 ]
   }
 ]
 ```
@@ -288,8 +336,8 @@ $ ./llama-bench -o jsonl
 ```
 
 ```json lines
-{"build_commit": "8cf427ff", "build_number": 5163, "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor", "gpu_info": "NVIDIA GeForce RTX 4080", "backends": "CUDA", "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf", "model_type": "qwen2 7B Q4_K - Medium", "model_size": 4677120000, "model_n_params": 7615616512, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "use_mmap": true, "embeddings": false, "n_prompt": 512, "n_gen": 0, "n_depth": 0, "test_time": "2025-04-24T11:59:33Z", "avg_ns": 70497220, "stddev_ns": 883196, "avg_ts": 7263.609157, "stddev_ts": 90.940578, "samples_ns": [ 71551000, 71222800, 70364100, 69439100, 69909100 ],"samples_ts": [ 7155.74, 7188.71, 7276.44, 7373.37, 7323.8 ]}
-{"build_commit": "8cf427ff", "build_number": 5163, "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor", "gpu_info": "NVIDIA GeForce RTX 4080", "backends": "CUDA", "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf", "model_type": "qwen2 7B Q4_K - Medium", "model_size": 4677120000, "model_n_params": 7615616512, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "use_mmap": true, "embeddings": false, "n_prompt": 0, "n_gen": 128, "n_depth": 0, "test_time": "2025-04-24T11:59:33Z", "avg_ns": 1068078400, "stddev_ns": 6279455, "avg_ts": 119.844681, "stddev_ts": 0.699739, "samples_ns": [ 1066331700, 1064864900, 1079042600, 1063328400, 1066824400 ],"samples_ts": [ 120.038, 120.203, 118.624, 120.377, 119.982 ]}
+{"build_commit": "69f7e7116", "build_number": 6321, "cpu_info": "OpenBLAS, CPU", "gpu_info": "", "backends": "BLAS", "model_filename": "models/granite-3.3-2b-instruct-be.IQ4_XS.gguf", "model_type": "granite 3B IQ4_XS - 4.25 bpw", "model_size": 1395281392, "model_n_params": 2533539840, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "tensor_buft_overrides": "none", "use_mmap": true, "embeddings": false, "no_op_offload": 0, "n_prompt": 512, "n_gen": 0, "n_depth": 0, "test_time": "2025-08-28T17:05:56Z", "avg_ns": 6287855687, "stddev_ns": 24678326, "avg_ts": 81.427806, "stddev_ts": 0.318701, "avg_ttft_ms": 0.000000, "stddev_ttft_ms": 0.000000, "avg_e2e_ms": 6287.855687, "stddev_e2e_ms": 24.678263, "avg_itl_ms": 0.000000, "stddev_itl_ms": 0.000000, "samples_ns": [ 6278179171, 6280580749, 6291595583, 6327539008, 6261383925 ],"samples_ts": [ 81.5523, 81.5211, 81.3784, 80.9161, 81.7711 ],"samples_ttft_ns": [  ],"samples_itl_ns": [  ]}
+{"build_commit": "69f7e7116", "build_number": 6321, "cpu_info": "OpenBLAS, CPU", "gpu_info": "", "backends": "BLAS", "model_filename": "models/granite-3.3-2b-instruct-be.IQ4_XS.gguf", "model_type": "granite 3B IQ4_XS - 4.25 bpw", "model_size": 1395281392, "model_n_params": 2533539840, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "tensor_buft_overrides": "none", "use_mmap": true, "embeddings": false, "no_op_offload": 0, "n_prompt": 0, "n_gen": 128, "n_depth": 0, "test_time": "2025-08-28T17:06:33Z", "avg_ns": 5498943758, "stddev_ns": 137464807, "avg_ts": 23.288635, "stddev_ts": 0.571937, "avg_ttft_ms": 43.519547, "stddev_ttft_ms": 1.625999, "avg_e2e_ms": 5498.943758, "stddev_e2e_ms": 137.464807, "avg_itl_ms": 42.956096, "stddev_itl_ms": 1.075456, "samples_ns": [ 5563859512, 5712210875, 5398301124, 5410462401, 5409884878 ],"samples_ts": [ 23.0056, 22.4081, 23.7112, 23.6579, 23.6604 ],"samples_ttft_ns": [ 46182840, 43768889, 43176480, 42210650, 42258878 ],"samples_itl_ns": [ 4.34463e+07, 4.46334e+07, 4.21663e+07, 4.22697e+07, 4.22648e+07 ]}
 ```
 
 
@@ -302,7 +350,7 @@ $ ./llama-bench -o sql
 ```
 
 ```sql
-CREATE TABLE IF NOT EXISTS test (
+CREATE TABLE IF NOT EXISTS llama_bench (
   build_commit TEXT,
   build_number INTEGER,
   cpu_info TEXT,
@@ -326,8 +374,10 @@ CREATE TABLE IF NOT EXISTS test (
   no_kv_offload INTEGER,
   flash_attn INTEGER,
   tensor_split TEXT,
+  tensor_buft_overrides TEXT,
   use_mmap INTEGER,
   embeddings INTEGER,
+  no_op_offload INTEGER,
   n_prompt INTEGER,
   n_gen INTEGER,
   n_depth INTEGER,
@@ -335,9 +385,15 @@ CREATE TABLE IF NOT EXISTS test (
   avg_ns INTEGER,
   stddev_ns INTEGER,
   avg_ts REAL,
-  stddev_ts REAL
+  stddev_ts REAL,
+  avg_ttft_ms REAL,
+  stddev_ttft_ms REAL,
+  avg_e2e_ms REAL,
+  stddev_e2e_ms REAL,
+  avg_itl_ms REAL,
+  stddev_itl_ms REAL
 );
 
-INSERT INTO test (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, use_mmap, embeddings, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('8cf427ff', '5163', 'AMD Ryzen 7 7800X3D 8-Core Processor', 'NVIDIA GeForce RTX 4080', 'CUDA', 'models/Qwen2.5-7B-Instruct-Q4_K_M.gguf', 'qwen2 7B Q4_K - Medium', '4677120000', '7615616512', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', '1', '0', '512', '0', '0', '2025-04-24T12:00:08Z', '69905000', '519516', '7324.546977', '54.032613');
-INSERT INTO test (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, use_mmap, embeddings, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('8cf427ff', '5163', 'AMD Ryzen 7 7800X3D 8-Core Processor', 'NVIDIA GeForce RTX 4080', 'CUDA', 'models/Qwen2.5-7B-Instruct-Q4_K_M.gguf', 'qwen2 7B Q4_K - Medium', '4677120000', '7615616512', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', '1', '0', '0', '128', '0', '2025-04-24T12:00:09Z', '1063608780', '4464130', '120.346696', '0.504647');
+INSERT INTO llama_bench (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, tensor_buft_overrides, use_mmap, embeddings, no_op_offload, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts, avg_ttft_ms, stddev_ttft_ms, avg_e2e_ms, stddev_e2e_ms, avg_itl_ms, stddev_itl_ms) VALUES ('69f7e7116', '6321', 'OpenBLAS, CPU', '', 'BLAS', 'models/granite-3.3-2b-instruct-be.IQ4_XS.gguf', 'granite 3B IQ4_XS - 4.25 bpw', '1395281392', '2533539840', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', 'none', '1', '0', '0', '512', '0', '0', '2025-08-28T17:08:13Z', '6326649352', '9345621', '80.927655', '0.119504', '0.000000', '0.000000', '6326.649353', '9.344944', '0.000000', '0.000000');
+INSERT INTO llama_bench (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, tensor_buft_overrides, use_mmap, embeddings, no_op_offload, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts, avg_ttft_ms, stddev_ttft_ms, avg_e2e_ms, stddev_e2e_ms, avg_itl_ms, stddev_itl_ms) VALUES ('69f7e7116', '6321', 'OpenBLAS, CPU', '', 'BLAS', 'models/granite-3.3-2b-instruct-be.IQ4_XS.gguf', 'granite 3B IQ4_XS - 4.25 bpw', '1395281392', '2533539840', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', 'none', '1', '0', '0', '0', '128', '0', '2025-08-28T17:08:51Z', '5640474378', '40328612', '22.694063', '0.163702', '44.155657', '0.086653', '5640.474378', '40.328543', '44.065502', '0.317725');
 ```
