@@ -137,6 +137,18 @@ Then the quantized model can be run using the following command:
 (venv) $ make causal-run-quantized-model
 ```
 
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make causal-quantize-qat-Q4_0
+```
+
 
 ## Embedding Language Model Conversion
 
@@ -238,6 +250,18 @@ Then the quantized model can be run using the following command:
 (venv) $ make embedding-run-quantized-model
 ```
 
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make embedding-quantize-qat-Q4_0
+```
+
 ## Perplexity Evaluation
 
 ### Simple perplexity evaluation
@@ -285,12 +309,20 @@ For the following targets a `HF_TOKEN` environment variable is required.
 This will create a new model repsository on Hugging Face with the specified
 model name.
 ```console
-(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev"
+(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
 Repository ID:  danbev/TestModel-GGUF
 Repository created: https://huggingface.co/danbev/TestModel-GGUF
 ```
 Note that we append a `-GGUF` suffix to the model name to ensure a consistent
 naming convention for GGUF models.
+
+An embedding model can be created using the following command:
+```console
+(venv) $ make hf-create-model-embedding MODEL_NAME='TestEmbeddingModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
+```
+The only difference is that the model card for an embedding model will be different
+with regards to the llama-server command and also how to access/call the embedding
+endpoint.
 
 ### Upload a GGUF model to model repository
 The following target uploads a model to an existing Hugging Face model repository.
