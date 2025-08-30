@@ -41,9 +41,9 @@ fun ConversationBottomBar(
     onSendClick: () -> Unit,
     showModelCard: Boolean,
     onToggleModelCard: (Boolean) -> Unit,
-    onAttachPhotoClick: () -> Unit,
-    onAttachFileClick: () -> Unit,
-    onAudioInputClick: () -> Unit,
+    onAttachPhotoClick: (() -> Unit)?,
+    onAttachFileClick: (() -> Unit)?,
+    onAudioInputClick: (() -> Unit)?,
 ) {
     val placeholder = if (isReady) "Message ${APP_NAME}..." else "Please wait for ${APP_NAME} to finish"
 
@@ -86,25 +86,31 @@ fun ConversationBottomBar(
 
         BottomAppBar(
             actions = {
-                IconButton(onClick = onAttachPhotoClick) {
-                    Icon(
-                        imageVector = Icons.Outlined.AddPhotoAlternate,
-                        contentDescription = "Attach a photo",
-                    )
+                onAttachPhotoClick?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            imageVector = Icons.Outlined.AddPhotoAlternate,
+                            contentDescription = "Attach a photo",
+                        )
+                    }
                 }
 
-                IconButton(onClick = onAttachFileClick) {
-                    Icon(
-                        imageVector = Icons.Outlined.AttachFile,
-                        contentDescription = "Attach a file",
-                    )
+                onAttachFileClick?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            imageVector = Icons.Outlined.AttachFile,
+                            contentDescription = "Attach a file",
+                        )
+                    }
                 }
 
-                IconButton(onClick = onAudioInputClick) {
-                    Icon(
-                        imageVector = Icons.Default.Mic,
-                        contentDescription = "Input with voice",
-                    )
+                onAudioInputClick?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Input with voice",
+                        )
+                    }
                 }
 
                 IconButton(onClick = { onToggleModelCard(!showModelCard) } ) {

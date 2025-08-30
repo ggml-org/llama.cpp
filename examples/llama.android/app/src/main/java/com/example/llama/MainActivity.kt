@@ -290,11 +290,11 @@ fun AppContent(
             val modelThinkingOrSpeaking =
                 engineState is State.ProcessingUserPrompt || engineState is State.Generating
 
-            val showStubMessage = {
-                handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
-                    message = "Stub for now, let me know if you want it done :)"
-                ))
-            }
+            val showStubMessage = null  //            {
+//                handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+//                    message = "Stub for now, let me know if you want it done :)"
+//                ))
+//            }
 
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
