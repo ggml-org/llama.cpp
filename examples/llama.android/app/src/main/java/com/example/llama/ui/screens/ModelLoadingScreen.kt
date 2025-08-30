@@ -1,7 +1,9 @@
 package com.example.llama.ui.screens
 
+import android.content.Intent
 import android.llama.cpp.InferenceEngine.State
 import android.llama.cpp.UnsupportedArchitectureException
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -17,11 +19,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PlayArrow
@@ -32,6 +36,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -49,13 +54,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.example.llama.data.model.SystemPrompt
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.ui.components.ModelCardCoreExpandable
-import com.example.llama.ui.components.ModelUnloadDialogHandler
 import com.example.llama.ui.scaffold.ScaffoldEvent
 import com.example.llama.viewmodel.ModelLoadingViewModel
 
@@ -78,6 +84,8 @@ fun ModelLoadingScreen(
     onNavigateToConversation: (ModelLoadingMetrics) -> Unit,
     viewModel: ModelLoadingViewModel,
 ) {
+    val context = LocalContext.current
+
     // View model states
     val engineState by viewModel.engineState.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
@@ -85,7 +93,7 @@ fun ModelLoadingScreen(
     val recentPrompts by viewModel.recentPrompts.collectAsState()
 
     // UI states
-    var isModelCardExpanded by remember { mutableStateOf(false) }
+    var isModelCardExpanded by remember { mutableStateOf(true) }
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
     var showedSystemPromptWarning by remember { mutableStateOf(false) }
@@ -217,10 +225,23 @@ fun ModelLoadingScreen(
                     Text(
                         text = "Use system prompt",
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .padding(start = 32.dp) // Align with radio text
-                            .weight(1f)
+                        modifier = Modifier.padding(start = 32.dp) // Align with radio text
                     )
+
+                    IconButton(onClick = {
+                        Toast.makeText(context, "Please refer to this guide for more details on \"System Prompt\"", Toast.LENGTH_SHORT).show()
+                        val intent = Intent(Intent.ACTION_VIEW, "https://docs.perplexity.ai/guides/prompt-guide#system-prompt".toUri())
+                        context.startActivity(intent)
+                    }) {
+                        Icon(
+                            modifier = Modifier.size(24.dp),
+                            imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            contentDescription = "Information on system prompt"
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
 
                     Switch(
                         checked = useSystemPrompt,
@@ -330,7 +351,9 @@ fun ModelLoadingScreen(
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
             colors = if (exception != null)
                 ButtonDefaults.buttonColors(
                     disabledContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
@@ -360,7 +383,9 @@ fun ModelLoadingScreen(
                 }
 
                 isLoading -> {
-                    CircularProgressIndicator(modifier = Modifier.height(24.dp).width(24.dp))
+                    CircularProgressIndicator(modifier = Modifier
+                        .height(24.dp)
+                        .width(24.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = when (engineState) {
@@ -435,8 +460,8 @@ private fun SystemPromptTabContent(
             if (prompts.isEmpty()) {
                 Text(
                     text =
-                        if (selectedTab == SystemPromptTab.PRESETS) "No preset prompts available."
-                        else "No recent prompts found.",
+                        if (selectedTab == SystemPromptTab.PRESETS) "No System Prompt presets available."
+                        else "No recently used System Prompts found.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp)
@@ -459,7 +484,7 @@ private fun SystemPromptTabContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxSize(),
-                label = { Text("Enter system prompt") },
+                label = { Text("Customize your own system prompt here") },
                 placeholder = { Text("You are a helpful assistant...") },
                 minLines = 5
             )
