@@ -18750,11 +18750,6 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
     };
 
-#ifdef GGML_USE_METAL
-    // note: we usually have plenty of VRAM, so by default offload all layers to the GPU
-    result.n_gpu_layers = 999;
-#endif
-
     return result;
 }
 
