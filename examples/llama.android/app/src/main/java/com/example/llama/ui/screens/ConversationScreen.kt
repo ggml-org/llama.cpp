@@ -1,6 +1,8 @@
 package com.example.llama.ui.screens
 
+import android.content.Intent
 import android.llama.cpp.InferenceEngine.State
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -28,12 +30,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TonalToggleButton
@@ -52,9 +56,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -279,6 +285,13 @@ private fun ConversationMessageList(
     messages: List<Message>,
     listState: LazyListState,
 ) {
+    val context = LocalContext.current
+    val onInfoClick = {
+        Toast.makeText(context, "Please refer to this guide for more details on the metrics", Toast.LENGTH_SHORT).show()
+        val intent = Intent(Intent.ACTION_VIEW, "https://docs.nvidia.com/nim/benchmarking/llm/latest/metrics.html".toUri())
+        context.startActivity(intent)
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -289,39 +302,36 @@ private fun ConversationMessageList(
             items = messages,
             key = { "${it::class.simpleName}_${it.timestamp}" }
         ) { message ->
-            MessageBubble(message = message)
+            when (message) {
+                is Message.User -> UserMessageBubble(
+                    formattedTime = message.formattedTime,
+                    content = message.content
+                )
+
+                is Message.Assistant.Ongoing -> AssistantMessageBubble(
+                    formattedTime = message.formattedTime,
+                    content = message.content,
+                    isThinking = message.content.isBlank(),
+                    isGenerating = true,
+                    metrics = null,
+                    onInfoClick = onInfoClick,
+                )
+
+                is Message.Assistant.Stopped -> AssistantMessageBubble(
+                    formattedTime = message.formattedTime,
+                    content = message.content,
+                    isThinking = false,
+                    isGenerating = false,
+                    metrics = message.metrics,
+                    onInfoClick = onInfoClick,
+                )
+            }
         }
 
         // Add extra space at the bottom for better UX and a scroll target
         item(key = "bottom-spacer") {
             Spacer(modifier = Modifier.height(36.dp))
         }
-    }
-}
-
-@Composable
-private fun MessageBubble(message: Message) {
-    when (message) {
-        is Message.User -> UserMessageBubble(
-            formattedTime = message.formattedTime,
-            content = message.content
-        )
-
-        is Message.Assistant.Ongoing -> AssistantMessageBubble(
-            formattedTime = message.formattedTime,
-            content = message.content,
-            isThinking = message.content.isBlank(),
-            isGenerating = true,
-            metrics = null
-        )
-
-        is Message.Assistant.Stopped -> AssistantMessageBubble(
-            formattedTime = message.formattedTime,
-            content = message.content,
-            isThinking = false,
-            isGenerating = false,
-            metrics = message.metrics
-        )
     }
 }
 
@@ -367,9 +377,11 @@ private fun AssistantMessageBubble(
     content: String,
     isThinking: Boolean,
     isGenerating: Boolean,
-    metrics: TokenMetrics? = null
+    metrics: TokenMetrics? = null,
+    onInfoClick: () -> Unit,
 ) {
     Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
         // Assistant avatar
@@ -435,7 +447,7 @@ private fun AssistantMessageBubble(
             } else {
                 // Show metrics when message is complete
                 metrics?.let {
-                    ExpandableTokenMetricsBubble(metrics)
+                    ExpandableTokenMetricsBubble(metrics, onInfoClick)
                 }
             }
         }
@@ -484,10 +496,13 @@ private fun PulsatingDots(small: Boolean = false) {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ExpandableTokenMetricsBubble(metrics: TokenMetrics) {
+private fun ExpandableTokenMetricsBubble(
+    metrics: TokenMetrics,
+    onInfoClick: () -> Unit
+) {
     var showMetrics by remember { mutableStateOf(false) }
 
-    Column {
+    Column(Modifier.fillMaxWidth(0.9f)) {
         TonalToggleButton(
             checked = showMetrics,
             onCheckedChange = { showMetrics = !showMetrics }
@@ -512,7 +527,6 @@ private fun ExpandableTokenMetricsBubble(metrics: TokenMetrics) {
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
-
                 Row(
                     modifier = Modifier.padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(18.dp)
@@ -525,6 +539,15 @@ private fun ExpandableTokenMetricsBubble(metrics: TokenMetrics) {
 
                     val duration = formatMilliSecondstructured(metrics.duration)
                     TokenMetricSection("Duration", duration.value.toString(), duration.unit.toEnglishName())
+
+                    IconButton(onClick = onInfoClick) {
+                        Icon(
+                            modifier = Modifier.size(24.dp),
+                            imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            contentDescription = "Information on token metrics"
+                        )
+                    }
                 }
             }
         }
