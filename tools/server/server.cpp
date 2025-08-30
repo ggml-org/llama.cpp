@@ -387,6 +387,7 @@ struct server_task {
             params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params_base.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
             params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
             params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+            params.oaicompat_chat_syntax.tools_schema = json_value(data, "tools_schema", nlohmann::ordered_json());
         }
 
         {

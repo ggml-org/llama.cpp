@@ -1330,62 +1330,196 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 }
 
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    LOG_INF("%s: initializing GLM-4.5 chat params\n", __func__);
     common_chat_params data;
-    data.prompt = apply(tmpl, inputs);
+    
+    // Configure template inputs
+    minja::chat_template_inputs tmpl_inputs;
+    tmpl_inputs.messages = inputs.messages;
+    tmpl_inputs.tools = inputs.tools.empty() ? json() : inputs.tools;
+    tmpl_inputs.add_generation_prompt = inputs.add_generation_prompt;
+    tmpl_inputs.extra_context = inputs.extra_context;
+    tmpl_inputs.now = inputs.now; // Use the consistent timestamp from params
+    
+    // Configure template options to disable polyfills and enforce native XML format
+    minja::chat_template_options opts;
+    opts.apply_polyfills = false; // Hard disable all polyfills
+    
+    // The prompt is generated here
+    data.prompt = tmpl.apply(tmpl_inputs, opts);
     data.format = COMMON_CHAT_FORMAT_GLM_4_5;
+    
+    data.preserved_tokens = {
+        "<|system|>", "<|assistant|>", "<|observation|>",
+        "<tool_call>", "</tool_call>", "<arg_key>", "</arg_key>", 
+        "<arg_value>", "</arg_value>", "<think>", "</think>",
+        "<tool_response>", "</tool_response>",
+    };
+    
+    // Store tools schema for type-aware parsing later
+    data.tools_schema = inputs.tools;
+    
+    LOG_INF("%s: GLM-4.5 native XML format enforced\n", __func__);
     return data;
 }
 
 static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
-    builder.consume_spaces();
-    builder.try_parse_reasoning("<think>", "</think>");
-    if (!builder.syntax().parse_tool_calls) {
-        builder.add_content(builder.consume_rest());
-        return;
-    }
-
-    // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
-    static const common_regex tool_call_start("<tool_call>([^\n<]+)");
-    static const common_regex arg_key_regex("<arg_key>([^<]+)</arg_key>");
-    static const common_regex arg_value_regex("<arg_value>([\\s\\S]*?)</arg_value>");
-    static const common_regex tool_call_end("</tool_call>");
-
-    while (auto res = builder.try_find_regex(tool_call_start)) {
-        // Move to the start of the tool call and consume it
-        builder.move_to(res->groups[0].begin);
-        builder.consume_regex(tool_call_start);
-        
-        std::string function_name = builder.str(res->groups[1]);
-        json arguments = json::object();
-        
-        builder.consume_spaces();
-        
-        // Parse all arg_key/arg_value pairs
-        while (auto key_res = builder.try_consume_regex(arg_key_regex)) {
-            std::string key = builder.str(key_res->groups[1]);
-            builder.consume_spaces();
-            
-            if (auto value_res = builder.try_consume_regex(arg_value_regex)) {
-                std::string value = builder.str(value_res->groups[1]);
-                arguments[key] = value;
-                builder.consume_spaces();
-            } else {
-                throw common_chat_msg_partial_exception("Expected <arg_value> after <arg_key>");
+    
+    auto get_expected_type = [&](const std::string& tool_name, const std::string& param_name) -> std::string {
+        // Access tools schema from builder syntax
+        const auto& tools_schema = builder.syntax().tools_schema;
+        if (tools_schema.is_array()) {
+            for (const auto& tool : tools_schema) {
+                if (tool.contains("function") && tool["function"]["name"] == tool_name) {
+                    auto params = tool["function"]["parameters"];
+                    if (params.contains("properties") && params["properties"].contains(param_name)) {
+                        return params["properties"][param_name].value("type", "string");
+                    }
+                }
             }
         }
+        return "string"; // Default fallback
+    };
+
+    auto handle_tool_call_end = [&] (common_chat_msg_parser & builder, auto end_pos) {
+        builder.move_to(end_pos);
+        builder.consume_literal("</tool_call>");
         
-        // Consume closing tag
-        builder.consume_regex(tool_call_end);
-        builder.consume_spaces();
-        
-        // Add the parsed tool call
-        if (!builder.add_tool_call(function_name, "", arguments.dump())) {
-            throw common_chat_msg_partial_exception("Failed to add GLM tool call");
+        size_t obs_pos = builder.input().find("<|observation|>", builder.pos());
+        if (obs_pos != std::string::npos) {
+            if (obs_pos > builder.pos()) {
+                std::string content = builder.input().substr(builder.pos(), obs_pos - builder.pos());
+                builder.add_content(content);
+            }
+            
+            builder.move_to(obs_pos);
+            builder.consume_literal("<|observation|>");
+        } else {
+            std::string remaining = builder.consume_rest();
+            if (!remaining.empty()) builder.add_content(remaining);
         }
+    };
+
+    builder.consume_spaces();
+    
+    builder.try_parse_reasoning("<think>", "</think>");
+    
+    size_t curr_pos = builder.pos();
+    while (builder.input().find("<tool_call>", builder.pos()) != std::string::npos) {
+        size_t tool_call_start = builder.input().find("<tool_call>", builder.pos());
+        if (tool_call_start > builder.pos()) {
+            std::string content = builder.input().substr(builder.pos(), tool_call_start - builder.pos());
+            builder.add_content(content);
+        }
+        
+        size_t tool_call_end = builder.input().find("</tool_call>", tool_call_start);
+        if (tool_call_end == std::string::npos) return;
+
+        builder.move_to(tool_call_start);
+        builder.consume_literal("<tool_call>");
+        builder.consume_spaces();
+
+        size_t arg_key_start = builder.input().find("<arg_key>", tool_call_start);
+        if (arg_key_start == std::string::npos || arg_key_start > tool_call_end) {
+            std::string function_content = builder.input().substr(builder.pos(), tool_call_end - builder.pos());
+            std::string function_name = string_strip(function_content);
+            
+            if (!builder.add_tool_call(function_name, "", "{}")) {
+                LOG_INF("%s: failed to add tool call\n", __func__);
+            }
+
+            handle_tool_call_end(builder, tool_call_end);
+
+        } else {
+            std::string function_content = builder.input().substr(builder.pos(), arg_key_start - builder.pos());
+            std::string function_name = string_strip(function_content);
+            
+            json args_json = json::object();
+            builder.move_to(arg_key_start);
+            
+            while (builder.pos() < tool_call_end && builder.input().substr(builder.pos()).find("<arg_key>") == 0) {
+                if (!builder.try_consume_literal("<arg_key>")) break;
+                
+                auto key_close = builder.try_find_literal("</arg_key>");
+                if (!key_close || key_close->groups[0].end > tool_call_end) {
+                    throw common_chat_msg_partial_exception("incomplete tool call");
+                    return;
+                }
+                
+                std::string key = string_strip(key_close->prelude);
+                
+                builder.consume_spaces();
+                
+                if (!builder.try_consume_literal("<arg_value>")) {
+                    throw common_chat_msg_partial_exception("incomplete tool call");
+                    return;
+                }
+                
+                auto value_close = builder.try_find_literal("</arg_value>");
+                if (!value_close || value_close->groups[0].end > tool_call_end) {
+                    throw common_chat_msg_partial_exception("incomplete tool call");
+                    return;
+                }
+                
+                std::string value = string_strip(value_close->prelude);
+
+                // Schema-aware type conversion
+                std::string expected_type = get_expected_type(function_name, key);
+                json parsed_value;
+
+                if (expected_type == "array" || expected_type == "object") {
+                    try {
+                        parsed_value = json::parse(value);
+                    } catch (...) {
+                        parsed_value = value;
+                    }
+                } else {
+                    // For all other types, store as string and let the unpacking logic handle it
+                    parsed_value = value;
+                }
+
+                args_json[key] = parsed_value;
+                builder.consume_spaces();
+            }
+
+            if (args_json.size() == 1) {
+                const auto key = args_json.begin().key();
+                auto& value = args_json.begin().value();
+
+                if (value.is_string()) {
+                    try {
+                        json unpacked_json = json::parse(value.get<std::string>());
+                        if (unpacked_json.is_object()) {
+                            args_json = unpacked_json;
+                        }
+                    } catch (const std::exception&) {
+                        // Not a valid JSON string, proceed as normal
+                    }
+                }
+            }
+            
+            if (!builder.add_tool_call(function_name, "", args_json.dump())) {
+                LOG_INF("%s: failed to add tool call with arguments\n", __func__);
+            } else {
+                LOG_INF("%s: successfully added tool call with arguments\n", __func__);
+            }
+
+            handle_tool_call_end(builder, tool_call_end);
+        }
+    
+        if (curr_pos == builder.pos()) {
+            // No progress made, avoid infinite loop
+            LOG_INF("%s: no progress in parsing, stopping to avoid infinite loop\n", __func__);
+            break;
+        }
+        curr_pos = builder.pos();
     }
 
-    builder.add_content(builder.consume_rest());
+    if (builder.pos() < builder.input().size()) {
+        builder.add_content(builder.consume_rest());
+    }
 }
+
 
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);

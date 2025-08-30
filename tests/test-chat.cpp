@@ -294,6 +294,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
             common_chat_syntax syntax;
             syntax.format = data.params.format;
             syntax.reasoning_format = reasoning_format;
+            syntax.tools_schema = data.params.tools_schema;
             const auto msg = common_chat_parse(data.delta, /* is_partial= */ false, syntax);
             assert_msg_equals(test_message, msg);
         }

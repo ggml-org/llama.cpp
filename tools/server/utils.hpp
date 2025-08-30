@@ -848,6 +848,9 @@ static json oaicompat_chat_params_parse(
         }
     }
 
+    // Store tools schema for parser
+    llama_params["tools_schema"] = chat_params.tools_schema;
+
     return llama_params;
 }
 
