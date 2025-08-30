@@ -30,6 +30,7 @@ import com.example.llama.viewmodel.UnloadModelState
  */
 @Composable
 fun ModelUnloadDialogHandler(
+    message: String,
     unloadModelState: UnloadModelState,
     onUnloadConfirmed: (onNavigateBack: () -> Unit) -> Unit,
     onUnloadDismissed: () -> Unit,
@@ -38,15 +39,17 @@ fun ModelUnloadDialogHandler(
     when (unloadModelState) {
         is UnloadModelState.Confirming -> {
             UnloadModelDialog(
+                message = message,
                 onConfirm = {
                     onUnloadConfirmed(onNavigateBack)
                 },
                 onDismiss = onUnloadDismissed,
-                isUnloading = false
+                isUnloading = false,
             )
         }
         is UnloadModelState.Unloading -> {
             UnloadModelDialog(
+                message = message,
                 onConfirm = {
                     onUnloadConfirmed(onNavigateBack)
                 },
@@ -72,6 +75,7 @@ fun ModelUnloadDialogHandler(
 
 @Composable
 private fun UnloadModelDialog(
+    message: String,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     isUnloading: Boolean = false
@@ -86,10 +90,7 @@ private fun UnloadModelDialog(
         },
         text = {
             Column {
-                Text(
-                    "Going back will unload the current model. " +
-                        "Any unsaved conversation will be lost."
-                )
+                Text(message)
 
                 if (isUnloading) {
                     Spacer(modifier = Modifier.height(16.dp))

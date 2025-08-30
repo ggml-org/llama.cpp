@@ -83,7 +83,6 @@ fun ModelLoadingScreen(
     val selectedModel by viewModel.selectedModel.collectAsState()
     val presetPrompts by viewModel.presetPrompts.collectAsState()
     val recentPrompts by viewModel.recentPrompts.collectAsState()
-    val unloadDialogState by viewModel.unloadModelState.collectAsState()
 
     // UI states
     var isModelCardExpanded by remember { mutableStateOf(false) }
@@ -385,14 +384,6 @@ fun ModelLoadingScreen(
             }
         }
     }
-
-    // Unload confirmation dialog
-    ModelUnloadDialogHandler(
-        unloadModelState = unloadDialogState,
-        onUnloadConfirmed = { viewModel.onUnloadConfirmed(onNavigateBack) },
-        onUnloadDismissed = { viewModel.onUnloadDismissed() },
-        onNavigateBack = onNavigateBack,
-    )
 }
 
 @Composable

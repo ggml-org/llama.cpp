@@ -205,6 +205,7 @@ fun ConversationScreen(
 
     // Unload confirmation dialog
     ModelUnloadDialogHandler(
+        message =  "Going back will unload the current model and clear the whole conversation.",
         unloadModelState = unloadDialogState,
         onUnloadConfirmed = { viewModel.onUnloadConfirmed(onNavigateBack) },
         onUnloadDismissed = { viewModel.onUnloadDismissed() },

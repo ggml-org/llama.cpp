@@ -178,6 +178,7 @@ fun BenchmarkScreen(
 
     // Unload confirmation dialog
     ModelUnloadDialogHandler(
+        message = "Going back will unload the current model and clear all the benchmark results.",
         unloadModelState = unloadDialogState,
         onUnloadConfirmed = { viewModel.onUnloadConfirmed(onNavigateBack) },
         onUnloadDismissed = { viewModel.onUnloadDismissed() },

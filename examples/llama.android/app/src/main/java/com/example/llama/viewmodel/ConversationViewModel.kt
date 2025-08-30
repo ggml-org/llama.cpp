@@ -30,7 +30,7 @@ class ConversationViewModel @Inject constructor(
     val systemPrompt = conversationService.systemPrompt
 
     // UI state: Model card
-    private val _showModelCard = MutableStateFlow(true)
+    private val _showModelCard = MutableStateFlow(false)
     val showModelCard = _showModelCard.asStateFlow()
 
     fun toggleModelCard(show: Boolean) {

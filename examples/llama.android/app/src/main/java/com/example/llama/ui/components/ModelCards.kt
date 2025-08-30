@@ -94,7 +94,7 @@ fun ModelCardCoreExpandable(
             )
             false -> CardDefaults.cardColors()
         },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
