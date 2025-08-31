@@ -229,7 +229,7 @@ static void test_deepseek_v3_1_tool_calls() {
 
     // variant: function + fenced JSON
     {
-        const char* variant = "fenced";
+        const std::string variant("fenced");
         const std::string in = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
