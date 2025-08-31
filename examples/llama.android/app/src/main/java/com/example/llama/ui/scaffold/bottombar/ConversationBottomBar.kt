@@ -122,12 +122,7 @@ fun ConversationBottomBar(
             },
             floatingActionButton = {
                 FloatingActionButton(
-                    onClick = {
-                        if (isReady) {
-                            onSendClick()
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.primary
+                    onClick = { if (isReady) { onSendClick() } },
                 ) {
                     if (isReady) {
                         Icon(
@@ -138,7 +133,6 @@ fun ConversationBottomBar(
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
                             strokeCap = StrokeCap.Round,
-                            color = MaterialTheme.colorScheme.onPrimary,
                         )
                     }
                 }

@@ -84,7 +84,7 @@ fun BenchmarkScreen(
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()
 
     // UI states
-    var isModelCardExpanded by remember { mutableStateOf(false) }
+    var isModelCardExpanded by remember { mutableStateOf(true) }
     var isInitialBenchmarkRun by rememberSaveable { mutableStateOf(false) }
 
     // Run benchmark when entering the screen

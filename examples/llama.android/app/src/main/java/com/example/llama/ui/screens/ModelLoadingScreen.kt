@@ -518,7 +518,7 @@ private fun PromptList(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateItemPlacement()
+                    .animateItem()
                     .selectable(
                         selected = isSelected,
                         onClick = {

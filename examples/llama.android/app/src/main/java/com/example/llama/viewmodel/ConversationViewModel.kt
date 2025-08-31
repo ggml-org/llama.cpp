@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
-import okhttp3.internal.toImmutableList
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -108,7 +107,7 @@ class ConversationViewModel @Inject constructor(
         _messages.value.toMutableList().apply {
             (removeLastOrNull() as? Message.Assistant.Stopped)?.let {
                 add(it.copy(content = it.content + SUFFIX_GENERATION_STOPPED))
-                _messages.value = toImmutableList()
+                _messages.value = toList()
             }
         }
 
@@ -119,7 +118,7 @@ class ConversationViewModel @Inject constructor(
         _messages.value.toMutableList().apply {
             (removeLastOrNull() as? Message.Assistant.Stopped)?.let {
                 add(it.copy(content = it.content + SUFFIX_GENERATION_ERROR.format(e.message)))
-                _messages.value = toImmutableList()
+                _messages.value = this.toList()
             }
         }
 
@@ -143,7 +142,7 @@ class ConversationViewModel @Inject constructor(
                         timestamp = it.timestamp
                     ))
                 }
-                _messages.value = toImmutableList()
+                _messages.value = toList()
             }
         }
 

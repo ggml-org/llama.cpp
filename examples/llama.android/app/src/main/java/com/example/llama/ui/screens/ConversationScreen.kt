@@ -32,15 +32,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconToggleButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TonalToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -72,6 +78,7 @@ import com.example.llama.ui.components.ModelCardContentContextRow
 import com.example.llama.ui.components.ModelCardContentField
 import com.example.llama.ui.components.ModelCardCoreExpandable
 import com.example.llama.ui.components.ModelUnloadDialogHandler
+import com.example.llama.ui.theme.ButtonShape
 import com.example.llama.util.formatMilliSeconds
 import com.example.llama.util.formatMilliSecondstructured
 import com.example.llama.util.toEnglishName
@@ -204,7 +211,10 @@ fun ConversationScreen(
         if (showModelCard) {
             selectedModel?.let {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .align(Alignment.TopCenter)
                 ) {
                     ModelCardWithSystemPrompt(
                         model = it,
@@ -338,7 +348,9 @@ private fun ConversationMessageList(
 @Composable
 private fun UserMessageBubble(content: String, formattedTime: String) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.End
     ) {
         // Timestamp above bubble
@@ -494,7 +506,6 @@ private fun PulsatingDots(small: Boolean = false) {
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ExpandableTokenMetricsBubble(
     metrics: TokenMetrics,
@@ -503,21 +514,24 @@ private fun ExpandableTokenMetricsBubble(
     var showMetrics by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxWidth(0.9f)) {
-        TonalToggleButton(
-            checked = showMetrics,
-            onCheckedChange = { showMetrics = !showMetrics }
-        ) {
-            Icon(
-                modifier = Modifier.size(16.dp),
-                imageVector = Icons.Default.Timer,
-                contentDescription = "${if (showMetrics) "Hide" else "Show"} token metrics of this assistant message"
-            )
-            Text(
-                text = "${if (showMetrics) "Hide" else "Show"} stats",
-                modifier = Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
+        FilterChip(
+            selected = showMetrics,
+            onClick = { showMetrics = !showMetrics },
+            label = {
+                Text(
+                    text = "${if (showMetrics) "Hide" else "Show"} stats",
+                    modifier = Modifier.padding(start = 8.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    modifier = Modifier.size(16.dp),
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = "${if (showMetrics) "Hide" else "Show"} token metrics of this assistant message"
+                )
+            },
+        )
 
         if (showMetrics) {
             Card(
