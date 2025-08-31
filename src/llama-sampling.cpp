@@ -201,7 +201,7 @@ static void llama_token_data_array_sort_inplace(llama_token_data_array * cur_p, 
 
     llama_token_data_array_sort(*cur_p, k, tmp);
 
-    std::memcpy(cur_p->data, tmp.data(), k*sizeof(llama_token_data));
+    std::copy(tmp.data(), tmp.data() + k, cur_p->data);
 }
 
 static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng) {
@@ -754,7 +754,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
 
     // Resize the output vector to keep only the top-p tokens
     if (!cur_p->sorted) {
-        std::memcpy(cur_p->data, buf_sort.data(), last_idx*sizeof(llama_token_data));
+        std::copy(buf_sort.data(), buf_sort.data() + last_idx, cur_p->data);
         cur_p->sorted = true;
     }
 
@@ -828,7 +828,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
         // if we have enough values the operation was a success
         if (!filtered_tokens.empty() && filtered_tokens.size() >= ctx->min_keep) {
-            memcpy(cur_p->data, filtered_tokens.data(), filtered_tokens.size()*sizeof(llama_token_data));
+            std::copy(filtered_tokens.begin(), filtered_tokens.end(), cur_p->data);
             cur_p->size = filtered_tokens.size();
             min_p_applied = true;
         }
