@@ -78,7 +78,8 @@ sealed class BottomBarConfig {
         data class Deleting(
             val onQuitDeleting: () -> Unit,
             val selectedModels: Map<String, ModelInfo>,
-            val toggleAllSelection: (Boolean) -> Unit,
+            val selectAllFilteredModels: () -> Unit,
+            val clearAllSelectedModels: () -> Unit,
             val deleteSelected: () -> Unit
         ) : BottomBarConfig()
 

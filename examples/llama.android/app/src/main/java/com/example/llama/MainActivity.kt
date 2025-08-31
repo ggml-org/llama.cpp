@@ -53,9 +53,10 @@ import com.example.llama.viewmodel.BenchmarkViewModel
 import com.example.llama.viewmodel.ConversationViewModel
 import com.example.llama.viewmodel.MainViewModel
 import com.example.llama.viewmodel.ModelLoadingViewModel
+import com.example.llama.viewmodel.ModelScreenUiMode
+import com.example.llama.viewmodel.ModelsManagementViewModel
 import com.example.llama.viewmodel.ModelsViewModel
 import com.example.llama.viewmodel.SettingsViewModel
-import com.example.llama.viewmodel.ModelScreenUiMode
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -85,10 +86,10 @@ fun AppContent(
     settingsViewModel: SettingsViewModel,
     mainViewModel: MainViewModel = hiltViewModel(),
     modelsViewModel: ModelsViewModel = hiltViewModel(),
+    modelsManagementViewModel: ModelsManagementViewModel = hiltViewModel(),
     modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
     benchmarkViewModel: BenchmarkViewModel = hiltViewModel(),
     conversationViewModel: ConversationViewModel = hiltViewModel(),
-//    modelsManagementViewModel: ModelsManagementViewModel = hiltViewModel(),
 ) {
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -191,19 +192,20 @@ fun AppContent(
         // Model selection screen
         currentRoute == AppDestinations.MODELS_ROUTE -> {
             // Collect states for bottom bar
+            val filteredModels by modelsViewModel.filteredModels.collectAsState()
             val sortOrder by modelsViewModel.sortOrder.collectAsState()
             val showSortMenu by modelsViewModel.showSortMenu.collectAsState()
             val activeFilters by modelsViewModel.activeFilters.collectAsState()
             val showFilterMenu by modelsViewModel.showFilterMenu.collectAsState()
             val preselection by modelsViewModel.preselectedModelToRun.collectAsState()
 
-            val selectedModelsToDelete by modelsViewModel.selectedModelsToDelete.collectAsState()
-            val showImportModelMenu by modelsViewModel.showImportModelMenu.collectAsState()
+            val selectedModelsToDelete by modelsManagementViewModel.selectedModelsToDelete.collectAsState()
+            val showImportModelMenu by modelsManagementViewModel.showImportModelMenu.collectAsState()
 
             // Create file launcher for importing local models
             val fileLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.OpenDocument()
-            ) { uri -> uri?.let { modelsViewModel.importLocalModelFileSelected(it) } }
+            ) { uri -> uri?.let { modelsManagementViewModel.importLocalModelFileSelected(it) } }
 
             ScaffoldConfig(
                 topBarConfig =
@@ -231,6 +233,7 @@ fun AppContent(
                             TopBarConfig.ModelsDeleting(
                                 title = "Deleting models",
                                 navigationIcon = NavigationIcon.Quit {
+                                    modelsManagementViewModel.resetManagementState()
                                     modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
                                 },
                             )
@@ -309,14 +312,14 @@ fun AppContent(
                                 ),
                                 importing = BottomBarConfig.Models.Management.ImportConfig(
                                     isMenuVisible = showImportModelMenu,
-                                    toggleMenu = { show -> modelsViewModel.toggleImportMenu(show) },
+                                    toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
                                     importFromLocal = {
                                         fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
-                                        modelsViewModel.toggleImportMenu(false)
+                                        modelsManagementViewModel.toggleImportMenu(false)
                                     },
                                     importFromHuggingFace = {
-                                        modelsViewModel.queryModelsFromHuggingFace()
-                                        modelsViewModel.toggleImportMenu(false)
+                                        modelsManagementViewModel.queryModelsFromHuggingFace()
+                                        modelsManagementViewModel.toggleImportMenu(false)
                                     }
                                 ),
                                 onToggleDeleting = {
@@ -330,11 +333,16 @@ fun AppContent(
                                     modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
                                 },
                                 selectedModels = selectedModelsToDelete,
-                                toggleAllSelection = { modelsViewModel.toggleAllSelectedModelsToDelete(it) },
+                                selectAllFilteredModels = {
+                                    modelsManagementViewModel.selectAllFilteredModelsToDelete(filteredModels)
+                                },
+                                clearAllSelectedModels = {
+                                    modelsManagementViewModel.clearAllSelectedModelsToDelete()
+                                },
                                 deleteSelected = {
                                     selectedModelsToDelete.let {
                                         if (it.isNotEmpty()) {
-                                            modelsViewModel.batchDeletionClicked(it)
+                                            modelsManagementViewModel.batchDeletionClicked(it)
                                         }
                                     }
                                 },
@@ -464,7 +472,8 @@ fun AppContent(
                             }
                         },
                         onScaffoldEvent = handleScaffoldEvent,
-                        viewModel = modelsViewModel
+                        modelsViewModel = modelsViewModel,
+                        managementViewModel = modelsManagementViewModel,
                     )
                 }
 

@@ -39,7 +39,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
+import com.example.llama.data.model.ModelFilter
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.ui.components.InfoAction
@@ -68,6 +68,7 @@ import com.example.llama.viewmodel.ModelManagementState.Deletion
 import com.example.llama.viewmodel.ModelManagementState.Download
 import com.example.llama.viewmodel.ModelManagementState.Importation
 import com.example.llama.viewmodel.ModelScreenUiMode
+import com.example.llama.viewmodel.ModelsManagementViewModel
 import com.example.llama.viewmodel.ModelsViewModel
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -77,24 +78,18 @@ import java.util.Locale
  */
 @Composable
 fun ModelsManagementAndDeletingScreen(
+    filteredModels: List<ModelInfo>,
+    activeFiltersCount: Int,
     isDeleting: Boolean,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
-    viewModel: ModelsViewModel,
+    modelsViewModel: ModelsViewModel,
+    managementViewModel: ModelsManagementViewModel,
 ) {
-    // Data: models
-    val filteredModels by viewModel.filteredModels.collectAsState()
-
     // Selection state
-    val selectedModels by viewModel.selectedModelsToDelete.collectAsState()
-
-    // Filter state
-    val activeFilters by viewModel.activeFilters.collectAsState()
-    val activeFiltersCount by remember(activeFilters) {
-        derivedStateOf { activeFilters.count { it.value }  }
-    }
+    val selectedModels by managementViewModel.selectedModelsToDelete.collectAsState()
 
     // Model management state
-    val managementState by viewModel.managementState.collectAsState()
+    val managementState by managementViewModel.managementState.collectAsState()
 
     // UI states
     val expandedModels = remember { mutableStateMapOf<String, ModelInfo>() }
@@ -136,7 +131,7 @@ fun ModelsManagementAndDeletingScreen(
                         isSelected = isSelected,
                         onSelected = {
                             if (isDeleting) {
-                                viewModel.toggleModelSelectionById(model.id)
+                                managementViewModel.toggleModelSelectionById(filteredModels, model.id)
                             }
                         },
                         isExpanded = expandedModels.contains(model.id),
@@ -161,11 +156,11 @@ fun ModelsManagementAndDeletingScreen(
                     isImporting = false,
                     progress = 0.0f,
                     onConfirm = {
-                        viewModel.importLocalModelFileConfirmed(
+                        managementViewModel.importLocalModelFileConfirmed(
                             state.uri, state.fileName, state.fileSize
                         )
                     },
-                    onCancel = { viewModel.resetManagementState() }
+                    onCancel = { managementViewModel.resetManagementState() }
                 )
             }
 
@@ -177,7 +172,7 @@ fun ModelsManagementAndDeletingScreen(
                     isCancelling = state.isCancelling,
                     progress = state.progress,
                     onConfirm = {},
-                    onCancel = { viewModel.cancelOngoingLocalModelImport() },
+                    onCancel = { managementViewModel.cancelOngoingLocalModelImport() },
                 )
             }
 
@@ -186,7 +181,7 @@ fun ModelsManagementAndDeletingScreen(
                     title = "Import Failed",
                     message = state.message,
                     learnMoreUrl = state.learnMoreUrl,
-                    onDismiss = { viewModel.resetManagementState() }
+                    onDismiss = { managementViewModel.resetManagementState() }
                 )
             }
 
@@ -198,21 +193,21 @@ fun ModelsManagementAndDeletingScreen(
                         )
                     )
 
-                    viewModel.resetManagementState()
+                    managementViewModel.resetManagementState()
                 }
             }
 
             is Download.Querying -> {
                 ImportFromHuggingFaceDialog(
-                    onCancel = { viewModel.resetManagementState() }
+                    onCancel = { managementViewModel.resetManagementState() }
                 )
             }
 
             is Download.Ready -> {
                 ImportFromHuggingFaceDialog(
                     models = state.models,
-                    onConfirm = { viewModel.downloadHuggingFaceModelConfirmed(it) },
-                    onCancel = { viewModel.resetManagementState() }
+                    onConfirm = { managementViewModel.downloadHuggingFaceModelConfirmed(it) },
+                    onCancel = { managementViewModel.resetManagementState() }
                 )
             }
 
@@ -225,7 +220,7 @@ fun ModelsManagementAndDeletingScreen(
                         )
                     )
 
-                    viewModel.resetManagementState()
+                    managementViewModel.resetManagementState()
                 }
             }
 
@@ -236,11 +231,11 @@ fun ModelsManagementAndDeletingScreen(
                     isImporting = false,
                     progress = 0.0f,
                     onConfirm = {
-                        viewModel.importLocalModelFileConfirmed(
+                        managementViewModel.importLocalModelFileConfirmed(
                             state.uri, state.fileName, state.fileSize
                         )
                     },
-                    onCancel = { viewModel.resetManagementState() }
+                    onCancel = { managementViewModel.resetManagementState() }
                 )
             }
 
@@ -248,15 +243,15 @@ fun ModelsManagementAndDeletingScreen(
                 ErrorDialog(
                     title = "Download Failed",
                     message = state.message,
-                    onDismiss = { viewModel.resetManagementState() }
+                    onDismiss = { managementViewModel.resetManagementState() }
                 )
             }
 
             is Deletion.Confirming -> {
                 BatchDeleteConfirmationDialog(
                     count = state.models.size,
-                    onConfirm = { viewModel.deleteModels(state.models) },
-                    onDismiss = { viewModel.resetManagementState() },
+                    onConfirm = { managementViewModel.deleteModels(state.models) },
+                    onDismiss = { managementViewModel.resetManagementState() },
                     isDeleting = false
                 )
             }
@@ -274,19 +269,20 @@ fun ModelsManagementAndDeletingScreen(
                 ErrorDialog(
                     title = "Deletion Failed",
                     message = state.message,
-                    onDismiss = { viewModel.resetManagementState() }
+                    onDismiss = { managementViewModel.resetManagementState() }
                 )
             }
 
             is Deletion.Success -> {
                 LaunchedEffect(state) {
-                    viewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                    modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
 
                     val count = state.models.size
                     onScaffoldEvent(
                         ScaffoldEvent.ShowSnackbar(
                             message = "Deleted $count ${if (count > 1) "models" else "model"}.",
-                            duration = SnackbarDuration.Long
+                            withDismissAction = true,
+                            duration = SnackbarDuration.Long,
                         )
                     )
                 }

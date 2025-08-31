@@ -13,13 +13,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.scaffold.ScaffoldEvent
 import com.example.llama.util.formatFileByteSize
 import com.example.llama.viewmodel.ModelScreenUiMode
+import com.example.llama.viewmodel.ModelsManagementViewModel
 import com.example.llama.viewmodel.ModelsViewModel
 import com.example.llama.viewmodel.PreselectedModelToRun.RamWarning
 
@@ -29,31 +32,39 @@ fun ModelsScreen(
     onManageModelsClicked: () -> Unit,
     onConfirmSelection: (ModelInfo, RamWarning) -> Unit,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
-    viewModel: ModelsViewModel,
+    modelsViewModel: ModelsViewModel,
+    managementViewModel: ModelsManagementViewModel,
 ) {
     // Data
-    val preselection by viewModel.preselectedModelToRun.collectAsState()
+    val filteredModels by modelsViewModel.filteredModels.collectAsState()
+    val preselection by modelsViewModel.preselectedModelToRun.collectAsState()
+
+    // UI states: Filter
+    val activeFilters by modelsViewModel.activeFilters.collectAsState()
+    val activeFiltersCount by remember(activeFilters) {
+        derivedStateOf { activeFilters.count { it.value }  }
+    }
 
     // UI states
-    val currentMode by viewModel.modelScreenUiMode.collectAsState()
+    val currentMode by modelsViewModel.modelScreenUiMode.collectAsState()
 
     // Handle back button press
     BackHandler {
         when (currentMode) {
             ModelScreenUiMode.BROWSING -> {
                 if (preselection != null) {
-                    viewModel.resetPreselection()
+                    modelsViewModel.resetPreselection()
                 }
             }
             ModelScreenUiMode.SEARCHING -> {
-                viewModel.toggleMode(ModelScreenUiMode.BROWSING)
+                modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
             }
             ModelScreenUiMode.MANAGING -> {
-                viewModel.toggleMode(ModelScreenUiMode.BROWSING)
+                modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
             }
             ModelScreenUiMode.DELETING -> {
-                viewModel.toggleAllSelectedModelsToDelete(false)
-                viewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                managementViewModel.clearAllSelectedModelsToDelete()
+                modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
             }
         }
     }
@@ -64,16 +75,25 @@ fun ModelsScreen(
         when (currentMode) {
             ModelScreenUiMode.BROWSING ->
                 ModelsBrowsingScreen(
+                    filteredModels = filteredModels,
+                    preselection = preselection,
                     onManageModelsClicked = { /* TODO-han.yin */ },
-                    viewModel = viewModel
+                    activeFiltersCount = activeFiltersCount,
+                    viewModel = modelsViewModel,
                 )
             ModelScreenUiMode.SEARCHING ->
-                ModelsSearchingScreen(viewModel = viewModel)
+                ModelsSearchingScreen(
+                    preselection = preselection,
+                    viewModel = modelsViewModel
+                )
             ModelScreenUiMode.MANAGING, ModelScreenUiMode.DELETING ->
                 ModelsManagementAndDeletingScreen(
+                    filteredModels = filteredModels,
                     isDeleting = currentMode == ModelScreenUiMode.DELETING,
                     onScaffoldEvent = onScaffoldEvent,
-                    viewModel = viewModel
+                    activeFiltersCount = activeFiltersCount,
+                    modelsViewModel = modelsViewModel,
+                    managementViewModel = managementViewModel,
                 )
         }
 
@@ -83,7 +103,7 @@ fun ModelsScreen(
                 if (warning.showing) {
                     RamErrorDialog(
                         warning,
-                        onDismiss = { viewModel.dismissRamWarning() },
+                        onDismiss = { modelsViewModel.dismissRamWarning() },
                         onConfirm = { onConfirmSelection(it.modelInfo, warning) }
                     )
                 }

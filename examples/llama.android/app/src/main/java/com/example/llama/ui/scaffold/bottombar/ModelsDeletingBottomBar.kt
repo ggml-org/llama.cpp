@@ -23,14 +23,14 @@ fun ModelsDeletingBottomBar(
 ) {
     BottomAppBar(
         actions = {
-            IconButton(onClick = { deleting.toggleAllSelection(false) }) {
+            IconButton(onClick = { deleting.clearAllSelectedModels() }) {
                 Icon(
                     imageVector = Icons.Default.ClearAll,
                     contentDescription = "Deselect all"
                 )
             }
 
-            IconButton(onClick = { deleting.toggleAllSelection(true) }) {
+            IconButton(onClick = { deleting.selectAllFilteredModels() }) {
                 Icon(
                     imageVector = Icons.Default.SelectAll,
                     contentDescription = "Select all"

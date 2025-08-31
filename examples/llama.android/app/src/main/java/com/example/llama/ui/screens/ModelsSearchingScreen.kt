@@ -39,15 +39,14 @@ import androidx.compose.ui.unit.dp
 import com.example.llama.ui.components.ModelCardFullExpandable
 import com.example.llama.viewmodel.ModelScreenUiMode
 import com.example.llama.viewmodel.ModelsViewModel
+import com.example.llama.viewmodel.PreselectedModelToRun
 
 @ExperimentalMaterial3Api
 @Composable
 fun ModelsSearchingScreen(
-
+    preselection: PreselectedModelToRun?,
     viewModel: ModelsViewModel,
 ) {
-    val preselection by viewModel.preselectedModelToRun.collectAsState()
-
     // Query states
     val textFieldState = viewModel.searchFieldState
     val searchQuery by remember(textFieldState) {
@@ -68,7 +67,7 @@ fun ModelsSearchingScreen(
         }
     }
 
-
+    // TODO-han.yin: remove after validation
 //    LaunchedEffect (isSearchActive) {
 //        if (isSearchActive) {
 //            toggleSearchFocusAndIme(true)

@@ -12,24 +12,30 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DefaultTopBar(
     title: String,
+    titleColor: Color = Color.Unspecified,
+    navigationIconTint: Color = Color.Unspecified,
     onNavigateBack: (() -> Unit)? = null,
     onQuit: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null
 ) {
     TopAppBar(
-        title = { Text(title) },
+        title = {
+            Text(text = title, color = titleColor)
+        },
         navigationIcon = {
             when {
                 onQuit != null -> {
                     IconButton(onClick = onQuit) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Quit"
+                            contentDescription = "Quit",
+                            tint = navigationIconTint
                         )
                     }
                 }
@@ -38,7 +44,8 @@ fun DefaultTopBar(
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = "Back",
+                            tint = navigationIconTint
                         )
                     }
                 }
@@ -47,7 +54,8 @@ fun DefaultTopBar(
                     IconButton(onClick = onMenuOpen) {
                         Icon(
                             imageVector = Icons.Default.Menu,
-                            contentDescription = "Menu"
+                            contentDescription = "Menu",
+                            tint = navigationIconTint
                         )
                     }
                 }

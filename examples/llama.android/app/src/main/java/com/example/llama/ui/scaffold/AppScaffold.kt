@@ -1,6 +1,7 @@
 package com.example.llama.ui.scaffold
 
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -77,6 +78,8 @@ fun AppScaffold(
 
             is TopBarConfig.ModelsDeleting -> DefaultTopBar(
                 title = topBarconfig.title,
+                titleColor = MaterialTheme.colorScheme.error,
+                navigationIconTint = MaterialTheme.colorScheme.error,
                 onQuit = topBarconfig.navigationIcon.quitAction
             )
 

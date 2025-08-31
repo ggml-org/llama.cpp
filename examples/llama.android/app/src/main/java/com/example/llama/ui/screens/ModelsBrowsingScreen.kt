@@ -9,33 +9,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.InfoAction
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.components.ModelCardFullExpandable
 import com.example.llama.viewmodel.ModelsViewModel
+import com.example.llama.viewmodel.PreselectedModelToRun
 
 @Composable
 fun ModelsBrowsingScreen(
+    filteredModels: List<ModelInfo>,
+    activeFiltersCount: Int,
+    preselection: PreselectedModelToRun?,
     onManageModelsClicked: () -> Unit,
     viewModel: ModelsViewModel,
 ) {
-    // Data: models
-    val filteredModels by viewModel.filteredModels.collectAsState()
-    val preselection by viewModel.preselectedModelToRun.collectAsState()
-
-    // Filter states
-    val activeFilters by viewModel.activeFilters.collectAsState()
-    val activeFiltersCount by remember(activeFilters) {
-        derivedStateOf { activeFilters.count { it.value }  }
-    }
-
-
     if (filteredModels.isEmpty()) {
         // Empty model prompt
         EmptyModelsView(activeFiltersCount, onManageModelsClicked)
@@ -62,7 +52,6 @@ fun ModelsBrowsingScreen(
         }
     }
 }
-
 
 @Composable
 private fun EmptyModelsView(
