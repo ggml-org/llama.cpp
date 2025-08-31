@@ -129,7 +129,6 @@ struct ring_buffer {
 };
 
 // writes result in res, does not mutate cur
-// reduces the size of cur_p to npartial, keeping only the top npartial elements
 static void llama_token_data_array_partial_sort(const llama_token_data_array & cur, int npartial, std::vector<llama_token_data> & res) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
         return a.logit > b.logit;
