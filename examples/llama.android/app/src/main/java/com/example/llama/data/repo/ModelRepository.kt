@@ -83,7 +83,7 @@ interface ModelRepository {
     /**
      * Search models on HuggingFace
      */
-    suspend fun searchHuggingFaceModels(limit: Int = 20): Result<List<HuggingFaceModel>>
+    suspend fun searchHuggingFaceModels(limit: Int): Result<List<HuggingFaceModel>>
 
     /**
      * Obtain the model details from HuggingFace

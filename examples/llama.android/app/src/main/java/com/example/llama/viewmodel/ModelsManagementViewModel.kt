@@ -182,14 +182,14 @@ class ModelsManagementViewModel @Inject constructor(
     /**
      * Query models on HuggingFace available for download even without signing in
      */
-    fun queryModelsFromHuggingFace() {
+    fun queryModelsFromHuggingFace(cap: Int = FETCH_HUGGINGFACE_MODELS_CAP_SIZE) {
         huggingFaceQueryJob = viewModelScope.launch {
             _managementState.emit(Download.Querying)
             try {
-                modelRepository.searchHuggingFaceModels().fold(
+                modelRepository.searchHuggingFaceModels(FETCH_HUGGINGFACE_MODELS_LIMIT_SIZE).fold(
                     onSuccess = { models ->
-                        Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
-                        _managementState.emit(Download.Ready(models))
+                        Log.d(TAG, "Fetched ${models.size} models from HuggingFace, capped by $cap:\n")
+                        _managementState.emit(Download.Ready(models.take(cap)))
                     },
                     onFailure = { throw it }
                 )
@@ -303,6 +303,8 @@ class ModelsManagementViewModel @Inject constructor(
     companion object {
         private val TAG = ModelsManagementViewModel::class.java.simpleName
 
+        private const val FETCH_HUGGINGFACE_MODELS_LIMIT_SIZE = 50
+        private const val FETCH_HUGGINGFACE_MODELS_CAP_SIZE = 12
         private const val DELETE_SUCCESS_RESET_TIMEOUT_MS = 1000L
     }
 }

@@ -15,7 +15,9 @@ import javax.inject.Singleton
 private const val QUERY_Q4_0_GGUF = "gguf q4_0"
 private const val FILTER_TEXT_GENERATION = "text-generation"
 private const val SORT_BY_DOWNLOADS = "downloads"
-private const val SEARCH_RESULT_LIMIT = 20
+private const val SEARCH_RESULT_LIMIT = 30
+
+private val INVALID_KEYWORDS = arrayOf("-of-", "split", "70B", "30B", "27B", "14B", "13B", "12B")
 
 interface HuggingFaceRemoteDataSource {
     /**
@@ -67,11 +69,18 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
                 direction = direction,
                 limit = limit,
                 full = full,
-            ).filter {
-                it.gated != true && it.private != true && it.getGgufFilename() != null
-            }.let {
-                if (it.isEmpty()) Result.failure(FileNotFoundException()) else Result.success(it)
-            }
+            )
+                .filterNot { it.gated || it.private }
+                .filterNot {
+                    it.getGgufFilename().let { filename ->
+                        filename.isNullOrBlank() || INVALID_KEYWORDS.any {
+                            filename.contains(it, ignoreCase = true)
+                        }
+                    }
+                }.let {
+                    if (it.isEmpty()) Result.failure(FileNotFoundException())
+                    else Result.success(it)
+                }
         } catch (e: Exception) {
             Log.e(TAG, "Error searching for models on HuggingFace: ${e.message}")
             Result.failure(e)

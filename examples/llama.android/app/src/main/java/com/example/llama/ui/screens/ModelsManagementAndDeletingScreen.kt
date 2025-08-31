@@ -442,8 +442,11 @@ private fun ImportFromHuggingFaceDialog(
             ) {
                 Text(
                     modifier = Modifier.fillMaxWidth(),
-                    text = models?.let { "Select a model to download:" }
-                        ?: "Searching on HuggingFace for models available for direct download...",
+                    text = models?.let {
+                        "These open-source models from Hugging Face are ungated and free for everyone.\n\n" +
+                            "Please use them at your own discretion.\n\n" +
+                            "Select a model and tap download button:"
+                    } ?: "Searching on HuggingFace for ungated models available for free downloading...",
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Start,
                 )

@@ -5,7 +5,8 @@ import androidx.core.net.toUri
 import com.example.llama.di.HUGGINGFACE_HOST
 import java.util.Date
 
-private const val FILE_EXTENSION_GGUF = ".gguf"
+private const val FILE_EXTENSION_GGUF = ".GGUF"
+private val QUANTIZATION_Q4_0 = arrayOf("Q4_0", "Q4-0")
 
 data class HuggingFaceModel(
     val _id: String,
@@ -34,10 +35,23 @@ data class HuggingFaceModel(
         val rfilename: String,
     )
 
-    fun getGgufFilename(): String? =
-        siblings.map { it.rfilename }.firstOrNull { it.endsWith(FILE_EXTENSION_GGUF) }
+    fun getGgufFilename(keywords: Array<String> = QUANTIZATION_Q4_0): String? =
+        siblings.map { it.rfilename }
+            .filter {
+                it.endsWith(FILE_EXTENSION_GGUF, ignoreCase = true) }
+            .firstOrNull { filename ->
+                keywords.any { filename.contains(it, ignoreCase = true) }
+            }
 
-    fun toDownloadInfo() = getGgufFilename()?.let { HuggingFaceDownloadInfo(_id, modelId, it) }
+    fun anyFilenameContains(keywords: Array<String>): Boolean =
+        siblings.map { it.rfilename }
+            .any { filename ->
+                keywords.any { filename.contains(it, ignoreCase = true) }
+            }
+
+    fun toDownloadInfo() = getGgufFilename()?.let {
+        HuggingFaceDownloadInfo(_id, modelId, it)
+    }
 }
 
 data class HuggingFaceDownloadInfo(
