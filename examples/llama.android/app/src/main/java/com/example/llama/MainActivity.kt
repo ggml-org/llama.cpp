@@ -293,6 +293,10 @@ fun AppContent(
 
                         ModelScreenUiMode.MANAGING ->
                             BottomBarConfig.Models.Management(
+                                isDeletionEnabled = filteredModels?.isNotEmpty() == true,
+                                onToggleDeleting = {
+                                    modelsViewModel.toggleMode(ModelScreenUiMode.DELETING)
+                                },
                                 sorting = BottomBarConfig.Models.Management.SortingConfig(
                                     currentOrder = sortOrder,
                                     isMenuVisible = showSortMenu,
@@ -322,9 +326,6 @@ fun AppContent(
                                         modelsManagementViewModel.toggleImportMenu(false)
                                     }
                                 ),
-                                onToggleDeleting = {
-                                    modelsViewModel.toggleMode(ModelScreenUiMode.DELETING)
-                                }
                             )
 
                         ModelScreenUiMode.DELETING ->
@@ -334,10 +335,12 @@ fun AppContent(
                                 },
                                 selectedModels = selectedModelsToDelete,
                                 selectAllFilteredModels = {
-                                    modelsManagementViewModel.selectAllFilteredModelsToDelete(filteredModels)
+                                    filteredModels?.let {
+                                        modelsManagementViewModel.selectModelsToDelete(it)
+                                    }
                                 },
                                 clearAllSelectedModels = {
-                                    modelsManagementViewModel.clearAllSelectedModelsToDelete()
+                                    modelsManagementViewModel.clearSelectedModelsToDelete()
                                 },
                                 deleteSelected = {
                                     selectedModelsToDelete.let {

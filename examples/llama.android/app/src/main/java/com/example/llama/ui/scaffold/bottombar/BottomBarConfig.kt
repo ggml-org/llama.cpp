@@ -46,10 +46,11 @@ sealed class BottomBarConfig {
         ) : BottomBarConfig()
 
         data class Management(
+            val isDeletionEnabled: Boolean,
+            val onToggleDeleting: () -> Unit,
             val sorting: SortingConfig,
             val filtering: FilteringConfig,
             val importing: ImportConfig,
-            val onToggleDeleting: () -> Unit,
         ) : BottomBarConfig() {
             data class SortingConfig(
                 val currentOrder: ModelSortOrder,

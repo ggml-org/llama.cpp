@@ -1,5 +1,6 @@
 package com.example.llama.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.basicMarquee
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.outlined.ContactSupport
 import androidx.compose.material.icons.filled.Attribution
 import androidx.compose.material.icons.filled.Download
@@ -78,13 +80,15 @@ import java.util.Locale
  */
 @Composable
 fun ModelsManagementAndDeletingScreen(
-    filteredModels: List<ModelInfo>,
+    filteredModels: List<ModelInfo>?,
     activeFiltersCount: Int,
     isDeleting: Boolean,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,
     managementViewModel: ModelsManagementViewModel,
 ) {
+    val context = LocalContext.current
+
     // Selection state
     val selectedModels by managementViewModel.selectedModelsToDelete.collectAsState()
 
@@ -102,18 +106,29 @@ fun ModelsManagementAndDeletingScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (filteredModels.isEmpty()) {
+        if (filteredModels == null) {
+            ModelsLoadingInProgressView()
+        } else if (filteredModels.isEmpty()) {
             // Import model prompt
             val message = when (activeFiltersCount) {
-                0 -> "Tap the \"+\" button to import a model!"
-                1 -> "No models match the selected filter"
-                else -> "No models match the selected filters"
+                0 -> "Tap the \"+\" button\n to import a model"
+                1 -> "No models match\n the selected filter"
+                else -> "No models match\n the selected filters"
             }
             InfoView(
-                modifier = Modifier.fillMaxSize(),
-                title = "No Models Available",
+                modifier = Modifier.fillMaxSize(0.8f).align(Alignment.Center),
+                title = message,
                 icon = Icons.Default.FolderOpen,
-                message = message,
+                message = "Import a local GGUF model file, or download directly from HuggingFace!",
+                action = InfoAction(
+                    label = "Learn more",
+                    icon = Icons.AutoMirrored.Default.Help,
+                    onAction = {
+                        val url = "https://huggingface.co/docs/hub/en/gguf"
+                        val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                        context.startActivity(intent)
+                    }
+                )
             )
         } else {
             // Model cards
@@ -178,6 +193,7 @@ fun ModelsManagementAndDeletingScreen(
 
             is Importation.Error -> {
                 ErrorDialog(
+                    context = context,
                     title = "Import Failed",
                     message = state.message,
                     learnMoreUrl = state.learnMoreUrl,
@@ -241,6 +257,7 @@ fun ModelsManagementAndDeletingScreen(
 
             is Download.Error -> {
                 ErrorDialog(
+                    context = context,
                     title = "Download Failed",
                     message = state.message,
                     onDismiss = { managementViewModel.resetManagementState() }
@@ -267,6 +284,7 @@ fun ModelsManagementAndDeletingScreen(
 
             is Deletion.Error -> {
                 ErrorDialog(
+                    context = context,
                     title = "Deletion Failed",
                     message = state.message,
                     onDismiss = { managementViewModel.resetManagementState() }
@@ -660,13 +678,12 @@ private fun BatchDeleteConfirmationDialog(
 
 @Composable
 private fun ErrorDialog(
+    context: Context,
     title: String,
     message: String,
     learnMoreUrl: String? = null,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-
     val action = learnMoreUrl?.let { url ->
          InfoAction(
             label = "Learn More",

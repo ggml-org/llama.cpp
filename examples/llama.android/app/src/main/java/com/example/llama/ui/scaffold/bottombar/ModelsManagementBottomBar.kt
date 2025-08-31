@@ -31,19 +31,19 @@ import com.example.llama.data.model.ModelSortOrder
 
 @Composable
 fun ModelsManagementBottomBar(
+    isDeletionEnabled: Boolean,
+    onToggleDeleting: () -> Unit,
     sortingConfig: BottomBarConfig.Models.Management.SortingConfig,
     filteringConfig: BottomBarConfig.Models.Management.FilteringConfig,
     importingConfig: BottomBarConfig.Models.Management.ImportConfig,
-    onToggleDeleting: () -> Unit,
 ) {
     BottomAppBar(
         actions = {
             // Batch-deletion action
-            IconButton(onClick = onToggleDeleting) {
+            IconButton(enabled = isDeletionEnabled, onClick = onToggleDeleting) {
                 Icon(
                     imageVector = Icons.Outlined.DeleteSweep,
-                    contentDescription = "Delete models"
-                )
+                    contentDescription = "Delete models",)
             }
 
             // Sorting action
@@ -104,7 +104,10 @@ fun ModelsManagementBottomBar(
                     imageVector =
                         if (filteringConfig.isActive) Icons.Default.FilterAlt
                         else Icons.Outlined.FilterAlt,
-                    contentDescription = "Filter models"
+                    contentDescription = "Filter models",
+                    tint =
+                        if (filteringConfig.isActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

@@ -61,11 +61,11 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
-    fun selectAllFilteredModelsToDelete(filteredModels: List<ModelInfo>) {
-        _selectedModelsToDelete.value = filteredModels.associateBy { it.id }
+    fun selectModelsToDelete(models: List<ModelInfo>) {
+        _selectedModelsToDelete.value = models.associateBy { it.id }
     }
 
-    fun clearAllSelectedModelsToDelete() {
+    fun clearSelectedModelsToDelete() {
         _selectedModelsToDelete.value = emptyMap()
     }
 
@@ -100,7 +100,7 @@ class ModelsManagementViewModel @Inject constructor(
         huggingFaceQueryJob?.let {
             if (it.isActive) { it.cancel() }
         }
-        clearAllSelectedModelsToDelete()
+        clearSelectedModelsToDelete()
         _managementState.value = ModelManagementState.Idle
     }
 
@@ -288,7 +288,7 @@ class ModelsManagementViewModel @Inject constructor(
                 _managementState.value = Deletion.Deleting(deleted.toFloat() / total, modelsToDelete)
             }
             _managementState.value = Deletion.Success(modelsToDelete.values.toList())
-            clearAllSelectedModelsToDelete()
+            clearSelectedModelsToDelete()
 
             // Reset state after a delay
             delay(DELETE_SUCCESS_RESET_TIMEOUT_MS)

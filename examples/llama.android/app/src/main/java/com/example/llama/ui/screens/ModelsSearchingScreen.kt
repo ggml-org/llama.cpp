@@ -101,43 +101,45 @@ fun ModelsSearchingScreen(
             expanded = true,
             onExpandedChange = handleExpanded
         ) {
-            if (queryResults.isEmpty()) {
-                if (searchQuery.isNotBlank()) {
-                    // If no results under current query, show "no results" message
-                    EmptySearchResultsView(
-                        onClearSearch = {
-                            textFieldState.clearText()
-                            toggleSearchFocusAndIme(true)
-                        }
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
-                ) {
-                    items(items = queryResults, key = { it.id }) { model ->
-                        ModelCardFullExpandable(
-                            model = model,
-                            isSelected = if (model == preselection?.modelInfo) true else null,
-                            onSelected = { selected ->
-                                if (selected) {
-                                    toggleSearchFocusAndIme(false)
-                                } else {
-                                    viewModel.resetPreselection()
-                                    toggleSearchFocusAndIme(true)
-                                }
-                            },
-                            isExpanded = model == preselection?.modelInfo,
-                            onExpanded = { expanded ->
-                                viewModel.preselectModel(model, expanded)
-                                toggleSearchFocusAndIme(!expanded)
+            queryResults?.let { results ->
+                if (results.isEmpty()) {
+                    if (searchQuery.isNotBlank()) {
+                        // If no results under current query, show "no results" message
+                        EmptySearchResultsView(
+                            onClearSearch = {
+                                textFieldState.clearText()
+                                toggleSearchFocusAndIme(true)
                             }
                         )
                     }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
+                    ) {
+                        items(items = results, key = { it.id }) { model ->
+                            ModelCardFullExpandable(
+                                model = model,
+                                isSelected = if (model == preselection?.modelInfo) true else null,
+                                onSelected = { selected ->
+                                    if (selected) {
+                                        toggleSearchFocusAndIme(false)
+                                    } else {
+                                        viewModel.resetPreselection()
+                                        toggleSearchFocusAndIme(true)
+                                    }
+                                },
+                                isExpanded = model == preselection?.modelInfo,
+                                onExpanded = { expanded ->
+                                    viewModel.preselectModel(model, expanded)
+                                    toggleSearchFocusAndIme(!expanded)
+                                }
+                            )
+                        }
+                    }
                 }
-            }
+            } ?: ModelsLoadingInProgressView()
         }
     }
 }

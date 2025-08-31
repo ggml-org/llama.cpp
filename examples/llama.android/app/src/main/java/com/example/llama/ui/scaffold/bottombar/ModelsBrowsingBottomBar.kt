@@ -104,7 +104,10 @@ fun ModelsBrowsingBottomBar(
                     imageVector =
                         if (filteringConfig.isActive) Icons.Default.FilterAlt
                         else Icons.Outlined.FilterAlt,
-                    contentDescription = "Filter models"
+                    contentDescription = "Filter models",
+                    tint =
+                        if (filteringConfig.isActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

@@ -4,11 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -17,6 +20,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.scaffold.ScaffoldEvent
@@ -63,7 +67,7 @@ fun ModelsScreen(
                 modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
             }
             ModelScreenUiMode.DELETING -> {
-                managementViewModel.clearAllSelectedModelsToDelete()
+                managementViewModel.clearSelectedModelsToDelete()
                 modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
             }
         }
@@ -77,7 +81,10 @@ fun ModelsScreen(
                 ModelsBrowsingScreen(
                     filteredModels = filteredModels,
                     preselection = preselection,
-                    onManageModelsClicked = { /* TODO-han.yin */ },
+                    onManageModelsClicked = {
+                        managementViewModel.toggleImportMenu(true)
+                        modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                    },
                     activeFiltersCount = activeFiltersCount,
                     viewModel = modelsViewModel,
                 )
@@ -110,6 +117,21 @@ fun ModelsScreen(
             }
         }
     }
+}
+
+@Composable
+fun ModelsLoadingInProgressView() {
+    InfoView(
+        modifier = Modifier.fillMaxSize(),
+        title = "Loading...",
+        icon = {
+            CircularProgressIndicator(
+                modifier = Modifier.size(64.dp),
+                strokeWidth = ProgressIndicatorDefaults.CircularStrokeWidth * 1.5f
+            )
+        },
+        message = "Searching for installed models on your device...",
+    )
 }
 
 @Composable

@@ -39,6 +39,9 @@ class ModelsViewModel @Inject constructor(
 ) : ViewModel() {
 
     // UI state: model management mode
+    private val _allModels = MutableStateFlow<List<ModelInfo>?>(null)
+    val allModels = _allModels.asStateFlow()
+
     private val _modelScreenUiMode = MutableStateFlow(ModelScreenUiMode.BROWSING)
     val modelScreenUiMode = _modelScreenUiMode.asStateFlow()
 
@@ -128,11 +131,11 @@ class ModelsViewModel @Inject constructor(
     }
 
     // Data: filtered & sorted models
-    private val _filteredModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    private val _filteredModels = MutableStateFlow<List<ModelInfo>?>(null)
     val filteredModels = _filteredModels.asStateFlow()
 
     // Data: queried models
-    private val _queryResults = MutableStateFlow<List<ModelInfo>>(emptyList())
+    private val _queryResults = MutableStateFlow<List<ModelInfo>?>(null)
     val queryResults = _queryResults.asStateFlow()
 
     // Data: pre-selected model in expansion mode
@@ -161,29 +164,39 @@ class ModelsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(
-                modelRepository.getModels(),
-                _activeFilters,
-                _sortOrder,
-            ) { models, filters, sortOrder ->
-                models.filterBy(filters).sortByOrder(sortOrder)
-            }.collectLatest {
-                _filteredModels.value = it
-            }
-        }
-
-        viewModelScope.launch {
-            combine(
-                modelRepository.getModels(),
-                snapshotFlow { searchFieldState.text }.debounce(QUERY_DEBOUNCE_TIMEOUT_MS)
-            ) { models, query ->
-                if (query.isBlank()) {
-                    emptyList()
-                } else {
-                    models.queryBy(query.toString()).sortedBy { it.dateLastUsed ?: it.dateAdded }
+            launch {
+                modelRepository.getModels().collectLatest {
+                    _allModels.value = it
                 }
-            }.collectLatest {
-                _queryResults.value = it
+            }
+
+            launch {
+                combine(
+                    _allModels,
+                    _activeFilters,
+                    _sortOrder,
+                ) { models, filters, sortOrder ->
+                    models?.filterBy(filters)?.sortByOrder(sortOrder)
+                }.collectLatest {
+                    _filteredModels.value = it
+                }
+            }
+
+            launch {
+                combine(
+                    _allModels,
+                    snapshotFlow { searchFieldState.text }.debounce(QUERY_DEBOUNCE_TIMEOUT_MS)
+                ) { models, query ->
+                    if (query.isBlank()) {
+                        emptyList()
+                    } else {
+                        models?.queryBy(query.toString())?.sortedBy {
+                            it.dateLastUsed ?: it.dateAdded
+                        }
+                    }
+                }.collectLatest {
+                    _queryResults.value = it
+                }
             }
         }
     }

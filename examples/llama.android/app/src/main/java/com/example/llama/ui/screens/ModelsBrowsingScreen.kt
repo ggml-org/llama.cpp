@@ -20,13 +20,15 @@ import com.example.llama.viewmodel.PreselectedModelToRun
 
 @Composable
 fun ModelsBrowsingScreen(
-    filteredModels: List<ModelInfo>,
+    filteredModels: List<ModelInfo>?,
     activeFiltersCount: Int,
     preselection: PreselectedModelToRun?,
     onManageModelsClicked: () -> Unit,
     viewModel: ModelsViewModel,
 ) {
-    if (filteredModels.isEmpty()) {
+    if (filteredModels == null) {
+        ModelsLoadingInProgressView()
+    } else if (filteredModels.isEmpty()) {
         // Empty model prompt
         EmptyModelsView(activeFiltersCount, onManageModelsClicked)
     } else {

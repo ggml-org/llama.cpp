@@ -125,10 +125,11 @@ fun AppScaffold(
 
             is BottomBarConfig.Models.Management -> {
                 ModelsManagementBottomBar(
+                    isDeletionEnabled = config.isDeletionEnabled,
+                    onToggleDeleting = config.onToggleDeleting,
                     sortingConfig = config.sorting,
                     filteringConfig = config.filtering,
-                    importingConfig = config.importing,
-                    onToggleDeleting = config.onToggleDeleting
+                    importingConfig = config.importing
                 )
             }
 

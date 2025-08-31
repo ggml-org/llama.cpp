@@ -32,23 +32,43 @@ fun InfoView(
     message: String? = null,
     action: InfoAction? = null
 ) {
+    InfoView(
+        modifier = modifier,
+        title = title,
+        icon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            )
+        },
+        message = message,
+        action = action
+    )
+}
+
+@Composable
+fun InfoView(
+    modifier: Modifier = Modifier,
+    title: String,
+    icon: @Composable () -> Unit,
+    message: String? = null,
+    action: InfoAction? = null
+) {
     Column(
         modifier = modifier.padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-        )
+        icon()
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
             text = title,
-            style = MaterialTheme.typography.headlineSmall
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center
         )
 
         message?.let {
