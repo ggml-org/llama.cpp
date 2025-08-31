@@ -1062,6 +1062,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_NONE:
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_RESHAPE:
             return true;
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
