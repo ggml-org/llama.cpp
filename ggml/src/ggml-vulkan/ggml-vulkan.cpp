@@ -12200,17 +12200,15 @@ static bool ggml_vk_instance_validation_ext_available() {
 #ifdef GGML_VULKAN_VALIDATE
     // Check if validation layer provides the extension
     const std::string layer_name = "VK_LAYER_KHRONOS_validation";
-    try {
-        for (const auto& layer : vk::enumerateInstanceLayerProperties()) {
-            if (layer_name == layer.layerName.data()) {
-                for (const auto& ext : vk::enumerateInstanceExtensionProperties(layer_name)) {
-                    if (strcmp("VK_EXT_validation_features", ext.extensionName.data()) == 0) {
-                        return true;
-                    }
+    for (const auto& layer : vk::enumerateInstanceLayerProperties()) {
+        if (layer_name == layer.layerName.data()) {
+            for (const auto& ext : vk::enumerateInstanceExtensionProperties(layer_name)) {
+                if (strcmp("VK_EXT_validation_features", ext.extensionName.data()) == 0) {
+                    return true;
                 }
             }
         }
-    } catch (...) { /* It's alright if the layer is not present */ }
+    }
 
     std::cerr << "ggml_vulkan: WARNING: Instance extension VK_EXT_validation_features not found." << std::endl;
 #endif
