@@ -7076,9 +7076,7 @@ static void ggml_compute_forward_im2col_3d_f16(
     const int64_t OW = ne1;
     const int64_t OH_OW = OH*OW;
     const int64_t KD_KH_KW = KD*KH*KW;
-    const int64_t ID_IH_IW = ID*IH*IW;
     const int64_t KH_KW = KH*KW;
-    const int64_t IH_IW = IH*IW;
     const int64_t IC_KD_KH_KW = IC*KD*KH*KW;
 
     GGML_ASSERT(nb10 == sizeof(float));
@@ -7169,9 +7167,7 @@ static void ggml_compute_forward_im2col_3d_f32(
 
     const int64_t OH_OW = OH*OW;
     const int64_t KD_KH_KW = KD*KH*KW;
-    const int64_t ID_IH_IW = ID*IH*IW;
     const int64_t KH_KW = KH*KW;
-    const int64_t IH_IW = IH*IW;
     const int64_t IC_KD_KH_KW = IC*KD*KH*KW;
 
     GGML_ASSERT(nb10 == sizeof(float));
