@@ -17,6 +17,15 @@ struct kernel_bounds {
     int64_t x_min, x_max;
 };
 
+template<typename T>
+__device__ __forceinline__ float to_float(const T& val) {
+    if constexpr (std::is_same_v<T, __half>) {
+        return __half2float(val);
+    } else {
+        return val;  // Assumes T is float
+    }
+}
+
 __device__ __forceinline__ int64_t max64(int64_t a, int64_t b) {
     return (a > b) ? a : b;
 }
@@ -94,8 +103,8 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
                 const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
 
                 const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
-                const float kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
-                acc += (input_val * kernel_val);
+                const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
+                acc += (input_val * to_float(kernel_val));
             }
         }
     }
