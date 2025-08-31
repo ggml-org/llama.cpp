@@ -11460,7 +11460,7 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
     vk::PhysicalDeviceMemoryProperties2 memprops = {};
     bool membudget_supported = vk_instance.device_supports_membudget[device];
-    
+
     if (membudget_supported) {
         memprops.pNext = &budgetprops;
     }
