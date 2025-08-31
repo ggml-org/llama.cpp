@@ -10,7 +10,7 @@ More information is available in <https://github.com/ggml-org/llama.cpp/pull/486
     -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \
     [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \
     [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \
-    [--output-format gguf|dat] [--activation-statistics] [--show-statistics] [...]
+    [--output-format gguf|dat] [--show-statistics] [...]
 ```
 
 Here `-m | --model` with a model name and `-f | --file` with a file containing calibration data (such as e.g. `wiki.train.raw`) are mandatory.
@@ -29,7 +29,6 @@ The parameters in square brackets are optional and have the following meaning:
 * `--chunks` maximum number of chunks to process. Default is `-1` for all available chunks.
 * `--no-ppl` disables the calculation of perplexity for the processed chunks. Useful if you want to speed up the processing and do not care about perplexity.
 * `--show-statistics` displays imatrix file's statistics.
-* `--activation-statistics` enables the collection of activation statistics for each tensor. If set, the imatrix file size will double, but reported statistics will be more accurate.
 
 For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-layers` argument.
 
@@ -71,18 +70,11 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 ```
 
 ```bash
-# generate imatrix and enable activation-based statistics
-./llama-imatrix -m ggml-model-f16.gguf -f calibration-data.txt --activation-statistics -ngl 99
-```
-
-```bash
 # analyse imatrix file and display summary statistics instead of running inference
 ./llama-imatrix --in-file imatrix.gguf --show-statistics
 ```
 
 ## Statistics
-
-For current versions of `llama-imatrix`, the `--show-statistics` option has two modes of operation: If `--activation-statistics` was used to generate the imatrix and `--output-format` was set to `gguf`, precise activations statistics will be calculated. Otherwise, it will report less accurate, albeit still useful, metrics based on average squared activations.
 
 #### Per tensor
 
