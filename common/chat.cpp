@@ -2145,7 +2145,7 @@ static void common_chat_parse_nemotron_v2(common_chat_msg_parser & builder) {
         } else {
             throw common_chat_msg_partial_exception("Incomplete tool call");
         }
-    } 
+    }
     builder.add_content(builder.consume_rest());
 }
 
