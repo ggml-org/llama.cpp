@@ -1,5 +1,4 @@
 #include "vec.h"
-#include <riscv_vector.h>
 
 #include <cassert>
 
