@@ -30,12 +30,12 @@
 	} from '$lib/stores/chat.svelte';
 	import { contextService } from '$lib/services';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { AUTO_SCROLL_INTERVAL, AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
-	import { navigating } from '$app/state';
+	import { AUTO_SCROLL_INTERVAL, AUTO_SCROLL_THRESHOLD, INITIAL_SCROLL_DELAY } from '$lib/constants/auto-scroll';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { deleteConversation } from '$lib/stores/chat.svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -100,12 +100,43 @@
 		}
 	}
 
+	async function handleDeleteConfirm() {
+		const conversation = activeConversation();
+		if (conversation) {
+			await deleteConversation(conversation.id);
+		}
+		showDeleteDialog = false;
+	}
+
+	function handleDeleteDialogKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			handleDeleteConfirm();
+		}
+	}
+
 	function handleFileRemove(fileId: string) {
 		uploadedFiles = uploadedFiles.filter((f) => f.id !== fileId);
 	}
 
 	function handleFileUpload(files: File[]) {
 		processFiles(files);
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+		if (isCtrlOrCmd && event.key === 'k') {
+			event.preventDefault();
+			goto('/?new_chat=true');
+		}
+
+		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
+			event.preventDefault();
+			if (activeConversation()) {
+				showDeleteDialog = true;
+			}
+		}
 	}
 
 	function handleScroll() {
@@ -205,48 +236,13 @@
 		});
 	}
 
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+	afterNavigate(() => {
+		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+	})
 
-		if (isCtrlOrCmd && event.key === 'k') {
-			event.preventDefault();
-			goto('/?new_chat=true');
-		}
-
-		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
-			event.preventDefault();
-			if (activeConversation()) {
-				showDeleteDialog = true;
-			}
-		}
-	}
-
-	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
-		if (conversation) {
-			await deleteConversation(conversation.id);
-		}
-		showDeleteDialog = false;
-	}
-
-	function handleDeleteDialogKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			handleDeleteConfirm();
-		}
-	}
-
-	$effect(() => {
-		// This solution is not ideal, but it works for now. But can be tricky for long conversations
-		// Eventually we might want to find a proper way to render the content scrolled down from the beginning
-		if (navigating.complete && chatScrollContainer) {
-			setTimeout(() => scrollChatToBottom('instant'), AUTO_SCROLL_INTERVAL);
-		}
-
-		if (navigating) {
-			scrollChatToBottom('instant');
-		}
-	});
+	onMount(() => {
+		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+	})
 
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
@@ -268,15 +264,15 @@
 
 {#if !isEmpty}
 	<div
-		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
 		bind:this={chatScrollContainer}
-		onscroll={handleScroll}
+		aria-label="Chat interface with file drop zone"
+		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
 		ondrop={handleDrop}
+		onscroll={handleScroll}
 		role="main"
-		aria-label="Chat interface with file drop zone"
 	>
 		<ChatMessages
 			class="mb-16 md:mb-24"
