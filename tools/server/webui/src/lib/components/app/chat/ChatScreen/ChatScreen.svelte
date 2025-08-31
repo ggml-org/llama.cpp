@@ -30,7 +30,11 @@
 	} from '$lib/stores/chat.svelte';
 	import { contextService } from '$lib/services';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { AUTO_SCROLL_INTERVAL, AUTO_SCROLL_THRESHOLD, INITIAL_SCROLL_DELAY } from '$lib/constants/auto-scroll';
+	import {
+		AUTO_SCROLL_INTERVAL,
+		AUTO_SCROLL_THRESHOLD,
+		INITIAL_SCROLL_DELAY
+	} from '$lib/constants/auto-scroll';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { deleteConversation } from '$lib/stores/chat.svelte';
@@ -238,11 +242,11 @@
 
 	afterNavigate(() => {
 		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
-	})
+	});
 
 	onMount(() => {
 		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
-	})
+	});
 
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
