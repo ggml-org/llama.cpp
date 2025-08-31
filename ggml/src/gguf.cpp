@@ -1310,9 +1310,8 @@ struct gguf_writer_buf final : public gguf_writer_base {
     }
 };
 
-void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta) {
-    gguf_writer_buf gw(buf);
-
+template <typename Writer>
+static void gguf_write_out(const struct gguf_context * ctx, Writer & gw, bool only_meta) {
     const int64_t n_kv      = gguf_get_n_kv(ctx);
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
 
@@ -1348,6 +1347,11 @@ void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & bu
     for (int64_t i = 0; i < n_tensors; ++i) {
         gw.write_tensor_data(ctx->info[i], offset_data, ctx->alignment);
     }
+}
+
+void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta) {
+    gguf_writer_buf gw(buf);
+    gguf_write_out(ctx, gw, only_meta);
 }
 
 bool gguf_write_to_file(const struct gguf_context * ctx, const char * fname, bool only_meta) {
