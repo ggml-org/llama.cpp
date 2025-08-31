@@ -14,13 +14,14 @@
 #include "log.h"
 #include "regex-partial.h"
 
-template<class T>
-static void assert_equals(const char* label, const T& expected, const T& actual) {
-    if (expected != actual){
-        std::ostringstream oss;
-        if (label && *label) oss << label << '\n';
-        oss << "Expected: " << expected << "\nActual: " << actual;
-        throw std::runtime_error(oss.str());
+template <class T>
+static void assert_equals(const std::string & label, const T & expected, const T & actual) {
+    if (expected != actual) {
+        std::cerr << label << std::endl;
+        std::cerr << "Expected: " << expected << std::endl;
+        std::cerr << "Actual: " << actual << std::endl;
+        std::cerr << std::flush;
+        throw std::runtime_error("Test failed");
     }
 }
 
