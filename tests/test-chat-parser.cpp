@@ -266,7 +266,7 @@ static void test_deepseek_v3_1_tool_calls() {
             /* .thinking_forced_open = */ false,
             /* .parse_tool_calls = */ true,
         };
-        const char* variant = "simple_multiple_tool_calls";
+        const std::string variant("simple_multiple_tool_calls");
         const std::string in = "CONTENT<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 2, m.tool_calls.size());
