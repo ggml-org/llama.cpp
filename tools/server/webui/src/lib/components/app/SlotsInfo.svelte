@@ -34,13 +34,9 @@
 		position: sticky;
 		top: 0;
 		z-index: 10;
-		background: var(--background);
-		backdrop-filter: blur(8px);
-		background: rgba(var(--background-rgb), 0.95);
-		padding: 0.75rem 1rem;
-		margin-bottom: 1rem;
+		padding: 1.5rem 1rem;
 		opacity: 0;
-		transform: translateY(-100%);
+		transform: translateY(50%);
 		transition:
 			opacity 300ms ease-out,
 			transform 300ms ease-out;
