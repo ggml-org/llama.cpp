@@ -324,7 +324,7 @@ static void test_deepseek_v3_1_tool_calls() {
             /* .thinking_forced_open = */ false,
             /* .parse_tool_calls = */ true,
         };
-        const char* variant = "thinking_not_forced_open_missing_reasoning_no_tool_calls";
+        const std::string variant("thinking_not_forced_open_missing_reasoning_no_tool_calls");
         const std::string in = "CONTENT";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
