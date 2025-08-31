@@ -5958,7 +5958,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     case VK_VENDOR_ID_NVIDIA:
         switch (src0_type) {
         case GGML_TYPE_Q8_0:
-            return k >= 3072 && m < k;
+            return false;
         default:
             return true;
         }
