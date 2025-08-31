@@ -1166,50 +1166,51 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
     ctx->info[tensor_id].t.data = (void *)(uintptr_t)data; // double cast suppresses warning about casting away const
 }
 
-struct gguf_writer {
-    std::vector<int8_t> & buf;
+struct gguf_writer_base {
+    size_t written_bytes {0u};
 
-    gguf_writer(std::vector<int8_t> & buf) : buf(buf) {}
+    ~gguf_writer_base(void) {}
+
+    // we bet on devirtualization
+    virtual void write(int8_t val) = 0;
+    virtual void write(const std::vector<int8_t> & val) = 0;
+    virtual void write_tensor_data(const struct gguf_tensor_info & info, size_t offset_data, size_t alignment) = 0;
 
     template <typename T>
-    void write(const T & val) const {
+    void write(const T & val) {
         for (size_t i = 0; i < sizeof(val); ++i) {
-            buf.push_back(reinterpret_cast<const int8_t *>(&val)[i]);
+            write(reinterpret_cast<const int8_t *>(&val)[i]);
         }
     }
 
-    void write(const std::vector<int8_t> & val) const {
-        buf.insert(buf.end(), val.begin(), val.end());
-    }
-
-    void write(const bool & val) const {
+    void write(const bool & val) {
         const int8_t val8 = val ? 1 : 0;
         write(val8);
     }
 
-    void write(const std::string & val) const {
+    void write(const std::string & val) {
         {
             const uint64_t n = val.length();
             write(n);
         }
         for (size_t i = 0; i < val.length(); ++i) {
-            buf.push_back(reinterpret_cast<const int8_t *>(val.data())[i]);
+            write((val.data())[i]);
         }
     }
 
-    void write(const char * val) const {
+    void write(const char * val) {
         write(std::string(val));
     }
 
-    void write(const enum ggml_type & val) const {
+    void write(const enum ggml_type & val) {
         write(int32_t(val));
     }
 
-    void write(const enum gguf_type & val) const {
+    void write(const enum gguf_type & val) {
         write(int32_t(val));
     }
 
-    void write(const struct gguf_kv & kv) const {
+    void write(const struct gguf_kv & kv) {
         const uint64_t ne = kv.get_ne();
 
         write(kv.get_key());
@@ -1250,7 +1251,7 @@ struct gguf_writer {
         }
     }
 
-    void write_tensor_meta(const struct gguf_tensor_info & info) const {
+    void write_tensor_meta(const struct gguf_tensor_info & info) {
         write(info.t.name);
 
         const uint32_t n_dims = ggml_n_dims(&info.t);
@@ -1263,14 +1264,33 @@ struct gguf_writer {
         write(info.offset);
     }
 
-    void pad(const size_t alignment) const {
-        while (buf.size() % alignment != 0) {
+    void pad(const size_t alignment) {
+        while (written_bytes % alignment != 0) {
             const int8_t zero = 0;
             write(zero);
         }
     }
+};
 
-    void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) const {
+// vector buffer based writer
+struct gguf_writer_buf final : public gguf_writer_base {
+    std::vector<int8_t> & buf;
+
+    gguf_writer_buf(std::vector<int8_t> & buf) : buf(buf) {}
+
+    using gguf_writer_base::write;
+
+    void write(const int8_t val) override {
+        buf.push_back(val);
+        written_bytes++;
+    }
+
+    void write(const std::vector<int8_t> & val) override {
+        buf.insert(buf.end(), val.begin(), val.end());
+        written_bytes += val.size();
+    }
+
+    void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
         GGML_ASSERT(buf.size() - offset_data == info.offset);
 
         GGML_ASSERT(ggml_is_contiguous(&info.t));
@@ -1284,13 +1304,14 @@ struct gguf_writer {
             GGML_ASSERT(info.t.data);
             memcpy(buf.data() + offset, info.t.data, nbytes);
         }
+        written_bytes += nbytes;
 
         pad(alignment);
     }
 };
 
 void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta) {
-    const struct gguf_writer gw(buf);
+    gguf_writer_buf gw(buf);
 
     const int64_t n_kv      = gguf_get_n_kv(ctx);
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
@@ -1321,7 +1342,7 @@ void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & bu
         return;
     }
 
-    const size_t offset_data = gw.buf.size();
+    const size_t offset_data = gw.written_bytes;
 
     // write tensor data
     for (int64_t i = 0; i < n_tensors; ++i) {
