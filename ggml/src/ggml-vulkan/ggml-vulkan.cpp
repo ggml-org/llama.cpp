@@ -5958,17 +5958,14 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     case VK_VENDOR_ID_NVIDIA:
         switch (src0_type) {
         case GGML_TYPE_Q8_0:
-            return false;
+            return device->architecture == vk_device_architecture::NVIDIA_PRE_TURING;
         default:
             return true;
         }
     case VK_VENDOR_ID_AMD:
-        if (device->architecture == vk_device_architecture::AMD_GCN) {
-            return true;
-        }
         switch (src0_type) {
         case GGML_TYPE_Q8_0:
-            return false;
+            return device->architecture == vk_device_architecture::AMD_GCN;
         default:
             return true;
         }
@@ -5984,6 +5981,9 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     default:
         return true;
     }
+
+    GGML_UNUSED(m);
+    GGML_UNUSED(k);
 }
 
 static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
