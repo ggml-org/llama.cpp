@@ -34,6 +34,7 @@ import com.example.llama.viewmodel.PreselectedModelToRun.RamWarning
 @Composable
 fun ModelsScreen(
     onConfirmSelection: (ModelInfo, RamWarning) -> Unit,
+    onFirstModelImportSuccess: (() -> Unit)?,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,
     managementViewModel: ModelsManagementViewModel,
@@ -98,6 +99,7 @@ fun ModelsScreen(
                     isDeleting = currentMode == ModelScreenUiMode.DELETING,
                     onScaffoldEvent = onScaffoldEvent,
                     activeFiltersCount = activeFiltersCount,
+                    onFirstModelImportSuccess = onFirstModelImportSuccess,
                     modelsViewModel = modelsViewModel,
                     managementViewModel = managementViewModel,
                 )

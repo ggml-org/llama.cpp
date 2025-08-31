@@ -82,6 +82,7 @@ fun ModelsManagementAndDeletingScreen(
     filteredModels: List<ModelInfo>?,
     activeFiltersCount: Int,
     isDeleting: Boolean,
+    onFirstModelImportSuccess: (() -> Unit)?,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,
     managementViewModel: ModelsManagementViewModel,
@@ -212,7 +213,7 @@ fun ModelsManagementAndDeletingScreen(
                             message = "Imported model: ${state.model.name}"
                         )
                     )
-
+                    onFirstModelImportSuccess?.invoke()
                     managementViewModel.resetManagementState()
                 }
             }

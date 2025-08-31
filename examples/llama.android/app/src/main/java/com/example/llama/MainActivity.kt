@@ -96,7 +96,8 @@ fun AppContent(
 
     // App core states
     val engineState by mainViewModel.engineState.collectAsState()
-    val showUserOnboarding by mainViewModel.showUserOnboarding.collectAsState()
+    val showModelImportTooltip by mainViewModel.showModelImportTooltip.collectAsState()
+    val showChatTooltip by mainViewModel.showModelImportTooltip.collectAsState()
 
     // Model state
     val modelScreenUiMode by modelsViewModel.modelScreenUiMode.collectAsState()
@@ -324,7 +325,7 @@ fun AppContent(
                                     toggleMenu = modelsViewModel::toggleFilterMenu
                                 ),
                                 importing = BottomBarConfig.Models.Managing.ImportConfig(
-                                    showTooltip = showUserOnboarding,
+                                    showTooltip = showModelImportTooltip,
                                     isMenuVisible = showImportModelMenu,
                                     toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
                                     importFromLocal = {
@@ -481,6 +482,10 @@ fun AppContent(
                                 navigationActions.navigateToModelLoading()
                             }
                         },
+                        onFirstModelImportSuccess =
+                            if (showModelImportTooltip) {
+                                { mainViewModel.waiveModelImportTooltip() }
+                            } else null,
                         onScaffoldEvent = handleScaffoldEvent,
                         modelsViewModel = modelsViewModel,
                         managementViewModel = modelsManagementViewModel,

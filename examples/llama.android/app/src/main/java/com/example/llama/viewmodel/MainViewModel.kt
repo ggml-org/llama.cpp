@@ -51,7 +51,6 @@ class MainViewModel @Inject constructor (
     }
 
     fun waiveModelImportTooltip() {
-        android.util.Log.w("JOJO", "WAIVE IMPORT TOOLTIP!")
         viewModelScope.launch {
             appPreferences.setUserHasImportedFirstModel(true)
         }
