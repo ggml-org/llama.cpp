@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.Attribution
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -108,17 +108,22 @@ fun ModelsManagementAndDeletingScreen(
         if (filteredModels == null) {
             ModelsLoadingInProgressView()
         } else if (filteredModels.isEmpty()) {
-            // Import model prompt
+            // Prompt the user to import a model
             val title = when (activeFiltersCount) {
-                0 -> "Tap the \"+\" button\n to install a model"
+                0 -> "Import or download,\n have it your way"
                 1 -> "No models match\n the selected filter"
                 else -> "No models match\n the selected filters"
             }
+
+            val message = "If you already have GGUF models on your computer, " +
+                    "please transfer it onto your device, and then select \"Import a local model\".\n\n" +
+                    "Otherwise, select \"Download from HuggingFace\" and pick one you like."
+
             InfoView(
                 modifier = Modifier.fillMaxSize(0.9f).align(Alignment.Center),
                 title = title,
-                icon = Icons.Default.FolderOpen,
-                message = "Import a local GGUF model file, or download directly from HuggingFace!",
+                icon = Icons.Default.Info,
+                message = message,
                 action = InfoAction(
                     label = "Learn More",
                     icon = Icons.AutoMirrored.Default.Help,

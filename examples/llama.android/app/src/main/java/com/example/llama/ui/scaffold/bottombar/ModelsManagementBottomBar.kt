@@ -15,14 +15,21 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -30,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.example.llama.R
 import com.example.llama.data.model.ModelSortOrder
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsManagementBottomBar(
     isDeletionEnabled: Boolean,
@@ -38,6 +46,14 @@ fun ModelsManagementBottomBar(
     filteringConfig: BottomBarConfig.Models.Managing.FilteringConfig,
     importingConfig: BottomBarConfig.Models.Managing.ImportConfig,
 ) {
+    val tooltipState = rememberTooltipState()
+
+    LaunchedEffect(importingConfig) {
+        if (importingConfig.showTooltip && !importingConfig.isMenuVisible) {
+            tooltipState.show()
+        }
+    }
+
     BottomAppBar(
         actions = {
             // Batch-deletion action
@@ -162,13 +178,24 @@ fun ModelsManagementBottomBar(
             }
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { importingConfig.toggleMenu(true) },
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                    TooltipAnchorPosition.Above),
+                tooltip = {
+                    PlainTooltip {
+                        Text("Tap this button to install your first model!")
+                    }
+                },
+                state = tooltipState
             ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add model"
-                )
+                FloatingActionButton(
+                    onClick = { importingConfig.toggleMenu(true) },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add model"
+                    )
+                }
             }
 
             // Add model dropdown menu
@@ -177,7 +204,7 @@ fun ModelsManagementBottomBar(
                 onDismissRequest = { importingConfig.toggleMenu(false) }
             ) {
                 DropdownMenuItem(
-                    text = { Text("Import local model") },
+                    text = { Text("Import a local model") },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.FolderOpen,

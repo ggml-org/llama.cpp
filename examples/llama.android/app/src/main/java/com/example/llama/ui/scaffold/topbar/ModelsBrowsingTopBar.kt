@@ -18,13 +18,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.llama.viewmodel.ModelScreenUiMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsBrowsingTopBar(
     title: String,
-    onToggleMode: (ModelScreenUiMode) -> Unit,
+    onToggleManaging: (() -> Unit)? = null,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
 ) {
@@ -52,9 +51,9 @@ fun ModelsBrowsingTopBar(
             }
         },
         actions = {
-            ModelManageActionToggle(onToggleManageMode = {
-                onToggleMode(ModelScreenUiMode.MANAGING)
-            })
+            onToggleManaging?.let {
+                ModelManageActionToggle(it)
+            }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -65,11 +64,11 @@ fun ModelsBrowsingTopBar(
 
 @Composable
 private fun ModelManageActionToggle(
-    onToggleManageMode: () -> Unit,
+    onToggleManaging: () -> Unit,
 ) {
     FilledTonalButton(
         modifier = Modifier.padding(end = 12.dp),
-        onClick = onToggleManageMode
+        onClick = onToggleManaging
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(

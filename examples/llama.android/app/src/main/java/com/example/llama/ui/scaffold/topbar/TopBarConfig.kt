@@ -3,7 +3,6 @@ package com.example.llama.ui.scaffold.topbar
 import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.monitoring.TemperatureMetrics
-import com.example.llama.ui.scaffold.ScaffoldEvent
 import com.example.llama.viewmodel.ModelScreenUiMode
 
 /**
@@ -29,7 +28,7 @@ sealed class TopBarConfig {
     data class ModelsBrowsing(
         override val title: String,
         override val navigationIcon: NavigationIcon,
-        val onToggleMode: (ModelScreenUiMode) -> Unit,
+        val onToggleManaging: (() -> Unit)?,
     ) : TopBarConfig()
 
     // Model batch-deletion top bar with a toggle to turn on/off manage mode

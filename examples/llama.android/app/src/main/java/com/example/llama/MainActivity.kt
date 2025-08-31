@@ -220,7 +220,9 @@ fun AppContent(
                                     modelsViewModel.resetPreselection()
                                     openDrawer()
                                 },
-                                onToggleMode = modelsViewModel::toggleMode,
+                                onToggleManaging = if (hasModelsInstalled) {
+                                    { modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING) }
+                                } else null,
                             )
                         ModelScreenUiMode.SEARCHING ->
                             TopBarConfig.None()
@@ -321,6 +323,7 @@ fun AppContent(
                                     toggleMenu = modelsViewModel::toggleFilterMenu
                                 ),
                                 importing = BottomBarConfig.Models.Managing.ImportConfig(
+                                    showTooltip = true,
                                     isMenuVisible = showImportModelMenu,
                                     toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
                                     importFromLocal = {

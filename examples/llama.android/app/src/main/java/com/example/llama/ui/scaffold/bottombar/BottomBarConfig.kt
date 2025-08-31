@@ -72,6 +72,7 @@ sealed class BottomBarConfig {
             )
 
             data class ImportConfig(
+                val showTooltip: Boolean,
                 val isMenuVisible: Boolean,
                 val toggleMenu: (Boolean) -> Unit,
                 val importFromLocal: () -> Unit,
