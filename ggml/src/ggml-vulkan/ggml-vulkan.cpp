@@ -12015,16 +12015,13 @@ static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::Exte
 }
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions) {
 #ifdef __APPLE__
-    bool portability_enumeration_ext = false;
     // Check for portability enumeration extension for MoltenVK support
     for (const auto& properties : instance_extensions) {
         if (strcmp("VK_KHR_portability_enumeration", properties.extensionName) == 0) {
             return true;
         }
     }
-    if (!portability_enumeration_ext) {
-        std::cerr << "ggml_vulkan: WARNING: Instance extension VK_KHR_portability_enumeration not found." << std::endl;
-    }
+    std::cerr << "ggml_vulkan: WARNING: Instance extension VK_KHR_portability_enumeration not found." << std::endl;
 #endif
     return false;
 
