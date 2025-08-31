@@ -288,7 +288,7 @@ static void test_deepseek_v3_1_tool_calls() {
             /* .thinking_forced_open = */ true,
             /* .parse_tool_calls = */ true,
         };
-        const char* variant = "thinking_forced_open_tool_call_in_reasoning_fenced_thinking";
+        const std::string variant("thinking_forced_open_tool_call_in_reasoning_fenced_thinking");
         const std::string in = "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
