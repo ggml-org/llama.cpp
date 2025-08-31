@@ -22,15 +22,18 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.unit.dp
 import com.example.llama.data.model.ModelSortOrder
 
 @Composable
 fun ModelsBrowsingBottomBar(
+    isSearchingEnabled: Boolean,
     onToggleSearching: () -> Unit,
     sortingConfig: BottomBarConfig.Models.Browsing.SortingConfig,
     filteringConfig: BottomBarConfig.Models.Browsing.FilteringConfig,
@@ -39,7 +42,10 @@ fun ModelsBrowsingBottomBar(
     BottomAppBar(
         actions = {
             // Enter search action
-            IconButton(onClick = onToggleSearching) {
+            IconButton(
+                enabled = isSearchingEnabled,
+                onClick = onToggleSearching
+            ) {
                 Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = "Search models"
@@ -47,7 +53,10 @@ fun ModelsBrowsingBottomBar(
             }
 
             // Sorting action
-            IconButton(onClick = { sortingConfig.toggleMenu(true) }) {
+            IconButton(
+                enabled = sortingConfig.isEnabled,
+                onClick = { sortingConfig.toggleMenu(true) }
+            ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Sort,
                     contentDescription = "Sort models"
@@ -99,15 +108,20 @@ fun ModelsBrowsingBottomBar(
             }
 
             // Filter action
-            IconButton(onClick = { filteringConfig.toggleMenu(true) }) {
+            val hasFilters = filteringConfig.filters.any { it.value }
+            IconButton(
+                enabled = filteringConfig.isEnabled,
+                colors = IconButtonDefaults.iconButtonColors().copy(
+                    contentColor = if (hasFilters) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                onClick = { filteringConfig.toggleMenu(true) }
+            ) {
                 Icon(
                     imageVector =
-                        if (filteringConfig.isActive) Icons.Default.FilterAlt
+                        if (hasFilters) Icons.Default.FilterAlt
                         else Icons.Outlined.FilterAlt,
                     contentDescription = "Filter models",
-                    tint =
-                        if (filteringConfig.isActive) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

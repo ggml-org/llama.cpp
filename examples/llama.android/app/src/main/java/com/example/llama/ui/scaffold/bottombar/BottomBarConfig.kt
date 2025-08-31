@@ -16,12 +16,14 @@ sealed class BottomBarConfig {
     sealed class Models : BottomBarConfig() {
 
         data class Browsing(
+            val isSearchingEnabled: Boolean,
             val onToggleSearching: () -> Unit,
             val sorting: SortingConfig,
             val filtering: FilteringConfig,
             val runAction: RunActionConfig,
         ) : BottomBarConfig() {
             data class SortingConfig(
+                val isEnabled: Boolean,
                 val currentOrder: ModelSortOrder,
                 val isMenuVisible: Boolean,
                 val toggleMenu: (Boolean) -> Unit,
@@ -29,7 +31,7 @@ sealed class BottomBarConfig {
             )
 
             data class FilteringConfig(
-                val isActive: Boolean,
+                val isEnabled: Boolean,
                 val filters: Map<ModelFilter, Boolean>,
                 val onToggleFilter: (ModelFilter, Boolean) -> Unit,
                 val onClearFilters: () -> Unit,
@@ -45,7 +47,7 @@ sealed class BottomBarConfig {
             val runAction: RunActionConfig,
         ) : BottomBarConfig()
 
-        data class Management(
+        data class Managing(
             val isDeletionEnabled: Boolean,
             val onToggleDeleting: () -> Unit,
             val sorting: SortingConfig,
@@ -53,6 +55,7 @@ sealed class BottomBarConfig {
             val importing: ImportConfig,
         ) : BottomBarConfig() {
             data class SortingConfig(
+                val isEnabled: Boolean,
                 val currentOrder: ModelSortOrder,
                 val isMenuVisible: Boolean,
                 val toggleMenu: (Boolean) -> Unit,
@@ -60,7 +63,7 @@ sealed class BottomBarConfig {
             )
 
             data class FilteringConfig(
-                val isActive: Boolean,
+                val isEnabled: Boolean,
                 val filters: Map<ModelFilter, Boolean>,
                 val onToggleFilter: (ModelFilter, Boolean) -> Unit,
                 val onClearFilters: () -> Unit,

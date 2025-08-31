@@ -107,6 +107,7 @@ fun AppScaffold(
 
             is BottomBarConfig.Models.Browsing -> {
                 ModelsBrowsingBottomBar(
+                    isSearchingEnabled = config.isSearchingEnabled,
                     onToggleSearching = config.onToggleSearching,
                     sortingConfig = config.sorting,
                     filteringConfig = config.filtering,
@@ -123,7 +124,7 @@ fun AppScaffold(
                 )
             }
 
-            is BottomBarConfig.Models.Management -> {
+            is BottomBarConfig.Models.Managing -> {
                 ModelsManagementBottomBar(
                     isDeletionEnabled = config.isDeletionEnabled,
                     onToggleDeleting = config.onToggleDeleting,

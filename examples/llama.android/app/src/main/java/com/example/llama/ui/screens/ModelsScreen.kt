@@ -33,7 +33,6 @@ import com.example.llama.viewmodel.PreselectedModelToRun.RamWarning
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsScreen(
-    onManageModelsClicked: () -> Unit,
     onConfirmSelection: (ModelInfo, RamWarning) -> Unit,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,

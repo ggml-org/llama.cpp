@@ -56,7 +56,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
-import com.example.llama.data.model.ModelFilter
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.ui.components.InfoAction
@@ -110,18 +109,18 @@ fun ModelsManagementAndDeletingScreen(
             ModelsLoadingInProgressView()
         } else if (filteredModels.isEmpty()) {
             // Import model prompt
-            val message = when (activeFiltersCount) {
-                0 -> "Tap the \"+\" button\n to import a model"
+            val title = when (activeFiltersCount) {
+                0 -> "Tap the \"+\" button\n to install a model"
                 1 -> "No models match\n the selected filter"
                 else -> "No models match\n the selected filters"
             }
             InfoView(
-                modifier = Modifier.fillMaxSize(0.8f).align(Alignment.Center),
-                title = message,
+                modifier = Modifier.fillMaxSize(0.9f).align(Alignment.Center),
+                title = title,
                 icon = Icons.Default.FolderOpen,
                 message = "Import a local GGUF model file, or download directly from HuggingFace!",
                 action = InfoAction(
-                    label = "Learn more",
+                    label = "Learn More",
                     icon = Icons.AutoMirrored.Default.Help,
                     onAction = {
                         val url = "https://huggingface.co/docs/hub/en/gguf"

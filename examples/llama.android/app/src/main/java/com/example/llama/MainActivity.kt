@@ -192,6 +192,7 @@ fun AppContent(
         // Model selection screen
         currentRoute == AppDestinations.MODELS_ROUTE -> {
             // Collect states for bottom bar
+            val allModels by modelsViewModel.allModels.collectAsState()
             val filteredModels by modelsViewModel.filteredModels.collectAsState()
             val sortOrder by modelsViewModel.sortOrder.collectAsState()
             val showSortMenu by modelsViewModel.showSortMenu.collectAsState()
@@ -201,6 +202,8 @@ fun AppContent(
 
             val selectedModelsToDelete by modelsManagementViewModel.selectedModelsToDelete.collectAsState()
             val showImportModelMenu by modelsManagementViewModel.showImportModelMenu.collectAsState()
+
+            val hasModelsInstalled = allModels?.isNotEmpty() == true
 
             // Create file launcher for importing local models
             val fileLauncher = rememberLauncherForActivityResult(
@@ -242,10 +245,12 @@ fun AppContent(
                     when (modelScreenUiMode) {
                         ModelScreenUiMode.BROWSING ->
                             BottomBarConfig.Models.Browsing(
+                                isSearchingEnabled = hasModelsInstalled,
                                 onToggleSearching = {
                                     modelsViewModel.toggleMode(ModelScreenUiMode.SEARCHING)
                                 },
                                 sorting = BottomBarConfig.Models.Browsing.SortingConfig(
+                                    isEnabled = hasModelsInstalled,
                                     currentOrder = sortOrder,
                                     isMenuVisible = showSortMenu,
                                     toggleMenu = modelsViewModel::toggleSortMenu,
@@ -255,7 +260,7 @@ fun AppContent(
                                     }
                                 ),
                                 filtering = BottomBarConfig.Models.Browsing.FilteringConfig(
-                                    isActive = activeFilters.any { it.value },
+                                    isEnabled = hasModelsInstalled,
                                     filters = activeFilters,
                                     onToggleFilter = modelsViewModel::toggleFilter,
                                     onClearFilters = modelsViewModel::clearFilters,
@@ -292,12 +297,13 @@ fun AppContent(
                             )
 
                         ModelScreenUiMode.MANAGING ->
-                            BottomBarConfig.Models.Management(
+                            BottomBarConfig.Models.Managing(
                                 isDeletionEnabled = filteredModels?.isNotEmpty() == true,
                                 onToggleDeleting = {
                                     modelsViewModel.toggleMode(ModelScreenUiMode.DELETING)
                                 },
-                                sorting = BottomBarConfig.Models.Management.SortingConfig(
+                                sorting = BottomBarConfig.Models.Managing.SortingConfig(
+                                    isEnabled = hasModelsInstalled,
                                     currentOrder = sortOrder,
                                     isMenuVisible = showSortMenu,
                                     toggleMenu = { modelsViewModel.toggleSortMenu(it) },
@@ -306,15 +312,15 @@ fun AppContent(
                                         modelsViewModel.toggleSortMenu(false)
                                     }
                                 ),
-                                filtering = BottomBarConfig.Models.Management.FilteringConfig(
-                                    isActive = activeFilters.any { it.value },
+                                filtering = BottomBarConfig.Models.Managing.FilteringConfig(
+                                    isEnabled = hasModelsInstalled,
                                     filters = activeFilters,
                                     onToggleFilter = modelsViewModel::toggleFilter,
                                     onClearFilters = modelsViewModel::clearFilters,
                                     isMenuVisible = showFilterMenu,
                                     toggleMenu = modelsViewModel::toggleFilterMenu
                                 ),
-                                importing = BottomBarConfig.Models.Management.ImportConfig(
+                                importing = BottomBarConfig.Models.Managing.ImportConfig(
                                     isMenuVisible = showImportModelMenu,
                                     toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
                                     importFromLocal = {
@@ -466,9 +472,6 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODELS_ROUTE) {
                     ModelsScreen(
-                        onManageModelsClicked = {
-                            // TODO-han.yin: remove this after implementing onboarding flow
-                        },
                         onConfirmSelection = { modelInfo, ramWarning ->
                             if (modelsViewModel.confirmSelectedModel(modelInfo, ramWarning)) {
                                 navigationActions.navigateToModelLoading()

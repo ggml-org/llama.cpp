@@ -19,6 +19,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,9 +34,9 @@ import com.example.llama.data.model.ModelSortOrder
 fun ModelsManagementBottomBar(
     isDeletionEnabled: Boolean,
     onToggleDeleting: () -> Unit,
-    sortingConfig: BottomBarConfig.Models.Management.SortingConfig,
-    filteringConfig: BottomBarConfig.Models.Management.FilteringConfig,
-    importingConfig: BottomBarConfig.Models.Management.ImportConfig,
+    sortingConfig: BottomBarConfig.Models.Managing.SortingConfig,
+    filteringConfig: BottomBarConfig.Models.Managing.FilteringConfig,
+    importingConfig: BottomBarConfig.Models.Managing.ImportConfig,
 ) {
     BottomAppBar(
         actions = {
@@ -47,7 +48,10 @@ fun ModelsManagementBottomBar(
             }
 
             // Sorting action
-            IconButton(onClick = { sortingConfig.toggleMenu(true) }) {
+            IconButton(
+                enabled = sortingConfig.isEnabled,
+                onClick = { sortingConfig.toggleMenu(true) }
+            ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Sort,
                     contentDescription = "Sort models"
@@ -99,15 +103,20 @@ fun ModelsManagementBottomBar(
             }
 
             // Filtering action
-            IconButton(onClick = { filteringConfig.toggleMenu(true) }) {
+            val hasFilters = filteringConfig.filters.any { it.value }
+            IconButton(
+                enabled = filteringConfig.isEnabled,
+                onClick = { filteringConfig.toggleMenu(true) },
+                colors = IconButtonDefaults.iconButtonColors().copy(
+                    contentColor = if (hasFilters) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+            ) {
                 Icon(
                     imageVector =
-                        if (filteringConfig.isActive) Icons.Default.FilterAlt
+                        if (hasFilters) Icons.Default.FilterAlt
                         else Icons.Outlined.FilterAlt,
                     contentDescription = "Filter models",
-                    tint =
-                        if (filteringConfig.isActive) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
