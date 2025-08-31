@@ -220,7 +220,7 @@ static void test_deepseek_v3_1_tool_calls() {
     };
     const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
     auto msg = common_chat_parse(input, false, syntax);
-    assert_equals(variant, static_cast<std::size_t>(1), msg.tool_calls.size());
+    assert_equals<std::size_t>(variant, 1, msg.tool_calls.size());
     assert_equals(variant, std::string("get_time"), msg.tool_calls[0].name);
     // JSON arguments are dumped without spaces
     assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
