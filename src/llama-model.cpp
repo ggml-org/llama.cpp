@@ -623,8 +623,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
 
                 hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
-                hparams.n_swa         = 8192; // should this be a gguf kv? currently it's the same for Scout and Maverick
+                hparams.n_swa         = 8192; // currently it's the same for Scout and Maverick
                 hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
+
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); // for overrides in tests
 
                 switch (hparams.n_expert) {
                     case 16:  type = LLM_TYPE_17B_16E; break;
