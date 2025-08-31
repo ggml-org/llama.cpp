@@ -1,5 +1,6 @@
 package com.example.llama.ui.scaffold.topbar
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -64,6 +65,7 @@ private fun StorageIndicator(
 
     OutlinedButton(
         modifier = Modifier.padding(end = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = "Your models occupy $usedGb GB storage\nRemaining free space available: $availableGb GB",

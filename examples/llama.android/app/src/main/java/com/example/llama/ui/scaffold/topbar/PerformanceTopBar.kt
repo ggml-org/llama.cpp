@@ -1,5 +1,6 @@
 package com.example.llama.ui.scaffold.topbar
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -91,6 +92,7 @@ private fun MemoryIndicator(
 
     OutlinedButton(
         modifier = Modifier.padding(end = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = "Free RAM available: $availableGB GB\nTotal RAM on your device: $totalGB GB",
@@ -110,7 +112,7 @@ private fun MemoryIndicator(
             )
 
             Text(
-                modifier = Modifier.padding(start = 4.dp),
+                modifier = Modifier.padding(start = 2.dp),
                 text =  "$availableGB / $totalGB GB",
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -131,10 +133,11 @@ private fun TemperatureIndicator(
         TemperatureWarningLevel.MEDIUM -> "Your device is warming up to $temperatureDisplay."
         else -> "Your device's temperature is $temperatureDisplay."
     }
-    val warningDismissible = temperatureMetrics.warningLevel == TemperatureWarningLevel.HIGH
+    val warningDismissible = temperatureMetrics.warningLevel != TemperatureWarningLevel.HIGH
 
     OutlinedButton(
         modifier = Modifier.padding(end = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         onClick = {
             onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                 message = temperatureWarning,

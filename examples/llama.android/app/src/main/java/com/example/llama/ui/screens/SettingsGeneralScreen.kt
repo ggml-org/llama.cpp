@@ -168,7 +168,7 @@ fun SettingsGeneralScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Local inference for LLM models on your device powered by Arm® technologies.",
+                text = "Run Large Language Models locally at your fingertips, harness the power of mobile AI with Arm®.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }

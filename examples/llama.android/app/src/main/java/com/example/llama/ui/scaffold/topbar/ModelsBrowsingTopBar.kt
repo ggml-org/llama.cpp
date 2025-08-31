@@ -1,5 +1,6 @@
 package com.example.llama.ui.scaffold.topbar
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -67,7 +68,8 @@ private fun ModelManageActionToggle(
     onToggleManaging: () -> Unit,
 ) {
     FilledTonalButton(
-        modifier = Modifier.padding(end = 12.dp),
+        modifier = Modifier.padding(end = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         onClick = onToggleManaging
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
