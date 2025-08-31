@@ -1769,6 +1769,8 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     case 128:
         for (int i = 0; i < nb; ++i) {
 
+            __builtin_prefetch(&x[i + 1].d, 0, 1);
+
             const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
 
             const uint8_t * restrict q6 = x[i].ql;
