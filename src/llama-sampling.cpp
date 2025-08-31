@@ -128,19 +128,8 @@ struct ring_buffer {
     std::vector<T> data;
 };
 
-// helper buffers used for bucket sort
-// samplers can keep a struct of these to avoid allocating buffers on the heap each time
-struct llama_sort_data {
-    std::vector<llama_token_data> data;
-
-    std::vector<int> bucket_idx;
-    std::vector<int> histo;
-
-    std::vector<llama_token_data*> bucket_ptrs;
-};
-
 // writes result in res, does not mutate cur
-static void llama_token_data_array_sort(const llama_token_data_array & cur, int k, llama_sort_data & res) {
+static void llama_token_data_array_sort(const llama_token_data_array & cur, int k, std::vector<llama_token_data> & data) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
         return a.logit > b.logit;
     };
@@ -151,21 +140,18 @@ static void llama_token_data_array_sort(const llama_token_data_array & cur, int 
     constexpr float bucket_scale = nbuckets/(bucket_high - bucket_low);
     constexpr float bucket_inter = -bucket_low * bucket_scale;
 
-    auto & data = res.data;
-    auto & bucket_idx = res.bucket_idx;
-    auto & histo = res.histo;
-    auto & bucket_ptrs = res.bucket_ptrs;
+    std::vector<int> bucket_idx;
+    std::vector<int> histo(nbuckets, 0);
 
-    bucket_idx.resize(cur.size);
+    std::vector<llama_token_data*> bucket_ptrs;
 
-    histo.clear();
-    histo.resize(nbuckets, 0);
+    bucket_idx.reserve(cur.size);
 
     for (int i = 0; i < (int)cur.size; ++i) {
         const float val = cur.data[i].logit;
         int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
         ib = std::max(0, std::min(nbuckets - 1, ib));
-        bucket_idx[i] = ib;
+        bucket_idx.push_back(ib);
         ++histo[ib];
     }
     int nhave = 0;
@@ -178,7 +164,6 @@ static void llama_token_data_array_sort(const llama_token_data_array & cur, int 
     }
     data.resize(nhave);
     auto * ptr = data.data();
-    bucket_ptrs.clear();
     bucket_ptrs.reserve(nbuckets - ib);
     for (int j = nbuckets - 1; j >= ib; --j) {
         bucket_ptrs.push_back(ptr);
@@ -202,7 +187,7 @@ static void llama_token_data_array_sort(const llama_token_data_array & cur, int 
 }
 
 // buf is a helper buffer that can optionally be utilized
-static void llama_token_data_array_sort_inplace(llama_token_data_array * cur_p, int k, llama_sort_data & buf) {
+static void llama_token_data_array_sort_inplace(llama_token_data_array * cur_p, int k) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
         return a.logit > b.logit;
     };
@@ -212,9 +197,11 @@ static void llama_token_data_array_sort_inplace(llama_token_data_array * cur_p, 
         return;
     }
 
-    llama_token_data_array_sort(*cur_p, k, buf);
+    std::vector<llama_token_data> tmp;
 
-    std::memcpy(cur_p->data, buf.data.data(), k*sizeof(llama_token_data));
+    llama_token_data_array_sort(*cur_p, k, tmp);
+
+    std::memcpy(cur_p->data, tmp.data(), k*sizeof(llama_token_data));
 }
 
 static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng) {
@@ -289,13 +276,12 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
     }
 }
 
-// if buf_sort == nullptr : do not sort cur_p
-static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, llama_sort_data * buf_sort) {
+static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_sort) {
     GGML_ASSERT(cur_p->size > 0);
 
     // Sort the logits in descending order if requested
-    if (buf_sort && !cur_p->sorted) {
-        llama_token_data_array_sort_inplace(cur_p, cur_p->size, *buf_sort);
+    if (do_sort && !cur_p->sorted) {
+        llama_token_data_array_sort_inplace(cur_p, cur_p->size);
         cur_p->sorted = true;
     }
 
@@ -319,7 +305,7 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, llama_sor
     }
 }
 
-static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k, llama_sort_data & buf_sort) {
+static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) {
     // if (k >= (int32_t)cur_p->size) {
     //     return;
     // }
@@ -332,7 +318,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k, 
 
     // Sort scores in descending order
     if (!cur_p->sorted) {
-        llama_token_data_array_sort_inplace(cur_p, k, buf_sort);
+        llama_token_data_array_sort_inplace(cur_p, k);
         cur_p->sorted = true;
     }
 
@@ -604,8 +590,6 @@ struct llama_sampler_dist {
           uint32_t seed_cur;
 
     std::mt19937 rng;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_dist_name(const struct llama_sampler * /*smpl*/) {
@@ -616,7 +600,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     auto * ctx = (llama_sampler_dist *) smpl->ctx;
 
     // sorting is not necessary here
-    llama_sampler_softmax_impl(cur_p, nullptr);
+    llama_sampler_softmax_impl(cur_p, false);
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
 }
@@ -662,7 +646,6 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
             /* .seed     = */ seed,
             /* .seed_cur = */ seed_cur,
             /* .rng      = */ std::mt19937(seed_cur),
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -671,8 +654,6 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
 
 struct llama_sampler_top_k {
     const int32_t k;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_top_k_name(const struct llama_sampler * /*smpl*/) {
@@ -681,7 +662,7 @@ static const char * llama_sampler_top_k_name(const struct llama_sampler * /*smpl
 
 static void llama_sampler_top_k_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_top_k *) smpl->ctx;
-    llama_sampler_top_k_impl(cur_p, ctx->k, ctx->buf_sort);
+    llama_sampler_top_k_impl(cur_p, ctx->k);
 }
 
 static struct llama_sampler * llama_sampler_top_k_clone(const struct llama_sampler * smpl) {
@@ -706,8 +687,7 @@ struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_top_k_i,
         /* .ctx   = */ new llama_sampler_top_k {
-            /* .k        = */ k,
-            /* .buf_sort = */ {},
+            /* .k = */ k,
         }
     );
 }
@@ -718,7 +698,7 @@ struct llama_sampler_top_p {
     const float  p;
     const size_t min_keep;
 
-    llama_sort_data buf_sort;
+    std::vector<llama_token_data> buf_sort;
 };
 
 static const char * llama_sampler_top_p_name(const struct llama_sampler * /*smpl*/) {
@@ -732,7 +712,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, nullptr);
+    llama_sampler_softmax_impl(cur_p, false);
 
     size_t k = cur_p->size;
     auto * pdata = cur_p->data;
@@ -743,10 +723,10 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
     if (!cur_p->sorted && cur_p->size > 1024) {
         k = std::min<size_t>(256, cur_p->size);
         llama_token_data_array_sort(*cur_p, k, buf_sort);
-        pdata = buf_sort.data.data();
+        pdata = buf_sort.data();
     } else if (!cur_p->sorted) {
         // small candidates -> sort inplace
-        llama_token_data_array_sort_inplace(cur_p, k, buf_sort);
+        llama_token_data_array_sort_inplace(cur_p, k);
         cur_p->sorted = true;
     }
 
@@ -768,13 +748,13 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
         if (!cur_p->sorted && i == k - 1) {
             k = cur_p->size;
             llama_token_data_array_sort(*cur_p, k, buf_sort);
-            pdata = buf_sort.data.data();
+            pdata = buf_sort.data();
         }
     }
 
     // Resize the output vector to keep only the top-p tokens
     if (!cur_p->sorted) {
-        std::memcpy(cur_p->data, buf_sort.data.data(), last_idx*sizeof(llama_token_data));
+        std::memcpy(cur_p->data, buf_sort.data(), last_idx*sizeof(llama_token_data));
         cur_p->sorted = true;
     }
 
@@ -815,8 +795,6 @@ struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
 struct llama_sampler_min_p {
     const float  p;
     const size_t min_keep;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_min_p_name(const struct llama_sampler * /*smpl*/) {
@@ -860,7 +838,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
     if (!min_p_applied) {
         // Sort the logits in descending order
         if (!cur_p->sorted) {
-            llama_token_data_array_sort_inplace(cur_p, cur_p->size, ctx->buf_sort);
+            llama_token_data_array_sort_inplace(cur_p, cur_p->size);
             cur_p->sorted = true;
         }
 
@@ -902,7 +880,6 @@ struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
         /* .ctx   = */ new llama_sampler_min_p {
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -912,8 +889,6 @@ struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
 struct llama_sampler_typical {
     const float  p;
     const size_t min_keep;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_typical_name(const struct llama_sampler * /*smpl*/) {
@@ -930,7 +905,7 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     }
 
     // Compute the softmax of logits and calculate entropy
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     float entropy = 0.0f;
     for (size_t i = 0; i < cur_p->size; ++i) {
@@ -1004,7 +979,6 @@ struct llama_sampler * llama_sampler_init_typical(float p, size_t min_keep) {
         /* .ctx   = */ new llama_sampler_typical {
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -1058,8 +1032,6 @@ struct llama_sampler_temp_ext {
     const float temp;
     const float delta;
     const float exponent;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_temp_ext_name(const struct llama_sampler * /*smpl*/) {
@@ -1082,7 +1054,7 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
         // Calculate maximum possible entropy
         float max_entropy = -logf(1.0f / cur_p->size);
 
-        llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+        llama_sampler_softmax_impl(cur_p, true);
 
         // Calculate entropy of the softmax probabilities
         float entropy = 0.0f;
@@ -1162,7 +1134,6 @@ struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, floa
             /* .temp     = */ temp,
             /* .delta    = */ delta,
             /* .exponent = */ exponent,
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -1178,7 +1149,6 @@ struct llama_sampler_xtc {
     uint32_t       seed_cur;
 
     std::mt19937    rng;
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_xtc_name(const struct llama_sampler * /*smpl*/) {
@@ -1200,7 +1170,7 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     int pos_last = 0;
 
@@ -1262,7 +1232,6 @@ struct llama_sampler * llama_sampler_init_xtc(float p, float t, size_t min_keep,
             /* .seed          = */ seed,
             /* .seed_cur      = */ seed_cur,
             /* .rng           = */ std::mt19937(seed_cur),
-            /* .buf_sort      = */ {},
         }
     );
 }
@@ -1283,7 +1252,6 @@ struct llama_sampler_mirostat {
     float mu;
 
     std::mt19937    rng;
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_mirostat_name(const struct llama_sampler * /*smpl*/) {
@@ -1293,7 +1261,7 @@ static const char * llama_sampler_mirostat_name(const struct llama_sampler * /*s
 static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     // Estimate s_hat using the most probable m tokens
     float s_hat = 0.0;
@@ -1311,9 +1279,9 @@ static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_toke
     float epsilon_hat = s_hat - 1;
     float k = powf((epsilon_hat * powf(2, ctx->mu)) / (1 - powf(ctx->n_vocab, -epsilon_hat)), 1 / s_hat);
 
-    llama_sampler_top_k_impl(cur_p, std::max(int(k), 1), ctx->buf_sort);
+    llama_sampler_top_k_impl(cur_p, std::max(int(k), 1));
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     const int idx = llama_sample_dist(cur_p, ctx->rng);
 
@@ -1374,7 +1342,6 @@ struct llama_sampler * llama_sampler_init_mirostat(int32_t n_vocab, uint32_t see
             /* .m        = */ m,
             /* .mu       = */ 2.0f*tau,
             /* .rng      = */ std::mt19937(seed_cur),
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -1390,8 +1357,7 @@ struct llama_sampler_mirostat_v2 {
 
     float mu;
 
-    std::mt19937    rng;
-    llama_sort_data buf_sort;
+    std::mt19937 rng;
 };
 
 static const char * llama_sampler_mirostat_v2_name(const struct llama_sampler * /*smpl*/) {
@@ -1401,7 +1367,7 @@ static const char * llama_sampler_mirostat_v2_name(const struct llama_sampler * 
 static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat_v2 *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     // Truncate the words with surprise values greater than mu
     cur_p->size = std::distance(cur_p->data, std::find_if(cur_p->data, cur_p->data + cur_p->size, [&](const llama_token_data & candidate) {
@@ -1413,7 +1379,7 @@ static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_t
     }
 
     // Normalize the probabilities of the remaining words
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
     const int idx = llama_sample_dist(cur_p, ctx->rng);
 
@@ -1473,7 +1439,6 @@ struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, 
             /* .eta      = */ eta,
             /* .mu       = */ 2.0f*tau,
             /* .rng      = */ std::mt19937(seed_cur),
-            /* .buf_sort = */ {},
         }
     );
 }
@@ -1807,8 +1772,6 @@ struct llama_sampler * llama_sampler_init_penalties(
 
 struct llama_sampler_top_n_sigma {
     const float n;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_top_n_sigma_name(const struct llama_sampler * /*smpl*/) {
@@ -1855,7 +1818,7 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
         }
     }
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 }
 
 static struct llama_sampler * llama_sampler_top_n_sigma_clone(const struct llama_sampler * smpl) {
@@ -1880,8 +1843,7 @@ struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_top_n_sigma_i,
         /* .ctx   = */ new llama_sampler_top_n_sigma {
-            /* .n        = */ n,
-            /* .buf_sort = */ {},
+            /* .n = */ n,
         }
     );
 }
@@ -2371,8 +2333,6 @@ struct llama_sampler_infill {
 
     std::vector<char> buf0;
     std::vector<char> buf1;
-
-    llama_sort_data buf_sort;
 };
 
 static const char * llama_sampler_infill_name(const struct llama_sampler * /*smpl*/) {
@@ -2382,7 +2342,7 @@ static const char * llama_sampler_infill_name(const struct llama_sampler * /*smp
 static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_infill *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, &ctx->buf_sort);
+    llama_sampler_softmax_impl(cur_p, true);
 
 #if defined(GGML_DEBUG_SAMPLER_INFILL)
 #define LOG_DBG_CUR LLAMA_LOG_DEBUG
@@ -2579,10 +2539,9 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_infill_i,
         /* .ctx   = */ new llama_sampler_infill {
-            /* .vocab    = */ vocab,
-            /* .buf0     = */ std::vector<char>(512),
-            /* .buf1     = */ std::vector<char>(512),
-            /* .buf_sort = */ {},
+            /* .vocab = */ vocab,
+            /* .buf0  = */ std::vector<char>(512),
+            /* .buf1  = */ std::vector<char>(512),
         }
     );
 }
