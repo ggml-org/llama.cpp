@@ -1349,6 +1349,46 @@ static void gguf_write_out(const struct gguf_context * ctx, Writer & gw, bool on
     }
 }
 
+// file based writer
+struct gguf_writer_file final : public gguf_writer_base {
+    FILE * file;
+    bool ok {true};
+
+    gguf_writer_file(FILE* file) : file(file) {}
+
+    using gguf_writer_base::write;
+
+    void write(const int8_t val) override {
+        const auto ret = fputc(val, file);
+        written_bytes++;
+        ok = ok && ret == val;
+    }
+
+    void write(const std::vector<int8_t> & val) override {
+        const auto ret = fwrite(val.data(), 1, val.size(), file);
+        written_bytes += val.size();
+        ok = ok && ret == val.size();
+    }
+
+    void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
+        GGML_ASSERT(written_bytes - offset_data == info.offset);
+
+        GGML_ASSERT(ggml_is_contiguous(&info.t));
+        const size_t nbytes = ggml_nbytes(&info.t);
+
+        std::vector<int8_t> buf(nbytes);
+        if (info.t.buffer) {
+            ggml_backend_tensor_get(&info.t, buf.data(), 0, nbytes);
+        } else {
+            GGML_ASSERT(info.t.data);
+            memcpy(buf.data(), info.t.data, nbytes);
+        }
+        write(buf);
+
+        pad(alignment);
+    }
+};
+
 void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta) {
     gguf_writer_buf gw(buf);
     gguf_write_out(ctx, gw, only_meta);
@@ -1362,11 +1402,11 @@ bool gguf_write_to_file(const struct gguf_context * ctx, const char * fname, boo
         return false;
     }
 
-    std::vector<int8_t> buf;
-    gguf_write_to_buf(ctx, buf, only_meta);
-    const bool ok = fwrite(buf.data(), 1, buf.size(), file) == buf.size();
+    gguf_writer_file gw(file);
+    gguf_write_out(ctx, gw, only_meta);
+
     fclose(file);
-    return ok;
+    return gw.ok;
 }
 
 size_t gguf_get_meta_size(const struct gguf_context * ctx) {
