@@ -9,8 +9,10 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,11 +25,11 @@ class UserPreferences @Inject constructor (
 ) {
 
     companion object {
-        // Performance monitoring preferences
         private const val DATASTORE_SETTINGS = "settings"
         private val Context.settingsDataStore: DataStore<Preferences>
             by preferencesDataStore(name = DATASTORE_SETTINGS)
 
+        // Preferences keys
         private val PERFORMANCE_MONITORING_ENABLED = booleanPreferencesKey("performance_monitoring_enabled")
         private val USE_FAHRENHEIT_TEMPERATURE = booleanPreferencesKey("use_fahrenheit_temperature")
         private val MONITORING_INTERVAL_MS = longPreferencesKey("monitoring_interval_ms")
@@ -45,16 +47,15 @@ class UserPreferences @Inject constructor (
     /**
      * Gets whether performance monitoring is enabled.
      */
-    fun isPerformanceMonitoringEnabled(): Flow<Boolean> {
-        return context.settingsDataStore.data.map { preferences ->
+    fun isPerformanceMonitoringEnabled(): Flow<Boolean> =
+        context.settingsDataStore.data.map { preferences ->
             preferences[PERFORMANCE_MONITORING_ENABLED] != false
         }
-    }
 
     /**
      * Sets whether performance monitoring is enabled.
      */
-    suspend fun setPerformanceMonitoringEnabled(enabled: Boolean) {
+    suspend fun setPerformanceMonitoringEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
             preferences[PERFORMANCE_MONITORING_ENABLED] = enabled
         }
@@ -63,16 +64,15 @@ class UserPreferences @Inject constructor (
     /**
      * Gets whether temperature should be displayed in Fahrenheit.
      */
-    fun usesFahrenheitTemperature(): Flow<Boolean> {
-        return context.settingsDataStore.data.map { preferences ->
+    fun usesFahrenheitTemperature(): Flow<Boolean> =
+        context.settingsDataStore.data.map { preferences ->
             preferences[USE_FAHRENHEIT_TEMPERATURE] == true
         }
-    }
 
     /**
      * Sets whether temperature should be displayed in Fahrenheit.
      */
-    suspend fun setUseFahrenheitTemperature(useFahrenheit: Boolean) {
+    suspend fun setUseFahrenheitTemperature(useFahrenheit: Boolean) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
             preferences[USE_FAHRENHEIT_TEMPERATURE] = useFahrenheit
         }
@@ -83,16 +83,15 @@ class UserPreferences @Inject constructor (
      *
      * TODO-han.yin: replace with Enum value instead of millisecond value
      */
-    fun getMonitoringInterval(): Flow<Long> {
-        return context.settingsDataStore.data.map { preferences ->
+    fun getMonitoringInterval(): Flow<Long> =
+        context.settingsDataStore.data.map { preferences ->
             preferences[MONITORING_INTERVAL_MS] ?: DEFAULT_MONITORING_INTERVAL_MS
         }
-    }
 
     /**
      * Sets the monitoring interval in milliseconds.
      */
-    suspend fun setMonitoringInterval(intervalMs: Long) {
+    suspend fun setMonitoringInterval(intervalMs: Long) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
             preferences[MONITORING_INTERVAL_MS] = intervalMs
         }
@@ -101,16 +100,15 @@ class UserPreferences @Inject constructor (
     /**
      * Gets the current theme mode.
      */
-    fun getThemeMode(): Flow<Int> {
-        return context.settingsDataStore.data.map { preferences ->
+    fun getThemeMode(): Flow<Int> =
+        context.settingsDataStore.data.map { preferences ->
             preferences[THEME_MODE] ?: THEME_MODE_AUTO
         }
-    }
 
     /**
      * Sets the theme mode.
      */
-    suspend fun setThemeMode(mode: Int) {
+    suspend fun setThemeMode(mode: Int) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
             preferences[THEME_MODE] = mode
         }

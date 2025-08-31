@@ -4,8 +4,8 @@ import android.llama.cpp.LLamaTier
 import android.llama.cpp.TierDetection
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.llama.data.source.prefs.UserPreferences
 import com.example.llama.data.repo.ModelRepository
+import com.example.llama.data.source.prefs.UserPreferences
 import com.example.llama.monitoring.BatteryMetrics
 import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.monitoring.PerformanceMonitor

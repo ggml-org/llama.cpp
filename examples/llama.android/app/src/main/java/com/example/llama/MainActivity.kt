@@ -94,8 +94,9 @@ fun AppContent(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Inference engine state
+    // App core states
     val engineState by mainViewModel.engineState.collectAsState()
+    val showUserOnboarding by mainViewModel.showUserOnboarding.collectAsState()
 
     // Model state
     val modelScreenUiMode by modelsViewModel.modelScreenUiMode.collectAsState()
@@ -323,7 +324,7 @@ fun AppContent(
                                     toggleMenu = modelsViewModel::toggleFilterMenu
                                 ),
                                 importing = BottomBarConfig.Models.Managing.ImportConfig(
-                                    showTooltip = true,
+                                    showTooltip = showUserOnboarding,
                                     isMenuVisible = showImportModelMenu,
                                     toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
                                     importFromLocal = {
