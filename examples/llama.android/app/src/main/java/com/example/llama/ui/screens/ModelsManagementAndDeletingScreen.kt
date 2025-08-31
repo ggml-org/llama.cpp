@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -519,7 +520,7 @@ fun HuggingFaceModelListItem(
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
             Text(
-                modifier = Modifier.basicMarquee(),
+                modifier = Modifier.fillMaxWidth().basicMarquee(),
                 text = model.modelId.substringAfterLast("/"),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
@@ -527,9 +528,15 @@ fun HuggingFaceModelListItem(
 
             Spacer(modifier = Modifier.size(8.dp))
 
-            Row(verticalAlignment = Alignment.Bottom) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(0.9f)) {
+                    Row(
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Attribution,
                             contentDescription = "Author",
@@ -537,77 +544,73 @@ fun HuggingFaceModelListItem(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        Spacer(modifier = Modifier.size(4.dp))
-
                         Text(
+                            modifier = Modifier.padding(start = 4.dp),
                             text = model.author,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
-                    Spacer(modifier = Modifier.size(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(modifier = Modifier.weight(5f).padding(end = 8.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Today,
+                                contentDescription = "Author",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Today,
-                            contentDescription = "Author",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            Text(
+                                modifier = Modifier.padding(start = 4.dp),
+                                text = dateFormatter.format(model.lastModified),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-                        Spacer(modifier = Modifier.size(4.dp))
+                        Row(modifier = Modifier.weight(3f).padding(end = 8.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Favorite count",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                        Text(
-                            text = dateFormatter.format(model.lastModified),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            Text(
+                                modifier = Modifier.padding(start = 4.dp),
+                                text = formatContextLength(model.likes),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-                        Spacer(modifier = Modifier.size(8.dp))
+                        Row(modifier = Modifier.weight(4f).padding(end = 4.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Download count",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                        Icon(
-                            imageVector = Icons.Default.Favorite,
-                            contentDescription = "Favorite count",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.size(4.dp))
-
-                        Text(
-                            text = formatContextLength(model.likes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.size(8.dp))
-
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Download count",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.size(4.dp))
-
-                        Text(
-                            text = formatContextLength(model.downloads),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            Text(
+                                modifier = Modifier.padding(start = 4.dp),
+                                text = formatContextLength(model.downloads),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
-                Spacer(Modifier.weight(1f))
-
-                if (isSelected) {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = null, // handled by parent selectable
-                    )
-                }
+                Checkbox(
+                    modifier = Modifier.size(32.dp).alpha(if (isSelected) 1f else 0f),
+                    checked = isSelected,
+                    onCheckedChange = null, // handled by parent selectable
+                )
             }
         }
     }
