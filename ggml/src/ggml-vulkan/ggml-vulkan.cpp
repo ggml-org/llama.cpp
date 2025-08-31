@@ -12210,7 +12210,7 @@ static bool ggml_vk_instance_validation_ext_available() {
         }
     }
 
-    std::cerr << "ggml_vulkan: WARNING: Instance extension VK_EXT_validation_features not found." << std::endl;
+    std::cerr << "ggml_vulkan: WARNING: Validation layer or layer extension VK_EXT_validation_features not found." << std::endl;
 #endif
     return false;
 }
