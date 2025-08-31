@@ -210,7 +210,7 @@ static void test(const std::string & input, bool is_partial, const std::vector<s
 static void test_deepseek_v3_1_tool_calls() {
     //common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
     // variant: happy path for when it works as the model card says it should
-    const char* variant = "simple";
+    const std::string variant("simple");
     common_chat_syntax syntax = {
         /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
