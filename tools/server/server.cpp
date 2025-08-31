@@ -2550,11 +2550,12 @@ struct server_context {
         return slot.has_next_token; // continue
     }
 
-    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) {
+    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
         size_t n_probs = slot.params.sampling.n_probs;
         size_t n_vocab = llama_vocab_n_tokens(vocab);
+
         if (post_sampling) {
-            const auto * cur_p = common_sampler_get_candidates(slot.smpl);
+            const auto * cur_p = common_sampler_get_candidates(slot.smpl, true);
             const size_t max_probs = cur_p->size;
 
             // set probability for sampled token

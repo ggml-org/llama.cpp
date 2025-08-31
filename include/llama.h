@@ -206,7 +206,7 @@ extern "C" {
         llama_token_data * data;
         size_t size;
         int64_t selected; // this is the index in the data array (i.e. not the token id)
-        bool sorted;
+        bool sorted;      // note: do not assume the data is sorted - always check this flag
     } llama_token_data_array;
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
@@ -1155,11 +1155,6 @@ extern "C" {
 
     LLAMA_API struct llama_sampler * llama_sampler_init_greedy(void);
     LLAMA_API struct llama_sampler * llama_sampler_init_dist  (uint32_t seed);
-
-    /// @details Sorts candidate tokens by their logits in descending order and calculate probabilities based on logits.
-    /// NOTE: Avoid using on the full vocabulary as the sorting can become slow. For example, apply top-k or top-p sampling first.
-    DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_softmax    (void),
-        "will be removed in the future (see https://github.com/ggml-org/llama.cpp/pull/9896#discussion_r1800920915)");
 
     /// @details Top-K sampling described in academic paper "The Curious Case of Neural Text Degeneration" https://arxiv.org/abs/1904.09751
     /// Setting k <= 0 makes this a noop
