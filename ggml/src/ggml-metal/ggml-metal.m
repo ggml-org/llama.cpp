@@ -5130,7 +5130,7 @@ static int ggml_metal_encode_node(
 
                 bool use_vec_kernel = false;
 
-                // use non-vec kernel if there are many rows in src1 or if the vec-kernel is not support for this head size
+                // use non-vec kernel if the batch size is large or if the vec-kernel is not supported for this head size
                 if (ne01 >= 20 || (ne00 == 40 || ne00 == 80 || ne00 == 112)) {
                     switch (src1->type) {
                         case GGML_TYPE_F16:
