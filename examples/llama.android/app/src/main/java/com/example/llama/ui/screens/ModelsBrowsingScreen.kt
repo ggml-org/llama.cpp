@@ -22,6 +22,7 @@ import com.example.llama.viewmodel.PreselectedModelToRun
 
 @Composable
 fun ModelsBrowsingScreen(
+    showChatTooltip: Boolean,
     filteredModels: List<ModelInfo>?,
     activeFiltersCount: Int,
     preselection: PreselectedModelToRun?,
@@ -58,7 +59,7 @@ fun ModelsBrowsingScreen(
     } else {
         // Model cards
         LazyColumn(
-            Modifier.fillMaxSize(), // .padding(horizontal = 16.dp),
+            Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
         ) {

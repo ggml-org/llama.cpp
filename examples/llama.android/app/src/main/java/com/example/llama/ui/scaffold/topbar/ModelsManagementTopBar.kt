@@ -24,7 +24,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StorageTopBar(
+fun ModelsManagementTopBar(
     title: String,
     storageMetrics: StorageMetrics?,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,

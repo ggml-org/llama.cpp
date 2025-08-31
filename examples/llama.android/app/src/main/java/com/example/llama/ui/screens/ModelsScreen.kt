@@ -33,8 +33,10 @@ import com.example.llama.viewmodel.PreselectedModelToRun.RamWarning
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsScreen(
+    showModelImportTooltip: Boolean,
+    onFirstModelImportSuccess: (ModelInfo) -> Unit,
+    showChatTooltip: Boolean,
     onConfirmSelection: (ModelInfo, RamWarning) -> Unit,
-    onFirstModelImportSuccess: (() -> Unit)?,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,
     managementViewModel: ModelsManagementViewModel,
@@ -79,6 +81,7 @@ fun ModelsScreen(
         when (currentMode) {
             ModelScreenUiMode.BROWSING ->
                 ModelsBrowsingScreen(
+                    showChatTooltip = showChatTooltip,
                     filteredModels = filteredModels,
                     preselection = preselection,
                     onManageModelsClicked = {
@@ -95,11 +98,12 @@ fun ModelsScreen(
                 )
             ModelScreenUiMode.MANAGING, ModelScreenUiMode.DELETING ->
                 ModelsManagementAndDeletingScreen(
+                    showModelImportTooltip = showModelImportTooltip,
+                    onFirstModelImportSuccess = onFirstModelImportSuccess,
                     filteredModels = filteredModels,
                     isDeleting = currentMode == ModelScreenUiMode.DELETING,
                     onScaffoldEvent = onScaffoldEvent,
                     activeFiltersCount = activeFiltersCount,
-                    onFirstModelImportSuccess = onFirstModelImportSuccess,
                     modelsViewModel = modelsViewModel,
                     managementViewModel = managementViewModel,
                 )

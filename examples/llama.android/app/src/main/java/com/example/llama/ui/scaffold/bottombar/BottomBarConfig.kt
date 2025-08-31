@@ -89,6 +89,7 @@ sealed class BottomBarConfig {
         ) : BottomBarConfig()
 
         data class RunActionConfig(
+            val showTooltip: Boolean,
             val preselectedModelToRun: PreselectedModelToRun?,
             val onClickRun: (PreselectedModelToRun) -> Unit,
         )

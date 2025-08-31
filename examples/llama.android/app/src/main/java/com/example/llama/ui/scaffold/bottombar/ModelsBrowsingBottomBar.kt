@@ -18,19 +18,26 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.unit.dp
 import com.example.llama.data.model.ModelSortOrder
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsBrowsingBottomBar(
     isSearchingEnabled: Boolean,
@@ -39,6 +46,17 @@ fun ModelsBrowsingBottomBar(
     filteringConfig: BottomBarConfig.Models.Browsing.FilteringConfig,
     runActionConfig: BottomBarConfig.Models.RunActionConfig,
 ) {
+    val tooltipState = rememberTooltipState(
+        initialIsVisible = runActionConfig.showTooltip,
+        isPersistent = runActionConfig.showTooltip
+    )
+
+    LaunchedEffect(runActionConfig.preselectedModelToRun) {
+        if (runActionConfig.showTooltip && runActionConfig.preselectedModelToRun != null) {
+            tooltipState.show()
+        }
+    }
+
     BottomAppBar(
         actions = {
             // Enter search action
@@ -167,23 +185,35 @@ fun ModelsBrowsingBottomBar(
             }
         },
         floatingActionButton = {
-            // Only show FAB if a model is selected
-            AnimatedVisibility(
-                visible = runActionConfig.preselectedModelToRun != null,
-                enter = scaleIn() + fadeIn(),
-                exit = scaleOut() + fadeOut()
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                    TooltipAnchorPosition.Above),
+                state = tooltipState,
+                tooltip = {
+                    PlainTooltip {
+                        Text("Tap this button to run your first model!")
+                    }
+                },
+                onDismissRequest = {}
             ) {
-                FloatingActionButton(
-                    onClick = {
-                        runActionConfig.preselectedModelToRun?.let {
-                            runActionConfig.onClickRun(it)
-                        }
-                    },
+                // Only show FAB if a model is selected
+                AnimatedVisibility(
+                    visible = runActionConfig.preselectedModelToRun != null,
+                    enter = scaleIn() + fadeIn(),
+                    exit = scaleOut() + fadeOut()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Run with selected model"
-                    )
+                    FloatingActionButton(
+                        onClick = {
+                            runActionConfig.preselectedModelToRun?.let {
+                                runActionConfig.onClickRun(it)
+                            }
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Run with selected model"
+                        )
+                    }
                 }
             }
         }

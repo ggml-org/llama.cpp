@@ -19,7 +19,7 @@ import com.example.llama.ui.scaffold.topbar.DefaultTopBar
 import com.example.llama.ui.scaffold.topbar.ModelsBrowsingTopBar
 import com.example.llama.ui.scaffold.topbar.NavigationIcon
 import com.example.llama.ui.scaffold.topbar.PerformanceTopBar
-import com.example.llama.ui.scaffold.topbar.StorageTopBar
+import com.example.llama.ui.scaffold.topbar.ModelsManagementTopBar
 import com.example.llama.ui.scaffold.topbar.TopBarConfig
 
 /**
@@ -71,6 +71,7 @@ fun AppScaffold(
 
             is TopBarConfig.ModelsBrowsing -> ModelsBrowsingTopBar(
                 title = topBarconfig.title,
+                showManagingToggle = topBarconfig.showManagingToggle,
                 onToggleManaging = topBarconfig.onToggleManaging,
                 onNavigateBack = topBarconfig.navigationIcon.backAction,
                 onMenuOpen = topBarconfig.navigationIcon.menuAction
@@ -83,7 +84,7 @@ fun AppScaffold(
                 onQuit = topBarconfig.navigationIcon.quitAction
             )
 
-            is TopBarConfig.ModelsManagement -> StorageTopBar(
+            is TopBarConfig.ModelsManagement -> ModelsManagementTopBar(
                 title = topBarconfig.title,
                 storageMetrics = topBarconfig.storageMetrics,
                 onScaffoldEvent = onScaffoldEvent,

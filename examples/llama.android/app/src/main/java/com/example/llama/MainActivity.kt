@@ -97,7 +97,7 @@ fun AppContent(
     // App core states
     val engineState by mainViewModel.engineState.collectAsState()
     val showModelImportTooltip by mainViewModel.showModelImportTooltip.collectAsState()
-    val showChatTooltip by mainViewModel.showModelImportTooltip.collectAsState()
+    val showChatTooltip by mainViewModel.showChatTooltip.collectAsState()
 
     // Model state
     val modelScreenUiMode by modelsViewModel.modelScreenUiMode.collectAsState()
@@ -222,9 +222,12 @@ fun AppContent(
                                     modelsViewModel.resetPreselection()
                                     openDrawer()
                                 },
-                                onToggleManaging = if (hasModelsInstalled) {
-                                    { modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING) }
-                                } else null,
+                                showManagingToggle = !showChatTooltip && hasModelsInstalled,
+                                onToggleManaging = {
+                                    if (hasModelsInstalled) {
+                                        modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
+                                    }
+                                },
                             )
                         ModelScreenUiMode.SEARCHING ->
                             TopBarConfig.None()
@@ -234,7 +237,9 @@ fun AppContent(
                                 navigationIcon = NavigationIcon.Back {
                                     modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
                                 },
-                                storageMetrics = if (isMonitoringEnabled) storageMetrics else null,
+                                storageMetrics =
+                                    if (isMonitoringEnabled && !showModelImportTooltip)
+                                        storageMetrics else null,
                             )
                         ModelScreenUiMode.DELETING ->
                             TopBarConfig.ModelsDeleting(
@@ -272,6 +277,7 @@ fun AppContent(
                                     toggleMenu = modelsViewModel::toggleFilterMenu
                                 ),
                                 runAction = BottomBarConfig.Models.RunActionConfig(
+                                    showTooltip = showChatTooltip,
                                     preselectedModelToRun = preselection,
                                     onClickRun = {
                                         if (modelsViewModel.selectModel(it)) {
@@ -290,6 +296,7 @@ fun AppContent(
                                 },
                                 onSearch = { /* No-op for now */ },
                                 runAction = BottomBarConfig.Models.RunActionConfig(
+                                    showTooltip = false,
                                     preselectedModelToRun = preselection,
                                     onClickRun = {
                                         if (modelsViewModel.selectModel(it)) {
@@ -477,15 +484,20 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODELS_ROUTE) {
                     ModelsScreen(
+                        showModelImportTooltip = showModelImportTooltip,
+                        onFirstModelImportSuccess = { model ->
+                            if (showModelImportTooltip) {
+                                mainViewModel.waiveModelImportTooltip()
+                                modelsViewModel.toggleMode(ModelScreenUiMode.BROWSING)
+                                modelsViewModel.preselectModel(model, true)
+                            }
+                        },
+                        showChatTooltip = showChatTooltip,
                         onConfirmSelection = { modelInfo, ramWarning ->
                             if (modelsViewModel.confirmSelectedModel(modelInfo, ramWarning)) {
                                 navigationActions.navigateToModelLoading()
                             }
                         },
-                        onFirstModelImportSuccess =
-                            if (showModelImportTooltip) {
-                                { mainViewModel.waiveModelImportTooltip() }
-                            } else null,
                         onScaffoldEvent = handleScaffoldEvent,
                         modelsViewModel = modelsViewModel,
                         managementViewModel = modelsManagementViewModel,
@@ -498,7 +510,12 @@ fun AppContent(
                         onScaffoldEvent = handleScaffoldEvent,
                         onNavigateBack = { navigationActions.navigateUp() },
                         onNavigateToBenchmark = { navigationActions.navigateToBenchmark(it) },
-                        onNavigateToConversation = { navigationActions.navigateToConversation(it) },
+                        onNavigateToConversation = {
+                            navigationActions.navigateToConversation(it)
+                            if (showChatTooltip) {
+                                mainViewModel.waiveChatTooltip()
+                            }
+                        },
                         viewModel = modelLoadingViewModel
                     )
                 }

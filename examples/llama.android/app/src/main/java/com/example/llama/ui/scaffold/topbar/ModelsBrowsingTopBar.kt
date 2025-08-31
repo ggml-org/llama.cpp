@@ -24,7 +24,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ModelsBrowsingTopBar(
     title: String,
-    onToggleManaging: (() -> Unit)? = null,
+    showManagingToggle: Boolean,
+    onToggleManaging: () -> Unit,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
 ) {
@@ -52,9 +53,9 @@ fun ModelsBrowsingTopBar(
             }
         },
         actions = {
-            onToggleManaging?.let {
-                ModelManageActionToggle(it)
-            }
+            if (showManagingToggle) {
+            ModelManageActionToggle(onToggleManaging)
+                }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,

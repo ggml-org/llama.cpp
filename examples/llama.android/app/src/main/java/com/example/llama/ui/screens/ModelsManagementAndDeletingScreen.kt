@@ -19,15 +19,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.outlined.ContactSupport
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Attribution
+import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -80,10 +84,11 @@ import java.util.Locale
  */
 @Composable
 fun ModelsManagementAndDeletingScreen(
+    showModelImportTooltip: Boolean,
+    onFirstModelImportSuccess: (ModelInfo) -> Unit,
     filteredModels: List<ModelInfo>?,
     activeFiltersCount: Int,
     isDeleting: Boolean,
-    onFirstModelImportSuccess: (() -> Unit)?,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     modelsViewModel: ModelsViewModel,
     managementViewModel: ModelsManagementViewModel,
@@ -118,7 +123,7 @@ fun ModelsManagementAndDeletingScreen(
             }
 
             val message = "If you already have GGUF models on your computer, " +
-                    "please transfer it onto your device, and then select \"Import a local model\".\n\n" +
+                    "please transfer it onto your device, and then select \"Import a local GGUF model\".\n\n" +
                     "Otherwise, select \"Download from HuggingFace\" and pick one you like."
 
             InfoView(
@@ -208,14 +213,20 @@ fun ModelsManagementAndDeletingScreen(
             }
 
             is Importation.Success -> {
-                LaunchedEffect(state) {
-                    onScaffoldEvent(
-                        ScaffoldEvent.ShowSnackbar(
-                            message = "Imported model: ${state.model.name}"
+                if (showModelImportTooltip) {
+                    FirstModelImportSuccessDialog {
+                        onFirstModelImportSuccess(state.model)
+                        managementViewModel.resetManagementState()
+                    }
+                } else {
+                    LaunchedEffect(state) {
+                        onScaffoldEvent(
+                            ScaffoldEvent.ShowSnackbar(
+                                message = "Imported model: ${state.model.name}"
+                            )
                         )
-                    )
-                    onFirstModelImportSuccess?.invoke()
-                    managementViewModel.resetManagementState()
+                        managementViewModel.resetManagementState()
+                    }
                 }
             }
 
@@ -614,6 +625,34 @@ fun HuggingFaceModelListItem(
             }
         }
     }
+}
+
+@Composable
+private fun FirstModelImportSuccessDialog(
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        // Prevent dismissal via back button during deletion
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        ),
+        onDismissRequest = {},
+        text = {
+            InfoView(
+                title = "Congratulations",
+                icon = Icons.Default.Celebration,
+                message = "You have just installed your first Large Language Model!\n\n"
+                    + "Tap \"Continue\" to check it out!",
+                action = InfoAction(
+                    label = "Continue",
+                    icon = Icons.AutoMirrored.Default.ArrowForward,
+                    onAction = onConfirm
+                )
+            )
+        },
+        confirmButton = {}
+    )
 }
 
 @Composable

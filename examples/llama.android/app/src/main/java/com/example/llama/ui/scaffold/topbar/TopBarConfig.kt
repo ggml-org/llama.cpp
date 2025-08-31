@@ -28,7 +28,8 @@ sealed class TopBarConfig {
     data class ModelsBrowsing(
         override val title: String,
         override val navigationIcon: NavigationIcon,
-        val onToggleManaging: (() -> Unit)?,
+        val showManagingToggle: Boolean,
+        val onToggleManaging: () -> Unit,
     ) : TopBarConfig()
 
     // Model batch-deletion top bar with a toggle to turn on/off manage mode

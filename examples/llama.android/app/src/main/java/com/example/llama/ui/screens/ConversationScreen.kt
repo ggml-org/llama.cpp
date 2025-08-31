@@ -90,7 +90,6 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-private const val AUTO_REPOSITION_INTERVAL = 150L
 
 /**
  * Screen for LLM conversation with user.

@@ -46,7 +46,9 @@ fun ModelsManagementBottomBar(
     filteringConfig: BottomBarConfig.Models.Managing.FilteringConfig,
     importingConfig: BottomBarConfig.Models.Managing.ImportConfig,
 ) {
-    val tooltipState = rememberTooltipState()
+    val tooltipState = rememberTooltipState(
+        initialIsVisible = false,
+        isPersistent = importingConfig.showTooltip)
 
     LaunchedEffect(importingConfig) {
         if (importingConfig.showTooltip && !importingConfig.isMenuVisible) {
@@ -181,12 +183,13 @@ fun ModelsManagementBottomBar(
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
                     TooltipAnchorPosition.Above),
+                state = tooltipState,
                 tooltip = {
                     PlainTooltip {
                         Text("Tap this button to install your first model!")
                     }
                 },
-                state = tooltipState
+                onDismissRequest = {}
             ) {
                 FloatingActionButton(
                     onClick = { importingConfig.toggleMenu(true) },
@@ -204,7 +207,7 @@ fun ModelsManagementBottomBar(
                 onDismissRequest = { importingConfig.toggleMenu(false) }
             ) {
                 DropdownMenuItem(
-                    text = { Text("Import a local model") },
+                    text = { Text("Import a local GGUF model") },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.FolderOpen,
