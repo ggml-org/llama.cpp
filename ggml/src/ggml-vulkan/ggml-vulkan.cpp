@@ -6228,7 +6228,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     if (x_non_contig) {
         ctx->prealloc_x_need_sync = true;
     }
-    if (y_non_contig) {
+    if (y_non_contig || quantize_y) {
         ctx->prealloc_y_need_sync = true;
     }
 }
