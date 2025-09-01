@@ -15,7 +15,7 @@
 </script>
 
 <kbd class="{baseClasses} {variantClasses} {className}">
-	{#each keys as key, index}
+	{#each keys as key, index (index)}
 		{#if key === 'shift'}
 			<ArrowBigUp class="h-1 w-1 {variant === 'destructive' ? 'text-destructive' : ''} -mr-1" />
 		{:else if key === 'cmd'}

@@ -24,7 +24,9 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
-	let chatSidebar: any = $state();
+	let chatSidebar:
+		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
+		| undefined = $state();
 
 	// Conversation title update dialog state
 	let titleUpdateDialogOpen = $state(false);

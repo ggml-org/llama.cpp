@@ -38,7 +38,7 @@
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { deleteConversation } from '$lib/stores/chat.svelte';
-	import { afterNavigate, goto } from '$app/navigation';
+	import { afterNavigate } from '$app/navigation';
 	import { onMount } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();

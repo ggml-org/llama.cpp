@@ -1,4 +1,3 @@
-import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import { slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import type { ApiProcessingState } from '$lib/types/api';
