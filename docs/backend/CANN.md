@@ -314,3 +314,7 @@ Controls automatic cleanup of the memory pool. This option is only effective whe
 
 Converting the matmul weight format from ND to NZ can significantly improve performance on the 310I DUO NPU.
 
+### GGML_CANN_EAGER_MODE
+
+Enabling eager execution mode will bypass ACL graph execution and submit operators directly.  
+This is useful for debugging or scenarios where graph building overhead is undesirable.
