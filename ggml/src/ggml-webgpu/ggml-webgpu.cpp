@@ -630,7 +630,6 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_TRANSPOSE:
         case GGML_OP_RESHAPE:
             {
-                // TODO: implement these operations
                 break;
             }
         default:
