@@ -130,11 +130,6 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (isCtrlOrCmd && event.key === 'k') {
-			event.preventDefault();
-			goto('/?new_chat=true');
-		}
-
 		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
 			event.preventDefault();
 			if (activeConversation()) {

@@ -3,6 +3,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
+	import KeyboardShortcutInfo from '$lib/components/ui/KeyboardShortcutInfo.svelte';
 
 	interface Props {
 		isActive?: boolean;
@@ -58,6 +59,23 @@
 	function handleSelect() {
 		onSelect?.(conversation.id);
 	}
+
+	// Listen for global edit event
+	function handleGlobalEditEvent(event: Event) {
+		const customEvent = event as CustomEvent<{ conversationId: string }>;
+		if (customEvent.detail.conversationId === conversation.id && isActive) {
+			handleEdit(event);
+		}
+	}
+
+	// Add event listener when component mounts
+	$effect(() => {
+		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
+		
+		return () => {
+			document.removeEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
+		};
+	});
 </script>
 
 <button
@@ -93,25 +111,29 @@
 			</DropdownMenu.Trigger>
 
 			<DropdownMenu.Content align="end" class="z-999 w-48">
-				<DropdownMenu.Item onclick={handleEdit} class="flex items-center gap-2">
-					<Pencil class="h-4 w-4" />
-
-					Edit
+				<DropdownMenu.Item onclick={handleEdit} class="flex items-center justify-between hover:[&>kbd]:opacity-100">
+					<div class="flex items-center gap-2">
+						<Pencil class="h-4 w-4" />
+						Edit
+					</div>
+					<KeyboardShortcutInfo keys={['shift', 'cmd', 'e']} />
 				</DropdownMenu.Item>
 
 				<DropdownMenu.Separator />
 
 				<DropdownMenu.Item
 					variant="destructive"
-					class="flex items-center gap-2"
+					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
 					onclick={(e) => {
 						e.stopPropagation();
 						showDeleteDialog = true;
 					}}
 				>
-					<Trash2 class="h-4 w-4" />
-
-					Delete
+					<div class="flex items-center gap-2">
+						<Trash2 class="h-4 w-4 text-destructive" />
+						Delete
+					</div>
+					<KeyboardShortcutInfo keys={['shift', 'cmd', 'd']} variant="destructive" />
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>

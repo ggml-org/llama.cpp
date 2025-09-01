@@ -9,7 +9,7 @@ A modern, feature-rich web interface for llama.cpp built with SvelteKit. This UI
 - **Conversation Management** - Create, edit, branch, and search conversations
 - **Advanced Markdown** - Code highlighting, math formulas (KaTeX), and content blocks
 - **Reasoning Content** - Support for models with thinking blocks
-- **Keyboard Shortcuts** - Full keyboard navigation (Ctrl+K, Ctrl+V, Ctrl+B, etc.)
+- **Keyboard Shortcuts** - Keyboard navigation (Shift+Ctrl/Cmd+O for new chat, Shift+Ctrl/Cmdt+E for edit conversation, Shift+Ctrl/Cmdt+D for delete conversation, Ctrl/Cmd+K for search, Ctrl/Cmd+V for paste, Ctrl/Cmd+B for opening/collapsing sidebar)
 - **Request Tracking** - Monitor processing with slots endpoint integration
 - **UI Testing** - Storybook component library with automated tests
 

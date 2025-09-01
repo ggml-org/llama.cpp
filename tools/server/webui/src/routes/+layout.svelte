@@ -7,6 +7,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
+	import { goto } from '$app/navigation';
 
 	let { children } = $props();
 
@@ -15,6 +16,7 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
+	let chatSidebar: any = $state();
 
 	$effect(() => {
 		if (isHomeRoute && !isNewChatMode) {
@@ -36,6 +38,32 @@
 	$effect(() => {
 		serverStore.fetchServerProps();
 	});
+
+	// Global keyboard shortcuts
+	function handleKeydown(event: KeyboardEvent) {
+		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+		if (isCtrlOrCmd && event.key === 'k') {
+			event.preventDefault();
+			if (chatSidebar?.activateSearchMode) {
+				chatSidebar.activateSearchMode();
+				sidebarOpen = true;
+			}
+		}
+
+		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
+			event.preventDefault();
+			goto('/?new_chat=true');
+		}
+
+		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
+			event.preventDefault();
+			
+			if (chatSidebar?.editActiveConversation) {
+				chatSidebar.editActiveConversation();
+			}
+		}
+	}
 </script>
 
 <ModeWatcher />
@@ -47,7 +75,7 @@
 <Sidebar.Provider bind:open={sidebarOpen}>
 	<div class="flex h-screen w-full">
 		<Sidebar.Root class="h-full">
-			<ChatSidebar />
+			<ChatSidebar bind:this={chatSidebar} />
 		</Sidebar.Root>
 
 		<Sidebar.Trigger
@@ -62,3 +90,5 @@
 		</Sidebar.Inset>
 	</div>
 </Sidebar.Provider>
+
+<svelte:window onkeydown={handleKeydown} />

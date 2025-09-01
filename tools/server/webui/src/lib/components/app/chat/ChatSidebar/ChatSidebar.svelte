@@ -42,6 +42,23 @@
 		}
 	}
 
+	export function activateSearchMode() {
+		isSearchModeActive = true;
+	}
+
+	export function editActiveConversation() {
+		if (currentChatId) {
+			const activeConversation = filteredConversations.find(conv => conv.id === currentChatId);
+
+			if (activeConversation) {
+				const event = new CustomEvent('edit-active-conversation', { 
+					detail: { conversationId: currentChatId } 
+				});
+				document.dispatchEvent(event);
+			}
+		}
+	}
+
 	async function selectConversation(id: string) {
 		if (isSearchModeActive) {
 			isSearchModeActive = false;

@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Search, SquarePen, X } from '@lucide/svelte';
+	import KeyboardShortcutInfo from '$lib/components/ui/KeyboardShortcutInfo.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -49,26 +50,32 @@
 		</div>
 	{:else}
 		<Button
-			class="w-full justify-start gap-2"
+			class="w-full justify-between hover:[&>kbd]:opacity-100"
 			href="/?new_chat=true"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>
-			<SquarePen class="h-4 w-4" />
+			<div class="flex items-center gap-2">
+				<SquarePen class="h-4 w-4" />
+				New chat
+			</div>
 
-			New chat
+			<KeyboardShortcutInfo keys={['shift', 'cmd', 'o']} />
 		</Button>
 
 		<Button
-			class="w-full justify-start gap-2"
+			class="w-full justify-between hover:[&>kbd]:opacity-100"
 			onclick={() => {
 				isSearchModeActive = true;
 			}}
 			variant="ghost"
 		>
-			<Search class="h-4 w-4" />
+			<div class="flex items-center gap-2">
+				<Search class="h-4 w-4" />
+				Search conversations
+			</div>
 
-			Search conversations
+			<KeyboardShortcutInfo keys={['cmd', 'k']} />
 		</Button>
 	{/if}
 </div>
