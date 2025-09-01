@@ -1002,7 +1002,39 @@ https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/sr
     }
 #endif
 
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+
+inline static svfloat32_t ggml_v_expf(svbool_t pg, svfloat32_t x) {
+    const svfloat32_t r = svdup_n_f32_x(pg, 0x1.8p23f);
+    const svfloat32_t z = svmla_n_f32_x(pg, r, x, 0x1.715476p+0f);
+    const svfloat32_t n = svsub_f32_x(pg, z, r);
+    const svfloat32_t b = svmls_n_f32_x(pg, svmls_n_f32_x(pg, x, n, 0x1.62e4p-1f), n, 0x1.7f7d1cp-20f);
+    const svuint32_t e = svlsl_n_u32_x(pg, svreinterpret_u32_f32(z), 23);
+    const svfloat32_t k = svreinterpret_f32_u32(svadd_u32_x(pg, e, svreinterpret_u32_f32(svdup_n_f32_x(pg, 1))));
+    const svbool_t c = svacgt_n_f32(pg, n, 126);
+    const svfloat32_t u = svmul_f32_x(pg, b, b);
+    const svfloat32_t j = svmla_f32_x(pg,
+        svmul_n_f32_x(pg, b, 0x1.ffffecp-1f),
+        svmla_f32_x(pg, svmla_f32_x(pg, svdup_n_f32_x(pg, 0x1.fffdb6p-2f), svdup_n_f32_x(pg, 0x1.555e66p-3f), b),
+                        svmla_f32_x(pg, svdup_n_f32_x(pg, 0x1.573e2ep-5f), svdup_n_f32_x(pg, 0x1.0e4020p-7f), b), u), u);
+    const svuint32_t d = svdup_n_u32_z(svcmple_n_f32(pg, n, 0.0), 0x82000000);
+    const svfloat32_t s1 = svreinterpret_f32_u32(svadd_n_u32_x(pg, d, 0x7f000000));
+    const svfloat32_t s2 = svreinterpret_f32_u32(svsub_u32_x(pg, e, d));
+    return svsel_f32(svacgt_f32(pg, n, svdup_n_f32_x(pg, 192)), svmul_f32_x(pg, s1, s1),
+                     svsel_f32(c, svmul_f32_x(pg, svmla_f32_x(pg, s2, s2, j), s1), svmla_f32_x(pg, k, k, j)));
+}
+
+// computes silu x/(1+exp(-x)) in single precision vector
+inline static svfloat32_t ggml_v_silu(svbool_t pg, svfloat32_t x) {
+    const svfloat32_t one = svdup_n_f32_x(pg, 1.0f);
+    const svfloat32_t zero = svdup_n_f32_x(pg, 0.0f);
+    const svfloat32_t neg_x = svsub_f32_x(pg, zero, x);
+    const svfloat32_t exp_neg_x = ggml_v_expf(pg, neg_x);
+    const svfloat32_t one_plus_exp_neg_x = svadd_f32_x(pg, one, exp_neg_x);
+    return svdiv_f32_x(pg, x, one_plus_exp_neg_x);
+}
+
+#elif defined(__ARM_NEON) && defined(__aarch64__)
 
 // adapted from arm limited optimized routine
 // the maximum error is 1.45358 plus 0.5 ulps
