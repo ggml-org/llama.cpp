@@ -4,6 +4,7 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		isActive?: boolean;
@@ -60,7 +61,6 @@
 		onSelect?.(conversation.id);
 	}
 
-	// Listen for global edit event
 	function handleGlobalEditEvent(event: Event) {
 		const customEvent = event as CustomEvent<{ conversationId: string }>;
 		if (customEvent.detail.conversationId === conversation.id && isActive) {
@@ -68,8 +68,7 @@
 		}
 	}
 
-	// Add event listener when component mounts
-	$effect(() => {
+	onMount(() => {
 		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
 
 		return () => {
