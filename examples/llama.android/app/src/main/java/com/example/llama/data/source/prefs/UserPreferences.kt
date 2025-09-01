@@ -33,15 +33,18 @@ class UserPreferences @Inject constructor (
         private val PERFORMANCE_MONITORING_ENABLED = booleanPreferencesKey("performance_monitoring_enabled")
         private val USE_FAHRENHEIT_TEMPERATURE = booleanPreferencesKey("use_fahrenheit_temperature")
         private val MONITORING_INTERVAL_MS = longPreferencesKey("monitoring_interval_ms")
-        private val THEME_MODE = intPreferencesKey("theme_mode")
+        private val COLOR_THEME_MODE = intPreferencesKey("color_theme_mode")
+        private val DARK_THEME_MODE = intPreferencesKey("dark_theme_mode")
 
         // Constants
         private const val DEFAULT_MONITORING_INTERVAL_MS = 5000L
 
-        // Theme mode values
-        const val THEME_MODE_AUTO = 0
-        const val THEME_MODE_LIGHT = 1
-        const val THEME_MODE_DARK = 2
+        const val COLOR_THEME_MODE_ARM = 0
+        const val COLOR_THEME_MODE_MATERIAL = 1
+
+        const val DARK_THEME_MODE_AUTO = 0
+        const val DARK_THEME_MODE_LIGHT = 1
+        const val DARK_THEME_MODE_DARK = 2
     }
 
     /**
@@ -98,19 +101,36 @@ class UserPreferences @Inject constructor (
     }
 
     /**
-     * Gets the current theme mode.
+     * Gets the current color theme mode.
      */
-    fun getThemeMode(): Flow<Int> =
+    fun getColorThemeMode(): Flow<Int> =
         context.settingsDataStore.data.map { preferences ->
-            preferences[THEME_MODE] ?: THEME_MODE_AUTO
+            preferences[COLOR_THEME_MODE] ?: COLOR_THEME_MODE_ARM
         }
 
     /**
-     * Sets the theme mode.
+     * Sets the color theme mode.
      */
-    suspend fun setThemeMode(mode: Int) = withContext(Dispatchers.IO) {
+    suspend fun setColorThemeMode(mode: Int) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
-            preferences[THEME_MODE] = mode
+            preferences[COLOR_THEME_MODE] = mode
+        }
+    }
+
+    /**
+     * Gets the current dark theme mode.
+     */
+    fun getDarkThemeMode(): Flow<Int> =
+        context.settingsDataStore.data.map { preferences ->
+            preferences[DARK_THEME_MODE] ?: DARK_THEME_MODE_AUTO
+        }
+
+    /**
+     * Sets the dark theme mode.
+     */
+    suspend fun setDarkThemeMode(mode: Int) = withContext(Dispatchers.IO) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[DARK_THEME_MODE] = mode
         }
     }
 }

@@ -67,9 +67,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val settingsViewModel: SettingsViewModel = hiltViewModel()
-            val themeMode by settingsViewModel.themeMode.collectAsState()
+            val colorThemeMode by settingsViewModel.colorThemeMode.collectAsState()
+            val darkThemeMode by settingsViewModel.darkThemeMode.collectAsState()
 
-            LlamaTheme(themeMode) {
+            LlamaTheme(colorThemeMode = colorThemeMode, darkThemeMode = darkThemeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

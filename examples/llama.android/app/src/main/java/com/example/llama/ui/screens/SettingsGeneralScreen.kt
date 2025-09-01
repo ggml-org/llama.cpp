@@ -45,7 +45,8 @@ fun SettingsGeneralScreen(
     // Collect state from ViewModel
     val isMonitoringEnabled by viewModel.isMonitoringEnabled.collectAsState()
     val useFahrenheit by viewModel.useFahrenheitUnit.collectAsState()
-    val themeMode by viewModel.themeMode.collectAsState()
+    val colorThemeMode by viewModel.colorThemeMode.collectAsState()
+    val darkThemeMode by viewModel.darkThemeMode.collectAsState()
     val detectedTier = viewModel.detectedTier
 
     val supportedFeatures = remember(detectedTier) {
@@ -80,9 +81,44 @@ fun SettingsGeneralScreen(
             )
         }
 
-        SettingsCategory(title = "Theme") {
+        SettingsCategory(title = "Styling") {
+            // Color theme mode
             Text(
-                text = "Theme Mode",
+                text = "Color Theme",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Text(
+                text = "Arm® or follow your system dynamic colors",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                SegmentedButton(
+                    selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_ARM,
+                    onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_ARM) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                ) {
+                    Text("Arm")
+                }
+
+                SegmentedButton(
+                    selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_MATERIAL,
+                    onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_MATERIAL) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                ) {
+                    Text("Material")
+                }
+            }
+
+            // Dark theme mode
+            Text(
+                text = "Dark Mode",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -98,24 +134,24 @@ fun SettingsGeneralScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 SegmentedButton(
-                    selected = themeMode == UserPreferences.THEME_MODE_AUTO,
-                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_AUTO) },
+                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_AUTO,
+                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_AUTO) },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
                 ) {
                     Text("Auto")
                 }
 
                 SegmentedButton(
-                    selected = themeMode == UserPreferences.THEME_MODE_LIGHT,
-                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_LIGHT) },
+                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_LIGHT,
+                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_LIGHT) },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
                 ) {
                     Text("Light")
                 }
 
                 SegmentedButton(
-                    selected = themeMode == UserPreferences.THEME_MODE_DARK,
-                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_DARK) },
+                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_DARK,
+                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_DARK) },
                     shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
                 ) {
                     Text("Dark")

@@ -44,11 +44,10 @@ class SettingsViewModel @Inject constructor(
     private val _batteryInfo = MutableStateFlow(BatteryMetrics(0, false))
     val batteryInfo: StateFlow<BatteryMetrics> = _batteryInfo.asStateFlow()
 
-    // Temperature information
+    // User preferences: monitoring
     private val _temperatureMetrics = MutableStateFlow(TemperatureMetrics(0f, TemperatureWarningLevel.NORMAL))
     val temperatureMetrics: StateFlow<TemperatureMetrics> = _temperatureMetrics.asStateFlow()
 
-    // User preferences
     private val _isMonitoringEnabled = MutableStateFlow(true)
     val isMonitoringEnabled: StateFlow<Boolean> = _isMonitoringEnabled.asStateFlow()
 
@@ -58,8 +57,12 @@ class SettingsViewModel @Inject constructor(
     private val _monitoringInterval = MutableStateFlow(5000L)
     val monitoringInterval: StateFlow<Long> = _monitoringInterval.asStateFlow()
 
-    private val _themeMode = MutableStateFlow(UserPreferences.THEME_MODE_AUTO)
-    val themeMode: StateFlow<Int> = _themeMode.asStateFlow()
+    // User preferences: themes
+    private val _colorThemeMode = MutableStateFlow(UserPreferences.COLOR_THEME_MODE_ARM)
+    val colorThemeMode: StateFlow<Int> = _colorThemeMode.asStateFlow()
+
+    private val _darkThemeMode = MutableStateFlow(UserPreferences.DARK_THEME_MODE_AUTO)
+    val darkThemeMode: StateFlow<Int> = _darkThemeMode.asStateFlow()
 
     val detectedTier: LLamaTier?
         get() = tierDetection.detectedTier
@@ -70,18 +73,26 @@ class SettingsViewModel @Inject constructor(
             _isMonitoringEnabled.value = userPreferences.isPerformanceMonitoringEnabled().first()
             _useFahrenheitUnit.value = userPreferences.usesFahrenheitTemperature().first()
             _monitoringInterval.value = userPreferences.getMonitoringInterval().first()
-            _themeMode.value = userPreferences.getThemeMode().first()
+            _colorThemeMode.value = userPreferences.getColorThemeMode().first()
+            _darkThemeMode.value = userPreferences.getDarkThemeMode().first()
 
             // Start monitoring if enabled
             if (_isMonitoringEnabled.value) {
                 startMonitoring()
             }
 
-            viewModelScope.launch {
-                userPreferences.getThemeMode().collect { mode ->
-                    _themeMode.value = mode
-                }
-            }
+//            viewModelScope.launch {
+//                launch {
+//                    userPreferences.getColorThemeMode().collect { mode ->
+//                        _colorThemeMode.value = mode
+//                    }
+//                }
+//                launch {
+//                    userPreferences.getDarkThemeMode().collect { mode ->
+//                        _darkThemeMode.value = mode
+//                    }
+//                }
+//            }
         }
     }
 
@@ -158,12 +169,22 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Sets the theme mode.
+     * Sets the color theme mode.
      */
-    fun setThemeMode(mode: Int) {
+    fun setColorThemeMode(mode: Int) {
         viewModelScope.launch {
-            userPreferences.setThemeMode(mode)
-            _themeMode.value = mode
+            userPreferences.setColorThemeMode(mode)
+            _colorThemeMode.value = mode
+        }
+    }
+
+    /**
+     * Sets the dark theme mode.
+     */
+    fun setDarkThemeMode(mode: Int) {
+        viewModelScope.launch {
+            userPreferences.setDarkThemeMode(mode)
+            _darkThemeMode.value = mode
         }
     }
 }

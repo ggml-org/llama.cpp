@@ -2,6 +2,7 @@ package com.example.llama.ui.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -14,87 +15,152 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.example.llama.data.source.prefs.UserPreferences
+import com.example.llama.data.source.prefs.UserPreferences.Companion.COLOR_THEME_MODE_ARM
+import com.example.llama.data.source.prefs.UserPreferences.Companion.COLOR_THEME_MODE_MATERIAL
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
-// TODO-han.yin: support more / custom color palettes?
-private val LightColorScheme = lightColorScheme(
+// -------------------- ColorScheme --------------------
+internal val armLightColorScheme: ColorScheme = lightColorScheme(
     primary = md_theme_light_primary,
     onPrimary = md_theme_light_onPrimary,
     primaryContainer = md_theme_light_primaryContainer,
     onPrimaryContainer = md_theme_light_onPrimaryContainer,
+    inversePrimary = md_theme_light_inversePrimary,
+
     secondary = md_theme_light_secondary,
     onSecondary = md_theme_light_onSecondary,
     secondaryContainer = md_theme_light_secondaryContainer,
     onSecondaryContainer = md_theme_light_onSecondaryContainer,
+
     tertiary = md_theme_light_tertiary,
     onTertiary = md_theme_light_onTertiary,
     tertiaryContainer = md_theme_light_tertiaryContainer,
     onTertiaryContainer = md_theme_light_onTertiaryContainer,
-    error = md_theme_light_error,
-    errorContainer = md_theme_light_errorContainer,
-    onError = md_theme_light_onError,
-    onErrorContainer = md_theme_light_onErrorContainer,
+
     background = md_theme_light_background,
     onBackground = md_theme_light_onBackground,
     surface = md_theme_light_surface,
     onSurface = md_theme_light_onSurface,
     surfaceVariant = md_theme_light_surfaceVariant,
     onSurfaceVariant = md_theme_light_onSurfaceVariant,
-    outline = md_theme_light_outline,
-    inverseOnSurface = md_theme_light_inverseOnSurface,
-    inverseSurface = md_theme_light_inverseSurface,
-    inversePrimary = md_theme_light_inversePrimary,
     surfaceTint = md_theme_light_surfaceTint,
+    inverseSurface = md_theme_light_inverseSurface,
+    inverseOnSurface = md_theme_light_inverseOnSurface,
+
+    error = md_theme_light_error,
+    onError = md_theme_light_onError,
+    errorContainer = md_theme_light_errorContainer,
+    onErrorContainer = md_theme_light_onErrorContainer,
+
+    outline = md_theme_light_outline,
     outlineVariant = md_theme_light_outlineVariant,
     scrim = md_theme_light_scrim,
+
+    // TODO: surfaceBright = md_theme_light_surfaceBright,
+    surfaceContainer = md_theme_light_surfaceContainer,
+    surfaceContainerHigh = md_theme_light_surfaceContainerHigh,
+    // TODO: surfaceContainerHighest = md_theme_light_surfaceContainerHighest,
+    surfaceContainerLow = md_theme_light_surfaceContainerLow,
+    // TODO: surfaceContainerLowest = md_theme_light_surfaceContainerLowest,
+    // TODO: surfaceDim = md_theme_light_surfaceDim,
+
+    primaryFixed = md_theme_light_primaryFixed,
+    primaryFixedDim = md_theme_light_primaryFixedDim,
+    onPrimaryFixed = md_theme_light_onPrimaryFixed,
+    onPrimaryFixedVariant = md_theme_light_onPrimaryFixedVariant,
+
+    secondaryFixed = md_theme_light_secondaryFixed,
+    secondaryFixedDim = md_theme_light_secondaryFixedDim,
+    onSecondaryFixed = md_theme_light_onSecondaryFixed,
+    onSecondaryFixedVariant = md_theme_light_onSecondaryFixedVariant,
+
+    tertiaryFixed = md_theme_light_tertiaryFixed,
+    tertiaryFixedDim = md_theme_light_tertiaryFixedDim,
+    onTertiaryFixed = md_theme_light_onTertiaryFixed,
+    onTertiaryFixedVariant = md_theme_light_onTertiaryFixedVariant,
 )
 
-private val DarkColorScheme = darkColorScheme(
+
+internal val armDarkColorScheme: ColorScheme = darkColorScheme(
     primary = md_theme_dark_primary,
     onPrimary = md_theme_dark_onPrimary,
     primaryContainer = md_theme_dark_primaryContainer,
     onPrimaryContainer = md_theme_dark_onPrimaryContainer,
+    inversePrimary = md_theme_dark_inversePrimary,
+
     secondary = md_theme_dark_secondary,
     onSecondary = md_theme_dark_onSecondary,
     secondaryContainer = md_theme_dark_secondaryContainer,
     onSecondaryContainer = md_theme_dark_onSecondaryContainer,
+
     tertiary = md_theme_dark_tertiary,
     onTertiary = md_theme_dark_onTertiary,
     tertiaryContainer = md_theme_dark_tertiaryContainer,
     onTertiaryContainer = md_theme_dark_onTertiaryContainer,
-    error = md_theme_dark_error,
-    errorContainer = md_theme_dark_errorContainer,
-    onError = md_theme_dark_onError,
-    onErrorContainer = md_theme_dark_onErrorContainer,
+
     background = md_theme_dark_background,
     onBackground = md_theme_dark_onBackground,
     surface = md_theme_dark_surface,
     onSurface = md_theme_dark_onSurface,
     surfaceVariant = md_theme_dark_surfaceVariant,
     onSurfaceVariant = md_theme_dark_onSurfaceVariant,
-    outline = md_theme_dark_outline,
-    inverseOnSurface = md_theme_dark_inverseOnSurface,
-    inverseSurface = md_theme_dark_inverseSurface,
-    inversePrimary = md_theme_dark_inversePrimary,
     surfaceTint = md_theme_dark_surfaceTint,
+    inverseSurface = md_theme_dark_inverseSurface,
+    inverseOnSurface = md_theme_dark_inverseOnSurface,
+
+    error = md_theme_dark_error,
+    onError = md_theme_dark_onError,
+    errorContainer = md_theme_dark_errorContainer,
+    onErrorContainer = md_theme_dark_onErrorContainer,
+
+    outline = md_theme_dark_outline,
     outlineVariant = md_theme_dark_outlineVariant,
     scrim = md_theme_dark_scrim,
+
+    // TODO: surfaceBright = md_theme_dark_surfaceBright,
+    surfaceContainer = md_theme_dark_surfaceContainer,
+    surfaceContainerHigh = md_theme_dark_surfaceContainerHigh,
+    // TODO: surfaceContainerHighest = md_theme_dark_surfaceContainerHighest,
+    surfaceContainerLow = md_theme_dark_surfaceContainerLow,
+    // TODO: surfaceContainerLowest = md_theme_dark_surfaceContainerLowest,
+    // TODO: surfaceDim = md_theme_dark_surfaceDim,
+
+    primaryFixed = md_theme_dark_primaryFixed,
+    primaryFixedDim = md_theme_dark_primaryFixedDim,
+    onPrimaryFixed = md_theme_dark_onPrimaryFixed,
+    onPrimaryFixedVariant = md_theme_dark_onPrimaryFixedVariant,
+
+    secondaryFixed = md_theme_dark_secondaryFixed,
+    secondaryFixedDim = md_theme_dark_secondaryFixedDim,
+    onSecondaryFixed = md_theme_dark_onSecondaryFixed,
+    onSecondaryFixedVariant = md_theme_dark_onSecondaryFixedVariant,
+
+    tertiaryFixed = md_theme_dark_tertiaryFixed,
+    tertiaryFixedDim = md_theme_dark_tertiaryFixedDim,
+    onTertiaryFixed = md_theme_dark_onTertiaryFixed,
+    onTertiaryFixedVariant = md_theme_dark_onTertiaryFixedVariant,
 )
 
 @Composable
 fun LlamaTheme(
-    themeMode: Int = UserPreferences.THEME_MODE_AUTO,
+    colorThemeMode: Int,
+    darkThemeMode: Int,
     content: @Composable () -> Unit
 ) {
-    val darkTheme = when (themeMode) {
-        UserPreferences.THEME_MODE_LIGHT -> false
-        UserPreferences.THEME_MODE_DARK -> true
+    val darkTheme = when (darkThemeMode) {
+        UserPreferences.DARK_THEME_MODE_LIGHT -> false
+        UserPreferences.DARK_THEME_MODE_DARK -> true
         else -> isSystemInDarkTheme()
     }
 
     val context = LocalContext.current
-    val colorScheme =
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+
+    val colorScheme = when(colorThemeMode) {
+        COLOR_THEME_MODE_ARM -> if (darkTheme) armDarkColorScheme else armLightColorScheme
+        COLOR_THEME_MODE_MATERIAL ->
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        else -> error("Unexpected color theme $colorThemeMode")
+    }
 
     val view = LocalView.current
     if (!view.isInEditMode) {
