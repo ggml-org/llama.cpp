@@ -891,6 +891,20 @@ void main() {
         barrier();
     }
 
+#if defined(ACC_TYPE_MAX)
+#ifdef COOPMAT
+    [[unroll]] for (uint j = 0; j < cms_per_row * cms_per_col; j++) {
+        [[unroll]] for (uint i = 0; i < sums[j].length(); ++i) {
+            sums[j][i] = clamp(sums[j][i], -ACC_TYPE_MAX, ACC_TYPE_MAX);
+        }
+    }
+#else
+    [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
+        sums[i] = clamp(sums[i], -ACC_TYPE_MAX, ACC_TYPE_MAX);
+    }
+#endif
+#endif
+
     const uint dr = ir * BM + warp_r * WM;
     const uint dc = ic * BN + warp_c * WN;
 

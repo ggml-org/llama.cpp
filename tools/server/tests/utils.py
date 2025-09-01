@@ -66,7 +66,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
-    fa: bool | None = None
+    fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
@@ -148,6 +148,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.server_slots:
             server_args.append("--slots")
+        else:
+            server_args.append("--no-slots")
         if self.pooling:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
@@ -161,7 +163,7 @@ class ServerProcess:
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
         if self.fa is not None:
-            server_args.append("-fa")
+            server_args.extend(["-fa", self.fa])
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -427,7 +429,7 @@ class ServerPreset:
         server.n_batch = 300
         server.n_ubatch = 300
         server.n_slots = 2
-        server.fa = True
+        server.fa = "on"
         server.seed = 42
         server.server_embeddings = True
         return server
