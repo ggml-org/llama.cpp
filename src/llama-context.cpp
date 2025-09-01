@@ -41,7 +41,6 @@ llama_context::llama_context(
     cparams.yarn_beta_slow   = params.yarn_beta_slow;
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
-    cparams.flash_attn       = params.flash_attn;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
@@ -86,6 +85,8 @@ llama_context::llama_context(
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
     }
 
+    cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
+
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
@@ -101,16 +102,6 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
-
-    {
-        const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : supports_set_rows;
-
-        if (!supports_set_rows && !cparams.kv_unified) {
-            LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);
-            cparams.kv_unified = true;
-        }
-    }
 
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
@@ -129,7 +120,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",   __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",   __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: causal_attn   = %d\n",   __func__, cparams.causal_attn);
-    LLAMA_LOG_INFO("%s: flash_attn    = %d\n",   __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: flash_attn    = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
@@ -279,19 +270,7 @@ llama_context::llama_context(
         }
     }
 
-    // reserve worst-case graph
     if (!hparams.vocab_only) {
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
-        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
-
-        LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
-
-        int n_splits_pp = -1;
-        int n_nodes_pp  = -1;
-
-        int n_splits_tg = -1;
-        int n_nodes_tg  = -1;
-
         llama_memory_context_ptr mctx;
         if (memory) {
             LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
@@ -302,6 +281,60 @@ llama_context::llama_context(
         }
 
         cross.v_embd.clear();
+
+        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+
+        LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
+
+        // resolve automatic Flash Attention use
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+            auto * gf = graph_reserve(1, n_seqs, n_outputs, mctx.get(), true);
+            if (!gf) {
+                throw std::runtime_error("failed to split graph for Flash Attention check");
+            }
+
+            const size_t prefix_len = strlen(LLAMA_TENSOR_NAME_FATTN) + 1;
+            bool fa_device_mismatch = false;
+            for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+                ggml_tensor * n = ggml_graph_node(gf, i);
+                if (n->op != GGML_OP_FLASH_ATTN_EXT) {
+                    continue;
+                }
+                ggml_backend_dev_t device_fa = ggml_backend_get_device(
+                    ggml_backend_sched_get_tensor_backend(sched.get(), n));
+
+                // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
+                GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
+                const int il = std::stoi(n->name + prefix_len);
+                ggml_backend_dev_t device_kv = model.dev_layer(il);
+                if (device_fa != device_kv) {
+                    LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
+                        "is assigned to device %s (usually due to missing support)\n",
+                        __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
+                    // FIXME: fa_device_mismatch logic is wrong for --no-kv-offload, but this is broken anyways
+                    fa_device_mismatch = true;
+                    break;
+                }
+            }
+            if (fa_device_mismatch) {
+                cparams.flash_attn = false;
+                LLAMA_LOG_WARN("%s: Flash Attention was auto, set to disabled\n", __func__);
+                if (ggml_is_quantized(params.type_v)) {
+                    throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
+                }
+            } else {
+                cparams.flash_attn = true;
+                LLAMA_LOG_INFO("%s: Flash Attention was auto, set to enabled\n", __func__);
+            }
+        }
+
+        // reserve worst-case graph
+        int n_splits_pp = -1;
+        int n_nodes_pp  = -1;
+
+        int n_splits_tg = -1;
+        int n_nodes_tg  = -1;
 
         // reserve pp (prompt processing) graph first so that buffers are only allocated once
         {
@@ -890,12 +923,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!supports_set_rows) {
-        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-        // overlap with device computation.
-        ggml_backend_sched_reset(sched.get());
-    }
-
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
@@ -1226,12 +1253,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
 
-    if (!supports_set_rows) {
-        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-        // overlap with device computation.
-        ggml_backend_sched_reset(sched.get());
-    }
-
     return 0;
 }
 
@@ -1345,7 +1366,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
-ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx) {
+ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
 
     if (n_tokens % n_seqs != 0) {
@@ -1380,7 +1401,9 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
     this->n_outputs = save_n_outputs;
 
     // initialize scheduler with the specified graph
-    if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+    if (split_only) {
+        ggml_backend_sched_split_graph(sched.get(), gf);
+    } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
     }
@@ -2230,6 +2253,7 @@ llama_context_params llama_context_default_params() {
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
+        /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
         /*.rope_freq_base              =*/ 0.0f,
         /*.rope_freq_scale             =*/ 0.0f,
         /*.yarn_ext_factor             =*/ -1.0f,
@@ -2246,7 +2270,6 @@ llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
-        /*.flash_attn                  =*/ false,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
@@ -2274,12 +2297,30 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (params.flash_attn && model->arch == LLM_ARCH_GROK) {
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && model->arch == LLM_ARCH_GROK) {
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
-        params.flash_attn = false;
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     }
 
-    if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
+    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && ggml_is_quantized(params.type_k)) {
+        const uint32_t blck_size = ggml_blck_size(params.type_k);
+        if (model->hparams.n_embd_head_k % blck_size != 0) {
+            LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
+                __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k);
+            return nullptr;
+        }
+    }
+
+    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && ggml_is_quantized(params.type_v)) {
+        const uint32_t blck_size = ggml_blck_size(params.type_v);
+        if (model->hparams.n_embd_head_v % blck_size != 0) {
+            LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_k=%u\n",
+                __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v);
+            return nullptr;
+        }
+    }
+
+    if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
     }
