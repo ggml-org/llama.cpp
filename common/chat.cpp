@@ -1458,6 +1458,11 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
         // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
         common_chat_parse_deepseek_v3_1_content(builder);
     } else {
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+          LOG_DBG("%s: reasoning_format none, adding content\n", __func__);
+          common_chat_parse_deepseek_v3_1_content(builder);
+          return;
+        }
         // If no reasoning tags found, check if we should treat everything as reasoning
         if (builder.syntax().thinking_forced_open) {
             // If thinking is forced open but no tags found, treat everything as reasoning

@@ -114,10 +114,26 @@ static void test_reasoning() {
         /* .thinking_forced_open = */ true,
         /* .parse_tool_calls = */ true,
     };
+    const std::string variant("deepseek_v3_1_reasoning_format_deepseek");
     common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, syntax);
-    assert_equals(true, builder.try_parse_reasoning("<think>", "</think>"));
-    assert_equals(std::string("REASONING"), builder.result().reasoning_content);
-    assert_equals(std::string("ok"), builder.consume_rest());
+    assert_equals(variant, true, builder.try_parse_reasoning("<think>", "</think>"));
+    assert_equals(variant, std::string("REASONING"), builder.result().reasoning_content);
+    assert_equals(variant, std::string("ok"), builder.consume_rest());
+  }
+  // Test DeepSeek V3.1 parsing - reasoning_format none - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ true,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string variant("deepseek_v3_1_reasoning_format_none");
+    const std::string input = "REASONING</think>ok";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("REASONING</think>ok"), msg.content);
+    assert_equals(variant, std::string(""), msg.reasoning_content);
   }
 }
 

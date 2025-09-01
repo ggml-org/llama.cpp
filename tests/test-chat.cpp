@@ -1778,6 +1778,19 @@ static void test_template_output_parsers() {
                     /* .reasoning_in_content = */ false,
                     /* .thinking_forced_open = */ true,
                 }));
+        // variant: thinking forced open, reasoning_format none
+        assert_msg_equals(
+            simple_assist_msg("REASONING</think>ok", ""),
+            common_chat_parse(
+                "REASONING</think>ok",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
         // variant: happy path for when it works as the model card says it should
         assert_msg_equals(
             simple_assist_msg("", "", "get_time", "{\"city\":\"Tokyo\"}"),
