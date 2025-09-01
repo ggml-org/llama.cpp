@@ -17,13 +17,6 @@ import type { DatabaseMessage } from '$lib/types/database';
  *        └── message 5 (assistant)
  */
 
-export interface MessageSiblingInfo {
-	message: DatabaseMessage;
-	siblingIds: string[];
-	currentIndex: number;
-	totalSiblings: number;
-}
-
 /**
  * Filters messages to get the conversation path from root to a specific leaf node.
  * If the leafNodeId doesn't exist, returns the path with the latest timestamp.

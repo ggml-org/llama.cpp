@@ -4,7 +4,6 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { DatabaseMessage } from '$lib/types/database';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import type { Component } from 'svelte';
 	import MessageBranchingControls from './MessageBranchingControls.svelte';
 

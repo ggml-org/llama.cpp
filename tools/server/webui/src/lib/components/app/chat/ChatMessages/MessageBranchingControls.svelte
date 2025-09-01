@@ -2,7 +2,6 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 
 	interface Props {
 		class?: string;

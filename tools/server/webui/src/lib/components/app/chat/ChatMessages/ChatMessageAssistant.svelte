@@ -3,7 +3,6 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import { fade } from 'svelte/transition';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 

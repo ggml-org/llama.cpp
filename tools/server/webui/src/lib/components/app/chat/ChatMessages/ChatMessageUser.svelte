@@ -5,7 +5,6 @@
 	import { ChatAttachmentsList } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import type { DatabaseMessage } from '$lib/types/database';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {

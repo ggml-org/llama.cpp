@@ -1,10 +1,5 @@
 import { AudioMimeType } from '$lib/constants/supported-file-types';
 
-export interface AudioRecordingOptions {
-	mimeType?: string;
-	audioBitsPerSecond?: number;
-}
-
 export class AudioRecorder {
 	private mediaRecorder: MediaRecorder | null = null;
 	private audioChunks: Blob[] = [];

@@ -10,3 +10,10 @@ export interface ChatUploadedFile {
 	preview?: string;
 	textContent?: string;
 }
+
+export interface MessageSiblingInfo {
+	message: DatabaseMessage;
+	siblingIds: string[];
+	currentIndex: number;
+	totalSiblings: number;
+}

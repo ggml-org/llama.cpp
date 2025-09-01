@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { getDeletionInfo } from '$lib/stores/chat.svelte';
-	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
