@@ -191,6 +191,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
         ),
 
         # Attention key
@@ -209,6 +210,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
+            "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
         ),
 
         # Attention value
@@ -226,6 +228,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
         ),
 
         # Attention output
@@ -260,6 +263,7 @@ class TensorNameMap:
             "transformer_encoder.{bid}.wo",                                 # neobert
             "model.transformer.blocks.{bid}.attn_out",                      # llada
             "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
+            "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
         ),
 
         # Attention output norm
@@ -387,6 +391,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
             "model.transformer.blocks.{bid}.up_proj",                 # llada
             "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
+            "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -480,6 +485,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
             "model.transformer.blocks.{bid}.ff_out",                  # llada
             "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (

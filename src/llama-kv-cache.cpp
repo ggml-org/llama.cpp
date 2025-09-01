@@ -197,18 +197,6 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
-
-    const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-    supports_set_rows = LLAMA_SET_ROWS ? atoi(LLAMA_SET_ROWS) != 0 : supports_set_rows;
-
-    if (!supports_set_rows) {
-        // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-        GGML_ASSERT(unified && "cannot use non-unified KV cache without ggml_set_rows() support");
-    }
-
-    if (!supports_set_rows) {
-        LLAMA_LOG_WARN("%s: LLAMA_SET_ROWS=0, using old ggml_cpy() method for backwards compatibility\n", __func__);
-    }
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -551,11 +539,8 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
     bool success = true;
 
     for (const auto & ubatch : ubatches) {
-        // non-continuous slots require support for ggml_set_rows()
-        const bool cont = supports_set_rows ? false : true;
-
         // only find a suitable slot for the ubatch. don't modify the cells yet
-        const auto sinfo_new = find_slot(ubatch, cont);
+        const auto sinfo_new = find_slot(ubatch, false);
         if (sinfo_new.empty()) {
             success = false;
             break;
@@ -771,8 +756,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             GGML_ASSERT(ubatch.seq_id  [s*n_tokens][0] == seq_id);
         }
 
-        res.s0 = std::min<llama_seq_id>(res.s0, seq_to_stream[seq_id]);
-        res.s1 = std::max<llama_seq_id>(res.s1, seq_to_stream[seq_id]);
+        res.s0 = std::min<uint32_t>(res.s0, seq_to_stream[seq_id]);
+        res.s1 = std::max<uint32_t>(res.s1, seq_to_stream[seq_id]);
 
         res.strm[s] = seq_to_stream[seq_id];
         res.idxs[s].reserve(n_tokens);
@@ -964,20 +949,16 @@ bool llama_kv_cache::get_has_shift() const {
     return result;
 }
 
-uint32_t llama_kv_cache::get_n_kv() const {
+uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
-    for (uint32_t s = 0; s < n_stream; ++s) {
-        const auto & cells = v_cells[s];
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const auto & cells = v_cells[sinfo.strm[s]];
 
         result = std::max(std::min(cells.size(), std::max(n_pad, GGML_PAD(cells.used_max_p1(), n_pad))), result);
     }
 
     return result;
-}
-
-bool llama_kv_cache::get_supports_set_rows() const {
-    return supports_set_rows;
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1017,52 +998,42 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
         // note: v->nb[1] <= v->nb[2]
         return ggml_view_4d(ctx, v,
                 hparams.n_embd_head_v, hparams.n_head_kv(il), n_kv, ns,
-                ggml_row_size(v->type, hparams.n_embd_head_v),            // v->nb[1]
-                ggml_row_size(v->type, n_embd_v_gqa),         // v->nb[2]
-                ggml_row_size(v->type, n_embd_v_gqa*kv_size), // v->nb[3]
+                ggml_row_size(v->type, hparams.n_embd_head_v),          // v->nb[1]
+                ggml_row_size(v->type, n_embd_v_gqa),                   // v->nb[2]
+                ggml_row_size(v->type, n_embd_v_gqa*kv_size),           // v->nb[3]
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
     }
 
     // note: v->nb[1] > v->nb[2]
     return ggml_view_4d(ctx, v,
             n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v, ns,
-            ggml_row_size(v->type, kv_size*hparams.n_embd_head_v),    // v->nb[1]
-            ggml_row_size(v->type, kv_size),                          // v->nb[2]
-            ggml_row_size(v->type, kv_size*n_embd_v_gqa), // v->nb[3]
+            ggml_row_size(v->type, kv_size*hparams.n_embd_head_v),  // v->nb[1]
+            ggml_row_size(v->type, kv_size),                        // v->nb[2]
+            ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
+    GGML_UNUSED(sinfo);
+
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * k = layers[ikv].k;
 
-    const int64_t n_embd_k_gqa = k->ne[0];
     const int64_t n_tokens = k_cur->ne[2];
 
     k_cur = ggml_reshape_2d(ctx, k_cur, k->ne[0], n_tokens);
 
-    if (k_idxs && supports_set_rows) {
-        if (k->ne[2] > 1) {
-            k = ggml_reshape_2d(ctx, k, k->ne[0], k->ne[1]*k->ne[2]);
-        }
-
-        return ggml_set_rows(ctx, k, k_cur, k_idxs);
+    if (k->ne[2] > 1) {
+        k = ggml_reshape_2d(ctx, k, k->ne[0], k->ne[1]*k->ne[2]);
     }
 
-    // TODO: fallback to old ggml_cpy() method for backwards compatibility
-    //       will be removed when ggml_set_rows() is adopted by all backends
-
-    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported without LLAMA_SET_ROWS");
-
-    ggml_tensor * k_view = ggml_view_1d(ctx, k,
-            n_tokens*n_embd_k_gqa,
-            ggml_row_size(k->type, n_embd_k_gqa)*sinfo.head());
-
-    return ggml_cpy(ctx, k_cur, k_view);
+    return ggml_set_rows(ctx, k, k_cur, k_idxs);
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
+    GGML_UNUSED(sinfo);
+
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * v = layers[ikv].v;
@@ -1072,48 +1043,25 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_v_gqa, n_tokens);
 
-    if (v_idxs && supports_set_rows) {
-        if (!v_trans) {
-            if (v->ne[2] > 1) {
-                v = ggml_reshape_2d(ctx, v, v->ne[0], v->ne[1]*v->ne[2]);
-            }
-
-            return ggml_set_rows(ctx, v, v_cur, v_idxs);
-        }
-
-        // [TAG_V_CACHE_VARIABLE]
-        if (n_embd_v_gqa < v->ne[0]) {
-            v_cur = ggml_pad(ctx, v_cur, v->ne[0] - n_embd_v_gqa, 0, 0, 0);
-        }
-
-        // the row becomes a single element
-        ggml_tensor * v_view = ggml_reshape_2d(ctx, v, 1, v->ne[0]*v->ne[1]*v->ne[2]);
-
-        v_cur = ggml_reshape_2d(ctx, v_cur, 1, v_cur->ne[0]*v_cur->ne[1]);
-
-        return ggml_set_rows(ctx, v_view, v_cur, v_idxs);
-    }
-
-    // TODO: fallback to old ggml_cpy() method for backwards compatibility
-    //       will be removed when ggml_set_rows() is adopted by all backends
-
-    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported without LLAMA_SET_ROWS");
-
-    ggml_tensor * v_view = nullptr;
-
     if (!v_trans) {
-        v_view = ggml_view_1d(ctx, v,
-                n_tokens*n_embd_v_gqa,
-                ggml_row_size(v->type, n_embd_v_gqa)*sinfo.head());
-    } else {
-        v_cur = ggml_transpose(ctx, v_cur);
+        if (v->ne[2] > 1) {
+            v = ggml_reshape_2d(ctx, v, v->ne[0], v->ne[1]*v->ne[2]);
+        }
 
-        v_view = ggml_view_2d(ctx, v, n_tokens, n_embd_v_gqa,
-                (v->ne[1]    )*ggml_element_size(v),
-                (sinfo.head())*ggml_element_size(v));
+        return ggml_set_rows(ctx, v, v_cur, v_idxs);
     }
 
-    return ggml_cpy(ctx, v_cur, v_view);
+    // [TAG_V_CACHE_VARIABLE]
+    if (n_embd_v_gqa < v->ne[0]) {
+        v_cur = ggml_pad(ctx, v_cur, v->ne[0] - n_embd_v_gqa, 0, 0, 0);
+    }
+
+    // the row becomes a single element
+    ggml_tensor * v_view = ggml_reshape_2d(ctx, v, 1, v->ne[0]*v->ne[1]*v->ne[2]);
+
+    v_cur = ggml_reshape_2d(ctx, v_cur, 1, v_cur->ne[0]*v_cur->ne[1]);
+
+    return ggml_set_rows(ctx, v_view, v_cur, v_idxs);
 }
 
 ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
@@ -1143,10 +1091,6 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
 }
 
 void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const {
-    if (!supports_set_rows) {
-        return;
-    }
-
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
@@ -1163,10 +1107,6 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
 }
 
 void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const {
-    if (!supports_set_rows) {
-        return;
-    }
-
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
@@ -1985,8 +1925,7 @@ bool llama_kv_cache_context::apply() {
     }
 
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
-
-    n_kv = kv->get_n_kv();
+    n_kv = kv->get_n_kv(sinfos[i_cur]);
 
     return true;
 }
@@ -2003,10 +1942,6 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
-}
-
-bool llama_kv_cache_context::get_supports_set_rows() const {
-    return kv->get_supports_set_rows();
 }
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {

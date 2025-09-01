@@ -360,6 +360,30 @@ struct ggml_cann_graph {
 };
 #endif  // USE_ACL_GRAPH
 
+struct ggml_cann_rope_cache {
+    ~ggml_cann_rope_cache() {
+        if(theta_scale_cache != nullptr) {
+            ACL_CHECK(aclrtFree(theta_scale_cache));
+        }
+    }
+
+    void* theta_scale_cache = nullptr;
+    int64_t theta_scale_length = 0;
+    float theta_scale = 0.0f;
+    float freq_scale = 0.0f;
+};
+
+struct ggml_cann_tensor_cache {
+    ~ggml_cann_tensor_cache() {
+        if(cache != nullptr) {
+            ACL_CHECK(aclrtFree(cache));
+        }
+    }
+
+    void* cache = nullptr;
+    int64_t size = 0;
+};
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -374,17 +398,12 @@ struct ggml_backend_cann_context {
 #endif
     cann_task_queue task_queue;
     bool async_mode;
-    bool support_set_rows;
     // Rope Cache
-    void* rope_init_ptr = nullptr;
-    void* rope_sin_ptr = nullptr;
-    void* rope_cos_ptr = nullptr;
-    int64_t max_prompt_length = 0;
+    ggml_cann_rope_cache rope_cache;
     // Constant Pool
-    void* f32_zero_cache = nullptr;
-    void* f32_one_cache = nullptr;
-    int64_t f32_zero_cache_element = 0;
-    int64_t f32_one_cache_element = 0;
+    ggml_cann_tensor_cache rms_norm_one_tensor_cache;
+    ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
+
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -400,14 +419,6 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-
-        support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
-        GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
-
-        if (!support_set_rows) {
-            GGML_LOG_INFO("%s: CANN Graph currently only supports execution when LLAMA_SET_ROWS is ON. "
-                    "Falling back to eager mode.\n", __func__);
-        }
     }
 
     /**
@@ -423,21 +434,6 @@ struct ggml_backend_cann_context {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
-        }
-        if(rope_init_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_init_ptr));
-        }
-        if(rope_sin_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_sin_ptr));
-        }
-        if(rope_cos_ptr != nullptr) {
-            ACL_CHECK(aclrtFree(rope_cos_ptr));
-        }
-        if(f32_zero_cache != nullptr) {
-            ACL_CHECK(aclrtFree(f32_zero_cache));
-        }
-        if(f32_one_cache != nullptr) {
-            ACL_CHECK(aclrtFree(f32_one_cache));
         }
     }
 

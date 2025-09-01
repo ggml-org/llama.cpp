@@ -622,6 +622,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
+        case COMMON_CHAT_FORMAT_SEED_OSS: return "Seed-OSS";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -2059,6 +2060,94 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     }
 }
 
+static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
+    // Parse thinking tags first - this handles the main reasoning content
+    builder.try_parse_reasoning("<seed:think>", "</seed:think>");
+
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    // Parse tool calls - Seed-OSS uses <seed:tool_call> format
+    static const common_regex tool_call_begin_regex("<seed:tool_call>");
+    static const common_regex tool_call_end_regex("</seed:tool_call>");
+    static const common_regex function_regex("<function=([^>]+)>");
+    static const common_regex param_regex("<parameter=([^>]+)>");
+
+    while (auto tool_res = builder.try_find_regex(tool_call_begin_regex)) {
+        builder.consume_spaces();  // Consume whitespace after <seed:tool_call>
+
+        // Look for function call inside tool call, ignore any content before it
+        if (auto func_res = builder.try_find_regex(function_regex, std::string::npos, false)) {
+            auto function_name = builder.str(func_res->groups[1]);
+
+            // Parse Seed-OSS parameters <parameter=name>value</parameter>
+            json args = json::object();
+            // Parse all parameters
+            while (auto param_res = builder.try_find_regex(param_regex, std::string::npos, false)) {
+                // again, ignore noise around parameters
+                auto param_name = builder.str(param_res->groups[1]);
+                builder.move_to(param_res->groups[0].end);
+                builder.consume_spaces();  // Consume whitespace after parameter
+                auto savedPos = builder.pos();
+                if (auto param_parse = builder.try_find_literal("</parameter>")) {
+                    auto param = param_parse->prelude;
+                    builder.move_to(savedPos);
+                    try {
+                        if (auto param_res = builder.try_consume_json()) {
+                            args[param_name] = param_res->json;
+                        } else {
+                            args[param_name] = param;
+                        }
+                    } catch (json::exception &) {
+                        args[param_name] = param;
+                    }
+                } else {
+                    throw common_chat_msg_partial_exception("Incomplete tool parameter");
+                }
+            }
+            // Look for closing function tag
+            auto end_func = builder.try_find_literal("</function>");
+            if (end_func) {
+                builder.move_to(end_func->groups[0].end);
+                builder.consume_spaces();  // Consume whitespace after </function>
+
+                // Add the tool call with parsed arguments, but only if we REALLY got the literal
+                auto eaten_fragment = builder.input().substr(end_func->groups[0].begin, end_func->groups[0].end);
+                auto funlen = std::string("</function>").length();
+                if (eaten_fragment.length() >= funlen && eaten_fragment.substr(0, funlen) == std::string("</function>")) {
+                    if (!builder.add_tool_call(function_name, "", args.dump())) {
+                        throw common_chat_msg_partial_exception("Incomplete tool call");
+                    }
+                } else {
+                    throw common_chat_msg_partial_exception("Incomplete tool call");
+                }
+            } else {
+                throw common_chat_msg_partial_exception("Incomplete tool call");
+            }
+            // Look for closing tool call tag
+            if (auto end_tool = builder.try_find_regex(tool_call_end_regex, std::string::npos, false)) {
+                builder.move_to(end_tool->groups[0].end);
+                builder.consume_spaces();  // Consume trailing whitespace after tool call
+            } else {
+                throw common_chat_msg_partial_exception("Incomplete tool call");
+            }
+        } else {
+            // No function found - don't consume content here, let it be handled at the end
+            break;
+        }
+    }
+
+    // Consume any remaining whitespace after all tool call processing
+    builder.consume_spaces();
+    auto remaining = builder.consume_rest();
+    // If there's any non-whitespace content remaining, add it as content
+    if (!string_strip(remaining).empty()) {
+        builder.add_content(remaining);
+    }
+}
+
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
@@ -2075,8 +2164,62 @@ static common_chat_params common_chat_params_init_without_tools(const common_cha
     return data;
 }
 
+static common_chat_params common_chat_params_init_seed_oss(
+    const common_chat_template         & tmpl,
+    templates_params                   & params,
+    const common_chat_templates_inputs & inputs)
+{
+    common_chat_params data;
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_SEED_OSS;
+    if (string_ends_with(data.prompt, "<seed:think>")) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</seed:think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
+    if (params.tools.is_array() && !params.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(params.tools, [&](const json & tool) {
+                const auto & function   = tool.at("function");
+                std::string  name       = function.at("name");
+                auto         parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                // Create rule for Seed-OSS function call format
+                std::string param_rules;
+                if (parameters.contains("properties")) {
+                    for (const auto & [key, value] : parameters.at("properties").items()) {
+                        param_rules += "\"<parameter=" + key + ">\"" + builder.add_schema(name + "-arg-" + key, value) +
+                                       "\"</parameter>\"";
+                    }
+                }
+
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                                                      "\"<seed:tool_call>\" space \"<function=" + name + ">\" space " +
+                                                          param_rules +
+                                                          " \"</function>\" space \"</seed:tool_call>\""));
+            });
+
+            data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<seed:tool_call>" });
+
+            data.preserved_tokens = {
+                "<seed:think>", "</seed:think>", "<seed:tool_call>", "</seed:tool_call>",
+                "<function=",   "</function>",   "<parameter=",      "</parameter>",
+            };
+
+            builder.add_rule("root", string_join(tool_rules, " | "));
+        });
+    }
+    return data;
+}
+
 static common_chat_params common_chat_templates_apply_jinja(
-    const struct common_chat_templates * tmpls,
+    const struct common_chat_templates        * tmpls,
     const struct common_chat_templates_inputs & inputs)
 {
     templates_params params;
@@ -2143,6 +2286,11 @@ static common_chat_params common_chat_templates_apply_jinja(
     // GPT-OSS
     if (src.find("<|channel|>") != std::string::npos) {
         return common_chat_params_init_gpt_oss(tmpl, params);
+    }
+
+    // Seed-OSS
+    if (src.find("<seed:think>") != std::string::npos) {
+        return common_chat_params_init_seed_oss(tmpl, params, inputs);
     }
 
     // Use generic handler when mixing tools + JSON schema.
@@ -2302,6 +2450,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_GPT_OSS:
             common_chat_parse_gpt_oss(builder);
+            break;
+        case COMMON_CHAT_FORMAT_SEED_OSS:
+            common_chat_parse_seed_oss(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
