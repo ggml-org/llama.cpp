@@ -132,7 +132,7 @@ fun ModelsManagementAndDeletingScreen(
                 icon = Icons.Default.Info,
                 message = message,
                 action = InfoAction(
-                    label = "Learn More",
+                    label = "Learn more",
                     icon = Icons.AutoMirrored.Default.Help,
                     onAction = {
                         val url = "https://huggingface.co/docs/hub/en/gguf"
@@ -642,10 +642,9 @@ private fun FirstModelImportSuccessDialog(
             InfoView(
                 title = "Congratulations",
                 icon = Icons.Default.Celebration,
-                message = "You have just installed your first Large Language Model!\n\n"
-                    + "Tap \"Continue\" to check it out!",
+                message = "You have just installed your first Large Language Model!",
                 action = InfoAction(
-                    label = "Continue",
+                    label = "Check it out",
                     icon = Icons.AutoMirrored.Default.ArrowForward,
                     onAction = onConfirm
                 )
@@ -736,7 +735,7 @@ private fun ErrorDialog(
 ) {
     val action = learnMoreUrl?.let { url ->
          InfoAction(
-            label = "Learn More",
+            label = "Learn more",
             icon = Icons.AutoMirrored.Outlined.ContactSupport,
             onAction = {
                 val intent = Intent(Intent.ACTION_VIEW, url.toUri())

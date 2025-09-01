@@ -50,7 +50,7 @@ fun ModelsBrowsingScreen(
                 icon = Icons.Default.FolderOpen,
                 message = message,
                 action = InfoAction(
-                    label = "Get Started",
+                    label = "Get started",
                     icon = Icons.AutoMirrored.Default.ArrowForward,
                     onAction = onManageModelsClicked
                 )
