@@ -1,8 +1,8 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import { ChatSidebar, MaximumContextAlertDialog } from '$lib/components/app';
-	import { activeMessages, isLoading } from '$lib/stores/chat.svelte';
+	import { ChatSidebar, MaximumContextAlertDialog, ConversationTitleUpdateDialog } from '$lib/components/app';
+	import { activeMessages, isLoading, setTitleUpdateConfirmationCallback } from '$lib/stores/chat.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { ModeWatcher } from 'mode-watcher';
@@ -17,6 +17,12 @@
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
 	let chatSidebar: any = $state();
+
+	// Conversation title update dialog state
+	let titleUpdateDialogOpen = $state(false);
+	let titleUpdateCurrentTitle = $state('');
+	let titleUpdateNewTitle = $state('');
+	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	$effect(() => {
 		if (isHomeRoute && !isNewChatMode) {
@@ -38,6 +44,34 @@
 	$effect(() => {
 		serverStore.fetchServerProps();
 	});
+
+	// Set up title update confirmation callback
+	$effect(() => {
+		setTitleUpdateConfirmationCallback(async (currentTitle: string, newTitle: string) => {
+			return new Promise<boolean>((resolve) => {
+				titleUpdateCurrentTitle = currentTitle;
+				titleUpdateNewTitle = newTitle;
+				titleUpdateResolve = resolve;
+				titleUpdateDialogOpen = true;
+			});
+		});
+	});
+
+	function handleTitleUpdateConfirm() {
+		titleUpdateDialogOpen = false;
+		if (titleUpdateResolve) {
+			titleUpdateResolve(true);
+			titleUpdateResolve = null;
+		}
+	}
+
+	function handleTitleUpdateCancel() {
+		titleUpdateDialogOpen = false;
+		if (titleUpdateResolve) {
+			titleUpdateResolve(false);
+			titleUpdateResolve = null;
+		}
+	}
 
 	// Global keyboard shortcuts
 	function handleKeydown(event: KeyboardEvent) {
@@ -71,6 +105,14 @@
 <Toaster richColors />
 
 <MaximumContextAlertDialog />
+
+<ConversationTitleUpdateDialog 
+	bind:open={titleUpdateDialogOpen}
+	currentTitle={titleUpdateCurrentTitle}
+	newTitle={titleUpdateNewTitle}
+	onConfirm={handleTitleUpdateConfirm}
+	onCancel={handleTitleUpdateCancel}
+/>
 
 <Sidebar.Provider bind:open={sidebarOpen}>
 	<div class="flex h-screen w-full">

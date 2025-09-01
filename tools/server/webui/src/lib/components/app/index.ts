@@ -27,6 +27,8 @@ export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
 
+export { default as ConversationTitleUpdateDialog } from './ConversationTitleUpdateDialog.svelte';
+
 export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
 
 export { default as MarkdownContent } from './MarkdownContent.svelte';

@@ -57,6 +57,7 @@ class ChatStore {
 	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(
 		null
 	);
+	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	constructor() {
 		if (browser) {
@@ -622,8 +623,21 @@ class ChatStore {
 				return;
 			}
 
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			const isFirstUserMessage = rootMessage && messageToUpdate.parent === rootMessage.id && messageToUpdate.role === 'user';
+
 			this.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseStore.updateMessage(messageId, { content: newContent });
+
+			// If this is the first user message, update the conversation title with confirmation if needed
+			if (isFirstUserMessage && newContent.trim()) {
+				await this.updateConversationTitleWithConfirmation(
+					this.activeConversation.id, 
+					newContent.trim(),
+					this.titleUpdateConfirmationCallback
+				);
+			}
 
 			const messagesToRemove = this.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) {
@@ -725,6 +739,7 @@ class ChatStore {
 		}
 	}
 
+
 	/**
 	 * Updates the name of a conversation
 	 * @param convId - The conversation ID to update
@@ -745,6 +760,45 @@ class ChatStore {
 			}
 		} catch (error) {
 			console.error('Failed to update conversation name:', error);
+		}
+	}
+
+	/**
+	 * Sets the callback function for title update confirmations
+	 * @param callback - Function to call when confirmation is needed
+	 */
+	setTitleUpdateConfirmationCallback(
+		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
+	): void {
+		this.titleUpdateConfirmationCallback = callback;
+	}
+
+	/**
+	 * Updates conversation title with confirmation dialog
+	 * @param convId - The conversation ID to update
+	 * @param newTitle - The new title content
+	 * @param onConfirmationNeeded - Callback when user confirmation is needed
+	 * @returns Promise<boolean> - True if title was updated, false if cancelled
+	 */
+	async updateConversationTitleWithConfirmation(
+		convId: string, 
+		newTitle: string,
+		onConfirmationNeeded?: (currentTitle: string, newTitle: string) => Promise<boolean>
+	): Promise<boolean> {
+		try {
+			if (onConfirmationNeeded) {
+				const conversation = await DatabaseStore.getConversation(convId);
+				if (!conversation) return false;
+
+				const shouldUpdate = await onConfirmationNeeded(conversation.name, newTitle);
+				if (!shouldUpdate) return false;
+			}
+
+			await this.updateConversationName(convId, newTitle);
+			return true;
+		} catch (error) {
+			console.error('Failed to update conversation title with confirmation:', error);
+			return false;
 		}
 	}
 
@@ -915,9 +969,40 @@ class ChatStore {
 	async navigateToSibling(siblingId: string): Promise<void> {
 		if (!this.activeConversation) return;
 
+		// Get the current first user message before navigation
+		const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+		const currentFirstUserMessage = this.activeMessages.find(
+			(m) => m.role === 'user' && m.parent === rootMessage?.id
+		);
+
 		await DatabaseStore.updateCurrentNode(this.activeConversation.id, siblingId);
 		this.activeConversation.currNode = siblingId;
 		await this.refreshActiveMessages();
+
+		// Only show title dialog if we're navigating between different first user message siblings
+		if (rootMessage && this.activeMessages.length > 0) {
+			// Find the first user message in the new active path
+			const newFirstUserMessage = this.activeMessages.find(
+				(m) => m.role === 'user' && m.parent === rootMessage.id
+			);
+			
+			// Only show dialog if:
+			// 1. We have a new first user message
+			// 2. It's different from the previous one (different ID or content)
+			// 3. The new message has content
+			if (newFirstUserMessage && 
+				newFirstUserMessage.content.trim() &&
+				(!currentFirstUserMessage || 
+				 newFirstUserMessage.id !== currentFirstUserMessage.id ||
+				 newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())) {
+				await this.updateConversationTitleWithConfirmation(
+					this.activeConversation.id, 
+					newFirstUserMessage.content.trim(),
+					this.titleUpdateConfirmationCallback
+				);
+			}
+		}
 	}
 	/**
 	 * Edits a message by creating a new branch with the edited content
@@ -940,10 +1025,15 @@ class ChatStore {
 				return;
 			}
 
+			// Check if this is the first user message in the conversation
+			// First user message is one that has the root message as its parent
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			const isFirstUserMessage = rootMessage && messageToEdit.parent === rootMessage.id && messageToEdit.role === 'user';
+
 			let parentId = messageToEdit.parent;
 
 			if (parentId === undefined || parentId === null) {
-				const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 				const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 				if (rootMessage) {
 					parentId = rootMessage.id;
@@ -970,6 +1060,16 @@ class ChatStore {
 			await DatabaseStore.updateCurrentNode(this.activeConversation.id, newMessage.id);
 			this.activeConversation.currNode = newMessage.id;
 			this.updateConversationTimestamp();
+
+			// If this is the first user message, update the conversation title with confirmation if needed
+			if (isFirstUserMessage && newContent.trim()) {
+				await this.updateConversationTitleWithConfirmation(
+					this.activeConversation.id, 
+					newContent.trim(),
+					this.titleUpdateConfirmationCallback
+				);
+			}
+
 			await this.refreshActiveMessages();
 
 			if (messageToEdit.role === 'user') {
@@ -1118,6 +1218,7 @@ export const regenerateMessageWithBranching =
 export const deleteMessage = chatStore.deleteMessage.bind(chatStore);
 export const getDeletionInfo = chatStore.getDeletionInfo.bind(chatStore);
 export const updateConversationName = chatStore.updateConversationName.bind(chatStore);
+export const setTitleUpdateConfirmationCallback = chatStore.setTitleUpdateConfirmationCallback.bind(chatStore);
 
 export function stopGeneration() {
 	chatStore.stopGeneration();
