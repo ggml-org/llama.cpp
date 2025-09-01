@@ -71,9 +71,12 @@
 	// Add event listener when component mounts
 	$effect(() => {
 		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
-		
+
 		return () => {
-			document.removeEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
+			document.removeEventListener(
+				'edit-active-conversation',
+				handleGlobalEditEvent as EventListener
+			);
 		};
 	});
 </script>
@@ -111,7 +114,10 @@
 			</DropdownMenu.Trigger>
 
 			<DropdownMenu.Content align="end" class="z-999 w-48">
-				<DropdownMenu.Item onclick={handleEdit} class="flex items-center justify-between hover:[&>kbd]:opacity-100">
+				<DropdownMenu.Item
+					onclick={handleEdit}
+					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+				>
 					<div class="flex items-center gap-2">
 						<Pencil class="h-4 w-4" />
 						Edit

@@ -58,7 +58,7 @@
 
 		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
 			event.preventDefault();
-			
+
 			if (chatSidebar?.editActiveConversation) {
 				chatSidebar.editActiveConversation();
 			}

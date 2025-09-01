@@ -7,13 +7,10 @@
 		class?: string;
 	}
 
-	let {
-		keys,
-		variant = 'default',
-		class: className = ''
-	}: Props = $props();
+	let { keys, variant = 'default', class: className = '' }: Props = $props();
 
-	let baseClasses = 'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-mono text-md font-medium opacity-0 transition-opacity';
+	let baseClasses =
+		'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-mono text-md font-medium opacity-0 transition-opacity';
 	let variantClasses = variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground';
 </script>
 
