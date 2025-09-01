@@ -611,6 +611,8 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_NONE:
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_RESHAPE:
             return false;
         case GGML_OP_CPY:
             {
@@ -625,11 +627,6 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_MUL_MAT:
             {
                 ggml_webgpu_mul_mat(ctx, src0, src1, node);
-                break;
-            }
-        case GGML_OP_TRANSPOSE:
-        case GGML_OP_RESHAPE:
-            {
                 break;
             }
         default:
