@@ -146,11 +146,6 @@ kernel void kernel_convert_block_mxfp4(
     for (int i = 0; i < QK_MXFP4 / 2; ++i) {
         q[i] = b->qs[i];
     }
-    // vstore4(*(uint4 *)(&(b->qs[0])), 0, (uint *)(q));
-
-    // if (get_global_id(0) == 0) {
-    //     printf("[kernel_convert_block_mxfp4] e: %d, q[0]: %d, q[15]: %d\n", b->e, b->qs[0], b->qs[15]);
-    // }
 }
 
 kernel void kernel_restore_block_mxfp4(
