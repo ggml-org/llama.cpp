@@ -196,6 +196,8 @@ export class SlotsService {
 				tokensRemaining: 0,
 				contextUsed: 0,
 				contextTotal: 4096,
+				outputTokensUsed: 0,
+				outputTokensMax: 2048,
 				temperature: 0.8,
 				topP: 0.95,
 				speculative: false,
@@ -214,8 +216,26 @@ export class SlotsService {
 			status = 'preparing';
 		}
 
-		const promptTokens = Math.floor(activeSlot.prompt.length / 4);
-		const contextUsed = promptTokens + activeSlot.next_token.n_decoded;
+		// Calculate context and output token usage with the new slots format
+		// n_decoded represents ALL tokens generated (thinking + regular content)
+		const totalTokensGenerated = activeSlot.next_token.n_decoded;
+		const maxOutputTokens = activeSlot.params.max_tokens || activeSlot.params.n_predict;
+		
+		// For context calculation: only count tokens that will be sent back to API
+		// We need to estimate how many of the generated tokens are actual message content
+		// vs thinking content. For now, we'll assume thinking is ~60% of total output
+		// This is a rough estimate - in reality we'd need to track this separately
+		const estimatedThinkingRatio = 0.6;
+		const estimatedMessageTokens = Math.floor(totalTokensGenerated * (1 - estimatedThinkingRatio));
+		
+		// Context used = estimated prompt + only the message content tokens
+		const maxGenerationTokens = Math.min(maxOutputTokens, Math.floor(activeSlot.n_ctx * 0.4));
+		const estimatedPromptTokens = activeSlot.n_ctx - maxGenerationTokens;
+		const contextUsed = Math.min(activeSlot.n_ctx, estimatedPromptTokens + estimatedMessageTokens);
+		
+		// Output tokens: total generated tokens (thinking + regular)
+		const outputTokensUsed = totalTokensGenerated;
+		const outputTokensMax = maxOutputTokens;
 
 		const currentTime = Date.now();
 		const currentTokens = activeSlot.next_token.n_decoded;
@@ -275,6 +295,8 @@ export class SlotsService {
 			tokensRemaining: activeSlot.next_token.n_remain,
 			contextUsed,
 			contextTotal: activeSlot.n_ctx,
+			outputTokensUsed,
+			outputTokensMax,
 			temperature: activeSlot.params.temperature,
 			topP: activeSlot.params.top_p,
 			speculative: activeSlot.speculative,

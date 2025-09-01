@@ -162,10 +162,12 @@
 		// Mock the slots service to provide realistic slot data
 		const mockProcessingState = {
 			status: 'generating' as const,
-			tokensDecoded: 410,
-			tokensRemaining: 1000,
-			contextUsed: 429,
+			tokensDecoded: 1250,
+			tokensRemaining: 750,
+			contextUsed: 3200,
 			contextTotal: 4096,
+			outputTokensUsed: 1250,
+			outputTokensMax: 2048,
 			temperature: 0.8,
 			topP: 0.95,
 			speculative: false,

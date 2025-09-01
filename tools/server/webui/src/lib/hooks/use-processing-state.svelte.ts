@@ -93,20 +93,21 @@ export function useProcessingState() {
 			);
 		}
 
+		if (processingState.outputTokensUsed > 0) {
+			const outputPercent = Math.round(
+				(processingState.outputTokensUsed / processingState.outputTokensMax) * 100
+			);
+			details.push(
+				`Output: ${processingState.outputTokensUsed}/${processingState.outputTokensMax} (${outputPercent}%)`
+			);
+		}
+
 		if (
 			currentConfig.showTokensPerSecond &&
 			processingState.tokensPerSecond &&
 			processingState.tokensPerSecond > 0
 		) {
 			details.push(`${processingState.tokensPerSecond.toFixed(1)} tokens/sec`);
-		}
-
-		if (processingState.temperature !== SETTING_CONFIG_DEFAULT.temperature) {
-			details.push(`Temperature: ${processingState.temperature.toFixed(1)}`);
-		}
-
-		if (processingState.topP !== SETTING_CONFIG_DEFAULT.top_p) {
-			details.push(`Top-p: ${processingState.topP.toFixed(2)}`);
 		}
 
 		if (processingState.speculative) {

@@ -180,23 +180,16 @@ export interface ApiSlotData {
 		dry_base: number;
 		dry_allowed_length: number;
 		dry_penalty_last_n: number;
-		dry_sequence_breakers: string[];
 		mirostat: number;
 		mirostat_tau: number;
 		mirostat_eta: number;
-		stop: string[];
 		max_tokens: number;
 		n_keep: number;
 		n_discard: number;
 		ignore_eos: boolean;
 		stream: boolean;
-		logit_bias: Array<[number, number]>;
 		n_probs: number;
 		min_keep: number;
-		grammar: string;
-		grammar_lazy: boolean;
-		grammar_triggers: string[];
-		preserved_tokens: number[];
 		chat_format: string;
 		reasoning_format: string;
 		reasoning_in_content: boolean;
@@ -209,13 +202,11 @@ export interface ApiSlotData {
 		post_sampling_probs: boolean;
 		lora: Array<{ name: string; scale: number }>;
 	};
-	prompt: string;
 	next_token: {
 		has_next_token: boolean;
 		has_new_line: boolean;
 		n_remain: number;
 		n_decoded: number;
-		stopping_word: string;
 	};
 }
 
@@ -225,6 +216,8 @@ export interface ApiProcessingState {
 	tokensRemaining: number;
 	contextUsed: number;
 	contextTotal: number;
+	outputTokensUsed: number; // Total output tokens (thinking + regular content)
+	outputTokensMax: number;   // Max output tokens allowed
 	temperature: number;
 	topP: number;
 	speculative: boolean;
