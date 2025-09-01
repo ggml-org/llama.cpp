@@ -224,76 +224,70 @@ class LazyNumpyTensor(LazyBase):
     # TODO: __array_function__
 
 # --- begin low-memory streaming for dtype casts ------------------------------
-# This block monkey-patches LazyNumpyTensor.astype and .tofile so that pure
-# dtype-cast nodes are streamed to disk in chunks, avoiding large RAM spikes.
-# Tunable via env: GGUF_CAST_CHUNK_MB (MB per chunk, default 256).
+# Tunable via env:
+#   GGUF_CAST_CHUNK_MB  (MiB per chunk; default 64)
+#   GGUF_STREAM_LOG     (set to any non-empty value to print diagnostics)
+
+import sys
+from .stream_cast import write_cast  # sibling helper
 
 try:
     _LAZY_ORIG_ASTYPE = getattr(LazyNumpyTensor, "astype")
     _LAZY_ORIG_TOFILE = getattr(LazyNumpyTensor, "tofile")
 except NameError:
-    # If class names change in the future, fail noisily.
     raise RuntimeError("Expected LazyNumpyTensor to be defined above this block")
 
+def _slog(msg: str) -> None:
+    if os.environ.get("GGUF_STREAM_LOG"):
+        print(f"[gguf-stream] {msg}", file=sys.stdout, flush=True)
+
 def _gguf_streaming_astype(self, dtype, *args, **kwargs):
-    """Wrap the original .astype to tag the new lazy node as a streamable cast."""
+    """Tag astype results so writer/tofile can stream them later."""
     tgt = np.dtype(dtype)
     out = _LAZY_ORIG_ASTYPE(self, dtype, *args, **kwargs)
-    # mark the node so tofile() can detect and stream it
+    # mark as streamable and record target dtype
     setattr(out, "_gguf_stream_cast", True)
     setattr(out, "_gguf_stream_cast_dtype", tgt)
+    # NEW: record the *source* lazy tensor for writer-side streaming
+    setattr(out, "_gguf_stream_cast_src", self)
+    _slog(f"mark streamable astype: src={getattr(self._meta,'dtype','?')} -> dst={tgt}")
     return out
 
-def _gguf_stream_cast_write(fout, src, tgt_dtype, chunk_elems):
-    """Write src.astype(tgt_dtype) to fout in chunks, capping peak RAM."""
-    flat = src.reshape(-1)
-    n = flat.size
-    start = 0
-    mv = memoryview  # local for speed
-    while start < n:
-        end = min(start + chunk_elems, n)
-        # copy=False prevents an extra temporary when NumPy can reuse buffers
-        chunk = flat[start:end].astype(tgt_dtype, copy=False)
-        fout.write(mv(chunk).tobytes())
-        start = end
+def _gguf_streaming_tofile(self, fout, *args, **kwargs):
+    """If this lazy tensor is a pure dtype-cast, stream in chunks; else fallback."""
+    if not getattr(self, "_gguf_stream_cast", False):
+        return _LAZY_ORIG_TOFILE(self, fout, *args, **kwargs)
 
-def _gguf_streaming_tofile(self, fout):
-    """
-    If this lazy node represents a pure dtype cast, stream it in chunks.
-    Otherwise, fall back to the original behavior (materialize then write).
-    """
-    if getattr(self, "_gguf_stream_cast", False):
-        # The original astype stored the source object as the first arg
+    # default chunk size: 64 MiB (can override via GGUF_CAST_CHUNK_MB)
+    try:
+        mb = int(os.environ.get("GGUF_CAST_CHUNK_MB", "64") or "64")
+    except Exception:
+        mb = 64
+    mb = max(1, mb)
+
+    # Prefer the explicitly tagged source lazy tensor if present (step 2)
+    base = getattr(self, "_gguf_stream_cast_src", None)
+
+    # Fallback to first arg (older astype behavior) if not tagged
+    if base is None:
         base = getattr(self, "_args", None)
         base = base[0] if base else None
 
-        # Try to obtain an eager ndarray for the source
+    try:
+        src_arr = LazyNumpyTensor.to_eager(base)
+    except Exception:
         src_arr = None
-        try:
-            src_arr = LazyNumpyTensor.to_eager(base)
-        except Exception:
-            pass
 
-        if isinstance(src_arr, np.ndarray):
-            # chunk size in MB; default 256 if unset/invalid
-            try:
-                mb = int(os.environ.get("GGUF_CAST_CHUNK_MB", "256") or "256")
-            except Exception:
-                mb = 256
-            mb = max(1, mb)
+    if not isinstance(src_arr, np.ndarray):
+        _slog("fallback to original tofile: cannot materialize source to ndarray")
+        return _LAZY_ORIG_TOFILE(self, fout, *args, **kwargs)
 
-            tgt_dtype = getattr(self, "_gguf_stream_cast_dtype", src_arr.dtype)
-            # choose element count so that each chunk ~mb megabytes of the *larger* itemsize
-            itemsize = max(src_arr.dtype.itemsize, np.dtype(tgt_dtype).itemsize)
-            chunk_elems = max(1, (mb * 1024 * 1024) // itemsize)
+    tgt = getattr(self, "_gguf_stream_cast_dtype", src_arr.dtype)
+    _slog(f"streaming cast write: chunk={mb} MiB; dst={tgt}; shape={getattr(self._meta,'shape','?')}")
+    write_cast(fout, src_arr, tgt, mb)
+    return
 
-            _gguf_stream_cast_write(fout, src_arr, tgt_dtype, chunk_elems)
-            return
-
-    # Fallback: original behavior
-    _LAZY_ORIG_TOFILE(self, fout)
-
-# Install the monkey patches
+# Install patches
 LazyNumpyTensor.astype = _gguf_streaming_astype
 LazyNumpyTensor.tofile = _gguf_streaming_tofile
-# --- end low-memory streaming for dtype casts --------------------------------
+# --- end low-memory streaming for dtype casts ------------------------------
