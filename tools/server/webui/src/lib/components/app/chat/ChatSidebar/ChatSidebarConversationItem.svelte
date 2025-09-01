@@ -3,7 +3,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import KeyboardShortcutInfo from '$lib/components/ui/KeyboardShortcutInfo.svelte';
+	import { KeyboardShortcutInfo } from '$lib/components/app';
 
 	interface Props {
 		isActive?: boolean;
@@ -122,6 +122,7 @@
 						<Pencil class="h-4 w-4" />
 						Edit
 					</div>
+
 					<KeyboardShortcutInfo keys={['shift', 'cmd', 'e']} />
 				</DropdownMenu.Item>
 
@@ -139,6 +140,7 @@
 						<Trash2 class="h-4 w-4 text-destructive" />
 						Delete
 					</div>
+
 					<KeyboardShortcutInfo keys={['shift', 'cmd', 'd']} variant="destructive" />
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>

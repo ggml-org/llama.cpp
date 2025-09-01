@@ -10,16 +10,16 @@
 	let { keys, variant = 'default', class: className = '' }: Props = $props();
 
 	let baseClasses =
-		'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-mono text-md font-medium opacity-0 transition-opacity';
+		'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-sans text-md font-medium opacity-0 transition-opacity -my-1';
 	let variantClasses = variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground';
 </script>
 
 <kbd class="{baseClasses} {variantClasses} {className}">
 	{#each keys as key, index}
 		{#if key === 'shift'}
-			<ArrowBigUp class="h-2 w-2 {variant === 'destructive' ? 'text-destructive' : ''} -mr-1" />
+			<ArrowBigUp class="h-1 w-1 {variant === 'destructive' ? 'text-destructive' : ''} -mr-1" />
 		{:else if key === 'cmd'}
-			<span class="text-lg {variant === 'destructive' ? 'text-destructive' : ''}">⌘</span>
+			<span class="{variant === 'destructive' ? 'text-destructive' : ''}">⌘</span>
 		{:else}
 			{key.toUpperCase()}
 		{/if}

@@ -2,7 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Search, SquarePen, X } from '@lucide/svelte';
-	import KeyboardShortcutInfo from '$lib/components/ui/KeyboardShortcutInfo.svelte';
+	import { KeyboardShortcutInfo } from '$lib/components/app';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
