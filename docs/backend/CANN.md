@@ -316,5 +316,5 @@ Converting the matmul weight format from ND to NZ can significantly improve perf
 
 ### GGML_CANN_EAGER_MODE
 
-Enabling eager execution mode will bypass ACL graph execution and submit operators directly.  
+Enabling eager execution mode will bypass ACL graph execution and submit operators directly.
 This is useful for debugging or scenarios where graph building overhead is undesirable.

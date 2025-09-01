@@ -420,7 +420,7 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-        
+
         eager_mode = parse_bool(get_env("GGML_CANN_EAGER_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d eager execution mode is %s (acl graph disabled)\n",
               __func__, device, eager_mode ? "ON" : "OFF");
