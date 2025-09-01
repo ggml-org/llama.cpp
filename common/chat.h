@@ -111,6 +111,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_COMMAND_R7B,
     COMMON_CHAT_FORMAT_GRANITE,
     COMMON_CHAT_FORMAT_GPT_OSS,
+    COMMON_CHAT_FORMAT_SEED_OSS,
 
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
@@ -187,10 +188,12 @@ std::string common_chat_format_single(
 // Returns an example of formatted chat
 std::string common_chat_format_example(
     const struct common_chat_templates * tmpls,
-    bool use_jinja);
+    bool use_jinja,
+    const std::map<std::string, std::string> & chat_template_kwargs);
 
 const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
+common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
