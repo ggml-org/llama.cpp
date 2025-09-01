@@ -627,6 +627,12 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
                 ggml_webgpu_mul_mat(ctx, src0, src1, node);
                 break;
             }
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_RESHAPE:
+            {
+                // TODO: implement these operations
+                break;
+            }
         default:
             return false;
     }
