@@ -137,6 +137,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
 - [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
 - [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
+- [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
 
 #### Multimodal
 
