@@ -19,10 +19,6 @@
 #endif
 
 #define QK_MXFP4 32
-typedef struct {
-    uchar e; // E8M0
-    uchar qs[QK_MXFP4/2];
-} block_mxfp4;
 
 static inline half4 mxfp4_to_fp16_packed(ushort fp4x4) {
     ushort2 fp16_packed_a, fp16_packed_b, bias_a, bias_b, sign_a, sign_b;
@@ -66,6 +62,7 @@ static inline float e8m0_to_fp32(uchar x) {
 #define N_R0_MXFP4 2
 #define N_SG_MXFP4 2
 #define N_SIMDWIDTH 64
+#define SRC0Q_IMG
 #endif
 
 #ifdef INTEL_GPU
@@ -73,13 +70,17 @@ REQD_SUBGROUP_SIZE_16
 #elif defined (ADRENO_GPU)
 REQD_SUBGROUP_SIZE_64
 #endif
-kernel void kernel_mul_mv_mxfp4_f32(
-    global char * src0,
-    ulong         offset0,
-    global char * src1,
-    ulong         offset1,
-    global char * dst,
-    ulong         offsetd,
+kernel void kernel_mul_mv_mxfp4_f32_flat(
+#ifdef SRC0Q_IMG
+    __read_only image1d_buffer_t src0_q,
+#else
+    global uchar * src0_q,
+#endif
+    global uchar * src0_e,
+    global uchar * src1,
+    ulong          offset1,
+    global uchar * dst,
+    ulong          offsetd,
     int ne00,
     ulong nb01,
     ulong nb02,
@@ -93,9 +94,8 @@ kernel void kernel_mul_mv_mxfp4_f32(
     int r2,
     int r3
 ) {
-    src0 = (global char*)((global char*)src0 + offset0);
-    src1 = (global char*)((global char*)src1 + offset1);
-    dst  = (global char*)((global char*)dst  + offsetd);
+    src1 = src1 + offset1;
+    dst = dst + offsetd;
 
     int nb = ne00 / QK_MXFP4;
 
@@ -108,11 +108,16 @@ kernel void kernel_mul_mv_mxfp4_f32(
     uint i12 = im % ne12;
     uint i13 = im / ne12;
 
-    ulong offset_src0 = first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03;
-    ulong offset_src1 =        r1*nb11 + (i12   )*nb12 + (i13   )*nb13;
+    ulong offset_src0 = first_row * nb;
+#ifdef SRC0Q_IMG
+    ulong offset_q = offset_src0;
+#else
+    global uchar16 * x_q = (global uchar16 *)(src0_q) + offset_src0;
+#endif
+    global uchar * x_e = src0_e + offset_src0;
 
-    global block_mxfp4 * x = (global block_mxfp4 *) (src0 + offset_src0);
-    global float       * y = (global float       *) (src1 + offset_src1);
+    ulong offset_src1 = r1 * nb11 + i12 * nb12 + i13 * nb13;
+    global float * y = (global float *)(src1 + offset_src1);
 
     const short ix = get_sub_group_local_id() >> 1;  // 0...15
     const short it = get_sub_group_local_id() & 1;  // 0 or 1
@@ -124,10 +129,14 @@ kernel void kernel_mul_mv_mxfp4_f32(
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/2) {
         global float4 * y4 = (global float4 *)yb;
 
+        #pragma unroll
         for (short row = 0; row < N_R0_MXFP4; row++) {
-            global block_mxfp4 * xb = x + row*nb + ib;
-            global uchar       * q2 = (global uchar *)(xb->qs + 8*it);
-            ushort4 xb_q = ((global ushort4 *)(q2))[0];
+            uchar xb_e = x_e[row * nb + ib];
+#ifdef SRC0Q_IMG
+            ushort4 xb_q = as_ushort4(read_imageui(src0_q, (offset_q + row * nb + ib) * 2 + it).xy);
+#else
+            ushort4 xb_q = vload4(0, (global ushort *)((global uchar *)(x_q + row * nb + ib) + 8 * it));
+#endif
 
             half4 fp16x4_0 = mxfp4_to_fp16_packed(xb_q.s0);
             half4 fp16x4_1 = mxfp4_to_fp16_packed(xb_q.s1);
@@ -139,7 +148,7 @@ kernel void kernel_mul_mv_mxfp4_f32(
             acc1 += y4[1] * (float4)(fp16x4_0.s0, fp16x4_0.s2, fp16x4_1.s0, fp16x4_1.s2);
             acc1 += y4[5] * (float4)(fp16x4_0.s1, fp16x4_0.s3, fp16x4_1.s1, fp16x4_1.s3);
 
-            sumf[row] += e8m0_to_fp32(xb->e) * ((acc1.s0 + acc1.s1) + (acc1.s2 + acc1.s3));
+            sumf[row] += e8m0_to_fp32(xb_e) * ((acc1.s0 + acc1.s1) + (acc1.s2 + acc1.s3));
         }
 
         yb += (N_SIMDWIDTH/2) * QK_MXFP4;
