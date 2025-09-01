@@ -12,7 +12,12 @@ import type {
 	ApiLlamaCppServerProps
 } from '$lib/types/api';
 
-import type { ChatMessageType, ChatRole, ChatUploadedFile, MessageSiblingInfo } from '$lib/types/chat';
+import type {
+	ChatMessageType,
+	ChatRole,
+	ChatUploadedFile,
+	MessageSiblingInfo
+} from '$lib/types/chat';
 
 import type {
 	DatabaseConversation,
