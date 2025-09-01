@@ -1,8 +1,16 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import { ChatSidebar, MaximumContextAlertDialog, ConversationTitleUpdateDialog } from '$lib/components/app';
-	import { activeMessages, isLoading, setTitleUpdateConfirmationCallback } from '$lib/stores/chat.svelte';
+	import {
+		ChatSidebar,
+		MaximumContextAlertDialog,
+		ConversationTitleUpdateDialog
+	} from '$lib/components/app';
+	import {
+		activeMessages,
+		isLoading,
+		setTitleUpdateConfirmationCallback
+	} from '$lib/stores/chat.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { ModeWatcher } from 'mode-watcher';
@@ -106,7 +114,7 @@
 
 <MaximumContextAlertDialog />
 
-<ConversationTitleUpdateDialog 
+<ConversationTitleUpdateDialog
 	bind:open={titleUpdateDialogOpen}
 	currentTitle={titleUpdateCurrentTitle}
 	newTitle={titleUpdateNewTitle}

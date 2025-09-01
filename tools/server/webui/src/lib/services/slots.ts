@@ -220,19 +220,19 @@ export class SlotsService {
 		// n_decoded represents ALL tokens generated (thinking + regular content)
 		const totalTokensGenerated = activeSlot.next_token.n_decoded;
 		const maxOutputTokens = activeSlot.params.max_tokens || activeSlot.params.n_predict;
-		
+
 		// For context calculation: only count tokens that will be sent back to API
 		// We need to estimate how many of the generated tokens are actual message content
 		// vs thinking content. For now, we'll assume thinking is ~60% of total output
 		// This is a rough estimate - in reality we'd need to track this separately
 		const estimatedThinkingRatio = 0.6;
 		const estimatedMessageTokens = Math.floor(totalTokensGenerated * (1 - estimatedThinkingRatio));
-		
+
 		// Context used = estimated prompt + only the message content tokens
 		const maxGenerationTokens = Math.min(maxOutputTokens, Math.floor(activeSlot.n_ctx * 0.4));
 		const estimatedPromptTokens = activeSlot.n_ctx - maxGenerationTokens;
 		const contextUsed = Math.min(activeSlot.n_ctx, estimatedPromptTokens + estimatedMessageTokens);
-		
+
 		// Output tokens: total generated tokens (thinking + regular)
 		const outputTokensUsed = totalTokensGenerated;
 		const outputTokensMax = maxOutputTokens;

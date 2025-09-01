@@ -25,21 +25,17 @@
 		<div class="space-y-4 pt-2 pb-6">
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-muted-foreground">Current title:</p>
-				<p class="text-sm bg-muted/50 p-3 rounded-md font-medium">{currentTitle}</p>
+				<p class="rounded-md bg-muted/50 p-3 text-sm font-medium">{currentTitle}</p>
 			</div>
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-muted-foreground">New title would be:</p>
-				<p class="text-sm bg-muted/50 p-3 rounded-md font-medium">{newTitle}</p>
+				<p class="rounded-md bg-muted/50 p-3 text-sm font-medium">{newTitle}</p>
 			</div>
 		</div>
 
 		<AlertDialog.Footer>
-			<Button variant="outline" onclick={onCancel}>
-				Keep Current Title
-			</Button>
-			<Button onclick={onConfirm}>
-				Update Title
-			</Button>
+			<Button variant="outline" onclick={onCancel}>Keep Current Title</Button>
+			<Button onclick={onConfirm}>Update Title</Button>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>

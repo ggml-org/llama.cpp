@@ -217,7 +217,7 @@ export interface ApiProcessingState {
 	contextUsed: number;
 	contextTotal: number;
 	outputTokensUsed: number; // Total output tokens (thinking + regular content)
-	outputTokensMax: number;   // Max output tokens allowed
+	outputTokensMax: number; // Max output tokens allowed
 	temperature: number;
 	topP: number;
 	speculative: boolean;
