@@ -40,6 +40,11 @@ static __dpct_inline__ T op_abs(T x) {
 }
 
 template<typename T>
+static __dpct_inline__ T op_trunc(T x) {
+    return sycl::trunc(x);
+}
+
+template<typename T>
 static __dpct_inline__ T op_elu(T x) {
     return (x > static_cast<T>(0.f)) ? x : sycl::expm1(x);
 }
@@ -161,6 +166,13 @@ template<typename T>
 static void unary_op_abs_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_abs(x[i]);
+    }
+}
+
+template<typename T>
+static void unary_op_trunc_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_trunc(x[i]);
     }
 }
 
@@ -425,8 +437,8 @@ static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
     int dst_size = ne10 * ne11 * ne12 * ne13;
     int num_blocks = ceil_div(dst_size, SYCL_UPSCALE_BLOCK_SIZE);
     sycl::range<1> gridDim(num_blocks * SYCL_UPSCALE_BLOCK_SIZE);
-    sycl_parallel_for<1>(
-        stream, sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
+    sycl_parallel_for(stream,
+         sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
             upscale(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, item_ct1);
         });
 }
@@ -657,6 +669,19 @@ static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor
                                   sycl::range<1>(256)),
                 [=](sycl::nd_item<1> item_ct1) {
                     unary_op_abs_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
+static inline void ggml_sycl_op_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            sycl_parallel_for(stream,
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_trunc_kernel(src, dst_ptr, k_elements, item_ct1);
                 });
         });
 }
@@ -935,7 +960,7 @@ static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tens
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float min_arg, float max_arg) {
             const int num_blocks = ceil_div(k_elements, SYCL_CLAMP_BLOCK_SIZE);
-            sycl_parallel_for(stream,
+            sycl_parallel_for(main_stream,
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) {
@@ -1137,6 +1162,11 @@ void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_abs(ctx, dst);
+}
+
+void ggml_sycl_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_trunc(ctx, dst);
 }
 
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

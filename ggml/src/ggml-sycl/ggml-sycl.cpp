@@ -3626,6 +3626,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                 case GGML_UNARY_OP_ABS:
                     ggml_sycl_abs(ctx, dst);
                     break;
+                case GGML_UNARY_OP_TRUNC:
+                    ggml_sycl_trunc(ctx, dst);
+                    break;
                 case GGML_UNARY_OP_ELU:
                     ggml_sycl_elu(ctx, dst);
                     break;
@@ -4181,6 +4184,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_ABS:
+                case GGML_UNARY_OP_TRUNC:
                 case GGML_UNARY_OP_ELU:
 #if defined (GGML_SYCL_F16)
                     return ggml_is_contiguous(op->src[0]) && (op->type == op->src[0]->type);
