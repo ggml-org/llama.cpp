@@ -4400,10 +4400,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ACC:
             return true;
         case GGML_OP_PAD:
-            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 1) == 0) &&
-                   (ggml_get_op_params_i32(op, 2) == 0) && (ggml_get_op_params_i32(op, 3) == 0) &&
-                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 5) == 0) &&
-                   (ggml_get_op_params_i32(op, 6) == 0) && (ggml_get_op_params_i32(op, 7) == 0);
+            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
+                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_RWKV_WKV6:
