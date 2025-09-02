@@ -303,6 +303,7 @@ def best_alignment_offset(ranges: tuple[LocalTensorRange, ...], alignment: int):
             best_offset = offset
     return best_offset
 
+
 # (assuming this is only called where os.copy_file_range is present)
 #
 # Copy tensor ranges using os.copy_file_range with aligned offsets and sizes
