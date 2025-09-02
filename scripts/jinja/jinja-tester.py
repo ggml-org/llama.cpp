@@ -1,13 +1,12 @@
 import sys
 import json
-import traceback
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPlainTextEdit, QTextEdit, QPushButton
 )
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat
 from PySide6.QtCore import Qt, QRect, QSize
-from jinja2 import Environment, TemplateSyntaxError, TemplateError
+from jinja2 import Environment, TemplateSyntaxError
 
 
 # ------------------------
