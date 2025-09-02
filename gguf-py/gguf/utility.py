@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BufferedReader, BufferedWriter
 from pathlib import Path
 from typing import Literal
 
 import os
 import json
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def fill_templated_filename(filename: str, output_type: str | None) -> str:
@@ -279,6 +283,83 @@ class LocalTensorRange:
     filename: Path
     offset: int
     size: int
+
+
+def best_alignment_offset(ranges: tuple[LocalTensorRange, ...], alignment: int):
+    hist: dict[int, int] = {}
+
+    for r in ranges:
+        align_offset = r.offset % alignment
+        if align_offset not in hist:
+            hist[align_offset] = 0
+        hist[align_offset] += r.size
+
+    best_offset = 0
+    best_size = 0
+    for offset, size in hist.items():
+        if size > best_size:
+            best_size = size
+            best_offset = offset
+    return best_offset
+
+# (assuming this is only called where os.copy_file_range is present)
+#
+# Copy tensor ranges using os.copy_file_range with aligned offsets and sizes
+# to make it more likely that copy-on-write is used where possible.
+# Block alignment is necessary for BTRFS and XFS (and likely for ZFS too).
+def copy_tensor_ranges(fout: BufferedWriter, ranges: tuple[LocalTensorRange, ...], alignment: int = 4096):
+    assert len(ranges) > 0
+    dst_offset = fout.tell()
+    assert dst_offset % alignment == 0, dst_offset % alignment
+    align_offset = best_alignment_offset(ranges, alignment)
+    if len(ranges) == 1:
+        r = ranges[0]
+        with open(r.filename, "rb") as src:
+            offset_src = r.offset - align_offset
+            offset_src_end = r.offset + r.size
+            if offset_src_end % alignment != 0:
+                offset_src_end += alignment - (offset_src_end % alignment)
+            size = offset_src_end - offset_src
+            os.copy_file_range(src.fileno(), fout.fileno(), size, offset_src, dst_offset)
+            dst_offset += r.size + align_offset
+    else:
+        # All ranges need to have the same alignment offset
+        # Non-consecutive ranges need a patch block in between when the alignment offset is non-zero
+        src_files: dict[Path, BufferedReader] = {}
+        for r in ranges:
+            if r.filename not in src_files:
+                src_files[r.filename] = open(r.filename, "rb")
+
+        for i, r in enumerate(ranges):
+            this_align_offset = r.offset % alignment
+            src = src_files[r.filename]
+            if this_align_offset != align_offset:
+                logger.debug(f"copy-on-write can't be used ({i}/{len(ranges)})")
+            if i > 0 and dst_offset % alignment != 0:
+                # Write the correct data between blocks even when they are non-consecutive
+                extra_size = alignment - (dst_offset % alignment)
+                src.seek(r.offset)
+                buf = src.read(extra_size)
+                fout.seek(dst_offset)
+                fout.write(buf)
+                dst_offset += extra_size
+                assert dst_offset % alignment == 0, dst_offset % alignment
+                offset_src = r.offset + extra_size
+            else:
+                # TODO: is this always correct?
+                offset_src = r.offset - align_offset
+
+            offset_src_end = r.offset + r.size
+            if offset_src_end % alignment != 0:
+                offset_src_end += alignment - (offset_src_end % alignment)
+            size = offset_src_end - offset_src
+            os.copy_file_range(src.fileno(), fout.fileno(), size, offset_src, dst_offset)
+            dst_offset += r.size
+
+        for f in src_files.values():
+            f.close()
+
+    fout.seek(dst_offset)
 
 
 @dataclass

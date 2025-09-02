@@ -30,6 +30,7 @@ from .constants import (
 )
 
 from .quants import quant_shape_from_byte_shape
+from .utility import LocalTensorRange, best_alignment_offset, copy_tensor_ranges
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +85,16 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        use_reflinks = False,  # opportunistically attempt to use copy-on-write
     ):
         self.fout = None
         self.path = Path(path) if path else None
         self.arch = arch
         self.endianess = endianess
         self.data_alignment = GGUF_DEFAULT_ALIGNMENT
-        self.use_temp_file = use_temp_file
+        self.use_reflinks = use_reflinks and hasattr(os, "copy_file_range")
+        self.use_temp_file = use_temp_file if not self.use_reflinks else False
         self.temp_file = None
         self.tensors = [{}]
         self.kv_data = [{}]
@@ -106,6 +109,10 @@ class GGUFWriter:
 
         if self.small_first_shard:
             self.tensors.append({})
+
+        if self.use_reflinks:
+            # common default block size for COW filesystems
+            self.add_custom_alignment(4096)
 
         self.add_architecture()
 
@@ -257,14 +264,20 @@ class GGUFWriter:
             offset_tensor = 0
 
             for name, ti in tensors.items():
+                align_offset = 0
+                if self.use_reflinks:
+                    ranges: tuple[LocalTensorRange, ...] = getattr(ti.tensor, "_ranges", ())
+                    if len(ranges) > 0:
+                        align_offset = best_alignment_offset(ranges, self.data_alignment)
+
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
                 ti_data += self._pack("I", n_dims)
                 for j in range(n_dims):
                     ti_data += self._pack("Q", ti.shape[n_dims - 1 - j])
                 ti_data += self._pack("I", ti.dtype)
-                ti_data += self._pack("Q", offset_tensor)
-                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
+                ti_data += self._pack("Q", offset_tensor + align_offset)
+                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes + align_offset, self.data_alignment)
 
             fout.write(ti_data)
             fout.flush()
@@ -398,6 +411,7 @@ class GGUFWriter:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
+        assert not self.use_reflinks  # TODO: handle this here too
 
         if self.endianess == GGUFEndian.BIG:
             tensor.byteswap(inplace=True)
@@ -450,15 +464,21 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for ti in tensors.values():
+                for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
-                    ti.tensor.tofile(fout)
+                    if self.use_reflinks and len(ranges := getattr(ti.tensor, "_ranges", ())) > 0:
+                        logger.debug(f"using reflinks for {name}")
+                        start_offset = fout.tell()
+                        copy_tensor_ranges(fout, ranges, self.data_alignment)
+                        self.write_padding(fout, fout.tell() - start_offset)
+                    else:
+                        ti.tensor.tofile(fout)
+                        self.write_padding(fout, ti.nbytes)
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
                         bar.update(ti.nbytes)
-                    self.write_padding(fout, ti.nbytes)
                     ti.tensor = None
         else:
             self.temp_file.seek(0)

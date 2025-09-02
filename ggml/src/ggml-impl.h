@@ -42,8 +42,8 @@ void ggml_print_backtrace(void);
 #    define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
-// required for mmap as gguf only guarantees 32-byte alignment
-#define TENSOR_ALIGNMENT 32
+// required for mmap as gguf converted with reflinks from safetensors only guarantees 8-byte alignment
+#define TENSOR_ALIGNMENT 8
 
 // static_assert should be a #define, but if it's not,
 // fall back to the _Static_assert C11 keyword.
