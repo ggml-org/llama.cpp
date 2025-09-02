@@ -2252,6 +2252,10 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
+    if (!cann_ctx->acl_graph_mode) {
+        use_cann_graph = false;
+    }
+
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());
