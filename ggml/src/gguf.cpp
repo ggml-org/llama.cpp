@@ -1310,8 +1310,51 @@ struct gguf_writer_buf final : public gguf_writer_base {
     }
 };
 
-template <typename Writer>
-static void gguf_write_out(const struct gguf_context * ctx, Writer & gw, bool only_meta) {
+// file based writer
+struct gguf_writer_file final : public gguf_writer_base {
+    FILE * file;
+    bool ok {true};
+
+    gguf_writer_file(FILE* file) : file(file) {}
+
+    using gguf_writer_base::write;
+
+    void write(const int8_t val) override {
+        if (!ok) return;
+        const auto ret = fputc(val, file);
+        written_bytes++;
+        ok = ok && ret == val;
+    }
+
+    void write(const std::vector<int8_t> & val) override {
+        if (!ok) return;
+        const auto ret = fwrite(val.data(), 1, val.size(), file);
+        written_bytes += val.size();
+        ok = ok && ret == val.size();
+    }
+
+    void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
+        if (!ok) return;
+        GGML_ASSERT(written_bytes - offset_data == info.offset);
+
+        GGML_ASSERT(ggml_is_contiguous(&info.t));
+        const size_t nbytes = ggml_nbytes(&info.t);
+
+        std::vector<int8_t> buf(nbytes);
+        if (info.t.buffer) {
+            ggml_backend_tensor_get(&info.t, buf.data(), 0, nbytes);
+        } else {
+            GGML_ASSERT(info.t.data);
+            memcpy(buf.data(), info.t.data, nbytes);
+        }
+        write(buf);
+
+        pad(alignment);
+    }
+};
+
+template <typename writer_t>
+static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool only_meta) {
     const int64_t n_kv      = gguf_get_n_kv(ctx);
     const int64_t n_tensors = gguf_get_n_tensors(ctx);
 
@@ -1348,46 +1391,6 @@ static void gguf_write_out(const struct gguf_context * ctx, Writer & gw, bool on
         gw.write_tensor_data(ctx->info[i], offset_data, ctx->alignment);
     }
 }
-
-// file based writer
-struct gguf_writer_file final : public gguf_writer_base {
-    FILE * file;
-    bool ok {true};
-
-    gguf_writer_file(FILE* file) : file(file) {}
-
-    using gguf_writer_base::write;
-
-    void write(const int8_t val) override {
-        const auto ret = fputc(val, file);
-        written_bytes++;
-        ok = ok && ret == val;
-    }
-
-    void write(const std::vector<int8_t> & val) override {
-        const auto ret = fwrite(val.data(), 1, val.size(), file);
-        written_bytes += val.size();
-        ok = ok && ret == val.size();
-    }
-
-    void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
-        GGML_ASSERT(written_bytes - offset_data == info.offset);
-
-        GGML_ASSERT(ggml_is_contiguous(&info.t));
-        const size_t nbytes = ggml_nbytes(&info.t);
-
-        std::vector<int8_t> buf(nbytes);
-        if (info.t.buffer) {
-            ggml_backend_tensor_get(&info.t, buf.data(), 0, nbytes);
-        } else {
-            GGML_ASSERT(info.t.data);
-            memcpy(buf.data(), info.t.data, nbytes);
-        }
-        write(buf);
-
-        pad(alignment);
-    }
-};
 
 void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta) {
     gguf_writer_buf gw(buf);
