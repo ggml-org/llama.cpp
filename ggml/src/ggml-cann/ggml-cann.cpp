@@ -1155,7 +1155,7 @@ namespace {
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1203,7 +1203,7 @@ static void ggml_backend_cann_buffer_set_tensor(
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, data, offset);
+            weight_format_to_nz(tensor, offset);
         }
     } else {
         void *transform_buffer = malloc(size);
@@ -2247,9 +2247,14 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
     release_nz_workspace();
+
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
+
+    if (!cann_ctx->acl_graph_mode) {
+        use_cann_graph = false;
+    }
 
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
@@ -2400,14 +2405,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float ext_factor = 0.0f;
-            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
-                return false;
-            }
-            // TODO: ext_factor != 0
-            if (ext_factor != 0) {
                 return false;
             }
 
@@ -2419,9 +2418,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 return false;
             }
 
-            if(!ggml_is_contiguous(op->src[0])){
-                return false;
-            }
             return true;
         }
         case GGML_OP_UPSCALE: {
@@ -2491,7 +2487,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return true;
         case GGML_OP_SCALE:
             float bias;
-            memcpy(&bias, (float*)op->op_params + 1, sizeof(float));
+            memcpy(&bias, (const float *)(op->op_params) + 1, sizeof(float));
             return bias == 0.0f; // TODO: support bias != 0.0f
         case GGML_OP_SOFT_MAX:
             // TODO: support attention sinks [TAG_ATTN_SINKS]
@@ -2522,19 +2518,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 // different head sizes of K and V are not supported yet
                 return false;
             }
-            if (op->src[0]->ne[0] == 192) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 576) {
-                // DeepSeek MLA
-                return false;
-            }
             if (op->src[0]->ne[0] % 16 != 0) {
                 // TODO: padding to support
                 return false;
             }
             float logitSoftcap = 0.0f;
-            memcpy(&logitSoftcap,  (float*)op->op_params + 2, sizeof(float));
+            memcpy(&logitSoftcap, (const float *)(op->op_params) + 2, sizeof(float));
             if(logitSoftcap != 0.0f) {
                 return false;
             }
