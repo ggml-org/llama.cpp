@@ -1384,14 +1384,14 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
     auto handle_tool_call_end = [&] (common_chat_msg_parser & builder, auto end_pos) {
         builder.move_to(end_pos);
         builder.consume_literal("</tool_call>");
-        
+
         size_t obs_pos = builder.input().find("<|observation|>", builder.pos());
         if (obs_pos != std::string::npos) {
             if (obs_pos > builder.pos()) {
                 std::string content = builder.input().substr(builder.pos(), obs_pos - builder.pos());
                 builder.add_content(content);
             }
-            
+
             builder.move_to(obs_pos);
             builder.consume_literal("<|observation|>");
         } else {
@@ -1401,9 +1401,8 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
     };
 
     builder.consume_spaces();
-    
     builder.try_parse_reasoning("<think>", "</think>");
-    
+
     size_t curr_pos = builder.pos();
     while (builder.input().find("<tool_call>", builder.pos()) != std::string::npos) {
         size_t tool_call_start = builder.input().find("<tool_call>", builder.pos());
@@ -1411,7 +1410,7 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             std::string content = builder.input().substr(builder.pos(), tool_call_start - builder.pos());
             builder.add_content(content);
         }
-        
+
         size_t tool_call_end = builder.input().find("</tool_call>", tool_call_start);
         if (tool_call_end == std::string::npos) return;
 
@@ -1419,73 +1418,88 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
         builder.consume_literal("<tool_call>");
         builder.consume_spaces();
 
-        size_t arg_key_start = builder.input().find("<arg_key>", tool_call_start);
+        size_t arg_key_start = builder.input().find("<arg_key>", builder.pos());
         if (arg_key_start == std::string::npos || arg_key_start > tool_call_end) {
             std::string function_content = builder.input().substr(builder.pos(), tool_call_end - builder.pos());
             std::string function_name = string_strip(function_content);
-            
+
             if (!builder.add_tool_call(function_name, "", "{}")) {
                 LOG_INF("%s: failed to add tool call\n", __func__);
             }
-
             handle_tool_call_end(builder, tool_call_end);
-
         } else {
             std::string function_content = builder.input().substr(builder.pos(), arg_key_start - builder.pos());
             std::string function_name = string_strip(function_content);
-            
+
             json args_json = json::object();
             builder.move_to(arg_key_start);
-            
-            while (builder.pos() < tool_call_end && builder.input().substr(builder.pos()).find("<arg_key>") == 0) {
+
+            while (builder.pos() < tool_call_end && builder.input().substr(builder.pos()).rfind("<arg_key>", 0) == 0) {
                 if (!builder.try_consume_literal("<arg_key>")) break;
-                
+
                 auto key_close = builder.try_find_literal("</arg_key>");
                 if (!key_close || key_close->groups[0].end > tool_call_end) {
-                    throw common_chat_msg_partial_exception("incomplete tool call");
-                    return;
+                    throw common_chat_msg_partial_exception("incomplete tool call (arg_key)");
                 }
-                
                 std::string key = string_strip(key_close->prelude);
-                
+
                 builder.consume_spaces();
-                
                 if (!builder.try_consume_literal("<arg_value>")) {
-                    throw common_chat_msg_partial_exception("incomplete tool call");
-                    return;
+                     throw common_chat_msg_partial_exception("incomplete tool call (arg_value)");
                 }
-                
+
                 auto value_close = builder.try_find_literal("</arg_value>");
                 if (!value_close || value_close->groups[0].end > tool_call_end) {
-                    throw common_chat_msg_partial_exception("incomplete tool call");
-                    return;
+                    throw common_chat_msg_partial_exception("incomplete tool call (arg_value content)");
                 }
-                
                 std::string value = string_strip(value_close->prelude);
 
-                // Schema-aware type conversion
                 std::string expected_type = get_expected_type(function_name, key);
                 json parsed_value;
 
-                if (expected_type == "array" || expected_type == "object") {
+                if (expected_type == "integer" || expected_type == "number") {
+                    try {
+                        if (value.find('.') != std::string::npos) {
+                            parsed_value = std::stod(value);
+                        } else {
+                            parsed_value = std::stoll(value);
+                        }
+                    } catch (const std::exception&) {
+                        LOG_WRN("%s: Failed to parse '%s' as a number for key '%s', falling back to string.\n", __func__, value.c_str(), key.c_str());
+                        parsed_value = value;
+                    }
+                } else if (expected_type == "boolean") {
+                    std::string lower_val = value;
+                    std::transform(lower_val.begin(), lower_val.end(), lower_val.begin(),
+                                   [](unsigned char c){ return std::tolower(c); });
+                    if (lower_val == "true" || lower_val == "1") {
+                        parsed_value = true;
+                    } else if (lower_val == "false" || lower_val == "0") {
+                        parsed_value = false;
+                    } else {
+                        LOG_WRN("%s: Ambiguous boolean value '%s' for key '%s', falling back to string.\n", __func__, value.c_str(), key.c_str());
+                        parsed_value = value;
+                    }
+                } else if (expected_type == "array" || expected_type == "object") {
                     try {
                         parsed_value = json::parse(value);
-                    } catch (...) {
+                    } catch (const json::parse_error&) {
+                        LOG_WRN("%s: Failed to parse '%s' as JSON for key '%s', falling back to raw string.\n", __func__, value.c_str(), key.c_str());
                         parsed_value = value;
                     }
                 } else {
-                    // For all other types, store as string and let the unpacking logic handle it
+                    // Default case is "string".
                     parsed_value = value;
                 }
-
+                
                 args_json[key] = parsed_value;
                 builder.consume_spaces();
             }
-
+            
+            // This is a special case to handle when the model outputs a single JSON object as a string
             if (args_json.size() == 1) {
                 const auto key = args_json.begin().key();
                 auto& value = args_json.begin().value();
-
                 if (value.is_string()) {
                     try {
                         json unpacked_json = json::parse(value.get<std::string>());
@@ -1503,12 +1517,10 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             } else {
                 LOG_INF("%s: successfully added tool call with arguments\n", __func__);
             }
-
             handle_tool_call_end(builder, tool_call_end);
         }
-    
+
         if (curr_pos == builder.pos()) {
-            // No progress made, avoid infinite loop
             LOG_INF("%s: no progress in parsing, stopping to avoid infinite loop\n", __func__);
             break;
         }
