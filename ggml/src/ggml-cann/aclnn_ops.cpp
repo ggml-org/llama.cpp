@@ -1425,21 +1425,25 @@ static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
  * @param start         Starting exponent offset.
  * @param stop          Stopping exponent offset (exclusive).
  * @param step          Step size for the exponent increment.
+ * @param dtype         Data type for slope tensor.
  */
 static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer,
-    float m, int64_t size, float start, float stop, float step){
-    int64_t ne[] = {size};
-    size_t nb[] = {sizeof(uint16_t)};
+    float m, int64_t size, float start, float stop, float step, ggml_type dtype){
+    aclDataType acl_type = ggml_cann_type_mapping(dtype);
+    size_t type_size = ggml_type_size(dtype);
 
-    ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * sizeof(uint16_t));
+    int64_t ne[] = {size};
+    size_t nb[] = {type_size};
+
+    ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * type_size);
     void* arange_buffer = arange_allocator.get();
 
     aclTensor* arange_tensor = ggml_cann_create_tensor(
-        arange_buffer, ACL_FLOAT16, sizeof(uint16_t), ne, nb, 1);
+        arange_buffer, acl_type, type_size, ne, nb, 1);
     aclnn_arange(ctx, arange_tensor, start, stop, step, size);
 
     aclTensor* slope_tensor = ggml_cann_create_tensor(
-        slope_buffer, ACL_FLOAT16, sizeof(uint16_t), ne, nb, 1);
+        slope_buffer, acl_type, type_size, ne, nb, 1);
 
     aclScalar* sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
 
@@ -1470,10 +1474,11 @@ static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_bu
  * @param n_head        Total number of attention heads.
  * @param slope_buffer  Pointer to the output buffer (float array) for storing slopes.
  * @param max_bias      Maximum bias value for slope computation.
+ * @param dtype         Data type for slope tensor.
  *
 */
 static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
-    void* slope_buffer, float max_bias) {
+    void* slope_buffer, float max_bias, ggml_type dtype) {
     const int n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
     float m0 = powf(2.0f, -(max_bias) / n_head_log2);
@@ -1490,7 +1495,7 @@ static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
     float step  = 1;
     float count = n_head_log2;
     // end needs to be +1 because aclnn uses a left-closed, right-open interval.
-    aclnn_get_slope_inner(ctx, slope_buffer, m0, count, start, end + 1, step);
+    aclnn_get_slope_inner(ctx, slope_buffer, m0, count, start, end + 1, step, dtype);
     if (n_head_log2 < n_head) {
         // arange2
         start = 2 * (n_head_log2 - n_head_log2) + 1;
@@ -1499,7 +1504,7 @@ static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
         count = n_head - n_head_log2;
         aclnn_get_slope_inner(
             ctx, (char *) slope_buffer + n_head_log2 * sizeof(float),
-            m1, count, start, end + 1, step);
+            m1, count, start, end + 1, step, dtype);
     }
 }
 
@@ -1536,7 +1541,7 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
         ggml_cann_pool_alloc bias_allocator(
                     ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
         bias_buffer = bias_allocator.get();
-        aclnn_get_slope(ctx, n_heads, slope_buffer, max_bias);
+        aclnn_get_slope(ctx, n_heads, slope_buffer, max_bias, GGML_TYPE_F32);
     }
 
     // broadcast for mask, slop and dst;
@@ -3269,7 +3274,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 const int64_t n_heads = src0->ne[2];
                 ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(uint16_t));
                 void* slope_buffer = slope_allocator.get();
-                aclnn_get_slope(ctx, n_heads, slope_buffer, maxBias);
+                aclnn_get_slope(ctx, n_heads, slope_buffer, maxBias, GGML_TYPE_F16);
 
                 int64_t slope_ne[] = {1, 1, n_heads, 1};
                 size_t slope_nb[GGML_MAX_DIMS];
