@@ -130,11 +130,21 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
             compile_end_time = conversion_end_time;
         } else {
             std::shared_ptr<ov::Model> model;
-            std::set<ggml_type> types_to_dequantize;
+            std::map<ggml_type, ExtraQuantType> types_to_requantize;
             if (is_static) {
-                types_to_dequantize = {GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K};
+                types_to_requantize = {
+                    {GGML_TYPE_Q4_0, ExtraQuantType::Q4_0_128},
+                    {GGML_TYPE_Q4_1, ExtraQuantType::Q4_0_128},
+                    {GGML_TYPE_Q4_K, ExtraQuantType::Q4_0_128},
+                    {GGML_TYPE_Q6_K, ExtraQuantType::Q8_1_C  },
+                };
+            } else if (device == "GPU") {
+                types_to_requantize = {
+                    // CVS-166739
+                    {GGML_TYPE_Q6_K, ExtraQuantType::Q8_1_C},
+                };
             }
-            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, types_to_dequantize);
+            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, types_to_requantize);
 
             if (is_static) {
                 ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, true);

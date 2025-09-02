@@ -4,8 +4,10 @@
 #include <map>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
+#include <optional>
 #include <vector>
 
+#include "ggml-quants.hpp"
 #include "ggml.h"
 #include "openvino/decoder.hpp"
 
@@ -117,9 +119,10 @@ public:
 
     static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
 
-    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor, bool to_dequantize);
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor,
+                                                        std::optional<ExtraQuantType> requant_type = std::nullopt);
     static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(
-        struct ggml_cgraph* cgraph, std::set<ggml_type> types_to_dequantize = {});
+        struct ggml_cgraph* cgraph, std::map<ggml_type, ExtraQuantType> types_to_requantize = {});
 
     const ggml_tensor* get_tensor_used_op(const ggml_tensor* tensor) const;
     const ggml_tensor* get_tensor_from_name(const std::string& name) const;

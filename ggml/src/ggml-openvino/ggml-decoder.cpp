@@ -25,6 +25,7 @@
 #include <openvino/op/parameter.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/runtime/tensor.hpp>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <stdexcept>
@@ -371,7 +372,7 @@ std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const
 }
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(
-    struct ggml_cgraph* cgraph, std::set<ggml_type> types_to_dequantize) {
+    struct ggml_cgraph* cgraph, std::map<ggml_type, ExtraQuantType> types_to_requantize) {
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
     static std::mutex weights_mutex;
     auto* nodes = cgraph->nodes;
@@ -396,7 +397,10 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                         }
                     }
                     if (should_create) {
-                        auto weight_node = create_weight_node(src, types_to_dequantize.count(src->type) > 0);
+                        auto requant_type = types_to_requantize.count(src->type) ?
+                                                std::optional<ExtraQuantType>(types_to_requantize.at(src->type)) :
+                                                std::nullopt;
+                        auto weight_node = create_weight_node(src, requant_type);
                         weight_node->set_friendly_name(src_name);
                         {
                             std::lock_guard<std::mutex> lock(weights_mutex);
@@ -410,7 +414,8 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
     return model_weights;
 }
 
-std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor, bool to_dequantize) {
+std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
+                                                            std::optional<ExtraQuantType> requant_type) {
     std::set<ggml_type> weight_types = {
         GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
@@ -443,21 +448,15 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
         tensor->extra == nullptr,
         "Unsupported weight tensor: " + std::string(tensor->name) + " Possibly this is a repacked quantized weights");
 
-    if (to_dequantize) {
-        std::vector<float> weights_f32(ne_total);
-        ggml_get_type_traits(tensor->type)->to_float(tensor->data, weights_f32.data(), ggml_nelements(tensor));
-        ov::Tensor weights(ov::element::f16, node_shape);
-        ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), ggml_nelements(tensor));
-        std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
-        weight_node->set_friendly_name(tensor->name);
-        return weight_node;
+    if (requant_type.has_value()) {
+        return requantize(tensor, requant_type.value());
     }
 
-    uint64_t weights_per_byte;
+    ov::element::Type weight_type;
     if (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_1 || tensor->type == GGML_TYPE_Q4_K) {
-        weights_per_byte = 2;
+        weight_type = ov::element::u4;
     } else {  // tensor.type == GGUF_TYPE_Q8_0 || tensor.type == GGUF_TYPE_Q6_K
-        weights_per_byte = 1;
+        weight_type = ov::element::u8;
     }
 
     uint64_t weights_per_block;
@@ -474,15 +473,12 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
                     " has incompatible last dim shape: ",
                     node_shape.back());
 
-    auto weights_shape = node_shape;
-    weights_shape.back() /= (weights_per_byte * 4);  // means u32 type can store 8 q4 or 4 q8
-
-    ov::Tensor weights(ov::element::u32, weights_shape);
-    // For scales and bias
+    ov::Tensor weights(weight_type, node_shape);
+    // For scales and biases
     node_shape[node_shape.size() - 1] = node_shape[node_shape.size() - 1] / weights_per_block;
-
     ov::Tensor scales(ov::element::f16, node_shape);
     ov::Tensor biases(ov::element::f16, node_shape);
+
     ov::Output<ov::Node> weight_node;
     if (tensor->type == GGML_TYPE_Q4_0) {
         extract_q4_0_data(tensor, weights, scales, biases);
@@ -494,7 +490,6 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
         extract_q8_0_data(tensor, weights, scales, biases);
         weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
     } else if (tensor->type == GGML_TYPE_Q6_K) {
-        // due to WA #2135, this case will not be used, extract_q6_k_data temporarily disabled.
         extract_q6_k_data(tensor, weights, scales, biases);
         weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
     } else if (tensor->type == GGML_TYPE_Q4_K) {
@@ -503,15 +498,8 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
     }
 
     OPENVINO_ASSERT(weight_node.get_shape().size() == 2, "Weight should be 2D");
-    // weight_node = std::make_shared<ov::op::v0::Unsqueeze>(
-    //     weight_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {0}));
 
     weight_node.get_node_shared_ptr()->set_friendly_name(tensor->name);
-    // GGML_LOG_DEBUG("Created weight node: %s   %s %s%s\n",
-    //                tensor->name,
-    //                ggml_type_name(tensor->type),
-    //                weight_node.get_element_type().get_type_name().c_str(),
-    //                weight_node.get_partial_shape().to_string().c_str());
     return weight_node.get_node_shared_ptr();
 }
 
