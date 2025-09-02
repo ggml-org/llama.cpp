@@ -22,7 +22,7 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
-BinPackArguments: false
+BinPackArguments: true
 BinPackParameters: false # OnePerLine
 BitFieldColonSpacing: Both
 BreakBeforeBraces: Custom # Attach
