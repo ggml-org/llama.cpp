@@ -462,7 +462,9 @@ class ModelBase:
 
                 # workaround BF16 not being supported by Numpy
                 if data_torch.dtype == torch.bfloat16:
-                    data_torch = data_torch.view(torch.uint8)
+                    # Need a contiguous last dimension otherwise byte view doesn't work
+                    # (problem can be reproduced with DeepSeek-V2-Lite-Chat)
+                    data_torch = data_torch.contiguous().view(torch.uint8)
 
                 # if data ends up empty, it means data_torch was a scalar tensor -> restore
                 if len(data_torch.shape) == 0:

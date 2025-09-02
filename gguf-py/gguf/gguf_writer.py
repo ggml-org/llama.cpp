@@ -30,7 +30,7 @@ from .constants import (
 )
 
 from .quants import quant_shape_from_byte_shape
-from .utility import LocalTensorRange, best_alignment_offset, copy_tensor_ranges
+from .utility import LocalTensorRange, best_alignment_offset, reflink_tensor_ranges
 
 logger = logging.getLogger(__name__)
 
@@ -470,7 +470,7 @@ class GGUFWriter:
                     if self.use_reflinks and len(ranges := getattr(ti.tensor, "_ranges", ())) > 0:
                         logger.debug(f"using reflinks for {name}")
                         start_offset = fout.tell()
-                        copy_tensor_ranges(fout, ranges, self.data_alignment)
+                        reflink_tensor_ranges(fout, ranges, self.data_alignment)
                         self.write_padding(fout, fout.tell() - start_offset)
                     else:
                         ti.tensor.tofile(fout)

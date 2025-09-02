@@ -21,7 +21,7 @@ class LazyMeta(ABCMeta):
                 return type(self)._wrap_fn(
                     (lambda s, *args, **kwargs: getattr(s, name)(*args, **kwargs)),
                     use_self=self,
-                    data_noop=name in ("view", "reshape", "squeeze", "unsqueeze"),
+                    data_noop=name in ("view", "reshape", "squeeze", "unsqueeze", "contiguous"),
                 )
             elif isinstance(meta_attr, self._tensor_type):
                 # e.g. self.T with torch.Tensor should still be wrapped
