@@ -76,15 +76,8 @@ extern "C" {
         struct ggml_context ** ctx;
     };
 
-    struct gguf_tensor_shape {
-        int64_t ne[GGML_MAX_DIMS];
-    };
-
-    typedef bool (*tensor_shape_read_cb_t)(const int64_t* ne, uint32_t n_dims, struct gguf_tensor_shape* shape);
-
     GGML_API struct gguf_context * gguf_init_empty(void);
     GGML_API struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params);
-    GGML_API struct gguf_context * gguf_init_from_file_ext(const char * fname, struct gguf_init_params params, tensor_shape_read_cb_t on_tensor_shape_read);
     //GGML_API struct gguf_context * gguf_init_from_buffer(..);
 
     GGML_API void gguf_free(struct gguf_context * ctx);
