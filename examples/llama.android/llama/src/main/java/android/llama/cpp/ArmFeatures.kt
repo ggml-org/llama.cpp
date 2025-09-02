@@ -1,7 +1,7 @@
 package android.llama.cpp
 
 /**
- * Represents an ARM CPU feature with its metadata.
+ * Represents an Arm® CPU feature with its metadata.
  */
 data class ArmFeature(
     val name: String,
@@ -11,7 +11,7 @@ data class ArmFeature(
 )
 
 /**
- * Helper class to map LLamaTier to supported ARM features.
+ * Helper class to map LLamaTier to supported Arm® features.
  */
 object ArmFeaturesMapper {
 
@@ -24,7 +24,7 @@ object ArmFeaturesMapper {
     )
 
     /**
-     * All ARM features supported by the library, in order of introduction.
+     * All Arm® features supported by the library, in order of introduction.
      */
     val allFeatures = listOf(
         ArmFeature(
@@ -60,20 +60,6 @@ object ArmFeaturesMapper {
     )
 
     /**
-     * Maps a LLamaTier to its supported ARM features.
-     * Returns a list of booleans where each index corresponds to allFeatures.
-     */
-    fun getSupportedFeatures(tier: LLamaTier?): List<Boolean>? =
-        when (tier) {
-            LLamaTier.NONE, null -> null                              // No tier detected
-            LLamaTier.T0 -> listOf(true, false, false, false, false)  // ASIMD only
-            LLamaTier.T1 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
-            LLamaTier.T2 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
-            LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE
-            // TODO-han.yin: implement T4 once obtaining an Android device with SME!
-        }
-
-    /**
      * Gets the feature support data for UI display.
      */
     fun getFeatureDisplayData(tier: LLamaTier?): List<DisplayItem>? =
@@ -86,5 +72,19 @@ object ArmFeaturesMapper {
                     )
                 }
             }
+        }
+
+    /**
+     * Maps a LLamaTier to its supported Arm® features.
+     * Returns a list of booleans where each index corresponds to allFeatures.
+     */
+    private fun getSupportedFeatures(tier: LLamaTier?): List<Boolean>? =
+        when (tier) {
+            LLamaTier.NONE, null -> null                              // No tier detected
+            LLamaTier.T0 -> listOf(true, false, false, false, false)  // ASIMD only
+            LLamaTier.T1 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
+            LLamaTier.T2 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
+            LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE
+            // TODO-han.yin: implement T4 once obtaining an Android device with SME!
         }
 }

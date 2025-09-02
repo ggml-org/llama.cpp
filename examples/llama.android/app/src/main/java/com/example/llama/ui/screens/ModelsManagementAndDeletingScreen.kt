@@ -450,7 +450,7 @@ private fun ImportFromHuggingFaceDialog(
                     modifier = Modifier.fillMaxWidth(),
                     text = models?.let {
                         "The Hugging Face models shown here have been pre-filtered to be moderately sized and correctly quantized.\n\n" +
-                            "Please use responsibly. We do not endorse or take responsibility for misuse or harmful use of these models.\n\n" +
+                            "Please use responsibly. Arm® does not endorse or take responsibility for misuse or harmful use of these models.\n\n" +
                             "Select a model to download:"
                     } ?: "Searching on HuggingFace for open-source models free for downloading...",
                     style = MaterialTheme.typography.bodyLarge,
