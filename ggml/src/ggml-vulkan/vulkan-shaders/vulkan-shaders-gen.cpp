@@ -854,7 +854,13 @@ void write_output_files() {
         fputs(len.c_str(), src);
     }
 
-    for (const std::string& btype : {"f16", "f32", "q8_1"}) {
+    std::vector<std::string> btypes = {"f16", "f32"};
+
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    btypes.push_back("q8_1");
+#endif
+
+    for (const std::string& btype : btypes) {
     for (const auto& tname : type_names) {
         if (btype == "q8_1" && !is_legacy_quant(tname)) {
             continue;
