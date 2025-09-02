@@ -195,7 +195,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
+      (cmakeFeature "AMDGPU_TARGETS" rocmGpuTargets)
       (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
     ]
     ++ optionals useMetalKit [
