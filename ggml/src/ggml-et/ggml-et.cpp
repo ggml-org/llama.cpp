@@ -250,10 +250,6 @@ static bool ggml_backend_et_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
     return false;
 }
 
-static void ggml_backend_et_synchronize(ggml_backend_t backend) {
-    GGML_UNUSED(backend);
-}
-
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
 
@@ -401,10 +397,10 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
 static const struct ggml_backend_i ggml_backend_et_i = {
     /* .get_name                = */ ggml_backend_et_get_name,
     /* .free                    = */ ggml_backend_et_free,
-    /* .set_tensor_async        = */ ggml_backend_et_set_tensor_async,
-    /* .get_tensor_async        = */ ggml_backend_et_get_tensor_async,
-    /* .cpy_tensor_async        = */ ggml_backend_et_cpy_tensor_async,
-    /* .synchronize             = */ ggml_backend_et_synchronize,
+    /* .set_tensor_async        = */ NULL, // ggml checks for presence of these
+    /* .get_tensor_async        = */ NULL,
+    /* .cpy_tensor_async        = */ NULL,
+    /* .synchronize             = */ NULL,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
