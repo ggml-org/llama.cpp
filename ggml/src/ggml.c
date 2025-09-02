@@ -1010,6 +1010,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "CUSTOM",
 
+    "SCALE_DIAG_MASK_INF_SOFTMAX",
+
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
@@ -1018,7 +1020,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1113,6 +1115,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "custom(x)",
 
+    "scale_diag_mask_inf_softmax",
+
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
     "adamw(x)",
@@ -1121,7 +1125,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3878,6 +3882,24 @@ struct ggml_tensor * ggml_soft_max_ext_back_inplace(
         float                 scale,
         float                 max_bias) {
     return ggml_soft_max_ext_back_impl(ctx, a, b, scale, max_bias, true);
+}
+
+struct ggml_tensor * ggml_scale_diag_mask_inf_softmax_inplace(
+        struct ggml_context * ctx,
+        float                 scale,
+        int                   n_past,
+        struct ggml_tensor  * a) {
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    int32_t params[2];
+    memcpy(&params[0], &scale, sizeof(scale));
+    params[1] = n_past;
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op = GGML_OP_SCALE_DIAG_MASK_INF_SOFTMAX;
+    result->src[0] = a;
+
+    return result;
 }
 
 // ggml_rope

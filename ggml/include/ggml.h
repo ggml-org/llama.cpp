@@ -554,6 +554,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_SCALE_DIAG_MASK_INF_SOFTMAX,
+
         GGML_OP_COUNT,
     };
 
@@ -1627,6 +1629,12 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 scale,
             float                 max_bias);
+    // fused soft_max with diag mask inf
+    GGML_API struct ggml_tensor * ggml_scale_diag_mask_inf_softmax_inplace(
+            struct ggml_context * ctx,
+            float                 scale,
+            int                   n_past,
+            struct ggml_tensor  * a);
 
     // rotary position embedding
     // if (mode & 1) - skip n_past elements (NOT SUPPORTED)

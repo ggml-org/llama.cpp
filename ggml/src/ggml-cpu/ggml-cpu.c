@@ -1393,6 +1393,67 @@ UseGgmlGemm2:;
     }
 }
 
+static void ggml_compute_forward_scale_diag_mask_inf_softmax(
+        const struct ggml_compute_params * params,
+        const struct ggml_tensor * src0,
+        struct ggml_tensor * dst) {
+    assert(params->ith == 0);
+    assert(ggml_is_contiguous(dst));
+
+    float * dst_ptr  = (float *) dst->data;
+    float * src0_ptr = (float *) src0->data;
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+    const int64_t ne03 = src0->ne[3];
+
+    const int32_t * params_ptr = (const int32_t *) dst->op_params;
+    const float scale = *(const float *) &params_ptr[0];
+    const int n_past = params_ptr[1];
+
+    for (int64_t i3 = 0; i3 < ne03; i3++) {
+        for (int64_t i2 = 0; i2 < ne02; i2++) {
+            for (int64_t i1 = 0; i1 < ne01; i1++) {
+                float max = -INFINITY;
+                float sum = 0.0f;
+
+                // Scale and apply diagonal mask
+                for (int64_t i0 = 0; i0 < ne00; i0++) {
+                    const int64_t idx = i3*ne02*ne01*ne00 + i2*ne01*ne00 + i1*ne00 + i0;
+                    
+                    float val = src0_ptr[idx] * scale;
+                    
+                    // Apply diagonal mask
+                    if (i0 > n_past + i1) {
+                        val = -INFINITY;
+                    }
+                    
+                    dst_ptr[idx] = val;
+                    max = MAX(max, val);
+                }
+
+                // Compute softmax
+                for (int64_t i0 = 0; i0 < ne00; i0++) {
+                    const int64_t idx = i3*ne02*ne01*ne00 + i2*ne01*ne00 + i1*ne00 + i0;
+                    
+                    const float val = dst_ptr[idx];
+                    const float exp_val = expf(val - max);
+                    dst_ptr[idx] = exp_val;
+                    sum += exp_val;
+                }
+
+                // Normalize
+                const float inv_sum = 1.0f/sum;
+                for (int64_t i0 = 0; i0 < ne00; i0++) {
+                    const int64_t idx = i3*ne02*ne01*ne00 + i2*ne01*ne00 + i1*ne00 + i0;
+                    dst_ptr[idx] *= inv_sum;
+                }
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_mul_mat_id
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ids->ne[0]*ids->ne[1] + (i1)]
@@ -2010,6 +2071,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_custom(params, tensor);
             }
+            break;
+        case GGML_OP_SCALE_DIAG_MASK_INF_SOFTMAX:
+            {
+                ggml_compute_forward_scale_diag_mask_inf_softmax(params, tensor, tensor);
+            } 
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
             {
