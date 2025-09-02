@@ -158,16 +158,16 @@ static __global__ void rms_norm_f32(const float *  x,
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
     if constexpr (do_multiply) {
-        const uint32_t mul_row     = modulo(row, mul_nrows, mp_mul_rows, L_mul_rows);
-        const uint32_t mul_channel = modulo(channel, mul_nchannels, mp_mul_channels, L_mul_channels);
-        const uint32_t mul_sample  = modulo(sample, mul_nsamples, mp_mul_samples, L_mul_samples);
+        const uint32_t mul_row     = fastmodulo(row, mul_nrows, mp_mul_rows, L_mul_rows);
+        const uint32_t mul_channel = fastmodulo(channel, mul_nchannels, mp_mul_channels, L_mul_channels);
+        const uint32_t mul_sample  = fastmodulo(sample, mul_nsamples, mp_mul_samples, L_mul_samples);
         mul += mul_sample * mul_stride_sample + mul_channel * mul_stride_channel + mul_row * mul_stride_row;
     }
 
     if constexpr (do_add) {
-        const int add_row     = modulo(row, add_nrows, mp_add_rows, L_add_rows);
-        const int add_channel = modulo(channel, add_nchannels, mp_add_channels, L_add_channels);
-        const int add_sample  = modulo(sample, add_nsamples, mp_add_samples, L_add_samples);
+        const int add_row     = fastmodulo(row, add_nrows, mp_add_rows, L_add_rows);
+        const int add_channel = fastmodulo(channel, add_nchannels, mp_add_channels, L_add_channels);
+        const int add_sample  = fastmodulo(sample, add_nsamples, mp_add_samples, L_add_samples);
         add += add_sample * add_stride_sample + add_channel * add_stride_channel + add_row * add_stride_row;
     }
 
@@ -201,11 +201,11 @@ static __global__ void rms_norm_f32(const float *  x,
 
     for (int col = tid; col < ncols; col += block_size) {
         if constexpr (do_multiply && do_add) {
-            const int mul_col = modulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
-            const int add_col = modulo(col, add_ncols, mp_add_cols, L_add_cols);
+            const int mul_col = fastmodulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
+            const int add_col = fastmodulo(col, add_ncols, mp_add_cols, L_add_cols);
             dst[col]          = scale * x[col] * mul[mul_col] + add[add_col];
         } else if constexpr (do_multiply) {
-            const int mul_col = modulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
+            const int mul_col = fastmodulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
             dst[col]          = scale * x[col] * mul[mul_col];
         } else {
             dst[col] = scale * x[col];
