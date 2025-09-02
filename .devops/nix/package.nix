@@ -34,6 +34,7 @@
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   enableCurl ? true,
   useVulkan ? false,
+  buildAllCudaFaQuants ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -95,6 +96,8 @@ let
     clr
     hipblas
     rocblas
+    llvm.lld
+    llvm.bintools
   ];
 
   vulkanBuildInputs = [
@@ -160,7 +163,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   buildInputs =
     optionals effectiveStdenv.isDarwin darwinBuildInputs
     ++ optionals useCuda cudaBuildInputs
-    ++ optionals useMpi [ mpi ]
+    ++ optionals (useMpi && !useRocm) [ mpi ]
+    ++ optionals (useMpi && useRocm) [ rocmPackages.mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
     ++ optionals useVulkan vulkanBuildInputs
@@ -187,10 +191,12 @@ effectiveStdenv.mkDerivation (finalAttrs: {
           builtins.concatStringsSep ";" (map dropDot cudaCapabilities)
         )
       )
+      (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
       (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
+      (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
     ]
     ++ optionals useMetalKit [
       (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
