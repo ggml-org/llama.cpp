@@ -2417,7 +2417,11 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (mode & GGML_ROPE_TYPE_VISION) {
                 return false;
             }
-
+#ifdef ASCEND_310P
+            if(!ggml_is_contiguous(op->src[0])){
+                return false;
+            }
+#endif
             return true;
         }
         case GGML_OP_UPSCALE: {
