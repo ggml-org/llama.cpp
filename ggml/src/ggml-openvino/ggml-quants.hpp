@@ -1,3 +1,4 @@
+#pragma once
 #include <cstdint>
 #include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
@@ -44,6 +45,15 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor& weight,
                                        ov::Tensor& scales,
                                        ov::Tensor& biases,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
+
+enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128 };
+
+std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType requant_type);
+
+void quantize_q4_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,
+                   int64_t qk);
+void quantize_q8_1(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,
+                   int64_t qk);
 
 namespace ov {
 namespace op {
