@@ -12054,6 +12054,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_ACC:
         case GGML_OP_CONCAT:
         case GGML_OP_SCALE:
+            return true;
         case GGML_OP_PAD:
             return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 1) == 0) &&
                    (ggml_get_op_params_i32(op, 2) == 0) && (ggml_get_op_params_i32(op, 3) == 0) &&
