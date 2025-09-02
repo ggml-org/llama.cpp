@@ -29,6 +29,9 @@ class MainViewModel @Inject constructor (
     private val _showChatTooltip = MutableStateFlow(true)
     val showChatTooltip: StateFlow<Boolean> = _showChatTooltip.asStateFlow()
 
+    private val _showModelManagementTooltip = MutableStateFlow(true)
+    val showModelManagementTooltip: StateFlow<Boolean> = _showModelManagementTooltip.asStateFlow()
+
 
     /**
      * Unload the current model and release the resources
@@ -47,18 +50,28 @@ class MainViewModel @Inject constructor (
                     _showChatTooltip.value = !it
                 }
             }
-        }
-    }
-
-    fun waiveModelImportTooltip() {
-        viewModelScope.launch {
-            appPreferences.setUserHasImportedFirstModel(true)
+            launch {
+                appPreferences.userHasNavigatedToManagement().collect {
+                    _showModelManagementTooltip.value = !it
+                }
+            }
         }
     }
 
     fun waiveChatTooltip() {
         viewModelScope.launch {
             appPreferences.setUserHasChattedWithModel(true)
+        }
+    }
+    fun waiveModelImportTooltip() {
+        viewModelScope.launch {
+            appPreferences.setUserHasImportedFirstModel(true)
+        }
+    }
+
+    fun waiveModelManagementTooltip() {
+        viewModelScope.launch {
+            appPreferences.setUserHasNavigatedToManagement(true)
         }
     }
 }

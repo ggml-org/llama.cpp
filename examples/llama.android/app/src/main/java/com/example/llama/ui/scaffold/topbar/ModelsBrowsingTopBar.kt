@@ -12,10 +12,16 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -24,11 +30,23 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ModelsBrowsingTopBar(
     title: String,
+    showTooltip: Boolean,
     showManagingToggle: Boolean,
     onToggleManaging: () -> Unit,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
 ) {
+    val tooltipState = rememberTooltipState(
+        initialIsVisible = showTooltip,
+        isPersistent = showTooltip
+    )
+
+    LaunchedEffect(showTooltip, showManagingToggle) {
+        if (showTooltip && showManagingToggle) {
+            tooltipState.show()
+        }
+    }
+
     TopAppBar(
         title = { Text(title) },
         navigationIcon = {
@@ -54,8 +72,20 @@ fun ModelsBrowsingTopBar(
         },
         actions = {
             if (showManagingToggle) {
-            ModelManageActionToggle(onToggleManaging)
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                        TooltipAnchorPosition.Below),
+                    state = tooltipState,
+                    tooltip = {
+                        PlainTooltip {
+                            Text("Tap this button to install another model or manage your models!")
+                        }
+                    },
+                    onDismissRequest = {}
+                ) {
+                    ModelManageActionToggle(onToggleManaging)
                 }
+            }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,

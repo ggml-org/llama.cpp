@@ -99,6 +99,7 @@ fun AppContent(
     val engineState by mainViewModel.engineState.collectAsState()
     val showModelImportTooltip by mainViewModel.showModelImportTooltip.collectAsState()
     val showChatTooltip by mainViewModel.showChatTooltip.collectAsState()
+    val showManagementTooltip by mainViewModel.showModelManagementTooltip.collectAsState()
 
     // Model state
     val modelScreenUiMode by modelsViewModel.modelScreenUiMode.collectAsState()
@@ -223,9 +224,11 @@ fun AppContent(
                                     modelsViewModel.resetPreselection()
                                     openDrawer()
                                 },
+                                showTooltip = showManagementTooltip && !showChatTooltip && hasModelsInstalled,
                                 showManagingToggle = !showChatTooltip && hasModelsInstalled,
                                 onToggleManaging = {
                                     if (hasModelsInstalled) {
+                                        mainViewModel.waiveModelManagementTooltip()
                                         modelsViewModel.toggleMode(ModelScreenUiMode.MANAGING)
                                     }
                                 },

@@ -207,7 +207,7 @@ fun ModelsManagementBottomBar(
                 onDismissRequest = { importingConfig.toggleMenu(false) }
             ) {
                 DropdownMenuItem(
-                    text = { Text("Import a local GGUF model") },
+                    text = { Text("Import a local model") },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.FolderOpen,
@@ -217,7 +217,7 @@ fun ModelsManagementBottomBar(
                     onClick = importingConfig.importFromLocal
                 )
                 DropdownMenuItem(
-                    text = { Text("Download from HuggingFace") },
+                    text = { Text("Download a model from Hugging Face") },
                     leadingIcon = {
                         Icon(
                             painter = painterResource(id = R.drawable.logo_huggingface),

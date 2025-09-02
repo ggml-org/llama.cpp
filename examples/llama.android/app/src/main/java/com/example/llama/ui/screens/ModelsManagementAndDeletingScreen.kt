@@ -117,7 +117,7 @@ fun ModelsManagementAndDeletingScreen(
         } else if (filteredModels.isEmpty()) {
             // Prompt the user to import a model
             val title = when (activeFiltersCount) {
-                0 -> "Import or download,\n have it your way"
+                0 -> "Choose a model:\nImport locally or download online"
                 1 -> "No models match\n the selected filter"
                 else -> "No models match\n the selected filters"
             }

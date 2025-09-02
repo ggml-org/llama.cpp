@@ -43,6 +43,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -250,6 +251,7 @@ fun ModelLoadingScreen(
                             if (!showedSystemPromptWarning) {
                                 onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
                                     message = "Model may not support system prompt!\nProceed with caution.",
+                                    duration = SnackbarDuration.Long,
                                 ))
                                 showedSystemPromptWarning = true
                             }

@@ -29,6 +29,7 @@ class AppPreferences @Inject constructor (
         // Preference keys
         private val USER_HAS_IMPORTED_FIRST_MODEL = booleanPreferencesKey("user_has_imported_first_model")
         private val USER_HAS_CHATTED_WITH_MODEL = booleanPreferencesKey("user_has_chatted_with_model")
+        private val USER_HAS_NAVIGATED_TO_MANAGEMENT = booleanPreferencesKey("user_has_navigated_to_management")
     }
 
     /**
@@ -62,6 +63,23 @@ class AppPreferences @Inject constructor (
     suspend fun setUserHasChattedWithModel(done: Boolean) = withContext(Dispatchers.IO) {
         context.appDataStore.edit { preferences ->
             preferences[USER_HAS_CHATTED_WITH_MODEL] = done
+        }
+    }
+
+    /**
+     * Gets whether the user has navigated to model management screen.
+     */
+    fun userHasNavigatedToManagement(): Flow<Boolean> =
+        context.appDataStore.data.map { preferences ->
+            preferences[USER_HAS_NAVIGATED_TO_MANAGEMENT] == true
+        }
+
+    /**
+     * Sets whether the user has navigated to model management screen.
+     */
+    suspend fun setUserHasNavigatedToManagement(done: Boolean) = withContext(Dispatchers.IO) {
+        context.appDataStore.edit { preferences ->
+            preferences[USER_HAS_NAVIGATED_TO_MANAGEMENT] = done
         }
     }
 }

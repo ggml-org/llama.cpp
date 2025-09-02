@@ -28,6 +28,7 @@ sealed class TopBarConfig {
     data class ModelsBrowsing(
         override val title: String,
         override val navigationIcon: NavigationIcon,
+        val showTooltip: Boolean,
         val showManagingToggle: Boolean,
         val onToggleManaging: () -> Unit,
     ) : TopBarConfig()

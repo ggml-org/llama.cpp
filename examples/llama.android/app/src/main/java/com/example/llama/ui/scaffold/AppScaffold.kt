@@ -71,6 +71,7 @@ fun AppScaffold(
 
             is TopBarConfig.ModelsBrowsing -> ModelsBrowsingTopBar(
                 title = topBarconfig.title,
+                showTooltip = topBarconfig.showTooltip,
                 showManagingToggle = topBarconfig.showManagingToggle,
                 onToggleManaging = topBarconfig.onToggleManaging,
                 onNavigateBack = topBarconfig.navigationIcon.backAction,
