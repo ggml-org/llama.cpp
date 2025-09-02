@@ -100,6 +100,7 @@ fun SettingsGeneralScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 SegmentedButton(
+                    modifier = Modifier.weight(3f),
                     selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_ARM,
                     onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_ARM) },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
@@ -108,11 +109,12 @@ fun SettingsGeneralScreen(
                 }
 
                 SegmentedButton(
+                    modifier = Modifier.weight(4f),
                     selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_MATERIAL,
                     onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_MATERIAL) },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
                 ) {
-                    Text("Material")
+                    Text("Material Design")
                 }
             }
 
