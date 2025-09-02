@@ -161,7 +161,7 @@ private:
     int m_head_size;
     int32_t* m_rope_params;
     std::vector<std::string> m_kv_names;
-    bool m_is_static;
+    bool m_is_static = false;
     bool m_is_first_token;
 };
 
