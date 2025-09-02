@@ -81,6 +81,11 @@ interface ModelRepository {
     suspend fun deleteModels(modelIds: List<String>)
 
     /**
+     * Fetch details of preselected models
+     */
+    suspend fun fetchPreselectedHuggingFaceModels(): List<HuggingFaceModelDetails>
+
+    /**
      * Search models on HuggingFace
      */
     suspend fun searchHuggingFaceModels(limit: Int): Result<List<HuggingFaceModel>>
@@ -314,6 +319,10 @@ class ModelRepositoryImpl @Inject constructor(
             }
             modelDao.deleteModels(models)
         }
+    }
+
+    override suspend fun fetchPreselectedHuggingFaceModels() = withContext(Dispatchers.IO) {
+        huggingFaceRemoteDataSource.fetchPreselectedModels()
     }
 
     override suspend fun searchHuggingFaceModels(

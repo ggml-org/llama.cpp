@@ -33,7 +33,6 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import javax.inject.Singleton
@@ -109,10 +108,7 @@ internal abstract class AppModule {
 
         @Provides
         @Singleton
-        fun provideOkhttpClient() = OkHttpClient.Builder()
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            }).build()
+        fun provideOkhttpClient() = OkHttpClient.Builder().build()
 
         @Provides
         @Singleton

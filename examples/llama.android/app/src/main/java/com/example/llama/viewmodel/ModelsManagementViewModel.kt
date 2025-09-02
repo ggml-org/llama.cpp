@@ -16,6 +16,7 @@ import com.example.llama.data.repo.InsufficientStorageException
 import com.example.llama.data.repo.ModelRepository
 import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
+import com.example.llama.data.source.remote.HuggingFaceModelDetails
 import com.example.llama.util.formatFileByteSize
 import com.example.llama.util.getFileNameFromUri
 import com.example.llama.util.getFileSizeFromUri
@@ -186,13 +187,8 @@ class ModelsManagementViewModel @Inject constructor(
         huggingFaceQueryJob = viewModelScope.launch {
             _managementState.emit(Download.Querying)
             try {
-                modelRepository.searchHuggingFaceModels(FETCH_HUGGINGFACE_MODELS_LIMIT_SIZE).fold(
-                    onSuccess = { models ->
-                        Log.d(TAG, "Fetched ${models.size} models from HuggingFace, capped by $cap:\n")
-                        _managementState.emit(Download.Ready(models.take(cap)))
-                    },
-                    onFailure = { throw it }
-                )
+                val models = modelRepository.fetchPreselectedHuggingFaceModels().map(HuggingFaceModelDetails::toModel)
+                _managementState.emit(Download.Ready(models))
             } catch (_: CancellationException) {
                 // no-op
             } catch (_: UnknownHostException) {

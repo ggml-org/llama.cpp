@@ -5,12 +5,22 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.ceil
 
 private const val QUERY_Q4_0_GGUF = "gguf q4_0"
 private const val FILTER_TEXT_GENERATION = "text-generation"
@@ -19,7 +29,25 @@ private const val SEARCH_RESULT_LIMIT = 30
 
 private val INVALID_KEYWORDS = arrayOf("-of-", "split", "70B", "30B", "27B", "14B", "13B", "12B")
 
+private val PRESELECTED_MODEL_IDS = listOf(
+    "unsloth/gemma-3-1b-it-GGUF",
+    "unsloth/gemma-3-4b-it-GGUF",
+    "bartowski/Llama-3.2-1B-Instruct-GGUF",
+    "bartowski/Llama-3.2-3B-Instruct-GGUF",
+    "Qwen/Qwen2.5-3B-Instruct-GGUF",
+    "gaianet/Phi-4-mini-instruct-GGUF",
+    "bartowski/granite-3.0-2b-instruct-GGUF",
+    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+)
+
 interface HuggingFaceRemoteDataSource {
+
+    suspend fun fetchPreselectedModels(
+        ids: List<String> = PRESELECTED_MODEL_IDS,
+        parallelCount: Int = 3,
+        quorum: Float = 0.5f,
+    ): List<HuggingFaceModelDetails>
+
     /**
      * Query openly available Q4_0 GGUF models on HuggingFace
      */
@@ -52,6 +80,64 @@ interface HuggingFaceRemoteDataSource {
 class HuggingFaceRemoteDataSourceImpl @Inject constructor(
     private val apiService: HuggingFaceApiService
 ) : HuggingFaceRemoteDataSource {
+
+    override suspend fun fetchPreselectedModels(
+        ids: List<String>,
+        parallelCount: Int,
+        quorum: Float,
+    ): List<HuggingFaceModelDetails> = withContext(Dispatchers.IO) {
+        val successes = mutableListOf<HuggingFaceModelDetails>()
+        val failures = mutableListOf<Throwable>()
+
+        val sem = Semaphore(parallelCount)
+        supervisorScope {
+            ids.map { id ->
+                async {
+                    sem.withPermit {
+                        runCatching { getModelDetails(id) }
+                            .onSuccess { synchronized(successes) { successes += it } }
+                            .onFailure { t ->
+                                if (t is CancellationException) throw t
+                                synchronized(failures) { failures += t }
+                            }
+                    }
+                }
+            }.awaitAll()
+        }
+
+        val total = ids.size
+        val failed = failures.size
+        val ok = successes.size
+        val shouldThrow = failed >= ceil(total * quorum).toInt()
+
+        if (!shouldThrow) return@withContext successes.toList()
+
+        // 1. No Network
+        if (failures.count { it is UnknownHostException } >= ceil(failed * 0.5).toInt()) {
+            throw UnknownHostException()
+        }
+
+        // 2. Time out
+        if (failures.count { it is SocketTimeoutException } >= ceil(failed * 0.5).toInt()) {
+            throw SocketTimeoutException()
+        }
+
+        // 3. known error codes: 404/410/204
+        val http404ish = failures.count { (it as? HttpException)?.code() in listOf(404, 410, 204) }
+        if (ok == 0 && (failed > 0) && (http404ish >= ceil(failed * 0.5).toInt() || failed == total)) {
+            throw FileNotFoundException()
+        }
+
+        // 4. Unknown issues
+        val ioMajority = failures.count {
+            it is IOException && it !is UnknownHostException && it !is SocketTimeoutException
+        } >= ceil(failed * 0.5).toInt()
+        if (ioMajority) {
+            throw IOException(failures.first { it is IOException }.message)
+        }
+
+        successes
+    }
 
     override suspend fun searchModels(
         query: String?,

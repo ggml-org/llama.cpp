@@ -245,16 +245,10 @@ fun ModelsManagementAndDeletingScreen(
             }
 
             is Download.Dispatched -> {
-                LaunchedEffect(state) {
-                    onScaffoldEvent(
-                        ScaffoldEvent.ShowSnackbar(
-                            message = "Started downloading:\n${state.downloadInfo.modelId}",
-                            duration = SnackbarDuration.Long,
-                        )
-                    )
-
-                    managementViewModel.resetManagementState()
-                }
+                DownloadHuggingFaceDispatchedDialog(
+                    state.downloadInfo.modelId,
+                    onConfirm = { managementViewModel.resetManagementState() }
+                )
             }
 
             is Download.Completed -> {
@@ -625,6 +619,33 @@ fun HuggingFaceModelListItem(
             }
         }
     }
+}
+
+@Composable
+private fun DownloadHuggingFaceDispatchedDialog(
+    modelId: String,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        ),
+        title = {},
+        text = {
+            InfoView(
+                title = "Download has started",
+                icon = Icons.Default.Download,
+                message = "Your Android system download manager has started downloading the model: $modelId.\n\n"
+                    + "You can track its progress in your notification drawer.\n"
+                    + "Feel free to stay on this screen, or come back to import it after complete.",
+            )
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) { Text("Okay") }
+        },
+    )
 }
 
 @Composable
