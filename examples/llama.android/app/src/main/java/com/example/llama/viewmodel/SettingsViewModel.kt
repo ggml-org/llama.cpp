@@ -5,6 +5,8 @@ import android.llama.cpp.TierDetection
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.data.repo.ModelRepository
+import com.example.llama.data.source.prefs.ColorThemeMode
+import com.example.llama.data.source.prefs.DarkThemeMode
 import com.example.llama.data.source.prefs.UserPreferences
 import com.example.llama.monitoring.BatteryMetrics
 import com.example.llama.monitoring.MemoryMetrics
@@ -58,11 +60,11 @@ class SettingsViewModel @Inject constructor(
     val monitoringInterval: StateFlow<Long> = _monitoringInterval.asStateFlow()
 
     // User preferences: themes
-    private val _colorThemeMode = MutableStateFlow(UserPreferences.COLOR_THEME_MODE_ARM)
-    val colorThemeMode: StateFlow<Int> = _colorThemeMode.asStateFlow()
+    private val _colorThemeMode = MutableStateFlow(ColorThemeMode.ARM)
+    val colorThemeMode: StateFlow<ColorThemeMode> = _colorThemeMode.asStateFlow()
 
-    private val _darkThemeMode = MutableStateFlow(UserPreferences.DARK_THEME_MODE_AUTO)
-    val darkThemeMode: StateFlow<Int> = _darkThemeMode.asStateFlow()
+    private val _darkThemeMode = MutableStateFlow(DarkThemeMode.AUTO)
+    val darkThemeMode: StateFlow<DarkThemeMode> = _darkThemeMode.asStateFlow()
 
     val detectedTier: LLamaTier?
         get() = tierDetection.detectedTier
@@ -80,19 +82,6 @@ class SettingsViewModel @Inject constructor(
             if (_isMonitoringEnabled.value) {
                 startMonitoring()
             }
-
-//            viewModelScope.launch {
-//                launch {
-//                    userPreferences.getColorThemeMode().collect { mode ->
-//                        _colorThemeMode.value = mode
-//                    }
-//                }
-//                launch {
-//                    userPreferences.getDarkThemeMode().collect { mode ->
-//                        _darkThemeMode.value = mode
-//                    }
-//                }
-//            }
         }
     }
 
@@ -171,7 +160,7 @@ class SettingsViewModel @Inject constructor(
     /**
      * Sets the color theme mode.
      */
-    fun setColorThemeMode(mode: Int) {
+    fun setColorThemeMode(mode: ColorThemeMode) {
         viewModelScope.launch {
             userPreferences.setColorThemeMode(mode)
             _colorThemeMode.value = mode
@@ -181,7 +170,7 @@ class SettingsViewModel @Inject constructor(
     /**
      * Sets the dark theme mode.
      */
-    fun setDarkThemeMode(mode: Int) {
+    fun setDarkThemeMode(mode: DarkThemeMode) {
         viewModelScope.launch {
             userPreferences.setDarkThemeMode(mode)
             _darkThemeMode.value = mode

@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.llama.APP_NAME
+import com.example.llama.BuildConfig
 import com.example.llama.navigation.AppDestinations
 import com.example.llama.navigation.NavigationActions
 import kotlinx.coroutines.launch
@@ -111,7 +112,7 @@ private fun DrawerContent(
             )
 
             Text(
-                text = "v1.0.0",
+                text = BuildConfig.VERSION_NAME,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)

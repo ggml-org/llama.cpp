@@ -14,9 +14,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-import com.example.llama.data.source.prefs.UserPreferences
-import com.example.llama.data.source.prefs.UserPreferences.Companion.COLOR_THEME_MODE_ARM
-import com.example.llama.data.source.prefs.UserPreferences.Companion.COLOR_THEME_MODE_MATERIAL
+import com.example.llama.data.source.prefs.ColorThemeMode
+import com.example.llama.data.source.prefs.DarkThemeMode
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
 // -------------------- ColorScheme --------------------
@@ -143,23 +142,21 @@ internal val armDarkColorScheme: ColorScheme = darkColorScheme(
 
 @Composable
 fun LlamaTheme(
-    colorThemeMode: Int,
-    darkThemeMode: Int,
+    colorThemeMode: ColorThemeMode,
+    darkThemeMode: DarkThemeMode,
     content: @Composable () -> Unit
 ) {
-    val darkTheme = when (darkThemeMode) {
-        UserPreferences.DARK_THEME_MODE_LIGHT -> false
-        UserPreferences.DARK_THEME_MODE_DARK -> true
-        else -> isSystemInDarkTheme()
-    }
-
     val context = LocalContext.current
 
+    val darkTheme = when (darkThemeMode) {
+        DarkThemeMode.AUTO -> isSystemInDarkTheme()
+        DarkThemeMode.LIGHT -> false
+        DarkThemeMode.DARK -> true
+    }
     val colorScheme = when(colorThemeMode) {
-        COLOR_THEME_MODE_ARM -> if (darkTheme) armDarkColorScheme else armLightColorScheme
-        COLOR_THEME_MODE_MATERIAL ->
+        ColorThemeMode.ARM -> if (darkTheme) armDarkColorScheme else armLightColorScheme
+        ColorThemeMode.MATERIAL ->
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        else -> error("Unexpected color theme $colorThemeMode")
     }
 
     val view = LocalView.current

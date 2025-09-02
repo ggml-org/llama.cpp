@@ -31,9 +31,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.example.llama.APP_NAME
-import com.example.llama.data.source.prefs.UserPreferences
+import com.example.llama.BuildConfig
+import com.example.llama.data.source.prefs.ColorThemeMode
+import com.example.llama.data.source.prefs.DarkThemeMode
 import com.example.llama.ui.components.ArmFeaturesVisualizer
 import com.example.llama.viewmodel.SettingsViewModel
+import kotlin.math.sqrt
 
 /**
  * Screen for general app settings
@@ -67,11 +70,7 @@ fun SettingsGeneralScreen(
                 onCheckedChange = { viewModel.setMonitoringEnabled(it) }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            HorizontalDivider()
-
-            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             SettingsSwitch(
                 title = "Use Fahrenheit",
@@ -99,24 +98,24 @@ fun SettingsGeneralScreen(
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                SegmentedButton(
-                    modifier = Modifier.weight(3f),
-                    selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_ARM,
-                    onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_ARM) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
-                ) {
-                    Text("Arm")
-                }
+                ColorThemeMode.entries.forEachIndexed { index, mode ->
+                    val weight = sqrt(sqrt(mode.label.length.toFloat()))
 
-                SegmentedButton(
-                    modifier = Modifier.weight(4f),
-                    selected = colorThemeMode == UserPreferences.COLOR_THEME_MODE_MATERIAL,
-                    onClick = { viewModel.setColorThemeMode(UserPreferences.COLOR_THEME_MODE_MATERIAL) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
-                ) {
-                    Text("Material Design")
+                    SegmentedButton(
+                        modifier = Modifier.weight(weight),
+                        selected = colorThemeMode == mode,
+                        onClick = { viewModel.setColorThemeMode(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = ColorThemeMode.entries.size
+                        )
+                    ) {
+                        Text(mode.label)
+                    }
                 }
             }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
             // Dark theme mode
             Text(
@@ -135,28 +134,14 @@ fun SettingsGeneralScreen(
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                SegmentedButton(
-                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_AUTO,
-                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_AUTO) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                ) {
-                    Text("Auto")
-                }
-
-                SegmentedButton(
-                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_LIGHT,
-                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_LIGHT) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                ) {
-                    Text("Light")
-                }
-
-                SegmentedButton(
-                    selected = darkThemeMode == UserPreferences.DARK_THEME_MODE_DARK,
-                    onClick = { viewModel.setDarkThemeMode(UserPreferences.DARK_THEME_MODE_DARK) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                ) {
-                    Text("Dark")
+                DarkThemeMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = darkThemeMode == mode,
+                        onClick = { viewModel.setDarkThemeMode(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = DarkThemeMode.entries.size)
+                    ) {
+                        Text(mode.label)
+                    }
                 }
             }
         }
@@ -169,13 +154,11 @@ fun SettingsGeneralScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
-
                 Text(
                     text = "Available hardware capabilities on your device are highlighted below:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    modifier = Modifier.padding(vertical = 8.dp)
                 )
 
                 supportedFeatures?.let {
@@ -186,7 +169,7 @@ fun SettingsGeneralScreen(
                     text = "Tap a feature above to learn more about how it accelerates Generative AI!",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                    modifier = Modifier.padding(vertical = 8.dp)
                 )
             }
         }
@@ -198,9 +181,10 @@ fun SettingsGeneralScreen(
             )
 
             Text(
-                text = "Version 1.0.0",
+                text = "Version ${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp)
             )
 
             Spacer(modifier = Modifier.height(8.dp))

@@ -38,13 +38,6 @@ class UserPreferences @Inject constructor (
 
         // Constants
         private const val DEFAULT_MONITORING_INTERVAL_MS = 5000L
-
-        const val COLOR_THEME_MODE_ARM = 0
-        const val COLOR_THEME_MODE_MATERIAL = 1
-
-        const val DARK_THEME_MODE_AUTO = 0
-        const val DARK_THEME_MODE_LIGHT = 1
-        const val DARK_THEME_MODE_DARK = 2
     }
 
     /**
@@ -103,34 +96,53 @@ class UserPreferences @Inject constructor (
     /**
      * Gets the current color theme mode.
      */
-    fun getColorThemeMode(): Flow<Int> =
+    fun getColorThemeMode(): Flow<ColorThemeMode> =
         context.settingsDataStore.data.map { preferences ->
-            preferences[COLOR_THEME_MODE] ?: COLOR_THEME_MODE_ARM
+            ColorThemeMode.fromInt(preferences[COLOR_THEME_MODE]) ?: ColorThemeMode.ARM
         }
 
     /**
      * Sets the color theme mode.
      */
-    suspend fun setColorThemeMode(mode: Int) = withContext(Dispatchers.IO) {
+    suspend fun setColorThemeMode(mode: ColorThemeMode) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
-            preferences[COLOR_THEME_MODE] = mode
+            preferences[COLOR_THEME_MODE] = mode.value
         }
     }
 
     /**
      * Gets the current dark theme mode.
      */
-    fun getDarkThemeMode(): Flow<Int> =
+    fun getDarkThemeMode(): Flow<DarkThemeMode> =
         context.settingsDataStore.data.map { preferences ->
-            preferences[DARK_THEME_MODE] ?: DARK_THEME_MODE_AUTO
+            DarkThemeMode.fromInt(preferences[DARK_THEME_MODE]) ?: DarkThemeMode.AUTO
         }
 
     /**
      * Sets the dark theme mode.
      */
-    suspend fun setDarkThemeMode(mode: Int) = withContext(Dispatchers.IO) {
+    suspend fun setDarkThemeMode(mode: DarkThemeMode) = withContext(Dispatchers.IO) {
         context.settingsDataStore.edit { preferences ->
-            preferences[DARK_THEME_MODE] = mode
+            preferences[DARK_THEME_MODE] = mode.value
         }
+    }
+}
+
+enum class ColorThemeMode(val value: Int, val label: String) {
+    ARM(0, "Arm®"),
+    MATERIAL(1, "Material Design");
+
+    companion object {
+        fun fromInt(value: Int?) = entries.find { it.value == value }
+    }
+}
+
+enum class DarkThemeMode(val value: Int, val label: String) {
+    AUTO(0, "Auto"),
+    LIGHT(1, "Light"),
+    DARK(2, "Dark");
+
+    companion object {
+        fun fromInt(value: Int?) = entries.find { it.value == value }
     }
 }
