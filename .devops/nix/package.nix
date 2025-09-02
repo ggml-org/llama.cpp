@@ -36,6 +36,7 @@
   enableCurl ? true,
   useVulkan ? false,
   buildAllCudaFaQuants ? false,
+  enableUma ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -196,11 +197,13 @@ effectiveStdenv.mkDerivation (finalAttrs: {
         )
       )
       (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
+      (cmakeBool "GGML_CUDA_ENABLE_UNIFIED_MEMORY" enableUma)
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
       (cmakeFeature "AMDGPU_TARGETS" rocmGpuTargets)
       (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
+      (cmakeBool "GGML_CUDA_ENABLE_UNIFIED_MEMORY" enableUma)
     ]
     ++ optionals rocmUseWmma [
       (cmakeBool "GGML_HIP_ROCWMMA_FATTN" rocmUseWmma)
