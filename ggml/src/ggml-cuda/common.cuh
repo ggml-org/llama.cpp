@@ -586,7 +586,7 @@ static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, uint32_t mp, uint
     return (hi + n) >> L;
 }
 
-static __device__ __forceinline__ uint32_t modulo(uint32_t n, uint32_t divisor, int mp, uint32_t L) {
+static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, uint32_t divisor, int mp, uint32_t L) {
     return n - fastdiv(n, mp, L) * divisor;
 }
 
