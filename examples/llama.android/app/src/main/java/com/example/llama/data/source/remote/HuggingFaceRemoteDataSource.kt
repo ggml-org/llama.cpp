@@ -86,24 +86,23 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
         parallelCount: Int,
         quorum: Float,
     ): List<HuggingFaceModelDetails> = withContext(Dispatchers.IO) {
-        val successes = mutableListOf<HuggingFaceModelDetails>()
-        val failures = mutableListOf<Throwable>()
-
         val sem = Semaphore(parallelCount)
-        supervisorScope {
+        val results = supervisorScope {
             ids.map { id ->
                 async {
                     sem.withPermit {
-                        runCatching { getModelDetails(id) }
-                            .onSuccess { synchronized(successes) { successes += it } }
-                            .onFailure { t ->
-                                if (t is CancellationException) throw t
-                                synchronized(failures) { failures += t }
-                            }
+                        try {
+                            Result.success(getModelDetails(id))
+                        } catch (t: CancellationException) {
+                            Result.failure(t)
+                        }
                     }
                 }
             }.awaitAll()
         }
+
+        val successes = results.mapNotNull { it.getOrNull() }
+        val failures = results.mapNotNull { it.exceptionOrNull() }
 
         val total = ids.size
         val failed = failures.size

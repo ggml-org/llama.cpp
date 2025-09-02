@@ -190,7 +190,7 @@ class ModelsManagementViewModel @Inject constructor(
                 val models = modelRepository.fetchPreselectedHuggingFaceModels().map(HuggingFaceModelDetails::toModel)
                 _managementState.emit(Download.Ready(models))
             } catch (_: CancellationException) {
-                // no-op
+                resetManagementState()
             } catch (_: UnknownHostException) {
                 _managementState.value = Download.Error(message = "No internet connection")
             } catch (_: SocketTimeoutException) {
