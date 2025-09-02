@@ -273,7 +273,7 @@ struct gguf_reader {
     }
 
     bool read(std::string & dst) const {
-        uint64_t size = -1;
+        uint64_t size = 0;
         if (!read(size)) {
             return false;
         }
@@ -523,7 +523,7 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
 
         // tensor shape
         {
-            uint32_t n_dims = -1;
+            uint32_t n_dims = 0;
             ok = ok && gr.read(n_dims);
             if (n_dims > GGML_MAX_DIMS) {
                 GGML_LOG_ERROR("%s: tensor '%s' has invalid number of dimensions: %" PRIu32 " > %" PRIu32 "\n",
