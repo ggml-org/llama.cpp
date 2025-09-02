@@ -32,6 +32,7 @@
   useMpi ? false,
   useRocm ? config.rocmSupport,
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
+  rocmUseWmma ? true,
   enableCurl ? true,
   useVulkan ? false,
   buildAllCudaFaQuants ? false,
@@ -92,13 +93,16 @@ let
     libcublas
   ];
 
-  rocmBuildInputs = with rocmPackages; [
-    clr
-    hipblas
-    rocblas
-    llvm.lld
-    llvm.bintools
-  ];
+  rocmBuildInputs =
+    with rocmPackages;
+    [
+      clr
+      hipblas
+      rocblas
+      llvm.lld
+      llvm.bintools
+    ]
+    ++ optionals rocmUseWmma [ rocmPackages.rocwmma ];
 
   vulkanBuildInputs = [
     vulkan-headers
@@ -197,6 +201,10 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
       (cmakeFeature "AMDGPU_TARGETS" rocmGpuTargets)
       (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
+    ]
+    ++ optionals rocmUseWmma [
+      (cmakeBool "GGML_HIP_ROCWMMA_FATTN" rocmUseWmma)
+      (cmakeFeature "GGML_HIP_ROCWMMA_PATH" "${rocmPackages.rocwmma}")
     ]
     ++ optionals useMetalKit [
       (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
