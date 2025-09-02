@@ -117,14 +117,14 @@ fun ModelsManagementAndDeletingScreen(
         } else if (filteredModels.isEmpty()) {
             // Prompt the user to import a model
             val title = when (activeFiltersCount) {
-                0 -> "Choose a model:\nImport locally or download online"
+                0 -> "Install your first model"
                 1 -> "No models match\n the selected filter"
                 else -> "No models match\n the selected filters"
             }
 
-            val message = "If you already have GGUF models on your computer, " +
+            val message = "If you have already obtained GGUF models on your computer, " +
                     "please transfer it onto your device, and then select \"Import a local GGUF model\".\n\n" +
-                    "Otherwise, select \"Download from HuggingFace\" and pick one you like."
+                    "Otherwise, select \"Download from Hugging Face\" and pick one of the pre-selected models."
 
             InfoView(
                 modifier = Modifier.fillMaxSize(0.9f).align(Alignment.Center),
@@ -449,10 +449,10 @@ private fun ImportFromHuggingFaceDialog(
                 Text(
                     modifier = Modifier.fillMaxWidth(),
                     text = models?.let {
-                        "These open-source models from Hugging Face are ungated and free for everyone.\n\n" +
-                            "Please use them at your own discretion.\n\n" +
-                            "Select a model and tap download button:"
-                    } ?: "Searching on HuggingFace for ungated models available for free downloading...",
+                        "The Hugging Face models shown here have been pre-filtered to be moderately sized and correctly quantized.\n\n" +
+                            "Please use responsibly. We do not endorse or take responsibility for misuse or harmful use of these models.\n\n" +
+                            "Select a model to download:"
+                    } ?: "Searching on HuggingFace for open-source models free for downloading...",
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Start,
                 )

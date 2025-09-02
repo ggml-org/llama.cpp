@@ -217,7 +217,7 @@ fun ModelsManagementBottomBar(
                     onClick = importingConfig.importFromLocal
                 )
                 DropdownMenuItem(
-                    text = { Text("Download a model from Hugging Face") },
+                    text = { Text("Download from Hugging Face") },
                     leadingIcon = {
                         Icon(
                             painter = painterResource(id = R.drawable.logo_huggingface),
