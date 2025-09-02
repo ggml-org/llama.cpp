@@ -395,16 +395,15 @@ struct ggml_backend_cann_context {
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
     std::unique_ptr<ggml_cann_graph> cann_graph;
+    bool acl_graph_mode = true;
 #endif
     cann_task_queue task_queue;
     bool async_mode;
-    bool eager_mode; // not use acl graph
     // Rope Cache
     ggml_cann_rope_cache rope_cache;
     // Constant Pool
     ggml_cann_tensor_cache rms_norm_one_tensor_cache;
     ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
-
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -420,10 +419,13 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-
-        eager_mode = parse_bool(get_env("GGML_CANN_EAGER_MODE").value_or(""));
-        GGML_LOG_INFO("%s: device %d eager execution mode is %s (acl graph disabled)\n",
-              __func__, device, eager_mode ? "ON" : "OFF");
+#ifdef USE_ACL_GRAPH
+        acl_graph_mode = !(parse_bool(get_env("GGML_CANN_DISABLE_ACL_GRAPH").value_or("")));
+        GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n",
+              __func__, device,
+              acl_graph_mode ? "GRAPH" : "EAGER",
+              acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
+#endif
     }
 
     /**

@@ -2252,7 +2252,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
-    if (cann_ctx->eager_mode) {
+    if (!cann_ctx->acl_graph_mode) {
         use_cann_graph = false;
     }
 
