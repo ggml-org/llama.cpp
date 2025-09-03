@@ -105,45 +105,29 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
 }
 
 template <int block_size, bool do_multiply = false, bool do_add = false>
-static __global__ void rms_norm_f32(const float *  x,
-                                    float *        dst,
-                                    const int      ncols,
-                                    const int64_t  stride_row,
-                                    const int64_t  stride_channel,
-                                    const int64_t  stride_sample,
-                                    const float    eps,
-                                    const float *  mul                = nullptr,
-                                    const int64_t  mul_stride_row     = 0,
-                                    const int64_t  mul_stride_channel = 0,
-                                    const int64_t  mul_stride_sample  = 0,
-                                    const uint32_t mul_ncols          = 0,
-                                    const uint32_t mul_nrows          = 0,
-                                    const uint32_t mul_nchannels      = 0,
-                                    const uint32_t mul_nsamples       = 0,
-                                    const uint32_t mp_mul_cols        = 0,
-                                    const uint32_t L_mul_cols         = 0,
-                                    const uint32_t mp_mul_rows        = 0,
-                                    const uint32_t L_mul_rows         = 0,
-                                    const uint32_t mp_mul_channels    = 0,
-                                    const uint32_t L_mul_channels     = 0,
-                                    const uint32_t mp_mul_samples     = 0,
-                                    const uint32_t L_mul_samples      = 0,
-                                    const float *  add                = nullptr,
-                                    const int64_t  add_stride_row     = 0,
-                                    const int64_t  add_stride_channel = 0,
-                                    const int64_t  add_stride_sample  = 0,
-                                    const uint32_t add_ncols          = 0,
-                                    const uint32_t add_nrows          = 0,
-                                    const uint32_t add_nchannels      = 0,
-                                    const uint32_t add_nsamples       = 0,
-                                    const uint32_t mp_add_cols        = 0,
-                                    const uint32_t L_add_cols         = 0,
-                                    const uint32_t mp_add_rows        = 0,
-                                    const uint32_t L_add_rows         = 0,
-                                    const uint32_t mp_add_channels    = 0,
-                                    const uint32_t L_add_channels     = 0,
-                                    const uint32_t mp_add_samples     = 0,
-                                    const uint32_t L_add_samples      = 0) {
+static __global__ void rms_norm_f32(const float * x,
+                                    float *       dst,
+                                    const int     ncols,
+                                    const int64_t stride_row,
+                                    const int64_t stride_channel,
+                                    const int64_t stride_sample,
+                                    const float   eps,
+                                    const float * mul                  = nullptr,
+                                    const int64_t mul_stride_row       = 0,
+                                    const int64_t mul_stride_channel   = 0,
+                                    const int64_t mul_stride_sample    = 0,
+                                    const uint3   mul_ncols_packed     = make_uint3(0, 0, 0),
+                                    const uint3   mul_nrows_packed     = make_uint3(0, 0, 0),
+                                    const uint3   mul_nchannels_packed = make_uint3(0, 0, 0),
+                                    const uint3   mul_nsamples_packed  = make_uint3(0, 0, 0),
+                                    const float * add                  = nullptr,
+                                    const int64_t add_stride_row       = 0,
+                                    const int64_t add_stride_channel   = 0,
+                                    const int64_t add_stride_sample    = 0,
+                                    const uint3   add_ncols_packed     = make_uint3(0, 0, 0),
+                                    const uint3   add_nrows_packed     = make_uint3(0, 0, 0),
+                                    const uint3   add_nchannels_packed = make_uint3(0, 0, 0),
+                                    const uint3   add_nsamples_packed  = make_uint3(0, 0, 0)) {
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -158,16 +142,16 @@ static __global__ void rms_norm_f32(const float *  x,
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
     if constexpr (do_multiply) {
-        const uint32_t mul_row     = fastmodulo(row, mul_nrows, mp_mul_rows, L_mul_rows);
-        const uint32_t mul_channel = fastmodulo(channel, mul_nchannels, mp_mul_channels, L_mul_channels);
-        const uint32_t mul_sample  = fastmodulo(sample, mul_nsamples, mp_mul_samples, L_mul_samples);
+        const uint32_t mul_row     = fastmodulo(row, mul_nrows_packed);
+        const uint32_t mul_channel = fastmodulo(channel, mul_nchannels_packed);
+        const uint32_t mul_sample  = fastmodulo(sample, mul_nsamples_packed);
         mul += mul_sample * mul_stride_sample + mul_channel * mul_stride_channel + mul_row * mul_stride_row;
     }
 
     if constexpr (do_add) {
-        const int add_row     = fastmodulo(row, add_nrows, mp_add_rows, L_add_rows);
-        const int add_channel = fastmodulo(channel, add_nchannels, mp_add_channels, L_add_channels);
-        const int add_sample  = fastmodulo(sample, add_nsamples, mp_add_samples, L_add_samples);
+        const int add_row     = fastmodulo(row, add_nrows_packed);
+        const int add_channel = fastmodulo(channel, add_nchannels_packed);
+        const int add_sample  = fastmodulo(sample, add_nsamples_packed);
         add += add_sample * add_stride_sample + add_channel * add_stride_channel + add_row * add_stride_row;
     }
 
@@ -201,11 +185,11 @@ static __global__ void rms_norm_f32(const float *  x,
 
     for (int col = tid; col < ncols; col += block_size) {
         if constexpr (do_multiply && do_add) {
-            const int mul_col = fastmodulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
-            const int add_col = fastmodulo(col, add_ncols, mp_add_cols, L_add_cols);
+            const int mul_col = fastmodulo(col, mul_ncols_packed);
+            const int add_col = fastmodulo(col, add_ncols_packed);
             dst[col]          = scale * x[col] * mul[mul_col] + add[add_col];
         } else if constexpr (do_multiply) {
-            const int mul_col = fastmodulo(col, mul_ncols, mp_mul_cols, L_mul_cols);
+            const int mul_col = fastmodulo(col, mul_ncols_packed);
             dst[col]          = scale * x[col] * mul[mul_col];
         } else {
             dst[col] = scale * x[col];
@@ -414,63 +398,45 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         return;
     }
     if (add == nullptr) {
-        uint32_t mp_mul_cols, L_mul_cols;
-        init_fastdiv_values(mul_ncols, mp_mul_cols, L_mul_cols);
-        uint32_t mp_mul_rows, L_mul_rows;
-        init_fastdiv_values(mul_nrows, mp_mul_rows, L_mul_rows);
-        uint32_t mp_mul_channels, L_mul_channels;
-        init_fastdiv_values(mul_nchannels, mp_mul_channels, L_mul_channels);
-        uint32_t mp_mul_samples, L_mul_samples;
-        init_fastdiv_values(mul_nsamples, mp_mul_samples, L_mul_samples);
+        uint3 mul_ncols_packed     = init_fastmodulo_values(mul_ncols);
+        uint3 mul_nrows_packed     = init_fastmodulo_values(mul_nrows);
+        uint3 mul_nchannels_packed = init_fastmodulo_values(mul_nchannels);
+        uint3 mul_nsamples_packed  = init_fastmodulo_values(mul_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
             rms_norm_f32<256, true><<<blocks_num, block_dims, 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols, mul_nrows, mul_nchannels, mul_nsamples, mp_mul_cols, L_mul_cols,
-                mp_mul_rows, L_mul_rows, mp_mul_channels, L_mul_channels, mp_mul_samples, L_mul_samples);
+                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
         } else {
             const dim3 block_dims(1024, 1, 1);
             rms_norm_f32<1024, true><<<blocks_num, block_dims, 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols, mul_nrows, mul_nchannels, mul_nsamples, mp_mul_cols, L_mul_cols,
-                mp_mul_rows, L_mul_rows, mp_mul_channels, L_mul_channels, mp_mul_samples, L_mul_samples);
+                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
         }
     } else {
-        uint32_t mp_mul_cols, L_mul_cols;
-        init_fastdiv_values(mul_ncols, mp_mul_cols, L_mul_cols);
-        uint32_t mp_mul_rows, L_mul_rows;
-        init_fastdiv_values(mul_nrows, mp_mul_rows, L_mul_rows);
-        uint32_t mp_mul_channels, L_mul_channels;
-        init_fastdiv_values(mul_nchannels, mp_mul_channels, L_mul_channels);
-        uint32_t mp_mul_samples, L_mul_samples;
-        init_fastdiv_values(mul_nsamples, mp_mul_samples, L_mul_samples);
+        uint3 mul_ncols_packed     = init_fastmodulo_values(mul_ncols);
+        uint3 mul_nrows_packed     = init_fastmodulo_values(mul_nrows);
+        uint3 mul_nchannels_packed = init_fastmodulo_values(mul_nchannels);
+        uint3 mul_nsamples_packed  = init_fastmodulo_values(mul_nsamples);
 
-        uint32_t mp_add_cols, L_add_cols;
-        init_fastdiv_values(add_ncols, mp_add_cols, L_add_cols);
-        uint32_t mp_add_rows, L_add_rows;
-        init_fastdiv_values(add_nrows, mp_add_rows, L_add_rows);
-        uint32_t mp_add_channels, L_add_channels;
-        init_fastdiv_values(add_nchannels, mp_add_channels, L_add_channels);
-        uint32_t mp_add_samples, L_add_samples;
-        init_fastdiv_values(add_nsamples, mp_add_samples, L_add_samples);
+        uint3 add_ncols_packed     = init_fastmodulo_values(add_ncols);
+        uint3 add_nrows_packed     = init_fastmodulo_values(add_nrows);
+        uint3 add_nchannels_packed = init_fastmodulo_values(add_nchannels);
+        uint3 add_nsamples_packed  = init_fastmodulo_values(add_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
             rms_norm_f32<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols, mul_nrows, mul_nchannels, mul_nsamples, mp_mul_cols, L_mul_cols,
-                mp_mul_rows, L_mul_rows, mp_mul_channels, L_mul_channels, mp_mul_samples, L_mul_samples, add,
-                add_stride_row, add_stride_channel, add_stride_sample, add_ncols, add_nrows, add_nchannels,
-                add_nsamples, mp_add_cols, L_add_cols, mp_add_rows, L_add_rows, mp_add_channels, L_add_channels,
-                mp_add_samples, L_add_samples);
+                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                add_nchannels_packed, add_nsamples_packed);
         } else {
             const dim3 block_dims(1024, 1, 1);
             rms_norm_f32<1024, true, true><<<blocks_num, block_dims, 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols, mul_nrows, mul_nchannels, mul_nsamples, mp_mul_cols, L_mul_cols,
-                mp_mul_rows, L_mul_rows, mp_mul_channels, L_mul_channels, mp_mul_samples, L_mul_samples, add,
-                add_stride_row, add_stride_channel, add_stride_sample, add_ncols, add_nrows, add_nchannels,
-                add_nsamples, mp_add_cols, L_add_cols, mp_add_rows, L_add_rows, mp_add_channels, L_add_channels,
-                mp_add_samples, L_add_samples);
+                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                add_nchannels_packed, add_nsamples_packed);
         }
     }
 }
