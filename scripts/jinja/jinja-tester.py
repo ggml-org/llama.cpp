@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPlainTextEdit, QTextEdit, QPushButton
 )
-from PySide6.QtGui import QColor, QTextCursor, QTextFormat
+from PySide6.QtGui import QColor, QColorConstants, QTextCursor, QTextFormat
 from PySide6.QtCore import Qt, QRect, QSize
 from jinja2 import Environment, TemplateSyntaxError
 
@@ -56,12 +56,13 @@ class CodeEditor(QPlainTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
+        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), 
+                                                self.line_number_area_width(), cr.height()))
 
     def line_number_area_paint_event(self, event):
         from PySide6.QtGui import QPainter
         painter = QPainter(self.line_number_area)
-        painter.fillRect(event.rect(), Qt.lightGray)
+        painter.fillRect(event.rect(), QColorConstants.LightGray)
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
@@ -71,10 +72,10 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
-                painter.setPen(Qt.black)
+                painter.setPen(QColorConstants.Black)
                 painter.drawText(0, top, self.line_number_area.width() - 2,
                                  self.fontMetrics().height(),
-                                 Qt.AlignRight, number)
+                                 Qt.AlignmentFlag.AlignRight, number)
             block = block.next()
             top = bottom
             bottom = top + int(self.blockBoundingRect(block).height())
@@ -84,11 +85,11 @@ class CodeEditor(QPlainTextEdit):
         extra_selections = []
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
-            line_color = QColor(Qt.yellow).lighter(160)
-            selection.format.setBackground(line_color)
-            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
-            selection.cursor = self.textCursor()
-            selection.cursor.clearSelection()
+            line_color = QColorConstants.Yellow.lighter(160)
+            selection.format.setBackground(line_color) # type: ignore
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True) # type: ignore
+            selection.cursor = self.textCursor() # type: ignore
+            selection.cursor.clearSelection() # type: ignore
             extra_selections.append(selection)
         self.setExtraSelections(extra_selections)
 
@@ -100,11 +101,12 @@ class CodeEditor(QPlainTextEdit):
             start = block.position() + max(0, col - 1)
             cursor.setPosition(start)
             if col <= len(text):
-                cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
+                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter, 
+                                    QTextCursor.MoveMode.KeepAnchor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))
-            extra.cursor = cursor
+            extra.format.setBackground(color.lighter(160)) # type: ignore
+            extra.cursor = cursor # type: ignore
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -112,11 +114,11 @@ class CodeEditor(QPlainTextEdit):
         block = self.document().findBlockByLineNumber(lineno - 1)
         if block.isValid():
             cursor = QTextCursor(block)
-            cursor.select(QTextCursor.LineUnderCursor)
+            cursor.select(QTextCursor.SelectionType.LineUnderCursor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))
-            extra.cursor = cursor
+            extra.format.setBackground(color.lighter(160)) # type: ignore
+            extra.cursor = cursor # type: ignore
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
