@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # First try command line argument, then environment variable, then file
 CONVERTED_MODEL="${1:-"$CONVERTED_MODEL"}"
