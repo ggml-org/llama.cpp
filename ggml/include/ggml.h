@@ -814,14 +814,22 @@ extern "C" {
 
     GGML_API void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes);
 
+    // creates a new tensor with same shape and type as source tensor
+    // input: src tensor with shape [512,768] F32
+    // output: new tensor with shape [512,768] F32 and uninitialized data
     GGML_API struct ggml_tensor * ggml_dup_tensor (struct ggml_context * ctx, const struct ggml_tensor * src);
     // creates a view/reference to existing tensor without copying data
     // input: src tensor with shape [1024,768]
     // output: new tensor view with same shape [1024,768] sharing src's data
     GGML_API struct ggml_tensor * ggml_view_tensor(struct ggml_context * ctx, struct ggml_tensor * src);
 
-    // Context tensor enumeration and lookup
+    // returns the first tensor in the context's tensor list
+    // input: context containing tensors
+    // output: first tensor in context or NULL if context is empty
     GGML_API struct ggml_tensor * ggml_get_first_tensor(const struct ggml_context * ctx);
+    // returns the next tensor after given tensor in context's list
+    // input: context and current tensor
+    // output: next tensor in sequence or NULL if at end of list
     GGML_API struct ggml_tensor * ggml_get_next_tensor (const struct ggml_context * ctx, struct ggml_tensor * tensor);
     // finds tensor by name in context
     // input: name="embedding_weights"
@@ -838,6 +846,9 @@ extern "C" {
     GGML_API float * ggml_get_data_f32(const struct ggml_tensor * tensor);
 
     GGML_API const char *         ggml_get_name   (const struct ggml_tensor * tensor);
+    // assigns a name to the tensor for debugging and identification
+    // input: tensor, name="layer_1_weights"  
+    // output: same tensor with name assigned, returns tensor for chaining
     GGML_API struct ggml_tensor * ggml_set_name   (      struct ggml_tensor * tensor, const char * name);
     GGML_ATTRIBUTE_FORMAT(2, 3)
     // formats tensor name using printf-style formatting
@@ -1398,39 +1409,58 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-    // A: n columns, r rows,
-    // B: n columns, r rows,
+    // generic gated linear unit with separate tensors and specified operation
+    // input: tensor a[1024,2048], tensor b[1024,2048], op=GGML_GLU_RELU
+    // output: tensor result[1024,2048] where result = activation(a) * b
     GGML_API struct ggml_tensor * ggml_glu_split(
             struct ggml_context * ctx,
              struct ggml_tensor * a,
              struct ggml_tensor * b,
              enum ggml_glu_op     op);
 
+    // rectified gated linear unit with separate tensors: relu(a) * b  
+    // input: tensor a[512,1024], tensor b[512,1024]
+    // output: tensor result[512,1024] where result = relu(a) * b
     GGML_API struct ggml_tensor * ggml_reglu_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // gated error linear unit with separate tensors: gelu(a) * b
+    // input: tensor a[512,1024], tensor b[512,1024] 
+    // output: tensor result[512,1024] where result = gelu(a) * b
     GGML_API struct ggml_tensor * ggml_geglu_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // swish gated linear unit with separate tensors: swish(a) * b
+    // input: tensor a[512,1024], tensor b[512,1024]
+    // output: tensor result[512,1024] where result = swish(a) * b  
     GGML_API struct ggml_tensor * ggml_swiglu_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // gated error linear unit with erf activation and separate tensors
+    // input: tensor a[512,1024], tensor b[512,1024]
+    // output: tensor result[512,1024] where result = gelu_erf(a) * b
     GGML_API struct ggml_tensor * ggml_geglu_erf_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // gated error linear unit with quick approximation and separate tensors  
+    // input: tensor a[512,1024], tensor b[512,1024]
+    // output: tensor result[512,1024] where result = gelu_quick(a) * b
     GGML_API struct ggml_tensor * ggml_geglu_quick_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // OAI-style swish gated linear unit with clipping: clamp(swish(a) * b, -limit, limit)
+    // input: tensor a[512,1024], tensor b[512,1024], alpha=1.0, limit=20.0
+    // output: tensor result[512,1024] with clipped swish gating
     GGML_API struct ggml_tensor * ggml_swiglu_oai(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1568,12 +1598,18 @@ extern "C" {
             float                 s);
 
     // x = s * a + b
+    // applies linear transformation: scale and bias to each element
+    // input: tensor a[256,128], s=2.0, b=1.5
+    // output: tensor result[256,128] where result[i,j] = 2.0 * a[i,j] + 1.5
     GGML_API struct ggml_tensor * ggml_scale_bias(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         float                 s,
         float                 b);
 
+    // in-place scale and bias operation: a = s * a + b
+    // input: tensor a[256,128], s=0.5, b=0.1
+    // output: tensor a[256,128] modified where a[i,j] = 0.5 * a[i,j] + 0.1
     GGML_API struct ggml_tensor * ggml_scale_bias_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -1696,6 +1732,9 @@ extern "C" {
             int64_t               ne1,
             int64_t               ne2);
 
+    // creates a contiguous 4D tensor by copying data with specified dimensions
+    // input: tensor a[1024,768], ne0=32, ne1=32, ne2=8, ne3=12  
+    // output: tensor result[32,32,8,12] with contiguous memory layout
     GGML_API struct ggml_tensor * ggml_cont_4d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1763,6 +1802,9 @@ extern "C" {
             int64_t               ne0,
             size_t                offset);
 
+    // creates a 2D view of tensor with custom strides and offset
+    // input: tensor a[1024,512], ne0=512, ne1=256, nb1=2048, offset=1024
+    // output: tensor view[512,256] with specified memory layout and offset
     GGML_API struct ggml_tensor * ggml_view_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1771,6 +1813,9 @@ extern "C" {
             size_t                nb1, // row stride in bytes
             size_t                offset);
 
+    // creates a 3D view of tensor with custom strides and offset
+    // input: tensor a[2048,1024], ne0=64,ne1=64,ne2=32, nb1=256,nb2=4096, offset=0
+    // output: tensor view[64,64,32] with specified 3D memory layout
     GGML_API struct ggml_tensor * ggml_view_3d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1781,6 +1826,9 @@ extern "C" {
             size_t                nb2, // slice stride in bytes
             size_t                offset);
 
+    // creates a 4D view of tensor with custom strides and offset  
+    // input: tensor a[4096,2048], ne0=32,ne1=32,ne2=16,ne3=8, strides, offset=512
+    // output: tensor view[32,32,16,8] with specified 4D memory layout
     GGML_API struct ggml_tensor * ggml_view_4d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2110,6 +2158,9 @@ extern "C" {
             bool                  is_2D,
             enum ggml_type        dst_type);
 
+    // backward pass for im2col operation (gradient computation)
+    // input: kernel a, gradient b, input shape ne, stride s0,s1, padding p0,p1, dilation d0,d1
+    // output: tensor with gradients computed through im2col operation
     GGML_API struct ggml_tensor * ggml_im2col_back(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,  // convolution kernel
@@ -2123,6 +2174,9 @@ extern "C" {
         int                   d1, // dilation dimension 1
         bool                  is_2D);
 
+    // 1D convolution operation
+    // input: kernel a[5,64,128], data b[1024,64,1], stride s0=1, padding p0=2, dilation d0=1
+    // output: tensor result[1024,128,1] convolved in 1D  
     GGML_API struct ggml_tensor * ggml_conv_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // convolution kernel
@@ -2165,6 +2219,9 @@ extern "C" {
             int                   p0,  // padding
             int                   d0); // dilation
 
+    // 2D convolution operation  
+    // input: kernel a[3,3,64,128], data b[224,224,64,1], strides s0=1,s1=1, padding p0=1,p1=1
+    // output: tensor result[224,224,128,1] convolved in 2D
     GGML_API struct ggml_tensor * ggml_conv_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // convolution kernel
@@ -2202,7 +2259,9 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
-    // depthwise (via im2col and mul_mat)
+    // depthwise 2D convolution using im2col and matrix multiplication
+    // input: kernel a[3,3,64,1], data b[128,128,64,1], strides s0=1,s1=1, padding p0=1,p1=1
+    // output: tensor result[128,128,64,1] convolved with depthwise operation
     GGML_API struct ggml_tensor * ggml_conv_2d_dw(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // convolution kernel
@@ -2214,11 +2273,10 @@ extern "C" {
             int                  d0,  // dilation dimension 0
             int                  d1); // dilation dimension 1
 
-    // Depthwise 2D convolution
+    // Depthwise 2D convolution with direct implementation
     // may be faster than ggml_conv_2d_dw, but not available in all backends
-    // a:   KW    KH    1    C    convolution kernel
-    // b:   W     H     C    N    input data
-    // res: W_out H_out C    N
+    // input: kernel a[3,3,1,128], data b[224,224,128,1], stride0=2,stride1=2
+    // output: tensor result[112,112,128,1] with optimized depthwise convolution
     GGML_API struct ggml_tensor * ggml_conv_2d_dw_direct(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2230,12 +2288,18 @@ extern "C" {
             int                   dilation0,
             int                   dilation1);
 
+    // 2D transpose convolution with zero padding (upsampling)
+    // input: kernel a[4,4,64,32], data b[32,32,32,1], stride=2
+    // output: tensor result[64,64,64,1] upsampled using transpose convolution
     GGML_API struct ggml_tensor * ggml_conv_transpose_2d_p0(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             int                   stride);
 
+    // direct 2D convolution implementation  
+    // input: kernel a[3,3,64,128], data b[224,224,64,1], stride s0=1,s1=1, padding p0=1,p1=1
+    // output: tensor result[224,224,128,1] convolved directly
     GGML_API struct ggml_tensor * ggml_conv_2d_direct(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // convolution kernel [KW, KH, IC, OC]
@@ -2247,6 +2311,9 @@ extern "C" {
             int                   d0,  // dilation dimension 0
             int                   d1); // dilation dimension 1
 
+    // 3D convolution operation
+    // input: kernel a[3,3,3,64*128], data b[112,112,16,64*1], strides, padding, dilation  
+    // output: tensor result[output_w,output_h,output_d,128*1] convolved in 3D
     GGML_API struct ggml_tensor * ggml_conv_3d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // kernel [KW, KH, KD, IC * OC]
@@ -2270,6 +2337,9 @@ extern "C" {
         GGML_OP_POOL_COUNT,
     };
 
+    // 1D pooling operation (max or average) 
+    // input: tensor a[512,64,1], op=GGML_OP_POOL_MAX, kernel k0=2, stride s0=2, padding p0=0
+    // output: tensor result[256,64,1] with max pooling applied
     GGML_API struct ggml_tensor * ggml_pool_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2278,8 +2348,11 @@ extern "C" {
             int                   s0, // stride
             int                   p0); // padding
 
+    // 2D pooling operation (max or average)
     // the result will have 2*p0 padding for the first dimension
     // and 2*p1 padding for the second dimension
+    // input: tensor a[224,224,64], op=GGML_OP_POOL_AVG, kernel k0=2,k1=2, stride s0=2,s1=2
+    // output: tensor result[112,112,64] with average pooling applied
     GGML_API struct ggml_tensor * ggml_pool_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2291,6 +2364,9 @@ extern "C" {
             float                 p0,
             float                 p1);
 
+    // backward pass for 2D pooling (gradient computation)
+    // input: forward result, gradients, pooling parameters
+    // output: tensor with gradients propagated through pooling operation
     GGML_API struct ggml_tensor * ggml_pool_2d_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2314,8 +2390,10 @@ extern "C" {
         GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8)
     };
 
-    // interpolate
+    // upscale tensor by integer scale factor with interpolation
     // multiplies ne0 and ne1 by scale factor
+    // input: tensor a[64,64,3], scale_factor=2, mode=GGML_SCALE_MODE_NEAREST
+    // output: tensor result[128,128,3] upscaled using nearest neighbor or bilinear interpolation
     GGML_API struct ggml_tensor * ggml_upscale(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2336,6 +2414,8 @@ extern "C" {
 
     // Up- or downsamples the input to the specified size.
     // 2D scale modes (eg. bilinear) are applied to the first two dimensions.
+    // input: tensor a[32,32,64,1], ne0=128, ne1=128, ne2=64, ne3=1, mode=GGML_SCALE_MODE_BILINEAR
+    // output: tensor result[128,128,64,1] interpolated to target dimensions
     GGML_API struct ggml_tensor * ggml_interpolate(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2346,6 +2426,8 @@ extern "C" {
             uint32_t              mode); // ggml_scale_mode [ | ggml_scale_flag...]
 
     // pad each dimension with zeros: [x, ..., x] -> [x, ..., x, 0, ..., 0]
+    // input: tensor a[128,64], p0=2, p1=1, p2=0, p3=0
+    // output: tensor result[130,65] with zero padding added
     GGML_API struct ggml_tensor * ggml_pad(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2354,7 +2436,9 @@ extern "C" {
             int                  p2,
             int                  p3);
 
-    // pad each dimension with reflection: [a, b, c, d] -> [b, a, b, c, d, c]
+    // pad 1D tensor with reflection: [a, b, c, d] -> [b, a, b, c, d, c]  
+    // input: tensor a[10], p0=2, p1=1
+    // output: tensor result[13] with reflected padding
     GGML_API struct ggml_tensor * ggml_pad_reflect_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2363,6 +2447,8 @@ extern "C" {
 
     // Move tensor elements by an offset given for each dimension. Elements that
     // are shifted beyond the last position are wrapped around to the beginning.
+    // input: tensor a[8,4,2], shift0=2, shift1=1, shift2=0, shift3=0 
+    // output: tensor result[8,4,2] with elements circularly shifted
     GGML_API struct ggml_tensor * ggml_roll(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2372,9 +2458,10 @@ extern "C" {
             int                   shift3);
 
 
+    // timestep embedding for diffusion models (sinusoidal position encoding)
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
-    // timesteps: [N,]
-    // return: [N, dim]
+    // input: timesteps[N], dim=128, max_period=10000
+    // output: tensor result[N,dim] with sinusoidal embeddings for each timestep
     GGML_API struct ggml_tensor * ggml_timestep_embedding(
             struct ggml_context * ctx,
             struct ggml_tensor  * timesteps,
@@ -2387,18 +2474,26 @@ extern "C" {
         GGML_SORT_ORDER_DESC,
     };
 
+    // returns indices that would sort a tensor's rows 
+    // input: tensor a[100,256], order=GGML_SORT_ORDER_ASC
+    // output: tensor result[100,256] with indices for sorting each row
     GGML_API struct ggml_tensor * ggml_argsort(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             enum ggml_sort_order  order);
 
+    // creates tensor with evenly spaced values in range [start, stop) with given step
+    // input: start=0.0, stop=10.0, step=1.0
+    // output: tensor result[10] with values [0.0, 1.0, 2.0, ..., 9.0]
     GGML_API struct ggml_tensor * ggml_arange(
             struct ggml_context * ctx,
             float                 start,
             float                 stop,
             float                 step);
 
-    // top k elements per row
+    // returns top k elements per row (useful for sampling)
+    // input: tensor a[vocab_size,batch_size], k=50 
+    // output: tensor result[k,batch_size] with top-k values from each row
     GGML_API struct ggml_tensor * ggml_top_k(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2406,11 +2501,13 @@ extern "C" {
 
 #define GGML_KQ_MASK_PAD 64
 
+    // flash attention implementation with extended features (memory efficient)
     // q:    [n_embd_k, n_batch,     n_head,    ne3 ]
     // k:    [n_embd_k, n_kv,        n_head_kv, ne3 ]
     // v:    [n_embd_v, n_kv,        n_head_kv, ne3 ] !! not transposed !!
     // mask: [n_kv,     n_batch_pad, ne32,      ne33] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
-    // res:  [n_embd_v, n_head,      n_batch,   ne3 ] !! permuted !!
+    // input: q[64,16,12,1], k[64,512,12,1], v[64,512,12,1], mask, scale=0.125, max_bias=8.0
+    // output: tensor result[64,12,16,1] with attention applied efficiently
     //
     // broadcast:
     //   n_head % n_head_kv == 0
@@ -2439,6 +2536,9 @@ extern "C" {
             struct ggml_tensor * sinks);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
+    // backward pass for flash attention (gradient computation)
+    // input: q, k, v tensors, gradient d, masked=true for causal attention
+    // output: tensor with gradients computed through flash attention
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,
            struct ggml_tensor  * q,
@@ -2447,11 +2547,17 @@ extern "C" {
            struct ggml_tensor  * d,
            bool                  masked);
 
+    // state space model convolution operation for Mamba architecture
+    // input: state sx[batch,d_state,seq_len], conv weights c[d_conv,d_inner]
+    // output: tensor result with state space convolution applied
     GGML_API struct ggml_tensor * ggml_ssm_conv(
             struct ggml_context * ctx,
             struct ggml_tensor  * sx,
             struct ggml_tensor  * c);
 
+    // state space model scan operation for Mamba architecture
+    // input: state s, input x, delta dt, matrices A,B,C, token ids
+    // output: tensor result with selective state space scanning
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,
             struct ggml_tensor  * s,
@@ -2464,17 +2570,18 @@ extern "C" {
 
     // partition into non-overlapping windows with padding if needed
     // example:
-    // a:   768   64   64    1
-    // w:    14
-    // res: 768   14   14    25
-    // used in sam
+    // input: tensor a[768,64,64,1], w=14
+    // output: tensor result[768,14,14,25] partitioned into windows
+    // used in sam (Segment Anything Model)
     GGML_API struct ggml_tensor * ggml_win_part(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   w);
 
-    // reverse of ggml_win_part
-    // used in sam
+    // reverse of ggml_win_part - reconstructs original tensor from windows
+    // input: windowed tensor a[768,14,14,25], original dims w0=64, h0=64, window size w=14
+    // output: tensor result[768,64,64,1] reconstructed from windows
+    // used in sam (Segment Anything Model)
     GGML_API struct ggml_tensor * ggml_win_unpart(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2482,36 +2589,52 @@ extern "C" {
             int                   h0,
             int                   w);
 
+    // applies unary operation to tensor elements
+    // input: tensor a[128,256], op=GGML_UNARY_TANH
+    // output: tensor result[128,256] with tanh applied element-wise
     GGML_API struct ggml_tensor * ggml_unary(
             struct ggml_context * ctx,
              struct ggml_tensor * a,
              enum ggml_unary_op op);
 
+    // applies unary operation to tensor elements in-place
+    // input: tensor a[128,256], op=GGML_UNARY_RELU
+    // output: tensor a[128,256] modified with relu applied in-place
     GGML_API struct ggml_tensor * ggml_unary_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         enum ggml_unary_op op);
 
-    // used in sam
+    // extracts relative positional encodings for attention (used in SAM)
+    // input: tensor a[height*width,embedding], qh=query_height, kh=key_height
+    // output: tensor result with relative position encodings extracted
     GGML_API struct ggml_tensor * ggml_get_rel_pos(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   qh,
             int                   kh);
 
-    // used in sam
+    // adds relative position encodings to attention tensor (used in SAM)
+    // input: attention tensor a, width positions pw, height positions ph
+    // output: tensor result with relative positional bias added
     GGML_API struct ggml_tensor * ggml_add_rel_pos(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * pw,
             struct ggml_tensor  * ph);
 
+    // adds relative position encodings to attention tensor in-place
+    // input: attention tensor a, width positions pw, height positions ph
+    // output: tensor a modified with relative positional bias added
     GGML_API struct ggml_tensor * ggml_add_rel_pos_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * pw,
             struct ggml_tensor  * ph);
 
+    // RWKV-6 WKV (weighted key-value) operation for RWKV architecture
+    // input: keys k, values v, receptance r, time factors tf, td, state
+    // output: tensor result with RWKV-6 attention mechanism applied
     GGML_API struct ggml_tensor * ggml_rwkv_wkv6(
             struct ggml_context * ctx,
             struct ggml_tensor  * k,
@@ -2521,6 +2644,9 @@ extern "C" {
             struct ggml_tensor  * td,
             struct ggml_tensor  * state);
 
+    // gated linear attention mechanism (GLA) for linear transformers
+    // input: keys k, values v, queries q, gating parameters
+    // output: tensor result with gated linear attention applied
     GGML_API struct ggml_tensor * ggml_gated_linear_attn(
             struct ggml_context * ctx,
             struct ggml_tensor  * k,
@@ -2530,6 +2656,9 @@ extern "C" {
             struct ggml_tensor  * state,
             float scale);
 
+    // RWKV-7 WKV operation for RWKV architecture version 7
+    // input: receptance r, weights w, keys k, values v, factors a,b, state
+    // output: tensor result with RWKV-7 attention mechanism applied
     GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
             struct ggml_context * ctx,
             struct ggml_tensor  * r,
@@ -2549,6 +2678,9 @@ extern "C" {
 #define GGML_N_TASKS_MAX (-1)
     // n_tasks == GGML_N_TASKS_MAX means to use max number of tasks
 
+    // applies custom single-tensor operation using user-defined function
+    // input: tensor a[256,128], custom function fun, n_tasks=4, userdata
+    // output: tensor result[256,128] with custom operation applied 
     GGML_API struct ggml_tensor * ggml_map_custom1(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2556,6 +2688,9 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
+    // applies custom single-tensor operation in-place using user-defined function
+    // input: tensor a[256,128], custom function fun, n_tasks=GGML_N_TASKS_MAX
+    // output: tensor a[256,128] modified with custom operation applied in-place
     GGML_API struct ggml_tensor * ggml_map_custom1_inplace(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2563,6 +2698,9 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
+    // applies custom two-tensor operation using user-defined function  
+    // input: tensors a[128,64], b[128,64], custom function fun, n_tasks=8
+    // output: tensor result[128,64] with custom binary operation applied
     GGML_API struct ggml_tensor * ggml_map_custom2(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2571,6 +2709,9 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
+    // applies custom two-tensor operation in-place using user-defined function
+    // input: tensors a[128,64], b[128,64], custom function fun, n_tasks=4
+    // output: tensor a[128,64] modified with custom binary operation applied in-place  
     GGML_API struct ggml_tensor * ggml_map_custom2_inplace(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2579,6 +2720,9 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
+    // applies custom three-tensor operation using user-defined function
+    // input: tensors a[64,32], b[64,32], c[64,32], custom function fun, n_tasks=2
+    // output: tensor result[64,32] with custom ternary operation applied
     GGML_API struct ggml_tensor * ggml_map_custom3(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2588,6 +2732,9 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
+    // applies custom three-tensor operation in-place using user-defined function
+    // input: tensors a[64,32], b[64,32], c[64,32], custom function fun, n_tasks=1
+    // output: tensor a[64,32] modified with custom ternary operation applied in-place
     GGML_API struct ggml_tensor * ggml_map_custom3_inplace(
             struct ggml_context   * ctx,
             struct ggml_tensor    * a,
@@ -2599,6 +2746,9 @@ extern "C" {
 
     typedef void (*ggml_custom_op_t)(struct ggml_tensor * dst , int ith, int nth, void * userdata);
 
+    // creates custom 4D tensor with user-defined operation and arbitrary arguments
+    // input: type=GGML_TYPE_F32, dims ne0=32,ne1=32,ne2=8,ne3=16, args[], custom function fun
+    // output: tensor result[32,32,8,16] computed with user-defined operation
     GGML_API struct ggml_tensor * ggml_custom_4d(
             struct ggml_context * ctx,
             enum ggml_type        type,
@@ -2612,6 +2762,9 @@ extern "C" {
             int                   n_tasks,
             void                * userdata);
 
+    // applies user-defined custom operation with arbitrary number of input arguments in-place  
+    // input: tensor a[256,128], args[], custom function fun, n_tasks=4, userdata
+    // output: tensor a[256,128] modified with custom operation applied in-place
     GGML_API struct ggml_tensor * ggml_custom_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2623,20 +2776,28 @@ extern "C" {
 
     // loss function
 
+    // computes cross-entropy loss between logits and labels
+    // input: logits a[vocab_size,batch_size], labels b[batch_size] with class indices
+    // output: tensor result[1] with scalar cross-entropy loss value
     GGML_API struct ggml_tensor * ggml_cross_entropy_loss(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // logits
             struct ggml_tensor  * b); // labels
 
+    // backward pass for cross-entropy loss (gradient computation)
+    // input: logits a, labels b, gradients c from loss output
+    // output: tensor with gradients computed through cross-entropy loss
     GGML_API struct ggml_tensor * ggml_cross_entropy_loss_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // logits
             struct ggml_tensor  * b,  // labels
             struct ggml_tensor  * c); // gradients of cross_entropy_loss result
 
-    // AdamW optimizer step
+    // AdamW optimizer step for parameter updates
     // Paper: https://arxiv.org/pdf/1711.05101v3.pdf
     // PyTorch: https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+    // input: params a, gradients grad, momentum m, velocity v, adamw_params[lr, beta1, beta2, eps, weight_decay]
+    // output: tensor result with updated parameters using AdamW algorithm
     GGML_API struct ggml_tensor * ggml_opt_step_adamw(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -2646,6 +2807,8 @@ extern "C" {
             struct ggml_tensor  * adamw_params); // parameters such as the learning rate
 
     // stochastic gradient descent step (with weight decay)
+    // input: parameters a, gradients grad, SGD parameters [lr, momentum, weight_decay]
+    // output: tensor result with updated parameters using SGD with momentum and weight decay
     GGML_API struct ggml_tensor * ggml_opt_step_sgd(
         struct ggml_context * ctx,
         struct ggml_tensor *  a,
@@ -2671,7 +2834,13 @@ extern "C" {
     GGML_API void                 ggml_graph_clear     (struct ggml_cgraph * cgraph);
 
     GGML_API int                   ggml_graph_size   (struct ggml_cgraph * cgraph);
+    // gets tensor node at index i from computation graph (supports negative indexing)
+    // input: graph with 10 nodes, i=2 or i=-1 (last node)  
+    // output: tensor pointer at specified index in graph
     GGML_API struct ggml_tensor *  ggml_graph_node   (struct ggml_cgraph * cgraph, int i); // if i < 0, returns nodes[n_nodes + i]
+    // returns pointer to internal nodes array of computation graph
+    // input: computation graph
+    // output: array pointer to all tensor nodes in graph
     GGML_API struct ggml_tensor ** ggml_graph_nodes  (struct ggml_cgraph * cgraph);
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph * cgraph);
 
@@ -2680,8 +2849,17 @@ extern "C" {
     GGML_API size_t ggml_graph_overhead(void);
     GGML_API size_t ggml_graph_overhead_custom(size_t size, bool grads);
 
+    // finds tensor by name in computation graph
+    // input: graph, name="layer_1_weights"
+    // output: tensor with matching name or NULL if not found
     GGML_API struct ggml_tensor * ggml_graph_get_tensor  (const struct ggml_cgraph * cgraph, const char * name);
+    // gets gradient tensor for a given node in computation graph
+    // input: graph, node tensor for which gradient is needed
+    // output: gradient tensor or NULL if not found
     GGML_API struct ggml_tensor * ggml_graph_get_grad    (const struct ggml_cgraph * cgraph, const struct ggml_tensor * node);
+    // gets accumulated gradient tensor for a given node in computation graph
+    // input: graph, node tensor for which accumulated gradient is needed
+    // output: accumulated gradient tensor or NULL if not found  
     GGML_API struct ggml_tensor * ggml_graph_get_grad_acc(const struct ggml_cgraph * cgraph, const struct ggml_tensor * node);
 
     // print info and performance information for the graph
@@ -2697,6 +2875,9 @@ extern "C" {
     // If this is not called, or NULL is supplied, everything is output on stderr.
     GGML_API void ggml_log_set(ggml_log_callback log_callback, void * user_data);
 
+    // sets all elements of tensor to zero
+    // input: tensor[256,128] with any values
+    // output: tensor[256,128] with all elements set to 0.0
     GGML_API struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor);
 
     //
