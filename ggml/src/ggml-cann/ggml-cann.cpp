@@ -2247,9 +2247,14 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
     release_nz_workspace();
+
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
+
+    if (!cann_ctx->acl_graph_mode) {
+        use_cann_graph = false;
+    }
 
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
@@ -2400,14 +2405,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float ext_factor = 0.0f;
-            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
-                return false;
-            }
-            // TODO: ext_factor != 0
-            if (ext_factor != 0) {
                 return false;
             }
 
@@ -2419,9 +2418,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 return false;
             }
 
-            if(!ggml_is_contiguous(op->src[0])){
-                return false;
-            }
             return true;
         }
         case GGML_OP_UPSCALE: {
@@ -2520,13 +2516,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
                 // different head sizes of K and V are not supported yet
-                return false;
-            }
-            if (op->src[0]->ne[0] == 192) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 576) {
-                // DeepSeek MLA
                 return false;
             }
             if (op->src[0]->ne[0] % 16 != 0) {

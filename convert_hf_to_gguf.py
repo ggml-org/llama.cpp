@@ -302,10 +302,6 @@ class ModelBase:
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
 
-                # if data ends up empty, it means data_torch was a scalar tensor -> restore
-                if len(data.shape) == 0:
-                    data = data_torch.numpy()
-
                 n_dims = len(data.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
