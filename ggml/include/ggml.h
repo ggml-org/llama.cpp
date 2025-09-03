@@ -1176,42 +1176,72 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise hyperbolic tangent performed in-place on tensor a
+    // input: tensor a[64,128] with values like [-2.0, 0.0, 1.5, ...]
+    // output: tensor a[64,128] modified where a[i,j] = tanh(a[i,j]) ∈ (-1,1)
     GGML_API struct ggml_tensor * ggml_tanh_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise exponential linear unit: result[i] = a[i] >= 0 ? a[i] : α*(exp(a[i]) - 1)
+    // input: tensor a[32,64] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor result[32,64] where result[i,j] = ELU(a[i,j])
     GGML_API struct ggml_tensor * ggml_elu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise exponential linear unit performed in-place on tensor a
+    // input: tensor a[32,64] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor a[32,64] modified where a[i,j] = ELU(a[i,j])
     GGML_API struct ggml_tensor * ggml_elu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise rectified linear unit: result[i] = max(0, a[i])
+    // input: tensor a[128,256] with values like [-1.5, 0.0, 3.0, ...]
+    // output: tensor result[128,256] where result[i,j] = max(0, a[i,j])
     GGML_API struct ggml_tensor * ggml_relu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise leaky rectified linear unit with negative slope
+    // input: tensor a[64,128], negative_slope=0.01
+    // output: tensor result[64,128] where result[i,j] = a[i,j] >= 0 ? a[i,j] : negative_slope*a[i,j]
     GGML_API struct ggml_tensor * ggml_leaky_relu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a, float negative_slope, bool inplace);
 
+    // element-wise rectified linear unit performed in-place on tensor a
+    // input: tensor a[128,256] with values like [-1.5, 0.0, 3.0, ...]
+    // output: tensor a[128,256] modified where a[i,j] = max(0, a[i,j])
     GGML_API struct ggml_tensor * ggml_relu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sigmoid activation: result[i] = 1 / (1 + exp(-a[i]))
+    // input: tensor a[256,128] with values like [-2.0, 0.0, 3.0, ...]
+    // output: tensor result[256,128] where result[i,j] = σ(a[i,j]) ∈ (0,1)
     GGML_API struct ggml_tensor * ggml_sigmoid(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sigmoid activation performed in-place on tensor a
+    // input: tensor a[256,128] with values like [-2.0, 0.0, 3.0, ...]
+    // output: tensor a[256,128] modified where a[i,j] = σ(a[i,j]) ∈ (0,1)
     GGML_API struct ggml_tensor * ggml_sigmoid_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise Gaussian Error Linear Unit: result[i] = 0.5*a[i]*(1 + tanh(√(2/π)*(a[i] + 0.044715*a[i]³)))
+    // input: tensor a[512,768] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor result[512,768] where result[i,j] = GELU(a[i,j])
     GGML_API struct ggml_tensor * ggml_gelu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise Gaussian Error Linear Unit performed in-place on tensor a
+    // input: tensor a[512,768] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor a[512,768] modified where a[i,j] = GELU(a[i,j])
     GGML_API struct ggml_tensor * ggml_gelu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1222,22 +1252,37 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise GELU with error function performed in-place on tensor a
+    // input: tensor a[512,768] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor a[512,768] modified where a[i,j] = 0.5*a[i,j]*(1 + erf(a[i,j]/√2))
     GGML_API struct ggml_tensor * ggml_gelu_erf_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise GELU quick approximation: result[i] = a[i] * σ(1.702 * a[i])
+    // input: tensor a[256,512] with values like [-2.0, 0.0, 1.5, ...]
+    // output: tensor result[256,512] where result[i,j] = GELU_quick(a[i,j])
     GGML_API struct ggml_tensor * ggml_gelu_quick(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise GELU quick approximation performed in-place on tensor a
+    // input: tensor a[256,512] with values like [-2.0, 0.0, 1.5, ...]
+    // output: tensor a[256,512] modified where a[i,j] = a[i,j] * σ(1.702 * a[i,j])
     GGML_API struct ggml_tensor * ggml_gelu_quick_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise Swish/SiLU activation: result[i] = a[i] * σ(a[i])
+    // input: tensor a[768,512] with values like [-2.0, 0.0, 3.0, ...]
+    // output: tensor result[768,512] where result[i,j] = a[i,j] * σ(a[i,j])
     GGML_API struct ggml_tensor * ggml_silu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise Swish/SiLU activation performed in-place on tensor a
+    // input: tensor a[768,512] with values like [-2.0, 0.0, 3.0, ...]
+    // output: tensor a[768,512] modified where a[i,j] = a[i,j] * σ(a[i,j])
     GGML_API struct ggml_tensor * ggml_silu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1259,10 +1304,16 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise exponential: result[i] = exp(a[i])
+    // input: tensor a[128,64] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor result[128,64] where result[i,j] = exp(a[i,j])
     GGML_API struct ggml_tensor * ggml_exp(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise exponential performed in-place on tensor a
+    // input: tensor a[128,64] with values like [-1.0, 0.0, 2.0, ...]
+    // output: tensor a[128,64] modified where a[i,j] = exp(a[i,j])
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1277,42 +1328,72 @@ extern "C" {
              enum ggml_glu_op     op,
              bool                 swapped);
 
+    // ReLU-based Gated Linear Unit: splits input in half and applies relu(A) * B
+    // input: tensor a[512,1024] (will be split into two 512,512 parts)
+    // output: tensor result[512,512] where result = relu(a[:,:512]) * a[:,512:]
     GGML_API struct ggml_tensor * ggml_reglu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // ReLU-based Gated Linear Unit with swapped gate order: relu(B) * A
+    // input: tensor a[512,1024] (will be split into two 512,512 parts)
+    // output: tensor result[512,512] where result = relu(a[:,512:]) * a[:,:512]
     GGML_API struct ggml_tensor * ggml_reglu_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-based Gated Linear Unit: splits input and applies gelu(A) * B
+    // input: tensor a[768,1536] (will be split into two 768,768 parts)
+    // output: tensor result[768,768] where result = gelu(a[:,:768]) * a[:,768:]
     GGML_API struct ggml_tensor * ggml_geglu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-based Gated Linear Unit with swapped gate order: gelu(B) * A
+    // input: tensor a[768,1536] (will be split into two 768,768 parts)  
+    // output: tensor result[768,768] where result = gelu(a[:,768:]) * a[:,:768]
     GGML_API struct ggml_tensor * ggml_geglu_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // SiLU-based Gated Linear Unit: splits input and applies silu(A) * B
+    // input: tensor a[1024,2048] (will be split into two 1024,1024 parts)
+    // output: tensor result[1024,1024] where result = silu(a[:,:1024]) * a[:,1024:]
     GGML_API struct ggml_tensor * ggml_swiglu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // SiLU-based Gated Linear Unit with swapped gate order: silu(B) * A
+    // input: tensor a[1024,2048] (will be split into two 1024,1024 parts)
+    // output: tensor result[1024,1024] where result = silu(a[:,1024:]) * a[:,:1024]
     GGML_API struct ggml_tensor * ggml_swiglu_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-ERF-based Gated Linear Unit: splits input and applies gelu_erf(A) * B
+    // input: tensor a[768,1536] (will be split into two 768,768 parts)
+    // output: tensor result[768,768] where result = gelu_erf(a[:,:768]) * a[:,768:]
     GGML_API struct ggml_tensor * ggml_geglu_erf(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-ERF-based Gated Linear Unit with swapped gate order: gelu_erf(B) * A
+    // input: tensor a[768,1536] (will be split into two 768,768 parts)
+    // output: tensor result[768,768] where result = gelu_erf(a[:,768:]) * a[:,:768]  
     GGML_API struct ggml_tensor * ggml_geglu_erf_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-quick-based Gated Linear Unit: splits input and applies gelu_quick(A) * B
+    // input: tensor a[512,1024] (will be split into two 512,512 parts)
+    // output: tensor result[512,512] where result = gelu_quick(a[:,:512]) * a[:,512:]
     GGML_API struct ggml_tensor * ggml_geglu_quick(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU-quick-based Gated Linear Unit with swapped gate order: gelu_quick(B) * A
+    // input: tensor a[512,1024] (will be split into two 512,512 parts)
+    // output: tensor result[512,512] where result = gelu_quick(a[:,512:]) * a[:,:512]
     GGML_API struct ggml_tensor * ggml_geglu_quick_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1562,6 +1643,9 @@ extern "C" {
 
     // return view(a), b specifies the new shape
     // TODO: when we start computing gradient, make a copy instead of view
+    // reshapes tensor a to have the same shape as tensor b
+    // input: tensor a[1024], tensor b[32,32] 
+    // output: tensor result[32,32] with a's data reshaped
     GGML_API struct ggml_tensor * ggml_reshape(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1569,11 +1653,17 @@ extern "C" {
 
     // return view(a)
     // TODO: when we start computing gradient, make a copy instead of view
+    // reshapes tensor a into 1D shape
+    // input: tensor a[8,16,4], ne0=512
+    // output: tensor result[512] with a's data as 1D view
     GGML_API struct ggml_tensor * ggml_reshape_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int64_t               ne0);
 
+    // reshapes tensor a into 2D shape
+    // input: tensor a[512], ne0=32, ne1=16
+    // output: tensor result[32,16] with a's data as 2D view
     GGML_API struct ggml_tensor * ggml_reshape_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1582,6 +1672,9 @@ extern "C" {
 
     // return view(a)
     // TODO: when we start computing gradient, make a copy instead of view
+    // reshapes tensor a into 3D shape
+    // input: tensor a[1024], ne0=8, ne1=16, ne2=8
+    // output: tensor result[8,16,8] with a's data as 3D view
     GGML_API struct ggml_tensor * ggml_reshape_3d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1589,6 +1682,9 @@ extern "C" {
             int64_t               ne1,
             int64_t               ne2);
 
+    // reshapes tensor a into 4D shape
+    // input: tensor a[2048], ne0=8, ne1=8, ne2=8, ne3=4
+    // output: tensor result[8,8,8,4] with a's data as 4D view
     GGML_API struct ggml_tensor * ggml_reshape_4d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1634,6 +1730,9 @@ extern "C" {
             size_t                nb3,
             size_t                offset);
 
+    // permutes tensor dimensions according to specified axis order
+    // input: tensor a[64,128,32,8], axis0=1, axis1=0, axis2=3, axis3=2
+    // output: tensor result[128,64,8,32] with dimensions permuted
     GGML_API struct ggml_tensor * ggml_permute(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1643,16 +1742,25 @@ extern "C" {
             int                   axis3);
 
     // alias for ggml_permute(ctx, a, 1, 0, 2, 3)
+    // transposes first two dimensions of tensor a 
+    // input: tensor a[128,256,32]
+    // output: tensor result[256,128,32] with first two dimensions swapped
     GGML_API struct ggml_tensor * ggml_transpose(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
     // supports 3D: a->ne[2] == b->ne[1]
+    // extracts rows from tensor a using indices in tensor b
+    // input: tensor a[vocab_size,embed_dim,batch], tensor b[seq_len,batch] with row indices
+    // output: tensor result[embed_dim,seq_len,batch] with selected rows from a
     GGML_API struct ggml_tensor * ggml_get_rows(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // data
             struct ggml_tensor  * b); // row indices
 
+    // computes gradients for ggml_get_rows operation 
+    // input: tensor a (gradients), tensor b (row indices), tensor c (original data shape)
+    // output: tensor result with accumulated gradients for original tensor
     GGML_API struct ggml_tensor * ggml_get_rows_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
@@ -1676,29 +1784,44 @@ extern "C" {
             struct ggml_tensor  * b,  // source
             struct ggml_tensor  * c); // row indices
 
+    // extracts diagonal elements from 2D tensor to create 1D tensor
+    // input: tensor a[128,128] 
+    // output: tensor result[128] containing diagonal elements a[i,i]
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,
         struct ggml_tensor      * a);
 
     // set elements above the diagonal to -INF
+    // masks upper triangular part for causal attention
+    // input: tensor a[seq_len,seq_len], n_past=10
+    // output: tensor result where result[i,j] = (j > i + n_past) ? -INF : a[i,j]
     GGML_API struct ggml_tensor * ggml_diag_mask_inf(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_past);
 
     // in-place, returns view(a)
+    // masks upper triangular part for causal attention in-place
+    // input: tensor a[seq_len,seq_len], n_past=5
+    // output: tensor a modified where a[i,j] = (j > i + n_past) ? -INF : a[i,j]
     GGML_API struct ggml_tensor * ggml_diag_mask_inf_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_past);
 
     // set elements above the diagonal to 0
+    // masks upper triangular part with zeros
+    // input: tensor a[64,64], n_past=0
+    // output: tensor result where result[i,j] = (j > i + n_past) ? 0 : a[i,j]  
     GGML_API struct ggml_tensor * ggml_diag_mask_zero(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_past);
 
     // in-place, returns view(a)
+    // masks upper triangular part with zeros in-place
+    // input: tensor a[64,64], n_past=0
+    // output: tensor a modified where a[i,j] = (j > i + n_past) ? 0 : a[i,j]
     GGML_API struct ggml_tensor * ggml_diag_mask_zero_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
