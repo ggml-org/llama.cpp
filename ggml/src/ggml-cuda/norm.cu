@@ -398,10 +398,10 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         return;
     }
     if (add == nullptr) {
-        uint3 mul_ncols_packed     = init_fastdiv_values(mul_ncols);
-        uint3 mul_nrows_packed     = init_fastdiv_values(mul_nrows);
-        uint3 mul_nchannels_packed = init_fastdiv_values(mul_nchannels);
-        uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
+        const uint3 mul_ncols_packed     = init_fastdiv_values(mul_ncols);
+        const uint3 mul_nrows_packed     = init_fastdiv_values(mul_nrows);
+        const uint3 mul_nchannels_packed = init_fastdiv_values(mul_nchannels);
+        const uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
             rms_norm_f32<256, true><<<blocks_num, block_dims, 0, stream>>>(
@@ -414,15 +414,15 @@ static void rms_norm_mul_f32_cuda(const float *  x,
                 mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
         }
     } else {
-        uint3 mul_ncols_packed     = init_fastdiv_values(mul_ncols);
-        uint3 mul_nrows_packed     = init_fastdiv_values(mul_nrows);
-        uint3 mul_nchannels_packed = init_fastdiv_values(mul_nchannels);
-        uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
+        const uint3 mul_ncols_packed     = init_fastdiv_values(mul_ncols);
+        const uint3 mul_nrows_packed     = init_fastdiv_values(mul_nrows);
+        const uint3 mul_nchannels_packed = init_fastdiv_values(mul_nchannels);
+        const uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
 
-        uint3 add_ncols_packed     = init_fastdiv_values(add_ncols);
-        uint3 add_nrows_packed     = init_fastdiv_values(add_nrows);
-        uint3 add_nchannels_packed = init_fastdiv_values(add_nchannels);
-        uint3 add_nsamples_packed  = init_fastdiv_values(add_nsamples);
+        const uint3 add_ncols_packed     = init_fastdiv_values(add_ncols);
+        const uint3 add_nrows_packed     = init_fastdiv_values(add_nrows);
+        const uint3 add_nchannels_packed = init_fastdiv_values(add_nchannels);
+        const uint3 add_nsamples_packed  = init_fastdiv_values(add_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
             rms_norm_f32<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
