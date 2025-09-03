@@ -8,7 +8,7 @@ android {
     namespace = "android.llama.cpp"
     compileSdk = 36
 
-    ndkVersion = "29.0.13113456 rc1"
+    ndkVersion = "29.0.13113456"
 
     defaultConfig {
         minSdk = 33
@@ -24,6 +24,14 @@ android {
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
                 arguments += "-DCMAKE_MESSAGE_LOG_LEVEL=DEBUG"
                 arguments += "-DCMAKE_VERBOSE_MAKEFILE=ON"
+
+                arguments += "-DGGML_SYSTEM_ARCH=ARM"  // Undocumented before 3.21
+                arguments += "-DGGML_NATIVE=OFF"
+
+                arguments += "-DGGML_BACKEND_DL=ON"
+                arguments += "-DGGML_CPU_ALL_VARIANTS=ON"
+
+                arguments += "-DGGML_OPENMP=ON"
             }
         }
         aarMetadata {

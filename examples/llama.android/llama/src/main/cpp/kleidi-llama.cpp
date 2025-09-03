@@ -72,9 +72,15 @@ static void log_callback(ggml_log_level level, const char *fmt, void *data) {
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_android_llama_cpp_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/) {
+Java_android_llama_cpp_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
     // Set llama log handler to Android
     llama_log_set(log_callback, nullptr);
+
+    // Loading all CPU backend variants
+    const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
+    LOGi("Loading backends from %s", path_to_backend);
+    ggml_backend_load_all_from_path(path_to_backend);
+    env->ReleaseStringUTFChars(nativeLibDir, path_to_backend);
 
     // Initialize backends
     llama_backend_init();

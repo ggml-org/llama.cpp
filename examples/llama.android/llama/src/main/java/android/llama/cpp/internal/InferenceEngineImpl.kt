@@ -1,7 +1,7 @@
 package android.llama.cpp.internal
 
+import android.content.Context
 import android.llama.cpp.InferenceEngine
-import android.llama.cpp.LLamaTier
 import android.llama.cpp.UnsupportedArchitectureException
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -40,7 +40,7 @@ import java.io.IOException
  * @see llama-android.cpp for the native implementation details
  */
 internal class InferenceEngineImpl private constructor(
-    private val tier: LLamaTier
+    private val nativeLibDir: String
 ) : InferenceEngine {
 
     companion object {
@@ -49,22 +49,24 @@ internal class InferenceEngineImpl private constructor(
         private var initialized = false
 
         /**
-         * Create [InferenceEngineImpl] instance with specific tier
+         * Create [InferenceEngineImpl] instance at runtime
          *
-         * @throws IllegalArgumentException if tier's library name is invalid
+         * @param Context for obtaining native library directory
+         * @throws IllegalArgumentException if native library path is invalid
          * @throws UnsatisfiedLinkError if library failed to load
          */
-        internal fun createWithTier(tier: LLamaTier): InferenceEngineImpl {
+        internal fun create(context: Context): InferenceEngineImpl {
             assert(!initialized) { "Inference Engine has already been initialized!" }
 
-            require(tier.libraryName.isNotBlank()) { "Unexpected library: ${tier.libraryName}" }
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            require(nativeLibDir.isNotBlank()) { "Expected native library" }
 
             return try {
-                Log.i(TAG, "Instantiating InferenceEngineImpl w/ ${tier.libraryName}")
-                InferenceEngineImpl(tier).also { initialized = true }
+                Log.i(TAG, "Instantiating InferenceEngineImpl,,,")
+                InferenceEngineImpl(nativeLibDir).also { initialized = true }
 
             } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "Failed to load ${tier.libraryName}", e)
+                Log.e(TAG, "Failed to load native library from $nativeLibDir", e)
                 throw e
             }
         }
@@ -74,7 +76,7 @@ internal class InferenceEngineImpl private constructor(
      * JNI methods
      * @see llama-android.cpp
      */
-    private external fun init()
+    private external fun init(nativeLibDir: String)
     private external fun load(modelPath: String): Int
     private external fun prepare(): Int
 
@@ -108,10 +110,9 @@ internal class InferenceEngineImpl private constructor(
                     "Cannot load native library in ${_state.value.javaClass.simpleName}!"
                 }
                 _state.value = InferenceEngine.State.Initializing
-                Log.i(TAG, "Loading native library for $tier")
-
-                System.loadLibrary(tier.libraryName)
-                init()
+                Log.i(TAG, "Loading native library...")
+                System.load(File(nativeLibDir, "libkleidi-llama.so").absolutePath)
+                init(nativeLibDir)
                 _state.value = InferenceEngine.State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
 

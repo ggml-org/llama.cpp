@@ -54,19 +54,11 @@ internal object InferenceEngineLoader {
         _cachedInstance?.let { return it }
 
         return runBlocking {
-            // Obtain the optimal tier from cache if available
-            val tier = obtainTier(context)
-            if (tier == null || tier == LLamaTier.NONE) {
-                Log.e(TAG, "Aborted instantiating Inference Engine due to invalid tier")
-                return@runBlocking null
-            }
-
             try {
                 // Create and cache the inference engine instance
-                Log.i(TAG, "Using tier: ${tier.name} (${tier.description})")
-                InferenceEngineImpl.createWithTier(tier).also {
+                InferenceEngineImpl.create(context).also {
                     _cachedInstance = it
-                    Log.i(TAG, "Successfully instantiated Inference Engine w/ ${tier.name}")
+                    Log.i(TAG, "Successfully instantiated Inference Engine")
                 }
 
             } catch (e: Exception) {
