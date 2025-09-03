@@ -80,47 +80,123 @@ kernel void kernel_mul_mv_q8_0_f32_flat(
     global float * y  = (global float *) (src1 + offset_src1);
 
     // pointers to src0 rows
-    global char * ax[N_R0_Q8_0];
-    global half * ad[N_R0_Q8_0];
-    for (int row = 0; row < N_R0_Q8_0; ++row) {
-        ulong offset_src0 = ((first_row + row)*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03)/34;
-        ax[row] = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
-        ad[row] = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
-    }
+    uint offset_src0_base = first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03;
 
-    float yl[NB_Q8_0];
-    float sumf[N_R0_Q8_0] = { 0.f };
+    global char * ax0, * ax1, * ax2, * ax3;
+    global half * ad0, * ad1, * ad2, * ad3;
+    uint offset_src0;
+
+    offset_src0 = offset_src0_base + 0*nb01;
+    offset_src0 = offset_src0/34;
+    ax0 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
+    ad0 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
+
+    offset_src0 = offset_src0_base + 1*nb01;
+    offset_src0 = offset_src0/34;
+    ax1 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
+    ad1 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
+
+    offset_src0 = offset_src0_base + 2*nb01;
+    offset_src0 = offset_src0/34;
+    ax2 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
+    ad2 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
+
+    offset_src0 = offset_src0_base + 3*nb01;
+    offset_src0 = offset_src0/34;
+    ax3 = (global char *) ((global char *) src0_q + offset_src0*sizeof(char)*QK8_0);
+    ad3 = (global half *) ((global char *) src0_d + offset_src0*sizeof(half));
 
     const short ix = get_sub_group_local_id()/4;
     const short il = get_sub_group_local_id()%4;
 
     global float * yb = y + ix*QK8_0 + il*NB_Q8_0;
 
+    float8 yl;
+    float8 qv;
+    float4 sumf = 0.f;
+    float  sumq = 0.f;
+    global char * qs;
+
     // each thread handles NB_Q8_0 quants at a time
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/4) {
-        for (short i = 0; i < NB_Q8_0; ++i) {
-            yl[i] = yb[i];
-        }
+        yl = vload8(0, yb);
 
-        for (short row = 0; row < N_R0_Q8_0; row++) {
-            global char * qs = ax[row] + ib*sizeof(char)*QK8_0 + il*NB_Q8_0;
-            float sumq = 0.f;
-            for (short iq = 0; iq < NB_Q8_0; ++iq) {
-                sumq += qs[iq] * yl[iq];
-            }
-            sumf[row] += sumq*ad[row][ib];
-        }
+        qs = ax0 + ib*sizeof(char)*QK8_0 + il*NB_Q8_0;
+        qv = convert_float8(vload8(0, qs));
+        sumq = 0;
+        sumq += qv.s0*yl.s0;
+        sumq += qv.s1*yl.s1;
+        sumq += qv.s2*yl.s2;
+        sumq += qv.s3*yl.s3;
+        sumq += qv.s4*yl.s4;
+        sumq += qv.s5*yl.s5;
+        sumq += qv.s6*yl.s6;
+        sumq += qv.s7*yl.s7;
+        sumf.s0 += sumq*ad0[ib];
+
+        qs = ax1 + ib*sizeof(char)*QK8_0 + il*NB_Q8_0;
+        qv = convert_float8(vload8(0, qs));
+        sumq = 0;
+        sumq += qv.s0*yl.s0;
+        sumq += qv.s1*yl.s1;
+        sumq += qv.s2*yl.s2;
+        sumq += qv.s3*yl.s3;
+        sumq += qv.s4*yl.s4;
+        sumq += qv.s5*yl.s5;
+        sumq += qv.s6*yl.s6;
+        sumq += qv.s7*yl.s7;
+        sumf.s1 += sumq*ad1[ib];
+
+        qs = ax2 + ib*sizeof(char)*QK8_0 + il*NB_Q8_0;
+        qv = convert_float8(vload8(0, qs));
+        sumq = 0;
+        sumq += qv.s0*yl.s0;
+        sumq += qv.s1*yl.s1;
+        sumq += qv.s2*yl.s2;
+        sumq += qv.s3*yl.s3;
+        sumq += qv.s4*yl.s4;
+        sumq += qv.s5*yl.s5;
+        sumq += qv.s6*yl.s6;
+        sumq += qv.s7*yl.s7;
+        sumf.s2 += sumq*ad2[ib];
+
+        qs = ax3 + ib*sizeof(char)*QK8_0 + il*NB_Q8_0;
+        qv = convert_float8(vload8(0, qs));
+        sumq = 0;
+        sumq += qv.s0*yl.s0;
+        sumq += qv.s1*yl.s1;
+        sumq += qv.s2*yl.s2;
+        sumq += qv.s3*yl.s3;
+        sumq += qv.s4*yl.s4;
+        sumq += qv.s5*yl.s5;
+        sumq += qv.s6*yl.s6;
+        sumq += qv.s7*yl.s7;
+        sumf.s3 += sumq*ad3[ib];
 
         yb += N_SIMDWIDTH*NB_Q8_0;
     }
 
     global float * dst_f32 = (global float *) dst + (ulong)im*ne0*ne1 + (ulong)r1*ne0;
 
-    for (int row = 0; row < N_R0_Q8_0; ++row) {
-        float tot = sub_group_reduce_add(sumf[row]);
+    float4 tot = (float4)(
+        sub_group_reduce_add(sumf.s0),
+        sub_group_reduce_add(sumf.s1),
+        sub_group_reduce_add(sumf.s2),
+        sub_group_reduce_add(sumf.s3)
+    );
 
-        if (get_sub_group_local_id() == 0 && first_row + row < ne01) {
-            dst_f32[first_row + row] = tot;
+    if (get_sub_group_local_id() == 0) {
+        if (first_row + 0 < ne01) {
+            dst_f32[first_row + 0] = tot.s0;
+        }
+        if (first_row + 1 < ne01) {
+            dst_f32[first_row + 1] = tot.s1;
+        }
+        if (first_row + 2 < ne01) {
+            dst_f32[first_row + 2] = tot.s2;
+        }
+        if (first_row + 3 < ne01) {
+            dst_f32[first_row + 3] = tot.s3;
         }
     }
 }
