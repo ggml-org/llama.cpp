@@ -971,16 +971,21 @@ int main(int argc, char ** argv) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
+    // Ensure all prompt response output is fully completed before printing profiling data.
+   // Free threadpools first to guarantee all worker threads have finished processing and output.
+   // This prevents interleaving of prompt response and profiling output, ensuring correct order.
+   // fflush(stdout) is called to flush any remaining output before printing profiling stats.
+
+    ggml_threadpool_free_fn(threadpool);
+    ggml_threadpool_free_fn(threadpool_batch);
 
     LOG("\n\n");
+    fflush(stdout);
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
 
     llama_backend_free();
-
-    ggml_threadpool_free_fn(threadpool);
-    ggml_threadpool_free_fn(threadpool_batch);
 
     return 0;
 }

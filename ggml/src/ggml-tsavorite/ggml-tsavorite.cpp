@@ -522,7 +522,7 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
   if (tsi_log_setup() == false)
     return NULL;
 
-  std::string mainProfilerName = "GGML Tsavorite ";
+  std::string mainProfilerName = "OPU ";
   tsirt::utils::TSIProfiler::initialize();
   tsirt::utils::TSIScopedProfiler mainProfiler(mainProfilerName);
   
@@ -630,7 +630,7 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   tsi_finalize();
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
   tsirt::utils::TSIProfiler::finalize();
-  std::cout << "\nGGML Tsavorite Profiling Results:" << std::endl;
+  std::cout << "\nOPU Profiling Results:" << std::endl;
   std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
                    /*truncateFuncNames*/ true)
             << std::endl;

@@ -2620,25 +2620,51 @@ llama_perf_context_data llama_perf_context(const llama_context * ctx) {
     return data;
 }
 
+
 #ifdef GGML_PERF
 void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
-    LLAMA_LOG_TSAVORITE("  %-16s: %7s  %14s  %16s\n", "Op", "Runs", "Total us", "Avg us");
+    LLAMA_LOG_TSAVORITE("  %-16s  %7s  %14s  %16s\n", "Op", "Runs", "Total us", "Avg us");
 
     for (int i = 0; i < GGML_OP_COUNT; ++i) {
         if (totals[i].runs > 0) {
-            // Main op row
-            LLAMA_LOG_TSAVORITE("  %-16s: %7ld  %14ld  %16.2f\n",
+            LLAMA_LOG_TSAVORITE("  %-16s  %7ld  %14ld  %16.2f\n",
                 totals[i].op_name ? totals[i].op_name : "UNKNOWN",
                 totals[i].runs,
                 totals[i].total_us,
                 (double)totals[i].total_us / totals[i].runs);
+        }
 
-            // Backend subtotals
+        // Unary sub-op breakdown
+        if (i == GGML_OP_UNARY) {
+            for (int j = 0; j < GGML_UNARY_OP_COUNT; ++j) {
+                if (totals[i].unary_subtotals[j].runs > 0) {
+                    LLAMA_LOG_TSAVORITE("    -> %-11s  %7ld  %14ld  %16.2f\n",
+                        ggml_unary_op_name((enum ggml_unary_op) j),
+                        totals[i].unary_subtotals[j].runs,
+                        totals[i].unary_subtotals[j].total_us,
+                        (double)totals[i].unary_subtotals[j].total_us / totals[i].unary_subtotals[j].runs);
+                }
+            }
+        }
+    }
+}
+#else 
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
+    LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
+    LLAMA_LOG_TSAVORITE("  %-16s %-8s %7s  %14s  %16s\n", "Op", "Target", "Runs", "Total us", "Avg us");
+
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        if (totals[i].runs > 0) {
             for (int b = 0; b < GGML_COMPUTE_BACKEND_COUNT; ++b) {
                 if (totals[i].backend_subtotals[b].runs > 0) {
-                    LLAMA_LOG_TSAVORITE("    [%-10s] : %7ld  %14ld  %16.2f\n",
-                        ggml_backend_type((enum ggml_compute_backend_type) b),
+                    const char *backend_name = ggml_backend_type((enum ggml_compute_backend_type) b);
+                    char padded_backend[7] = {0}; // 6 chars + null terminator
+                    snprintf(padded_backend, sizeof(padded_backend), "%-6s", backend_name);
+
+                    LLAMA_LOG_TSAVORITE("  %-16s %-8s %7ld  %14ld  %16.2f\n",
+                        totals[i].op_name ? totals[i].op_name : "UNKNOWN",
+                        padded_backend,
                         totals[i].backend_subtotals[b].runs,
                         totals[i].backend_subtotals[b].total_us,
                         (double)totals[i].backend_subtotals[b].total_us / totals[i].backend_subtotals[b].runs);
@@ -2649,8 +2675,21 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
             if (i == GGML_OP_UNARY) {
                 for (int j = 0; j < GGML_UNARY_OP_COUNT; ++j) {
                     if (totals[i].unary_subtotals[j].runs > 0) {
-                        LLAMA_LOG_TSAVORITE("    -> %-12s: %7ld  %14ld  %16.2f\n",
+                        // Find backend for unary op (assumes same as parent op)
+                        const char *backend_name = NULL;
+                        for (int b = 0; b < GGML_COMPUTE_BACKEND_COUNT; ++b) {
+                            if (totals[i].backend_subtotals[b].runs > 0) {
+                                backend_name = ggml_backend_type((enum ggml_compute_backend_type) b);
+                                break;
+                            }
+                        }
+
+                        char padded_backend[7] = {0};
+                        snprintf(padded_backend, sizeof(padded_backend), "%-6s", backend_name ? backend_name : "UNK");
+
+                        LLAMA_LOG_TSAVORITE("    -> %-11s %-8s %7ld  %14ld  %16.2f\n",
                             ggml_unary_op_name((enum ggml_unary_op) j),
+                            padded_backend,
                             totals[i].unary_subtotals[j].runs,
                             totals[i].unary_subtotals[j].total_us,
                             (double)totals[i].unary_subtotals[j].total_us / totals[i].unary_subtotals[j].runs);
@@ -2661,6 +2700,7 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     }
 }
 #endif /* GGML_PERF */
+
 
 void llama_perf_context_print(const llama_context * ctx) {
     const auto data = llama_perf_context(ctx);
