@@ -932,9 +932,9 @@ int llama_context::decode(llama_batch & inp_batch) {
     kv_self_update();
 
     int64_t n_outputs_prev = 0;
-#ifdef GGML_PERF
+#ifdef GGML_PERF_DETAIL
     FILE *perf_all_shape_fp = ggml_perf_log_open("ggml_perf-all-shape.log");
-#endif /* GGML_PERF */
+#endif /* GGML_PERF_DETAIL */
 
     while (sbatch.n_tokens > 0) {
         llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
@@ -975,11 +975,13 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
 #ifdef GGML_PERF
+        ggml_perf_accumulate(perf_totals, gf);
+#elif GGML_PERF_DETAIL
         if (perf_all_shape_fp) {
             ggml_perf_write_detailed_csv(gf, perf_all_shape_fp);
         }
         ggml_perf_accumulate(perf_totals, gf);
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAI */
         if (compute_status != GGML_STATUS_SUCCESS) {
             switch (compute_status) {
                 case GGML_STATUS_ABORTED:
@@ -2649,7 +2651,7 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
         }
     }
 }
-#else 
+#elif GGML_PERF_DETAIL
 void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
     LLAMA_LOG_TSAVORITE("  %-16s %-8s %7s  %14s  %16s\n", "Op", "Target", "Runs", "Total us", "Avg us");
@@ -2699,7 +2701,7 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
         }
     }
 }
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAI */
 
 
 void llama_perf_context_print(const llama_context * ctx) {
