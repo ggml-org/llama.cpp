@@ -21,16 +21,16 @@
 	});
 </script>
 
-<div class="slots-info-container" class:visible={showSlotsInfo}>
-	<div class="slots-info-content">
+<div class="chat-processing-info-container" class:visible={showSlotsInfo}>
+	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
-			<span class="slots-info-detail">{detail}</span>
+			<span class="chat-processing-info-detail">{detail}</span>
 		{/each}
 	</div>
 </div>
 
 <style>
-	.slots-info-container {
+	.chat-processing-info-container {
 		position: sticky;
 		top: 0;
 		z-index: 10;
@@ -42,12 +42,12 @@
 			transform 300ms ease-out;
 	}
 
-	.slots-info-container.visible {
+	.chat-processing-info-container.visible {
 		opacity: 1;
 		transform: translateY(0);
 	}
 
-	.slots-info-content {
+	.chat-processing-info-content {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -57,7 +57,7 @@
 		margin: 0 auto;
 	}
 
-	.slots-info-detail {
+	.chat-processing-info-detail {
 		color: var(--muted-foreground);
 		font-size: 0.75rem;
 		padding: 0.25rem 0.75rem;
@@ -69,11 +69,11 @@
 	}
 
 	@media (max-width: 768px) {
-		.slots-info-content {
+		.chat-processing-info-content {
 			gap: 0.5rem;
 		}
 
-		.slots-info-detail {
+		.chat-processing-info-detail {
 			font-size: 0.7rem;
 			padding: 0.2rem 0.5rem;
 		}

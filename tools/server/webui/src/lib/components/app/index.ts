@@ -14,7 +14,9 @@ export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormF
 export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
-export { default as MessageBranchingControls } from './chat/ChatMessages/MessageBranchingControls.svelte';
+export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
+
+export { default as ChatProcessingInfo } from './chat/ChatProcessingInfo.svelte';
 
 export { default as ChatScreenHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
@@ -27,16 +29,17 @@ export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
 
-export { default as ConversationTitleUpdateDialog } from './ConversationTitleUpdateDialog.svelte';
+export { default as EmptyFileAlertDialog } from './dialogs/EmptyFileAlertDialog.svelte';
 
-export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
+export { default as ConversationTitleUpdateDialog } from './dialogs/ConversationTitleUpdateDialog.svelte';
 
-export { default as MarkdownContent } from './MarkdownContent.svelte';
+export { default as MaximumContextAlertDialog } from './dialogs/MaximumContextAlertDialog.svelte';
 
-export { default as MaximumContextAlertDialog } from './MaximumContextAlertDialog.svelte';
+export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
 
-export { default as ServerStatus } from './ServerStatus.svelte';
-export { default as ServerErrorSplash } from './ServerErrorSplash.svelte';
-export { default as ServerLoadingSplash } from './ServerLoadingSplash.svelte';
-export { default as ServerInfo } from './ServerInfo.svelte';
-export { default as SlotsInfo } from './SlotsInfo.svelte';
+export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
+
+export { default as ServerStatus } from './server/ServerStatus.svelte';
+export { default as ServerErrorSplash } from './server/ServerErrorSplash.svelte';
+export { default as ServerLoadingSplash } from './server/ServerLoadingSplash.svelte';
+export { default as ServerInfo } from './server/ServerInfo.svelte';

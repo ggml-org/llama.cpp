@@ -3,8 +3,8 @@
 	import { page } from '$app/state';
 	import {
 		ChatSidebar,
-		MaximumContextAlertDialog,
-		ConversationTitleUpdateDialog
+		ConversationTitleUpdateDialog,
+		MaximumContextAlertDialog
 	} from '$lib/components/app';
 	import {
 		activeMessages,

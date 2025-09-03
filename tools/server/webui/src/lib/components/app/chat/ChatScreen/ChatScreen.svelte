@@ -3,7 +3,6 @@
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
-	import EmptyFileAlertDialog from '$lib/components/app/EmptyFileAlertDialog.svelte';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
 	import {
 		supportsVision,
@@ -15,10 +14,11 @@
 		ChatForm,
 		ChatScreenHeader,
 		ChatMessages,
+		ChatProcessingInfo,
+		EmptyFileAlertDialog,
 		ServerInfo,
 		ServerErrorSplash,
-		ServerLoadingSplash,
-		SlotsInfo
+		ServerLoadingSplash
 	} from '$lib/components/app';
 	import {
 		activeMessages,
@@ -282,7 +282,7 @@
 		/>
 
 		<div class="sticky right-0 bottom-0 left-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
-			<SlotsInfo />
+			<ChatProcessingInfo />
 
 			<div class="conversation-chat-form rounded-t-3xl pb-4">
 				<ChatForm

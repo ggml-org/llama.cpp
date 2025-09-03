@@ -5,7 +5,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { DatabaseMessage } from '$lib/types/database';
 	import type { Component } from 'svelte';
-	import MessageBranchingControls from './MessageBranchingControls.svelte';
+	import ChatMessageBranchingControls from './ChatMessageBranchingControls.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -68,7 +68,7 @@
 			: 'right-0'} flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
 	>
 		{#if siblingInfo && siblingInfo.totalSiblings > 1}
-			<MessageBranchingControls {siblingInfo} {onNavigateToSibling} />
+			<ChatMessageBranchingControls {siblingInfo} {onNavigateToSibling} />
 		{/if}
 
 		<div
