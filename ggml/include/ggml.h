@@ -1439,21 +1439,33 @@ extern "C" {
             float                 limit);
 
     // normalize along rows
+    // layer normalization: output = (input - mean) / sqrt(variance + eps)
+    // input: tensor a[seq_len,hidden_size], eps=1e-5
+    // output: tensor result[seq_len,hidden_size] with normalized values
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
+    // layer normalization performed in-place on tensor a
+    // input: tensor a[seq_len,hidden_size], eps=1e-5
+    // output: tensor a[seq_len,hidden_size] with normalized values in-place
     GGML_API struct ggml_tensor * ggml_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
+    // root mean square normalization: output = input / sqrt(mean(input²) + eps)
+    // input: tensor a[batch_size,embed_dim], eps=1e-6
+    // output: tensor result[batch_size,embed_dim] with RMS normalized values
     GGML_API struct ggml_tensor * ggml_rms_norm(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
+    // root mean square normalization performed in-place on tensor a
+    // input: tensor a[batch_size,embed_dim], eps=1e-6  
+    // output: tensor a[batch_size,embed_dim] with RMS normalized values in-place
     GGML_API struct ggml_tensor * ggml_rms_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1467,6 +1479,9 @@ extern "C" {
             int                   n_groups,
             float                 eps);
 
+    // group normalization performed in-place on tensor a
+    // input: tensor a[height,width,channels], n_groups=8, eps=1e-5
+    // output: tensor a[height,width,channels] normalized in groups in-place
     GGML_API struct ggml_tensor * ggml_group_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1496,6 +1511,9 @@ extern "C" {
     // A: k columns, n rows => [ne03, ne02, n, k]
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
     // result is n columns, m rows => [ne03 * x, ne02 * y, m, n]
+    // matrix multiplication: C = A * B^T
+    // input: tensor a[batch,seq_len,hidden], tensor b[vocab_size,hidden] 
+    // output: tensor result[batch,seq_len,vocab_size] = a * b^T
     GGML_API struct ggml_tensor * ggml_mul_mat(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1508,6 +1526,9 @@ extern "C" {
             enum ggml_prec       prec);
 
     // indirect matrix multiplication
+    // selects matrices from 'as' using indices in 'ids' for multiplication with 'b'
+    // input: tensor as[num_experts,hidden,hidden], tensor b[batch,seq_len,hidden], tensor ids[batch,seq_len]
+    // output: tensor result[batch,seq_len,hidden] using selected expert matrices
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -1517,6 +1538,9 @@ extern "C" {
     // A: m columns, n rows,
     // B: p columns, n rows,
     // result is m columns, p rows
+    // outer product: C[i,j] = A[i,:] * B[j,:]
+    // input: tensor a[hidden_size,seq_len_a], tensor b[hidden_size,seq_len_b]
+    // output: tensor result[seq_len_a,seq_len_b] outer product
     GGML_API struct ggml_tensor * ggml_out_prod(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1526,12 +1550,18 @@ extern "C" {
     // operations on tensors without backpropagation
     //
 
+    // element-wise scaling: result[i] = a[i] * s
+    // input: tensor a[128,256], scalar s=0.5
+    // output: tensor result[128,256] where result[i,j] = a[i,j] * 0.5
     GGML_API struct ggml_tensor * ggml_scale(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 s);
 
     // in-place, returns view(a)
+    // element-wise scaling performed in-place on tensor a
+    // input: tensor a[128,256], scalar s=2.0
+    // output: tensor a[128,256] modified where a[i,j] *= 2.0
     GGML_API struct ggml_tensor * ggml_scale_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1551,6 +1581,9 @@ extern "C" {
         float                 b);
 
     // b -> view(a,offset,nb1,nb2,3), return modified a
+    // sets portion of tensor a with data from tensor b at specified offset and strides
+    // input: tensor a[1024,768], tensor b[128,64], offset, strides
+    // output: tensor a modified with b's data at specified location
     GGML_API struct ggml_tensor * ggml_set(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1561,6 +1594,9 @@ extern "C" {
             size_t                offset); // in bytes
 
     // b -> view(a,offset,nb1,nb2,3), return view(a)
+    // sets portion of tensor a with data from tensor b in-place
+    // input: tensor a[512,768], tensor b[64,128], offset, strides
+    // output: view of tensor a with b's data set at specified location
     GGML_API struct ggml_tensor * ggml_set_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1570,12 +1606,18 @@ extern "C" {
             size_t                nb3,
             size_t                offset); // in bytes
 
+    // sets portion of 1D tensor a with data from tensor b
+    // input: tensor a[1024], tensor b[64], offset=256 (bytes)
+    // output: tensor a modified with b's data starting at byte offset
     GGML_API struct ggml_tensor * ggml_set_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             size_t                offset); // in bytes
 
+    // sets portion of 1D tensor a with data from tensor b in-place
+    // input: tensor a[1024], tensor b[64], offset=256 (bytes)  
+    // output: view of tensor a with b's data set starting at byte offset
     GGML_API struct ggml_tensor * ggml_set_1d_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1583,6 +1625,9 @@ extern "C" {
             size_t                offset); // in bytes
 
     // b -> view(a,offset,nb1,nb2,3), return modified a
+    // sets portion of 2D tensor a with data from tensor b
+    // input: tensor a[256,512], tensor b[64,128], nb1, offset
+    // output: tensor a modified with b's data at specified 2D location
     GGML_API struct ggml_tensor * ggml_set_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1599,33 +1644,51 @@ extern "C" {
             size_t                offset); // in bytes
 
     // a -> b, return view(b)
+    // copies tensor a's data into tensor b's memory layout
+    // input: tensor a[128,64], tensor b[128,64] with different stride
+    // output: view of tensor b with a's data copied respecting b's layout
     GGML_API struct ggml_tensor * ggml_cpy(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // type conversion: converts tensor data type
+    // input: tensor a[256,512] with type GGML_TYPE_F16, type GGML_TYPE_F32
+    // output: tensor result[256,512] with same data converted to F32
     GGML_API struct ggml_tensor * ggml_cast(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             enum   ggml_type      type);
 
     // make contiguous
+    // ensures tensor data is stored contiguously in memory  
+    // input: tensor a[64,128] with non-contiguous strides
+    // output: tensor result[64,128] with contiguous memory layout
     GGML_API struct ggml_tensor * ggml_cont(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
     // make contiguous, with new shape
+    // makes tensor contiguous and reshapes to 1D
+    // input: tensor a[8,16,4] non-contiguous, ne0=512
+    // output: tensor result[512] contiguous with a's data
     GGML_API struct ggml_tensor * ggml_cont_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int64_t               ne0);
 
+    // makes tensor contiguous and reshapes to 2D
+    // input: tensor a[8,8,8] non-contiguous, ne0=32, ne1=16
+    // output: tensor result[32,16] contiguous with a's data reshaped
     GGML_API struct ggml_tensor * ggml_cont_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int64_t               ne0,
             int64_t               ne1);
 
+    // makes tensor contiguous and reshapes to 3D
+    // input: tensor a[512] non-contiguous, ne0=8, ne1=8, ne2=8
+    // output: tensor result[8,8,8] contiguous with a's data reshaped
     GGML_API struct ggml_tensor * ggml_cont_3d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
