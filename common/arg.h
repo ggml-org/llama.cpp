@@ -87,3 +87,6 @@ struct common_remote_params {
 };
 // get remote file content, returns <http_code, raw_response_body>
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);
+
+// Docker registry functions
+std::string common_docker_resolve_model(const std::string & docker_url);
