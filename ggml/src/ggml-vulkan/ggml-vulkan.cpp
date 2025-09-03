@@ -4271,7 +4271,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 }
 
-static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
+static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
@@ -4292,7 +4292,7 @@ static void ggml_vk_instance_init() {
     vk::ApplicationInfo app_info{ "ggml-vulkan", 1, nullptr, 0, api_version };
 
     const std::vector<vk::ExtensionProperties> instance_extensions = vk::enumerateInstanceExtensionProperties();
-    const bool validation_ext = ggml_vk_instance_validation_ext_available(instance_extensions);
+    const bool validation_ext = ggml_vk_instance_validation_ext_available();
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
@@ -12212,22 +12212,23 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 }
 
 // Extension availability
-static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions) {
+static bool ggml_vk_instance_validation_ext_available() {
 #ifdef GGML_VULKAN_VALIDATE
-    bool portability_enumeration_ext = false;
-    // Check for portability enumeration extension for MoltenVK support
-    for (const auto& properties : instance_extensions) {
-        if (strcmp("VK_KHR_portability_enumeration", properties.extensionName) == 0) {
-            return true;
+    // Check if validation layer provides the extension
+    const std::string layer_name = "VK_LAYER_KHRONOS_validation";
+    for (const auto& layer : vk::enumerateInstanceLayerProperties()) {
+        if (layer_name == layer.layerName.data()) {
+            for (const auto& ext : vk::enumerateInstanceExtensionProperties(layer_name)) {
+                if (strcmp("VK_EXT_validation_features", ext.extensionName.data()) == 0) {
+                    return true;
+                }
+            }
         }
     }
-    if (!portability_enumeration_ext) {
-        std::cerr << "ggml_vulkan: WARNING: Instance extension VK_KHR_portability_enumeration not found." << std::endl;
-    }
+
+    std::cerr << "ggml_vulkan: WARNING: Validation layer or layer extension VK_EXT_validation_features not found." << std::endl;
 #endif
     return false;
-
-    UNUSED(instance_extensions);
 }
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions) {
 #ifdef __APPLE__
