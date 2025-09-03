@@ -84,7 +84,7 @@ object ArmFeaturesMapper {
             LLamaTier.T0 -> listOf(true, false, false, false, false)  // ASIMD only
             LLamaTier.T1 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
             LLamaTier.T2 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
-            LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE
-            // TODO-han.yin: implement T4 once obtaining an Android device with SME!
+            LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE/2
+            LLamaTier.T4 -> listOf(true, true, true, true, true)     // ASIMD + DOTPROD + I8MM + SVE/2 + SME/2
         }
 }

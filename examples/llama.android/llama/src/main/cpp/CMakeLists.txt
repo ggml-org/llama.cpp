@@ -17,8 +17,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
 add_subdirectory(
         ${CMAKE_CURRENT_LIST_DIR}/../../../../../../include/cpu_features
         ${CMAKE_BINARY_DIR}/cpu_features_build)
-add_library(llama_cpu_detector SHARED cpu_detector.cpp)
-target_link_libraries(llama_cpu_detector
+add_library(kleidi-llama-cpu-detector SHARED cpu_detector.cpp)
+target_link_libraries(kleidi-llama-cpu-detector
         PRIVATE CpuFeatures::cpu_features
         android
         log)

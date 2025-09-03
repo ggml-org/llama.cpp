@@ -10,8 +10,7 @@ import android.util.Log
 object StubTierDetection : TierDetection {
     private val tag = StubTierDetection::class.java.simpleName
 
-    override val detectedTier: LLamaTier?
-        get() = LLamaTier.T2
+    override fun getDetectedTier(): LLamaTier? = LLamaTier.T2
 
     override fun clearCache() {
         Log.d(tag, "Cache cleared")

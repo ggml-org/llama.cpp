@@ -67,7 +67,7 @@ class SettingsViewModel @Inject constructor(
     val darkThemeMode: StateFlow<DarkThemeMode> = _darkThemeMode.asStateFlow()
 
     val detectedTier: LLamaTier?
-        get() = tierDetection.detectedTier
+        get() = tierDetection.getDetectedTier()
 
     init {
         viewModelScope.launch {
