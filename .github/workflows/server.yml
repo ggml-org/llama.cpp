@@ -262,6 +262,21 @@ jobs:
         run: |
           pip install -r tools/server/tests/requirements.txt
 
+      - name: Setup Node.js for WebUI
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install WebUI dependencies
+        run: npm ci
+        working-directory: tools/server/webui
+
+      - name: Build WebUI
+        run: npm run build
+        working-directory: tools/server/webui
+
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp
         if: ${{ matrix.sanitizer == 'THREAD' }}
