@@ -223,30 +223,73 @@ class ChatStore {
 	 */
 	private getApiOptions() {
 		const currentConfig = config();
-		return {
+		const apiOptions: Record<string, unknown> = {
 			stream: true,
-			temperature: Number(currentConfig.temperature) || 0.8,
-			max_tokens: Number(currentConfig.max_tokens) || 2048,
-			timings_per_token: currentConfig.showTokensPerSecond || false,
-			dynatemp_range: Number(currentConfig.dynatemp_range) || 0.0,
-			dynatemp_exponent: Number(currentConfig.dynatemp_exponent) || 1.0,
-			top_k: Number(currentConfig.top_k) || 40,
-			top_p: Number(currentConfig.top_p) || 0.95,
-			min_p: Number(currentConfig.min_p) || 0.05,
-			xtc_probability: Number(currentConfig.xtc_probability) || 0.0,
-			xtc_threshold: Number(currentConfig.xtc_threshold) || 0.1,
-			typical_p: Number(currentConfig.typical_p) || 1.0,
-			repeat_last_n: Number(currentConfig.repeat_last_n) || 64,
-			repeat_penalty: Number(currentConfig.repeat_penalty) || 1.0,
-			presence_penalty: Number(currentConfig.presence_penalty) || 0.0,
-			frequency_penalty: Number(currentConfig.frequency_penalty) || 0.0,
-			dry_multiplier: Number(currentConfig.dry_multiplier) || 0.0,
-			dry_base: Number(currentConfig.dry_base) || 1.75,
-			dry_allowed_length: Number(currentConfig.dry_allowed_length) || 2,
-			dry_penalty_last_n: Number(currentConfig.dry_penalty_last_n) || -1,
-			samplers: currentConfig.samplers || 'top_k;tfs_z;typical_p;top_p;min_p;temperature',
-			custom: currentConfig.custom || ''
+			timings_per_token: true
 		};
+
+		if (currentConfig.temperature !== undefined && currentConfig.temperature !== null) {
+			apiOptions.temperature = Number(currentConfig.temperature);
+		}
+		if (currentConfig.max_tokens !== undefined && currentConfig.max_tokens !== null) {
+			apiOptions.max_tokens = Number(currentConfig.max_tokens);
+		}
+		if (currentConfig.dynatemp_range !== undefined && currentConfig.dynatemp_range !== null) {
+			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
+		}
+		if (currentConfig.dynatemp_exponent !== undefined && currentConfig.dynatemp_exponent !== null) {
+			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
+		}
+		if (currentConfig.top_k !== undefined && currentConfig.top_k !== null) {
+			apiOptions.top_k = Number(currentConfig.top_k);
+		}
+		if (currentConfig.top_p !== undefined && currentConfig.top_p !== null) {
+			apiOptions.top_p = Number(currentConfig.top_p);
+		}
+		if (currentConfig.min_p !== undefined && currentConfig.min_p !== null) {
+			apiOptions.min_p = Number(currentConfig.min_p);
+		}
+		if (currentConfig.xtc_probability !== undefined && currentConfig.xtc_probability !== null) {
+			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
+		}
+		if (currentConfig.xtc_threshold !== undefined && currentConfig.xtc_threshold !== null) {
+			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
+		}
+		if (currentConfig.typical_p !== undefined && currentConfig.typical_p !== null) {
+			apiOptions.typical_p = Number(currentConfig.typical_p);
+		}
+		if (currentConfig.repeat_last_n !== undefined && currentConfig.repeat_last_n !== null) {
+			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
+		}
+		if (currentConfig.repeat_penalty !== undefined && currentConfig.repeat_penalty !== null) {
+			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
+		}
+		if (currentConfig.presence_penalty !== undefined && currentConfig.presence_penalty !== null) {
+			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
+		}
+		if (currentConfig.frequency_penalty !== undefined && currentConfig.frequency_penalty !== null) {
+			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
+		}
+		if (currentConfig.dry_multiplier !== undefined && currentConfig.dry_multiplier !== null) {
+			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
+		}
+		if (currentConfig.dry_base !== undefined && currentConfig.dry_base !== null) {
+			apiOptions.dry_base = Number(currentConfig.dry_base);
+		}
+		if (currentConfig.dry_allowed_length !== undefined && currentConfig.dry_allowed_length !== null) {
+			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
+		}
+		if (currentConfig.dry_penalty_last_n !== undefined && currentConfig.dry_penalty_last_n !== null) {
+			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
+		}
+		if (currentConfig.samplers) {
+			apiOptions.samplers = currentConfig.samplers;
+		}
+		if (currentConfig.custom) {
+			apiOptions.custom = currentConfig.custom;
+		}
+
+		return apiOptions;
 	}
 
 	/**
@@ -266,8 +309,7 @@ class ChatStore {
 
 		let streamedReasoningContent = '';
 
-		// Start slots polling when streaming begins
-		slotsService.startStreamingPolling();
+		slotsService.startStreaming();
 
 		await chatService.sendMessage(allMessages, {
 			...this.getApiOptions(),
@@ -281,8 +323,6 @@ class ChatStore {
 				this.updateMessageAtIndex(messageIndex, {
 					content: partialThinking.remainingContent || streamedContent
 				});
-
-				slotsService.updateSlotsState();
 			},
 
 			onReasoningChunk: (reasoningChunk: string) => {
@@ -290,27 +330,21 @@ class ChatStore {
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 
-				slotsService.updateSlotsState();
 			},
 
 			onComplete: async (finalContent?: string, reasoningContent?: string) => {
-				// Stop slots polling when streaming completes
-				slotsService.stopStreamingPolling();
+				slotsService.stopStreaming();
 
-				// Update assistant message in database
 				await DatabaseStore.updateMessage(assistantMessage.id, {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent
 				});
 
-				// Update currNode to assistant message after streaming completes
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
 				this.activeConversation!.currNode = assistantMessage.id;
 
-				// Refresh active messages to ensure UI state matches database state
 				await this.refreshActiveMessages();
 
-				// Call custom completion handler if provided
 				if (onComplete) {
 					await onComplete(streamedContent);
 				}
@@ -320,38 +354,32 @@ class ChatStore {
 			},
 
 			onError: (error: Error) => {
-				// Stop slots polling on any error
-				slotsService.stopStreamingPolling();
+				slotsService.stopStreaming();
 
-				// Don't log or show error if it's an AbortError (user stopped generation)
 				if (error.name === 'AbortError' || error instanceof DOMException) {
 					this.isLoading = false;
 					this.currentResponse = '';
 					return;
 				}
 
-				// Handle context errors specially
 				if (error.name === 'ContextError') {
 					console.warn('Context error detected:', error.message);
 					this.isLoading = false;
 					this.currentResponse = '';
 
-					// Remove the assistant message that was created but failed
 					const messageIndex = this.activeMessages.findIndex(
 						(m: DatabaseMessage) => m.id === assistantMessage.id
 					);
 
 					if (messageIndex !== -1) {
-						// Remove from UI
 						this.activeMessages.splice(messageIndex, 1);
-						// Remove from database
 						DatabaseStore.deleteMessage(assistantMessage.id).catch(console.error);
 					}
 
 					this.maxContextError = {
 						message: error.message,
 						estimatedTokens: 0, // Server-side error, we don't have client estimates
-						maxContext: serverStore.serverProps?.default_generation_settings.n_ctx ?? 4096 // Use server's actual n_ctx, fallback to 4096
+						maxContext: serverStore.serverProps?.default_generation_settings.n_ctx || null
 					};
 
 					if (onError) {
@@ -525,7 +553,7 @@ class ChatStore {
 	 * Stops the current message generation
 	 */
 	stopGeneration() {
-		slotsService.stopStreamingPolling();
+		slotsService.stopStreaming();
 		chatService.abort();
 		this.savePartialResponseIfNeeded();
 		this.isLoading = false;
@@ -538,7 +566,7 @@ class ChatStore {
 	async gracefulStop(): Promise<void> {
 		if (!this.isLoading) return;
 
-		slotsService.stopStreamingPolling();
+		slotsService.stopStreaming();
 		chatService.abort();
 		await this.savePartialResponseIfNeeded();
 		this.isLoading = false;

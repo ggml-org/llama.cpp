@@ -1,4 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
+import { slotsService } from './slots';
 
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
@@ -284,8 +285,14 @@ export class ChatService {
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+							
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
+							const timings = parsed.timings;
+
+							if (timings) {
+								this.updateProcessingState(timings);
+							}
 
 							if (content) {
 								hasReceivedData = true;
@@ -617,6 +624,31 @@ export class ChatService {
 		};
 
 		return [systemMsg, ...messages];
+	}
+
+	/**
+	 * Updates the processing state with timing data from streaming response
+	 */
+	private updateProcessingState(timings: {
+		prompt_n?: number;
+		prompt_ms?: number;
+		predicted_n?: number;
+		predicted_ms?: number;
+	}): void {
+		// Calculate tokens per second from timing data
+		const tokensPerSecond =
+			timings.predicted_ms && timings.predicted_n
+				? (timings.predicted_n / timings.predicted_ms) * 1000
+				: 0;
+
+		// Update slots service with timing data (async but don't wait)
+		slotsService.updateFromTimingData({
+			prompt_n: timings.prompt_n || 0,
+			predicted_n: timings.predicted_n || 0,
+			predicted_per_second: tokensPerSecond
+		}).catch(error => {
+			console.warn('Failed to update processing state:', error);
+		});
 	}
 }
 

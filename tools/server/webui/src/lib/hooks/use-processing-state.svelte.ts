@@ -35,7 +35,7 @@ export function useProcessingState() {
 			}
 
 			if (slotsService.isStreaming()) {
-				slotsService.startStreamingPolling();
+				slotsService.startStreaming();
 			}
 		} catch (error) {
 			console.warn('Failed to start slots monitoring:', error);
@@ -83,10 +83,12 @@ export function useProcessingState() {
 		const details: string[] = [];
 		const currentConfig = config(); // Get fresh config each time
 
-		if (processingState.contextUsed > 0) {
+		// Always show context info when we have valid data
+		if (processingState.contextUsed >= 0 && processingState.contextTotal > 0) {
 			const contextPercent = Math.round(
 				(processingState.contextUsed / processingState.contextTotal) * 100
 			);
+
 			details.push(
 				`Context: ${processingState.contextUsed}/${processingState.contextTotal} (${contextPercent}%)`
 			);
@@ -96,6 +98,7 @@ export function useProcessingState() {
 			const outputPercent = Math.round(
 				(processingState.outputTokensUsed / processingState.outputTokensMax) * 100
 			);
+
 			details.push(
 				`Output: ${processingState.outputTokensUsed}/${processingState.outputTokensMax} (${outputPercent}%)`
 			);

@@ -168,26 +168,18 @@
 			contextTotal: 4096,
 			outputTokensUsed: 1250,
 			outputTokensMax: 2048,
+			tokensPerSecond: 25.5,
 			temperature: 0.8,
 			topP: 0.95,
 			speculative: false,
 			hasNextToken: true
 		};
 		
-		// Override the parseProcessingState method to return our mock data
-		const originalParseProcessingState = slotsService['parseProcessingState'];
-		slotsService['parseProcessingState'] = () => mockProcessingState;
-		
-		// Trigger the processing state callbacks manually
-		for (const callback of slotsService['callbacks']) {
-			try {
-				callback(mockProcessingState);
-			} catch (error) {
-				console.error('Error in slots callback:', error);
-			}
-		}
-		
-		// Restore original method
-		slotsService['parseProcessingState'] = originalParseProcessingState;
+		// Update slots service with mock timing data
+		slotsService.updateFromTimingData({
+			prompt_n: mockProcessingState.contextUsed - mockProcessingState.outputTokensUsed,
+			predicted_n: mockProcessingState.outputTokensUsed,
+			predicted_per_second: mockProcessingState.tokensPerSecond
+		});
 	}}
 />
