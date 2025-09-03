@@ -6,22 +6,21 @@ import type { ApiProcessingState } from '$lib/types/api';
  * useProcessingState - Reactive processing state hook
  *
  * This hook provides reactive access to the processing state of the server.
- * It monitors the slots endpoint for changes and updates the processing state
- * accordingly. The hook also provides functions to start and stop monitoring,
- * as well as a function to get the current processing message and details.
+ * It subscribes to timing data updates from the slots service and provides
+ * formatted processing details for UI display.
  *
- * @returns {Object} An object containing the processing state, isPolling, getProcessingMessage,
+ * @returns {Object} An object containing the processing state, getProcessingMessage,
  * getProcessingDetails, shouldShowDetails, startMonitoring, and stopMonitoring.
  */
 export function useProcessingState() {
-	let isPolling = $state(false);
+	let isMonitoring = $state(false);
 	let processingState = $state<ApiProcessingState | null>(null);
 	let unsubscribe: (() => void) | null = null;
 
 	async function startMonitoring(): Promise<void> {
-		if (isPolling) return;
+		if (isMonitoring) return;
 
-		isPolling = true;
+		isMonitoring = true;
 
 		unsubscribe = slotsService.subscribe((state) => {
 			processingState = state;
@@ -44,9 +43,9 @@ export function useProcessingState() {
 	}
 
 	function stopMonitoring(): void {
-		if (!isPolling) return;
+		if (!isMonitoring) return;
 
-		isPolling = false;
+		isMonitoring = false;
 		processingState = null;
 
 		if (unsubscribe) {
@@ -126,9 +125,6 @@ export function useProcessingState() {
 	return {
 		get processingState() {
 			return processingState;
-		},
-		get isPolling() {
-			return isPolling;
 		},
 		getProcessingDetails,
 		getProcessingMessage,

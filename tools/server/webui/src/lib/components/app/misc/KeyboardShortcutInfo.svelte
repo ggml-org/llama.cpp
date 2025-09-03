@@ -23,6 +23,7 @@
 		{:else}
 			{key.toUpperCase()}
 		{/if}
+
 		{#if index < keys.length - 1}
 			<span> </span>
 		{/if}
