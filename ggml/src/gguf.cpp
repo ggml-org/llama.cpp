@@ -1167,6 +1167,7 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
 }
 
 struct gguf_writer_base {
+    bool ok {true};
     size_t written_bytes {0u};
 
     ~gguf_writer_base(void) {}
@@ -1266,6 +1267,7 @@ struct gguf_writer_base {
 
     void pad(const size_t alignment) {
         while (written_bytes % alignment != 0) {
+            if (!ok) return;
             const int8_t zero = 0;
             write(zero);
         }
@@ -1313,7 +1315,6 @@ struct gguf_writer_buf final : public gguf_writer_base {
 // file based writer
 struct gguf_writer_file final : public gguf_writer_base {
     FILE * file;
-    bool ok {true};
 
     gguf_writer_file(FILE* file) : file(file) {}
 
@@ -1367,6 +1368,8 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     gw.write(n_tensors);
     gw.write(n_kv);
 
+    if (!gw.ok) return;
+
     // write key-value pairs
     for (int64_t i = 0; i < n_kv; ++i) {
         gw.write(ctx->kv[i]);
@@ -1376,6 +1379,8 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     for (int64_t i = 0; i < n_tensors; ++i) {
         gw.write_tensor_meta(ctx->info[i]);
     }
+
+    if (!gw.ok) return;
 
     // we require the data section to be aligned
     gw.pad(ctx->alignment);
