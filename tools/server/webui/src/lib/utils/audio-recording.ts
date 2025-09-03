@@ -1,5 +1,18 @@
 import { AudioMimeType } from '$lib/constants/supported-file-types';
 
+/**
+ * AudioRecorder - Browser-based audio recording with MediaRecorder API
+ *
+ * This class provides a complete audio recording solution using the browser's MediaRecorder API.
+ * It handles microphone access, recording state management, and audio format optimization.
+ *
+ * **Features:**
+ * - Automatic microphone permission handling
+ * - Audio enhancement (echo cancellation, noise suppression, auto gain)
+ * - Multiple format support with fallback (WAV, WebM, MP4, AAC)
+ * - Real-time recording state tracking
+ * - Proper cleanup and resource management
+ */
 export class AudioRecorder {
 	private mediaRecorder: MediaRecorder | null = null;
 	private audioChunks: Blob[] = [];
@@ -181,6 +194,12 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	return new Blob([arrayBuffer], { type: AudioMimeType.WAV });
 }
 
+/**
+ * Create a File object from audio blob with timestamp-based naming
+ * @param audioBlob - The audio blob to wrap
+ * @param filename - Optional custom filename
+ * @returns File object with appropriate name and metadata
+ */
 export function createAudioFile(audioBlob: Blob, filename?: string): File {
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const extension = audioBlob.type.includes('wav') ? 'wav' : 'mp3';
@@ -192,6 +211,10 @@ export function createAudioFile(audioBlob: Blob, filename?: string): File {
 	});
 }
 
+/**
+ * Check if audio recording is supported in the current browser
+ * @returns True if MediaRecorder and getUserMedia are available
+ */
 export function isAudioRecordingSupported(): boolean {
 	return !!(
 		typeof navigator !== 'undefined' &&

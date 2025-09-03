@@ -2,6 +2,15 @@ import { slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import type { ApiProcessingState } from '$lib/types/api';
 
+export interface UseProcessingStateReturn {
+	readonly processingState: ApiProcessingState | null;
+	getProcessingDetails(): string[];
+	getProcessingMessage(): string;
+	shouldShowDetails(): boolean;
+	startMonitoring(): Promise<void>;
+	stopMonitoring(): void;
+}
+
 /**
  * useProcessingState - Reactive processing state hook
  *
@@ -9,10 +18,16 @@ import type { ApiProcessingState } from '$lib/types/api';
  * It subscribes to timing data updates from the slots service and provides
  * formatted processing details for UI display.
  *
- * @returns {Object} An object containing the processing state, getProcessingMessage,
- * getProcessingDetails, shouldShowDetails, startMonitoring, and stopMonitoring.
+ * **Features:**
+ * - Real-time processing state monitoring
+ * - Context and output token tracking
+ * - Tokens per second calculation
+ * - Graceful degradation when slots endpoint unavailable
+ * - Automatic cleanup on component unmount
+ *
+ * @returns Hook interface with processing state and control methods
  */
-export function useProcessingState() {
+export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let processingState = $state<ApiProcessingState | null>(null);
 	let unsubscribe: (() => void) | null = null;

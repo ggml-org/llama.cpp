@@ -67,8 +67,9 @@ class ChatStore {
 
 	/**
 	 * Initializes the chat store by loading conversations from the database
+	 * Sets up the initial state and loads existing conversations
 	 */
-	async initialize() {
+	async initialize(): Promise<void> {
 		try {
 			await this.loadConversations();
 
@@ -82,8 +83,9 @@ class ChatStore {
 
 	/**
 	 * Loads all conversations from the database
+	 * Refreshes the conversations list from persistent storage
 	 */
-	async loadConversations() {
+	async loadConversations(): Promise<void> {
 		this.conversations = await DatabaseStore.getAllConversations();
 	}
 
@@ -219,9 +221,10 @@ class ChatStore {
 
 	/**
 	 * Gets API options from current configuration settings
+	 * Converts settings store values to API-compatible format
 	 * @returns API options object for chat completion requests
 	 */
-	private getApiOptions() {
+	private getApiOptions(): Record<string, unknown> {
 		const currentConfig = config();
 		const apiOptions: Record<string, unknown> = {
 			stream: true,
@@ -465,6 +468,7 @@ class ChatStore {
 
 	/**
 	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Ensures recently active conversations appear first in the sidebar
 	 */
 	private updateConversationTimestamp(): void {
 		if (!this.activeConversation) return;
@@ -556,8 +560,9 @@ class ChatStore {
 
 	/**
 	 * Stops the current message generation
+	 * Aborts ongoing requests and saves partial response if available
 	 */
-	stopGeneration() {
+	stopGeneration(): void {
 		slotsService.stopStreaming();
 		chatService.abort();
 		this.savePartialResponseIfNeeded();
@@ -580,6 +585,7 @@ class ChatStore {
 
 	/**
 	 * Clears the max context error state
+	 * Removes any displayed context limit warnings
 	 */
 	clearMaxContextError(): void {
 		this.maxContextError = null;
@@ -597,8 +603,9 @@ class ChatStore {
 
 	/**
 	 * Saves partial response if generation was interrupted
+	 * Preserves user's partial content when generation is stopped early
 	 */
-	private async savePartialResponseIfNeeded() {
+	private async savePartialResponseIfNeeded(): Promise<void> {
 		if (!this.currentResponse.trim() || !this.activeMessages.length) {
 			return;
 		}
@@ -967,8 +974,9 @@ class ChatStore {
 
 	/**
 	 * Clears the active conversation and resets state
+	 * Used when navigating away from chat or starting fresh
 	 */
-	clearActiveConversation() {
+	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
 		this.currentResponse = '';
@@ -995,6 +1003,7 @@ class ChatStore {
 		this.activeMessages.length = 0;
 		this.activeMessages.push(...currentPath);
 	}
+
 	/**
 	 * Navigates to a specific sibling branch by updating currNode and refreshing messages
 	 * @param siblingId - The sibling message ID to navigate to
@@ -1039,6 +1048,7 @@ class ChatStore {
 			}
 		}
 	}
+
 	/**
 	 * Edits a message by creating a new branch with the edited content
 	 * @param messageId - The ID of the message to edit

@@ -3,6 +3,11 @@ import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { FileTypeCategory, getFileTypeCategory } from '$lib/constants/supported-file-types';
 
+/**
+ * Read a file as a data URL (base64 encoded)
+ * @param file - The file to read
+ * @returns Promise resolving to the data URL string
+ */
 function readFileAsDataURL(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -12,6 +17,11 @@ function readFileAsDataURL(file: File): Promise<string> {
 	});
 }
 
+/**
+ * Read a file as UTF-8 text
+ * @param file - The file to read
+ * @returns Promise resolving to the text content
+ */
 function readFileAsUTF8(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -21,6 +31,18 @@ function readFileAsUTF8(file: File): Promise<string> {
 	});
 }
 
+/**
+ * Process uploaded files into ChatUploadedFile format with previews and content
+ *
+ * This function processes various file types and generates appropriate previews:
+ * - Images: Base64 data URLs with format normalization (SVG/WebP → PNG)
+ * - Text files: UTF-8 content extraction
+ * - PDFs: Metadata only (processed later in conversion pipeline)
+ * - Audio: Base64 data URLs for preview
+ *
+ * @param files - Array of File objects to process
+ * @returns Promise resolving to array of ChatUploadedFile objects
+ */
 export async function processFilesToChatUploaded(files: File[]): Promise<ChatUploadedFile[]> {
 	const results: ChatUploadedFile[] = [];
 
