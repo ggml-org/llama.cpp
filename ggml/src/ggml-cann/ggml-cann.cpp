@@ -1118,28 +1118,39 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
 
 // ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
 namespace {
-    void* g_nz_workspace = nullptr;
-    size_t g_nz_workspace_allocated = 0;
 
-    void release_nz_workspace() {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
-            g_nz_workspace_allocated = 0;
+    static std::unordered_map<int, void*> g_nz_workspace_map;
+    static std::unordered_map<int, size_t> g_nz_workspace_allocated_map;
+
+    void release_nz_workspace(int device) {
+        auto it = g_nz_workspace_map.find(device);
+        if (it != g_nz_workspace_map.end() && it->second) {
+            aclrtFree(it->second);
+            g_nz_workspace_map.erase(it);
+            g_nz_workspace_allocated_map.erase(device);
         }
     }
 
-    void relloc_nz_workspace(size_t new_size) {
-        if (new_size > g_nz_workspace_allocated) {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
+    void relloc_nz_workspace(int device, size_t new_size) {
+        void* &workspace = g_nz_workspace_map[device];
+        size_t &allocated = g_nz_workspace_allocated_map[device];
+
+        if (new_size > allocated) {
+            if (workspace) {
+                aclrtFree(workspace);
+                workspace = nullptr;
+            }
+            ACL_CHECK(aclrtMalloc(&workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+            allocated = new_size;
         }
-        ACL_CHECK(aclrtMalloc(&g_nz_workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
-        g_nz_workspace_allocated = new_size;
     }
+
+    void* get_nz_workspace(int device) {
+        auto it = g_nz_workspace_map.find(device);
+        return (it != g_nz_workspace_map.end()) ? it->second : nullptr;
     }
-}
+
+} // namespace
 
 /**
  * @brief Convert tensor weights to NZ format using Ascend CANN API.
@@ -1149,13 +1160,13 @@ namespace {
  * improve performance on certain hardware.
  *
  * @param tensor Pointer to the input ggml_tensor containing the weights.
- * @param data Pointer to the raw data buffer for the tensor weights.
  * @param offset Byte offset within the tensor data buffer where weights start.
+ * @param device device id.
  *
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
+static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) {
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1165,7 +1176,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    relloc_nz_workspace(workspaceSize);
+    relloc_nz_workspace(device, workspaceSize);
+    
+    void* g_nz_workspace = get_nz_workspace(device);
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -1203,7 +1216,7 @@ static void ggml_backend_cann_buffer_set_tensor(
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, offset);
+            weight_format_to_nz(tensor, offset, ctx->device);
         }
     } else {
         void *transform_buffer = malloc(size);
@@ -2246,7 +2259,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    release_nz_workspace();
+    release_nz_workspace(cann_ctx->device);
 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
