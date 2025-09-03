@@ -25,9 +25,9 @@ template <typename T>
 static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
                                      const T * __restrict__ kernel,
                                      float * __restrict__ output,
-                                     const param_t &param) {
+                                     const param_t param) {
 
-    extern __shared__ __align__(16 * 1024) char smem[];
+    extern __shared__ __align__(16 * 1024) char smem[];        
     T *smemweight = reinterpret_cast<T *>(smem);
     float *smeminput = reinterpret_cast<float *>(smem + 16 * 1024);
 
@@ -35,6 +35,12 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
     int bx = blockIdx.x;
     int by = blockIdx.y;
 
+    // if(tx == 0 && bx == 0 && by == 0 && blockIdx.z == 0){
+    //     printf("param.n=%d, param.c=%d, param.h=%d, param.w=%d, param.k=%d, param.r=%d, param.s=%d, param.u=%d, param.v=%d, param.p=%d, param.q=%d, param.d_h=%d, param.d_w=%d, param.Oh=%d, param.Ow=%d\n",param.n,param.c,param.h,param.w,param.k,param.r,param.s,param.u,param.v,param.p,param.q,param.d_h,param.d_w,param.Oh,param.Ow);
+    //     // printf("param.n=%d\n",param.n);
+    // }
+    // __syncthreads();
+    
     // Warp tile
     const int lane_id = threadIdx.x % 32;
     const int warp_id = threadIdx.x / 32;
@@ -85,6 +91,10 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
         }
     }
 // ldg
+    // if(tx == 0 && bx == 0 && by == 0 && blockIdx.z == 0){
+    //     printf("param.n=%d, param.c=%d, param.h=%d, param.w=%d, param.k=%d, param.r=%d, param.s=%d, param.u=%d, param.v=%d, param.p=%d, param.q=%d, param.d_h=%d, param.d_w=%d, param.Oh=%d, param.Ow=%d\n",param.n,param.c,param.h,param.w,param.k,param.r,param.s,param.u,param.v,param.p,param.q,param.d_h,param.d_w,param.Oh,param.Ow);
+    // }
+    // __syncthreads();
 #pragma unroll
     for (int i = 0; i < 4; ++i)
     {
@@ -282,11 +292,10 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
             }
         }
     }
-    
 }
 
 template <typename T>
-static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, const param_t &P, cudaStream_t st) {
+static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, const param_t P, cudaStream_t st) {
     // const int blocks = (P.TOTAL + CUDA_CONV2D_BLOCK_SIZE - 1) / CUDA_CONV2D_BLOCK_SIZE;
     int blockx = ((P.Oh * P.Ow + 127) / 128); // blockx  number
     int blocky = (P.k + 127) / 128;             // blocky  number
@@ -300,11 +309,11 @@ static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
     conv2d_implicit_kernel<T><<<grid, thblock, smem_size, st>>>(X_D, K_D, Y_D, P);
 }
 
-static void conv2d_implicit_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const param_t &P, cudaStream_t st) {
+static void conv2d_implicit_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const param_t P, cudaStream_t st) {
     conv2d_implicit_cuda<half>(X_D, K_D, Y_D, P, st);
 }
 
-static void conv2d_implicit_cuda_f32(const float * X_D, const float * K_D, float * Y_D, const param_t &P, cudaStream_t st) {
+static void conv2d_implicit_cuda_f32(const float * X_D, const float * K_D, float * Y_D, const param_t P, cudaStream_t st) {
     conv2d_implicit_cuda<float>(X_D, K_D, Y_D, P, st);
 }
 
@@ -343,9 +352,9 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int IC = input->ne[2];   // input_channels
     const int OC = kernel->ne[3];  // ouptut_chanles
     const int B  = input->ne[3];   // n_batches
-
+    
     const int64_t total  = B * OC * OH * OW;
-    // param_t params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
+    
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, OH, OW };
 
     if (kernel->type == GGML_TYPE_F16) {
