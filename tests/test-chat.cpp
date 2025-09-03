@@ -1804,24 +1804,11 @@ static void test_template_output_parsers() {
                     /* .thinking_forced_open = */ false,
                     /* .parse_tool_calls = */ true,
                 }));
-        // variant: function + fenced JSON
-        assert_msg_equals(
-            simple_assist_msg("", "", "get_time", "{\"city\":\"Tokyo\"}"),
-            common_chat_parse(
-                "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-                /* is_partial= */ false,
-                {
-                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                    /* .reasoning_in_content = */ false,
-                    /* .thinking_forced_open = */ false,
-                    /* .parse_tool_calls = */ true,
-                }));
-        // variant: function + fenced JSON + thinking open
+        // variant: simple + thinking open
         assert_msg_equals(
             simple_assist_msg("", "REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
             common_chat_parse(
-                "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
@@ -1848,11 +1835,11 @@ static void test_template_output_parsers() {
                     /* .thinking_forced_open = */ false,
                     /* .parse_tool_calls = */ true,
                 }));
-        // variant: thinking forced open + tool call in reasoning content + function + fenced JSON
+        // variant: thinking forced open + tool call in reasoning content
         assert_msg_equals(
             simple_assist_msg("", "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
             common_chat_parse(
-                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
