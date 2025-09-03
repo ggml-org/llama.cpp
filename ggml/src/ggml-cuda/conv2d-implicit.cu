@@ -355,7 +355,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     
     const int64_t total  = B * OC * OH * OW;
     
-    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, OH, OW };
+    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW };
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_implicit_cuda_f16(X_D, (half *) K_D, Y_D, params, st);

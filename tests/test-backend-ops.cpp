@@ -5790,6 +5790,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (uint32_t s0 : { 1, 3 }) {
+        for (uint32_t p1 : { 2, 5 }) {
+            for (uint32_t Cin : { 1, 25 }) {
+                for (uint32_t Cout : { 1, 12 }) {
+                    for (uint32_t KH : { 1, 2, 3, 11 }) {
+                        for (uint32_t KW : { 1, 2, 3, 11 }) {
+                            for (uint32_t H : { 1, 133 }) {
+                                for (uint32_t W : { 1, 141 }) {
+                                    if (calc_conv_output_size(W, KW, s0, p0, d0) > 0 &&
+                                        calc_conv_output_size(H, KH, s1, p1, d1) > 0) {
+                                        for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                                            test_cases.emplace_back(new test_conv_2d_implicit(
+                                                { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, kernel_type, s0, s1, p0, p1, d0, d1, false));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)
     // however these cases need to alloc more memory which may fail in some devices (Intel Arc770, etc.)
