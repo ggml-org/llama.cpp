@@ -56,7 +56,7 @@ class CodeEditor(QPlainTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), 
+        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(),
                                                 self.line_number_area_width(), cr.height()))
 
     def line_number_area_paint_event(self, event):
@@ -101,7 +101,7 @@ class CodeEditor(QPlainTextEdit):
             start = block.position() + max(0, col - 1)
             cursor.setPosition(start)
             if col <= len(text):
-                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter, 
+                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter,
                                     QTextCursor.MoveMode.KeepAnchor)
 
             extra = QTextEdit.ExtraSelection()
