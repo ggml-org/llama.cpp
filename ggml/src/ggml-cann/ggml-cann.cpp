@@ -2479,12 +2479,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARGMAX:
         case GGML_OP_COS:
         case GGML_OP_SIN:
-        case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_LOG:
         case GGML_OP_MEAN:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
+            return (op->src[0]->ne[0] - 1) <= 255;
         case GGML_OP_SCALE:
             float bias;
             memcpy(&bias, (const float *)(op->op_params) + 1, sizeof(float));

@@ -2803,8 +2803,6 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
     aclIntArray *padding = aclCreateIntArray(paddingVal, 1);
     int64_t dilationVal[] = {1};
     aclIntArray *dilation = aclCreateIntArray(dilationVal, 1);
-    bool transposed = true;
-    int64_t groups = 1;
     int8_t cubeMathType = 0;
 
 #ifdef ASCEND_310P
@@ -2812,7 +2810,7 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
 #endif
 
     GGML_CANN_CALL_ACLNN_OP(ctx, Convolution, acl_input, acl_weight, nullptr, stride,
-        padding, dilation, transposed, padding, groups, acl_dst, cubeMathType);
+        padding, dilation, true, padding, 1, acl_dst, cubeMathType);
 
     ggml_cann_release_resources(ctx, acl_weight, acl_dst, stride, padding, dilation);
 }
