@@ -581,7 +581,7 @@ static void init_fastdiv_values(uint32_t d, uint32_t & mp, uint32_t & L) {
 
 static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, uint32_t mp, uint32_t L) {
     // Compute high 32 bits of n * mp
-    uint32_t hi = __umulhi(n, mp);
+    const uint32_t hi = __umulhi(n, mp);
     // Apply the formula
     return (hi + n) >> L;
 }
