@@ -1366,9 +1366,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
                 tool_rules.push_back(builder.add_rule(name + "-call",
-                    "( \"<｜tool▁call▁begin｜>\" )? \"function<｜tool▁sep｜>" + name + "\\n"
-                    "```json\\n\" " + builder.add_schema(name + "-args", parameters) + " "
-                    "\"```<｜tool▁call▁end｜>\""));
+                    "( \"<｜tool▁call▁begin｜>\" )? \"" + name + "<｜tool▁sep｜>"
+                    "\" " + builder.add_schema(name + "-args", parameters) + " "
+                    "\"<｜tool▁call▁end｜>\""));
             });
             // Distill Qwen 7B & 32B models seem confused re/ syntax of their tool call opening tag,
             // so we accept common variants (then it's all constrained)
@@ -1421,9 +1421,9 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & builder) {
-    static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?(?:function<｜tool▁sep｜>)?([^\\n<]+)(?:\\n```json\\n|<｜tool▁sep｜>)");
+    static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?([^\\n<]+)(?:<｜tool▁sep｜>)");
 
-    static const common_regex close_regex("(?:[\\n]*```[\\s\\r\\n]*)?<｜tool▁call▁end｜>");
+    static const common_regex close_regex("(?:[\\s]*)?<｜tool▁call▁end｜>");
     static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
     static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
 
