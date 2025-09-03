@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.outlined.ContactSupport
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Attribution
 import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Download
@@ -31,11 +30,11 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +63,7 @@ import androidx.core.net.toUri
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.ui.components.InfoAction
+import com.example.llama.ui.components.InfoAlertDialog
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.components.ModelCardFullExpandable
 import com.example.llama.ui.scaffold.ScaffoldEvent
@@ -626,25 +626,17 @@ private fun DownloadHuggingFaceDispatchedDialog(
     modelId: String,
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = {},
-        properties = DialogProperties(
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false
-        ),
-        title = {},
-        text = {
-            InfoView(
-                title = "Download has started",
-                icon = Icons.Default.Download,
-                message = "Your Android system download manager has started downloading the model: $modelId.\n\n"
-                    + "You can track its progress in your notification drawer.\n"
-                    + "Feel free to stay on this screen, or come back to import it after complete.",
-            )
-        },
-        confirmButton = {
-            Button(onClick = onConfirm) { Text("Okay") }
-        },
+    InfoAlertDialog(
+        title = "Download has started",
+        icon = Icons.Default.Download,
+        message = "Your Android system download manager has started downloading the model: $modelId.\n\n"
+            + "You can track its progress in your notification drawer.\n"
+            + "Feel free to stay on this screen, or come back to import it after complete.",
+        action = InfoAction(
+            icon = Icons.AutoMirrored.Default.ArrowForward,
+            label = "Okay",
+            onAction = onConfirm
+        )
     )
 }
 
@@ -652,26 +644,15 @@ private fun DownloadHuggingFaceDispatchedDialog(
 private fun FirstModelImportSuccessDialog(
     onConfirm: () -> Unit,
 ) {
-    AlertDialog(
-        // Prevent dismissal via back button during deletion
-        properties = DialogProperties(
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false
-        ),
-        onDismissRequest = {},
-        text = {
-            InfoView(
-                title = "Congratulations",
-                icon = Icons.Default.Celebration,
-                message = "You have just installed your first Large Language Model!",
-                action = InfoAction(
-                    label = "Check it out",
-                    icon = Icons.AutoMirrored.Default.ArrowForward,
-                    onAction = onConfirm
-                )
-            )
-        },
-        confirmButton = {}
+    InfoAlertDialog(
+        title = "Congratulations",
+        icon = Icons.Default.Celebration,
+        message = "You have just installed your first Large Language Model!",
+        action = InfoAction(
+            icon = Icons.AutoMirrored.Default.ArrowForward,
+            label = "Check it out",
+            onAction = onConfirm
+        )
     )
 }
 
@@ -765,21 +746,16 @@ private fun ErrorDialog(
         )
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        text = {
-            InfoView(
-                modifier = Modifier.fillMaxWidth(),
-                title = title,
-                icon = Icons.Default.Error,
-                message = message,
-                action = action
-            )
-        },
+    InfoAlertDialog(
+        isCritical = true,
+        title = title,
+        allowDismiss = true,
+        onDismiss = onDismiss,
+        icon = Icons.Default.Error,
+        message = message,
+        action = action,
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("OK")
-            }
+            FilledTonalButton(onClick = onDismiss) { Text("Dismiss") }
         }
     )
 }
