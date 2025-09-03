@@ -3,11 +3,10 @@
 import argparse
 import os
 import importlib
-import sys
 import torch
 import numpy as np
 
-from transformers import AutoTokenizer, AutoConfig, AutoModel, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
 from pathlib import Path
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
@@ -43,6 +42,8 @@ if unreleased_model_name:
         model = model_class.from_pretrained(model_path)
     except (ImportError, AttributeError) as e:
         print(f"Failed to import or load model: {e}")
+        print("Falling back to AutoModelForCausalLM")
+        model = AutoModelForCausalLM.from_pretrained(model_path)
 else:
     model = AutoModelForCausalLM.from_pretrained(model_path)
 print(f"Model class: {type(model)}")
