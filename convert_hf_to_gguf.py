@@ -8308,37 +8308,32 @@ class SmallThinkerModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
             
 
-@ModelBase.register("ModernBertModel")
-class ModernBertModel(TextModel):
+@ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
+class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 
-    def set_gguf_parameters(self) -> None:
-        # Determine block count (number of hidden layers)
-        block_count = self.hparams.get("num_hidden_layers") or self.hparams.get("num_hidden_layers_alt")
-        if block_count is None:
-            raise ValueError("Could not determine number of hidden layers from hparams")
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(True)
 
-        # Attention heads and dimensions
-        n_head = self.hparams.get("num_attention_heads")
-        if n_head is None:
-            raise ValueError("Missing 'num_attention_heads' in hparams")
-
-        hidden_size = self.hparams["hidden_size"]
-        head_dim = hidden_size // n_head
-        ffn_dim = self.hparams.get("intermediate_size", 4 * hidden_size)
-
-        # GGUF parameter assignment
-        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 512))
-        self.gguf_writer.add_embedding_length(hidden_size)
-        self.gguf_writer.add_feed_forward_length(ffn_dim)
-        self.gguf_writer.add_block_count(block_count)
-        self.gguf_writer.add_head_count(n_head)
-        self.gguf_writer.add_layer_norm_eps(self.hparams.get("layer_norm_eps", 1e-12))
-        self.gguf_writer.add_file_type(self.ftype)
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sliding_window(self.hparams["local_attention"])
+        self.gguf_writer.add_rope_freq_base(self.hparams["global_rope_theta"])
+        self.gguf_writer.add_rope_freq_base_swa(self.hparams["local_rope_theta"])
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Directly map tensor names without QKV splitting or reordering
-        return [(self.map_tensor_name(name), data_torch)]
+        # These layers act as MLM head, so we don't need them
+        if name.startswith("decoder."):
+            return []
+
+        if name.startswith("model."):
+            name = name[6:]
+
+        return super().modify_tensors(data_torch, name, bid)
     
 
 ###### CONVERSION LOGIC ######

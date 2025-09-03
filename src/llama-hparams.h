@@ -19,6 +19,7 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_NONE     = 0,
     LLAMA_SWA_TYPE_STANDARD = 1,
     LLAMA_SWA_TYPE_CHUNKED  = 2,
+    LLAMA_SWA_TYPE_LOCAL = 3,
 };
 
 struct llama_hparams_posnet {
