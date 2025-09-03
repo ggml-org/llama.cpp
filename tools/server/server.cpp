@@ -5072,7 +5072,7 @@ int main(int argc, char ** argv) {
 
     // SPA fallback route - serve index.html for any route that doesn't match API endpoints
     // This enables client-side routing for dynamic routes like /chat/[id]
-    if (params.public_path.empty()) {
+    if (params.webui && params.public_path.empty()) {
         // Only add fallback when using embedded static files
         svr->Get(".*", [](const httplib::Request & req, httplib::Response & res) {
             // Skip API routes - they should have been handled above
