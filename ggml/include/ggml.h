@@ -765,23 +765,35 @@ extern "C" {
     GGML_API size_t  ggml_get_mem_size       (const struct ggml_context * ctx);
     GGML_API size_t  ggml_get_max_tensor_size(const struct ggml_context * ctx);
 
+    // creates a new tensor with specified dimensions array
+    // input: type (e.g. GGML_TYPE_F32), n_dims=3, ne=[128,64,32] 
+    // output: new tensor with shape [128,64,32] and uninitialized data
     GGML_API struct ggml_tensor * ggml_new_tensor(
             struct ggml_context * ctx,
             enum   ggml_type type,
             int    n_dims,
             const int64_t *ne);
 
+    // creates a new 1D tensor
+    // input: type GGML_TYPE_F32, ne0=1024
+    // output: new tensor with shape [1024] and uninitialized data
     GGML_API struct ggml_tensor * ggml_new_tensor_1d(
             struct ggml_context * ctx,
             enum   ggml_type type,
             int64_t ne0);
 
+    // creates a new 2D tensor (matrix)  
+    // input: type GGML_TYPE_F32, ne0=512, ne1=768
+    // output: new tensor with shape [512,768] and uninitialized data
     GGML_API struct ggml_tensor * ggml_new_tensor_2d(
             struct ggml_context * ctx,
             enum   ggml_type type,
             int64_t ne0,
             int64_t ne1);
 
+    // creates a new 3D tensor
+    // input: type GGML_TYPE_F32, ne0=64, ne1=64, ne2=12  
+    // output: new tensor with shape [64,64,12] and uninitialized data
     GGML_API struct ggml_tensor * ggml_new_tensor_3d(
             struct ggml_context * ctx,
             enum   ggml_type type,
@@ -789,6 +801,9 @@ extern "C" {
             int64_t ne1,
             int64_t ne2);
 
+    // creates a new 4D tensor
+    // input: type GGML_TYPE_F32, ne0=32, ne1=32, ne2=8, ne3=16
+    // output: new tensor with shape [32,32,8,16] and uninitialized data
     GGML_API struct ggml_tensor * ggml_new_tensor_4d(
             struct ggml_context * ctx,
             enum   ggml_type type,
@@ -800,11 +815,17 @@ extern "C" {
     GGML_API void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes);
 
     GGML_API struct ggml_tensor * ggml_dup_tensor (struct ggml_context * ctx, const struct ggml_tensor * src);
+    // creates a view/reference to existing tensor without copying data
+    // input: src tensor with shape [1024,768]
+    // output: new tensor view with same shape [1024,768] sharing src's data
     GGML_API struct ggml_tensor * ggml_view_tensor(struct ggml_context * ctx, struct ggml_tensor * src);
 
     // Context tensor enumeration and lookup
     GGML_API struct ggml_tensor * ggml_get_first_tensor(const struct ggml_context * ctx);
     GGML_API struct ggml_tensor * ggml_get_next_tensor (const struct ggml_context * ctx, struct ggml_tensor * tensor);
+    // finds tensor by name in context
+    // input: name="embedding_weights"
+    // output: tensor with that name or NULL if not found
     GGML_API struct ggml_tensor * ggml_get_tensor(struct ggml_context * ctx, const char * name);
 
     // Converts a flat index into coordinates
@@ -819,6 +840,9 @@ extern "C" {
     GGML_API const char *         ggml_get_name   (const struct ggml_tensor * tensor);
     GGML_API struct ggml_tensor * ggml_set_name   (      struct ggml_tensor * tensor, const char * name);
     GGML_ATTRIBUTE_FORMAT(2, 3)
+    // formats tensor name using printf-style formatting
+    // input: tensor, format string "layer_%d", args... 
+    // output: same tensor with formatted name assigned
     GGML_API struct ggml_tensor * ggml_format_name(      struct ggml_tensor * tensor, const char * fmt, ...);
 
     // Tensor flags
@@ -831,6 +855,9 @@ extern "C" {
     // operations on tensors with backpropagation
     //
 
+    // duplicates tensor data into new tensor
+    // input: tensor a[512,768] with data
+    // output: new tensor[512,768] with copied data from a
     GGML_API struct ggml_tensor * ggml_dup(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -840,16 +867,25 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise addition: result[i] = a[i] + b[i]
+    // input: tensor a[128,64], tensor b[128,64] 
+    // output: tensor result[128,64] where result[i,j] = a[i,j] + b[i,j]
     GGML_API struct ggml_tensor * ggml_add(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise addition performed in-place on tensor a
+    // input: tensor a[128,64], tensor b[128,64]
+    // output: tensor a[128,64] modified where a[i,j] += b[i,j]
     GGML_API struct ggml_tensor * ggml_add_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise addition with type casting
+    // input: tensor a[64,32] F32, tensor b[64,32] F16, type GGML_TYPE_F32
+    // output: tensor result[64,32] F32 where result[i,j] = a[i,j] + (F32)b[i,j]  
     GGML_API struct ggml_tensor * ggml_add_cast(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -863,11 +899,17 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
 
+    // adds scalar tensor b to each element of tensor a
+    // input: tensor a[128,64], scalar b[1] with value 5.0
+    // output: tensor result[128,64] where result[i,j] = a[i,j] + 5.0
     GGML_API struct ggml_tensor * ggml_add1(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // adds scalar tensor b to each element of tensor a in-place
+    // input: tensor a[128,64], scalar b[1] with value 2.5
+    // output: tensor a[128,64] modified where a[i,j] += 2.5  
     GGML_API struct ggml_tensor * ggml_add1_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -885,6 +927,9 @@ extern "C" {
             size_t                nb3,
             size_t                offset);
 
+    // accumulates tensor b into view of tensor a at specified offset
+    // input: tensor a[512,768], tensor b[128,64], strides, offset
+    // output: tensor a modified where view(a, offset) += b
     GGML_API struct ggml_tensor * ggml_acc_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -894,72 +939,120 @@ extern "C" {
             size_t                nb3,
             size_t                offset);
 
+    // element-wise subtraction: result[i] = a[i] - b[i]
+    // input: tensor a[64,128], tensor b[64,128]
+    // output: tensor result[64,128] where result[i,j] = a[i,j] - b[i,j]
     GGML_API struct ggml_tensor * ggml_sub(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise subtraction performed in-place on tensor a
+    // input: tensor a[64,128], tensor b[64,128]
+    // output: tensor a[64,128] modified where a[i,j] -= b[i,j]
     GGML_API struct ggml_tensor * ggml_sub_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise multiplication: result[i] = a[i] * b[i]
+    // input: tensor a[32,64], tensor b[32,64]
+    // output: tensor result[32,64] where result[i,j] = a[i,j] * b[i,j]
     GGML_API struct ggml_tensor * ggml_mul(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise multiplication performed in-place on tensor a
+    // input: tensor a[32,64], tensor b[32,64]  
+    // output: tensor a[32,64] modified where a[i,j] *= b[i,j]
     GGML_API struct ggml_tensor * ggml_mul_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise division: result[i] = a[i] / b[i]
+    // input: tensor a[16,32], tensor b[16,32]
+    // output: tensor result[16,32] where result[i,j] = a[i,j] / b[i,j]
     GGML_API struct ggml_tensor * ggml_div(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise division performed in-place on tensor a
+    // input: tensor a[16,32], tensor b[16,32]
+    // output: tensor a[16,32] modified where a[i,j] /= b[i,j]
     GGML_API struct ggml_tensor * ggml_div_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // element-wise square: result[i] = a[i]^2
+    // input: tensor a[64,48] with values like [2.0, -3.0, 1.5, ...]
+    // output: tensor result[64,48] where result[i,j] = a[i,j]^2
     GGML_API struct ggml_tensor * ggml_sqr(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise square performed in-place on tensor a
+    // input: tensor a[64,48] with values like [2.0, -3.0, 1.5, ...]
+    // output: tensor a[64,48] modified where a[i,j] = a[i,j]^2
     GGML_API struct ggml_tensor * ggml_sqr_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise square root: result[i] = sqrt(a[i])
+    // input: tensor a[32,16] with values like [4.0, 9.0, 16.0, ...]
+    // output: tensor result[32,16] where result[i,j] = sqrt(a[i,j])
     GGML_API struct ggml_tensor * ggml_sqrt(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise square root performed in-place on tensor a
+    // input: tensor a[32,16] with values like [4.0, 9.0, 16.0, ...]
+    // output: tensor a[32,16] modified where a[i,j] = sqrt(a[i,j])
     GGML_API struct ggml_tensor * ggml_sqrt_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise natural logarithm: result[i] = ln(a[i])
+    // input: tensor a[48,32] with positive values like [1.0, 2.718, 10.0, ...]
+    // output: tensor result[48,32] where result[i,j] = ln(a[i,j])
     GGML_API struct ggml_tensor * ggml_log(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise natural logarithm performed in-place on tensor a  
+    // input: tensor a[48,32] with positive values like [1.0, 2.718, 10.0, ...]
+    // output: tensor a[48,32] modified where a[i,j] = ln(a[i,j])
     GGML_API struct ggml_tensor * ggml_log_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sine: result[i] = sin(a[i])
+    // input: tensor a[64,32] with values like [0.0, π/2, π, ...]
+    // output: tensor result[64,32] where result[i,j] = sin(a[i,j])
     GGML_API struct ggml_tensor * ggml_sin(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sine performed in-place on tensor a
+    // input: tensor a[64,32] with values like [0.0, π/2, π, ...]
+    // output: tensor a[64,32] modified where a[i,j] = sin(a[i,j])
     GGML_API struct ggml_tensor * ggml_sin_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise cosine: result[i] = cos(a[i])
+    // input: tensor a[64,32] with values like [0.0, π/2, π, ...]
+    // output: tensor result[64,32] where result[i,j] = cos(a[i,j])
     GGML_API struct ggml_tensor * ggml_cos(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise cosine performed in-place on tensor a
+    // input: tensor a[64,32] with values like [0.0, π/2, π, ...]
+    // output: tensor a[64,32] modified where a[i,j] = cos(a[i,j])
     GGML_API struct ggml_tensor * ggml_cos_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1020,38 +1113,65 @@ extern "C" {
             struct ggml_tensor  * b,
             int                   dim);
 
+    // element-wise absolute value: result[i] = |a[i]|
+    // input: tensor a[128,32] with values like [-2.5, 3.0, -1.0, ...]
+    // output: tensor result[128,32] where result[i,j] = |a[i,j]|
     GGML_API struct ggml_tensor * ggml_abs(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise absolute value performed in-place on tensor a
+    // input: tensor a[128,32] with values like [-2.5, 3.0, -1.0, ...]
+    // output: tensor a[128,32] modified where a[i,j] = |a[i,j]|
     GGML_API struct ggml_tensor * ggml_abs_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sign function: result[i] = sign(a[i])
+    // input: tensor a[64,16] with values like [-5.0, 0.0, 3.2, ...]
+    // output: tensor result[64,16] where result[i,j] = sign(a[i,j]) ∈ {-1,0,1}
     GGML_API struct ggml_tensor * ggml_sgn(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise sign function performed in-place on tensor a
+    // input: tensor a[64,16] with values like [-5.0, 0.0, 3.2, ...]
+    // output: tensor a[64,16] modified where a[i,j] = sign(a[i,j]) ∈ {-1,0,1}
     GGML_API struct ggml_tensor * ggml_sgn_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise negation: result[i] = -a[i]
+    // input: tensor a[32,64] with values like [1.0, -2.0, 3.5, ...]
+    // output: tensor result[32,64] where result[i,j] = -a[i,j]
     GGML_API struct ggml_tensor * ggml_neg(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise negation performed in-place on tensor a
+    // input: tensor a[32,64] with values like [1.0, -2.0, 3.5, ...]
+    // output: tensor a[32,64] modified where a[i,j] = -a[i,j]
     GGML_API struct ggml_tensor * ggml_neg_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise step function: result[i] = (a[i] > 0) ? 1 : 0
+    // input: tensor a[48,32] with values like [-1.0, 0.0, 2.5, ...]
+    // output: tensor result[48,32] where result[i,j] = (a[i,j] > 0) ? 1 : 0
     GGML_API struct ggml_tensor * ggml_step(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise step function performed in-place on tensor a
+    // input: tensor a[48,32] with values like [-1.0, 0.0, 2.5, ...]
+    // output: tensor a[48,32] modified where a[i,j] = (a[i,j] > 0) ? 1 : 0
     GGML_API struct ggml_tensor * ggml_step_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // element-wise hyperbolic tangent: result[i] = tanh(a[i])
+    // input: tensor a[64,128] with values like [-2.0, 0.0, 1.5, ...]
+    // output: tensor result[64,128] where result[i,j] = tanh(a[i,j]) ∈ (-1,1)
     GGML_API struct ggml_tensor * ggml_tanh(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
