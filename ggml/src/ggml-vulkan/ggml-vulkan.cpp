@@ -2937,9 +2937,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
     // Ensure a subgroup size >= 16 is available
-    const bool use_subgroups16 = use_subgroups &&
-                                    (!device->subgroup_size_control && device->subgroup_size >= 16 ||
-                                    device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16);
+    const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
 
     const uint32_t subgroup_size = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16) ? 16 : device->subgroup_size;
     const uint32_t subgroup_size16 = std::max(subgroup_size, 16u);
