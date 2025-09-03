@@ -169,7 +169,7 @@ jobs:
 
   webui-tests:
     needs: webui-build
-    name: Run tests
+    name: Run WebUI tests
     permissions:
       contents: read
 
