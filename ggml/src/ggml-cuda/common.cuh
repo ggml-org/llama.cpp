@@ -581,18 +581,18 @@ static const uint3 init_fastdiv_values(uint32_t d) {
     return make_uint3(mp, L, d);
 }
 
-static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 div_consts) {
-    // expects div_consts to contain <mp, L, divisor> in <x, y, z>
-    // div_consts.z is unused and optimized away by the compiler.
+static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 fastdiv_values) {
+    // expects fastdiv_values to contain <mp, L, divisor> in <x, y, z>
+    // fastdiv_values.z is unused and optimized away by the compiler.
     // Compute high 32 bits of n * mp
-    const uint32_t hi = __umulhi(n, div_consts.x);
+    const uint32_t hi = __umulhi(n, fastdiv_values.x);
     // add n, apply bit shift
-    return (hi + n) >> div_consts.y;
+    return (hi + n) >> fastdiv_values.y;
 }
 
-static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 modulo_consts) {
-    // expects modulo_consts to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
-    return n - fastdiv(n, modulo_consts) * modulo_consts.z;
+static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 fastdiv_values) {
+    // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    return n - fastdiv(n, fastdiv_values) * fastdiv_values.z;
 }
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
