@@ -48,7 +48,7 @@ cmake --build build-fpga --config Release
 
 
 echo 'creating tar bundle for fpga'
-TSI_GGML_VERSION=0.0.6
+TSI_GGML_VERSION=0.0.7
 TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
 GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
 TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
