@@ -988,7 +988,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 #ifdef GGML_PERF
 static const char * GGML_BACKEND_TYPE[GGML_COMPUTE_BACKEND_COUNT] = {
     "CPU",
-    "TSAVORITE"
+    "OPU"
 };
 #endif /* GGML_PERF */
 
