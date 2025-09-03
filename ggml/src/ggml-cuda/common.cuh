@@ -569,7 +569,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static const uint2 init_fastdiv_values(uint32_t d) {
+static const uint3 init_fastdiv_values(uint32_t d) {
     // compute L = ceil(log2(d));
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {
@@ -577,25 +577,22 @@ static const uint2 init_fastdiv_values(uint32_t d) {
     }
 
     uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
-    return make_uint2(mp, L);
+    // pack divisor as well to reduce error surface
+    return make_uint3(mp, L, d);
 }
 
-static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint2 div_consts) {
+static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 div_consts) {
+    // expects div_consts to contain <mp, L, divisor> in <x, y, z>
+    // div_consts.z is unused and optimized away by the compiler.
     // Compute high 32 bits of n * mp
     const uint32_t hi = __umulhi(n, div_consts.x);
-    // Apply the formula
+    // add n, apply bit shift
     return (hi + n) >> div_consts.y;
 }
 
-static const uint3 init_fastmodulo_values(uint32_t d) {
-    // uint3 contains <mp, L, divisor> in <x, y, z>
-    const uint2 fastdiv = init_fastdiv_values(d);
-    return make_uint3(fastdiv.x, fastdiv.y, d);
-}
-
 static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 modulo_consts) {
-    // expects modulo_consts to contain <mp, L, divisor> in <x, y, z> (see init_fastmodulo_values function)
-    return n - fastdiv(n, make_uint2(modulo_consts.x, modulo_consts.y)) * modulo_consts.z;
+    // expects modulo_consts to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    return n - fastdiv(n, modulo_consts) * modulo_consts.z;
 }
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
