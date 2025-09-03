@@ -593,9 +593,9 @@ static const uint3 init_fastmodulo_values(uint32_t d) {
     return make_uint3(fastdiv.x, fastdiv.y, d);
 }
 
-static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 div_consts_divisor) {
-    // expects div_consts_divisor to contain <mp, L, divisor> in <x, y, z>
-    return n - fastdiv(n, make_uint2(div_consts_divisor.x, div_consts_divisor.y)) * div_consts_divisor.z;
+static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 modulo_consts) {
+    // expects modulo_consts to contain <mp, L, divisor> in <x, y, z> (see init_fastmodulo_values function)
+    return n - fastdiv(n, make_uint2(modulo_consts.x, modulo_consts.y)) * modulo_consts.z;
 }
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
