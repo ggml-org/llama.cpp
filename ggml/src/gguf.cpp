@@ -1412,6 +1412,9 @@ bool gguf_write_to_file(const struct gguf_context * ctx, const char * fname, boo
 
     gguf_writer_file gw(file);
     gguf_write_out(ctx, gw, only_meta);
+    if (!gw.ok) {
+        GGML_LOG_ERROR("%s: failed to write GGUF data into '%s'\n", __func__, fname);
+    }
 
     fclose(file);
     return gw.ok;
