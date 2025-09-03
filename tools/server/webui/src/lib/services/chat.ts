@@ -285,7 +285,7 @@ export class ChatService {
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-							
+
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const timings = parsed.timings;
@@ -642,13 +642,15 @@ export class ChatService {
 				: 0;
 
 		// Update slots service with timing data (async but don't wait)
-		slotsService.updateFromTimingData({
-			prompt_n: timings.prompt_n || 0,
-			predicted_n: timings.predicted_n || 0,
-			predicted_per_second: tokensPerSecond
-		}).catch(error => {
-			console.warn('Failed to update processing state:', error);
-		});
+		slotsService
+			.updateFromTimingData({
+				prompt_n: timings.prompt_n || 0,
+				predicted_n: timings.predicted_n || 0,
+				predicted_per_second: tokensPerSecond
+			})
+			.catch((error) => {
+				console.warn('Failed to update processing state:', error);
+			});
 	}
 }
 

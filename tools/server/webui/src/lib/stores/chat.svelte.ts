@@ -276,10 +276,16 @@ class ChatStore {
 		if (currentConfig.dry_base !== undefined && currentConfig.dry_base !== null) {
 			apiOptions.dry_base = Number(currentConfig.dry_base);
 		}
-		if (currentConfig.dry_allowed_length !== undefined && currentConfig.dry_allowed_length !== null) {
+		if (
+			currentConfig.dry_allowed_length !== undefined &&
+			currentConfig.dry_allowed_length !== null
+		) {
 			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
 		}
-		if (currentConfig.dry_penalty_last_n !== undefined && currentConfig.dry_penalty_last_n !== null) {
+		if (
+			currentConfig.dry_penalty_last_n !== undefined &&
+			currentConfig.dry_penalty_last_n !== null
+		) {
 			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
 		}
 		if (currentConfig.samplers) {
@@ -329,7 +335,6 @@ class ChatStore {
 				streamedReasoningContent += reasoningChunk;
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
-
 			},
 
 			onComplete: async (finalContent?: string, reasoningContent?: string) => {

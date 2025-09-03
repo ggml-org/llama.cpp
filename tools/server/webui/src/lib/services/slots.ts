@@ -4,7 +4,7 @@ import { config } from '$lib/stores/settings.svelte';
 /**
  * SlotsService - Real-time processing state monitoring and token rate calculation
  *
- * This service provides real-time information about generation progress, token rates, 
+ * This service provides real-time information about generation progress, token rates,
  * and context usage based on timing data from ChatService streaming responses.
  * It manages streaming session tracking and provides accurate processing state updates.
  *
@@ -66,7 +66,9 @@ export class SlotsService {
 	 * This method logs a warning if called to help identify outdated usage
 	 */
 	fetchAndNotify(): void {
-		console.warn('SlotsService.fetchAndNotify() is deprecated - use timing data from ChatService instead');
+		console.warn(
+			'SlotsService.fetchAndNotify() is deprecated - use timing data from ChatService instead'
+		);
 	}
 
 	subscribe(callback: (state: ApiProcessingState) => void): () => void {
@@ -85,13 +87,13 @@ export class SlotsService {
 		predicted_per_second: number;
 	}): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
-		
+
 		// Only update if we successfully parsed the state
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
 			return;
 		}
-		
+
 		this.lastKnownState = processingState;
 
 		for (const callback of this.callbacks) {
@@ -132,7 +134,9 @@ export class SlotsService {
 		return 4096;
 	}
 
-	private async parseCompletionTimingData(timingData: Record<string, unknown>): Promise<ApiProcessingState | null> {
+	private async parseCompletionTimingData(
+		timingData: Record<string, unknown>
+	): Promise<ApiProcessingState | null> {
 		// Extract timing information from /chat/completions response
 		const promptTokens = (timingData.prompt_n as number) || 0;
 		const predictedTokens = (timingData.predicted_n as number) || 0;
@@ -140,7 +144,7 @@ export class SlotsService {
 
 		// Get context total from server or cache
 		const contextTotal = await this.getContextTotal();
-		
+
 		if (contextTotal === null) {
 			console.warn('No context total available - cannot calculate processing state');
 			return null;
@@ -149,7 +153,7 @@ export class SlotsService {
 		// Get output max tokens from user settings
 		const currentConfig = config();
 		const outputTokensMax = currentConfig.max_tokens;
-		
+
 		// Validate required data is available
 		if (!outputTokensMax) {
 			console.warn('No max_tokens setting available');
