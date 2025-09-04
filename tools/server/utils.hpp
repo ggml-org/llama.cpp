@@ -495,11 +495,6 @@ static json oaicompat_completion_params_parse(const json & body) {
         throw std::runtime_error("Only one completion choice is allowed");
     }
 
-    // Handle "echo" field
-    if (json_value(body, "echo", false)) {
-        throw std::runtime_error("Only no echo is supported");
-    }
-
     // Params supported by OAI but unsupported by llama.cpp
     static const std::vector<std::string> unsupported_params { "best_of", "suffix" };
     for (const auto & param : unsupported_params) {
