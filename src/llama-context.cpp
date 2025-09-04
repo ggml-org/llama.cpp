@@ -69,6 +69,10 @@ llama_context::llama_context(
         cparams.yarn_ext_factor = rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
     }
 
+    if (model.arch == LLM_ARCH_GROK && params.yarn_beta_fast == 32.0f) {
+        cparams.yarn_beta_fast = 8.0f;
+    }
+
     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
 
     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
