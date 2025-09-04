@@ -165,7 +165,8 @@ extern void _mlir_ciface_txe_silu_host(void *a, void *res);
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 #define NUM_OF_TXES 1
-#define MEM_REF_DESCRIPTOR_RANK 1
+// GML supports a maximum tensor rank of 4
+#define MEM_REF_DESCRIPTOR_RANK 4
 
 //
 // backend API

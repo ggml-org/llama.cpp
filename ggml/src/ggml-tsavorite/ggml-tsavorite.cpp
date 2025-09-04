@@ -337,7 +337,9 @@ static void _mlir_ciface_txe_add_test (void *src0, void *src1, void *res)
     srcP1 = (MemRefDescriptor<Rank> *)src1;
     nodeP = (MemRefDescriptor<Rank> *)res;
 
-    uint32_t count = srcP0->shape[Rank - 1];
+    // TVU kernels operate using a single dimension for the TVU add operation.
+    uint32_t count = srcP0->shape[0];
+
     float *s0      = (float*)srcP0->data;
     float *s1      = (float*)srcP1->data;
     float *n       = (float*)nodeP->data;
@@ -360,7 +362,9 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
     srcP1 = (MemRefDescriptor<Rank> *)src1;
     nodeP = (MemRefDescriptor<Rank> *)res;
 
-    uint32_t count = srcP0->shape[Rank - 1];
+    // TVU kernels operate using a single dimension for the TVU mul operation.
+    uint32_t count = srcP0->shape[0];
+
     float *s0      = (float*)srcP0->data;
     float *s1      = (float*)srcP1->data;
     float *n       = (float*)nodeP->data;
@@ -985,10 +989,13 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           float *src0_ptr = (float *)((char *)src0->data + i03 * nb03 + i02 * nb02 + i01 * nb01);
           float *src1_ptr = (float *)((char *)src1->data + i13 * nb13 + i12 * nb12 + i11 * nb11);
 
+          // The following below code operates exclusively on Rank 0
+	  // (i.e., the first dimension) for all blob-related processing.
+
           for (int64_t r = 0; r < nr0; ++r) {
-              srcP0->shape[Rank - 1]   = ne10;
-              srcP1->shape[Rank - 1]   = ne10;
-              nodeP->shape[Rank - 1]   = ne10;
+              srcP0->shape[0]   = ne10;
+              srcP1->shape[0]   = ne10;
+              nodeP->shape[0]   = ne10;
               srcP1->data =  srcP1->base = (void *)(src1_ptr);
               srcP0->data =  srcP0->base = (void *)(src0_ptr + r * ne10);
               nodeP->data =  nodeP->base = (void *)(dst_ptr + r * ne10);
@@ -1058,10 +1065,13 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 
         srcP0->data = srcP0->base = (void *)((float *)src0->data);
         nodeP->data = nodeP->base = (void *)((float *)node->data);
-        srcP0->shape[Rank - 1]    = num_elem_src0;
-        nodeP->shape[Rank - 1]    = num_elem_src0;
-        srcP0->strides[Rank - 1]  = 0;
-        nodeP->strides[Rank - 1]  = 0;
+
+        // The following below code operates exclusively on Rank 0
+	// (i.e., the first dimension) for all blob-related processing.
+        srcP0->shape[0]    = num_elem_src0;
+        nodeP->shape[0]    = num_elem_src0;
+        srcP0->strides[0]  = 0;
+        nodeP->strides[0]  = 0;
         // kernel call
         ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input(srcP0, nodeP);
         ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
