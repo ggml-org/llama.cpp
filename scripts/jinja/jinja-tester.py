@@ -147,11 +147,8 @@ def format_template_content(template_content):
 
     # Copy the newline / space count from the original
     tc_rstrip = template_content.rstrip()
-    if not tc_rstrip.endswith("-%}") and not tc_rstrip.endswith(r'-}}'):
-        # If orig ends with -%} or -}}, that means all newlines are stripped anyways
-        # So we shouldn't add anything
-        trailing_length = len(template_content) - len(tc_rstrip)
-        result += template_content[:-trailing_length]
+    if (trailing_length := len(template_content) - len(tc_rstrip)):
+        result += template_content[-trailing_length:]
 
     return result
 
