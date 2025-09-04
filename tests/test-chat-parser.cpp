@@ -15,7 +15,7 @@
 #include "regex-partial.h"
 
 template <class T>
-static void assert_equals(const std::string & label, const T & expected, const T & actual) {
+static void assert_equals(const std::string_view label, const T & expected, const T & actual) {
     if (expected != actual) {
         std::cerr << label << std::endl;
         std::cerr << "Expected: " << expected << std::endl;
