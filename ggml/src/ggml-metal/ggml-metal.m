@@ -407,6 +407,7 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_4,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_6,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_8,
+    GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_10,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_16,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F32_F16,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F16_F16,
@@ -1439,6 +1440,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_4,       mul_mm_id_map0_f16_ne20_4,       has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_6,       mul_mm_id_map0_f16_ne20_6,       has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_8,       mul_mm_id_map0_f16_ne20_8,       has_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_10,      mul_mm_id_map0_f16_ne20_10,      has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_16,      mul_mm_id_map0_f16_ne20_16,      has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F32_F16,               mul_mm_id_f32_f16,               has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F16_F16,               mul_mm_id_f16_f16,               has_simdgroup_mm);
@@ -3979,6 +3981,7 @@ static int ggml_metal_encode_node(
                             case 4:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_4 ].pipeline; break;
                             case 6:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_6 ].pipeline; break;
                             case 8:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_8 ].pipeline; break;
+                            case 10: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_10].pipeline; break;
                             case 16: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16_NE20_16].pipeline; break;
                             default: GGML_ABORT("missing specialization for ne20 = %d", (int) ne20);
                         }
