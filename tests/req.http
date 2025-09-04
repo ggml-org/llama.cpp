@@ -1,0 +1,177 @@
+POST http://localhost:8000/apply-template
+Content-Type: application/json
+
+{
+    "messages": [
+        {
+            "content": "What is the current weather in Barcelona, Stockholm, Lima, Berlin, and Oslo? And also, display them in a list sorted by their temperatures, highest first.",
+            "role": "user"
+        },
+        {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "id": "2u4dKpkZDH21gTVH7Sr6R2wm3pAxisVF",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Barcelona\"}"
+                    }
+                },
+                {
+                    "type": "function",
+                    "id": "DK3FsBQguP4NZm0yMRZrIe78ZePKZyq9",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Stockholm\"}"
+                    }
+                },
+                {
+                    "type": "function",
+                    "id": "21DPzPHMEx2Y1eTPyVDHs1ytuRUnND3E",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Lima\"}"
+                    }
+                },
+                {
+                    "type": "function",
+                    "id": "Nr8JukMvqXyvnypsgYR1DPrrxMtvFQjz",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Berlin\"}"
+                    }
+                },
+                {
+                    "type": "function",
+                    "id": "vl7dST6XZddIhZ9geWBIsGftgzSPUlQ5",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Oslo\"}"
+                    }
+                }
+            ]
+        },
+        {
+            "content": "Barcelona: \u2600\ufe0f +25\u00b0C",
+            "role": "tool",
+            "tool_call_id": "2u4dKpkZDH21gTVH7Sr6R2wm3pAxisVF"
+        },
+        {
+            "content": "Stockholm: \u2600\ufe0f +13\u00b0C",
+            "role": "tool",
+            "tool_call_id": "DK3FsBQguP4NZm0yMRZrIe78ZePKZyq9"
+        },
+        {
+            "content": "Lima: +16\u00b0C",
+            "role": "tool",
+            "tool_call_id": "21DPzPHMEx2Y1eTPyVDHs1ytuRUnND3E"
+        },
+        {
+
+            "content": "Berlin: \u2600\ufe0f +26\u00b0C",
+            "role": "tool",
+            "tool_call_id": "Nr8JukMvqXyvnypsgYR1DPrrxMtvFQjz"
+        },
+        {
+            "content": "Oslo: \u2600\ufe0f +13\u00b0C",
+            "role": "tool",
+            "tool_call_id": "vl7dST6XZddIhZ9geWBIsGftgzSPUlQ5"
+        }
+    ]
+}
+
+###
+POST http://localhost:8000/apply-template
+Content-Type: application/json
+
+{
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a given city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string",
+                "description": "The name of the city"
+              }
+            },
+            "required": ["city"]
+          }
+        }
+      }
+    ],
+    "messages": [
+        {
+            "content": "What is the current weather in Barcelona, Stockholm, Lima, Berlin, and Oslo? And also, display them in a list sorted by their temperatures, highest first.",
+            "role": "user"
+        },
+        {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "id": "2u4dKpkZDH21gTVH7Sr6R2wm3pAxisVF",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"location\": \"Barcelona\"}"
+                    }
+                }
+            ]
+        },
+        {
+            "content": "Barcelona: \u2600\ufe0f +25\u00b0C",
+            "role": "tool",
+            "tool_call_id": "2u4dKpkZDH21gTVH7Sr6R2wm3pAxisVF"
+        }
+    ]
+}
+
+###
+POST http://localhost:8000/tokenize
+Content-Type: application/json
+ 
+{
+
+    "content": "<think></think><TOOLCALL></TOOLCALL><TOOL_RESPONSE></TOOL_RESPONSE><AVAILABLE_TOOLS></AVAILABLE_TOOLS>",
+    "add_special": true
+}
+
+###
+POST http://localhost:8000/v1/chat/completions
+Content-Type: application/json
+
+{
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a given city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string",
+                "description": "The name of the city"
+              }
+            },
+            "required": ["city"]
+          }
+        }
+      }
+    ],
+    "messages": [
+        {
+            "content": "What is the current weather in Barcelona, Stockholm, Lima, Berlin, and Oslo? And also, display them in a list sorted by their temperatures, highest first.",
+            "role": "user"
+        }
+    ],
+    "tool_choice": "required"
+}

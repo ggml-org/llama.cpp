@@ -1798,9 +1798,9 @@ static void test_template_output_parsers() {
                     /*  .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
                 }));
-        
+
         // Test tool calls with extra content
-        assert_msg_equals(message_assist_call_content, 
+        assert_msg_equals(message_assist_call_content,
             common_chat_parse(
                 "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
@@ -1808,7 +1808,7 @@ static void test_template_output_parsers() {
             ));
 
         // Test tool calls with extra content AND thinking
-        assert_msg_equals(message_assist_call_thoughts_content, 
+        assert_msg_equals(message_assist_call_thoughts_content,
             common_chat_parse(
                 "<think>I'm\nthinking</think><TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
