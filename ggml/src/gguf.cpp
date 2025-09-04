@@ -624,16 +624,16 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
         ctx->size = 0;
         for (size_t i = 0; i < ctx->info.size(); ++i) {
             const gguf_tensor_info & ti = ctx->info[i];
-            // HACK: bypass the continuity check
-            ctx->size = ti.offset;
-            if (ti.offset != ctx->size) {
+            // alignment offset is only necessary for GGUF converted with reflinks
+            const size_t align_offset = ti.offset % ctx->alignment;
+            if (ti.offset - align_offset != ctx->size) {
                 GGML_LOG_ERROR("%s: tensor '%s' has offset %" PRIu64 ", expected %zu\n",
-                    __func__, ti.t.name, ti.offset, ctx->size);
+                    __func__, ti.t.name, ti.offset, ctx->size + align_offset);
                 GGML_LOG_ERROR("%s: failed to read tensor data\n", __func__);
                 gguf_free(ctx);
                 return nullptr;
             }
-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t) + align_offset, ctx->alignment);
             if (SIZE_MAX - ctx->size < padded_size) {
                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);

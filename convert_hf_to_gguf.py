@@ -80,6 +80,7 @@ class ModelBase:
     is_big_endian: bool
     endianess: gguf.GGUFEndian
     use_temp_file: bool
+    use_reflinks: bool
     lazy: bool
     dry_run: bool
     hparams: dict[str, Any]
@@ -119,6 +120,7 @@ class ModelBase:
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
+        self.use_reflinks = use_reflinks
         self.lazy = not eager or (remote_hf_model_id is not None)
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
@@ -133,7 +135,7 @@ class ModelBase:
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard,
-                                           use_reflinks=use_reflinks)
+                                           use_reflinks=self.use_reflinks)
 
         # Mistral specific
         self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
@@ -202,7 +204,7 @@ class ModelBase:
             logger.info(f"gguf: indexing model part '{part_name}'")
             ctx: ContextManager[Any]
             if is_safetensors:
-                ctx = cast(ContextManager[Any], gguf.utility.SafetensorsLocal(self.dir_model / part_name))
+                ctx = cast(ContextManager[Any], gguf.utility.SafetensorsLocal(self.dir_model / part_name, reflink=self.use_reflinks))
             else:
                 ctx = contextlib.nullcontext(torch.load(str(self.dir_model / part_name), map_location="cpu", mmap=True, weights_only=True))
 
