@@ -1025,8 +1025,9 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise square root: result[i] = sqrt(a[i])
-    // input: tensor a[32,16] with values like [4.0, 9.0, 16.0, ...]
-    // output: tensor result[32,16] where result[i,j] = sqrt(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: src contiguous in dim 0, dst contiguous in dim 0  
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_sqrt(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1039,15 +1040,17 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise natural logarithm: result[i] = ln(a[i])
-    // input: tensor a[48,32] with positive values like [1.0, 2.718, 10.0, ...]
-    // output: tensor result[48,32] where result[i,j] = ln(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: src contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_log(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-    // element-wise natural logarithm performed in-place on tensor a  
-    // input: tensor a[48,32] with positive values like [1.0, 2.718, 10.0, ...]
-    // output: tensor a[48,32] modified where a[i,j] = ln(a[i,j])
+    // element-wise natural logarithm performed in-place on tensor a
+    // requires: src and dst same shape, both contiguous in dims 0,1  
+    // requires: result modifies src tensor
+    // supports: f32, f16, bf16 types
     GGML_API struct ggml_tensor * ggml_log_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1207,15 +1210,17 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise exponential linear unit: result[i] = a[i] >= 0 ? a[i] : α*(exp(a[i]) - 1)
-    // input: tensor a[32,64] with values like [-1.0, 0.0, 2.0, ...]
-    // output: tensor result[32,64] where result[i,j] = ELU(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: src contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_elu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
     // element-wise exponential linear unit performed in-place on tensor a
-    // input: tensor a[32,64] with values like [-1.0, 0.0, 2.0, ...]
-    // output: tensor a[32,64] modified where a[i,j] = ELU(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: result modifies src tensor
+    // supports: f32, f16, bf16 types
     GGML_API struct ggml_tensor * ggml_elu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1242,8 +1247,9 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise sigmoid activation: result[i] = 1 / (1 + exp(-a[i]))
-    // input: tensor a[256,128] with values like [-2.0, 0.0, 3.0, ...]
-    // output: tensor result[256,128] where result[i,j] = σ(a[i,j]) ∈ (0,1)
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: src contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_sigmoid(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1328,15 +1334,17 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise exponential: result[i] = exp(a[i])
-    // input: tensor a[128,64] with values like [-1.0, 0.0, 2.0, ...]
-    // output: tensor result[128,64] where result[i,j] = exp(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: src contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_exp(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
     // element-wise exponential performed in-place on tensor a
-    // input: tensor a[128,64] with values like [-1.0, 0.0, 2.0, ...]
-    // output: tensor a[128,64] modified where a[i,j] = exp(a[i,j])
+    // requires: src and dst same shape, both contiguous in dims 0,1
+    // requires: result modifies src tensor
+    // supports: f32, f16, bf16 types
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
