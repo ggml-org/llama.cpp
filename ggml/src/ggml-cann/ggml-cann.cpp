@@ -1117,40 +1117,61 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
 }
 
 // ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
-namespace {
+class NzWorkspace {
+public:
+    // Constructor: initialize with no allocated buffer
+    NzWorkspace() : ptr_(nullptr), allocated_(0) {}
 
-    static std::unordered_map<int, void*> g_nz_workspace_map;
-    static std::unordered_map<int, size_t> g_nz_workspace_allocated_map;
-
-    void release_nz_workspace(int device) {
-        auto it = g_nz_workspace_map.find(device);
-        if (it != g_nz_workspace_map.end() && it->second) {
-            aclrtFree(it->second);
-            g_nz_workspace_map.erase(it);
-            g_nz_workspace_allocated_map.erase(device);
+    // Reset workspace to uninitialized state:
+    // - Free allocated device memory (if any)
+    // - Clear internal pointer and size
+    // Equivalent to release_nz_workspace(device) in old version
+    void init() {
+        if (ptr_) {
+            aclrtFree(ptr_);
+            ptr_ = nullptr;
+            allocated_ = 0;
         }
     }
 
-    void relloc_nz_workspace(int device, size_t new_size) {
-        void* &workspace = g_nz_workspace_map[device];
-        size_t &allocated = g_nz_workspace_allocated_map[device];
-
-        if (new_size > allocated) {
-            if (workspace) {
-                aclrtFree(workspace);
-                workspace = nullptr;
-            }
-            ACL_CHECK(aclrtMalloc(&workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
-            allocated = new_size;
+    // Allocate or reallocate the workspace buffer:
+    // - If requested size > currently allocated size:
+    //   * Free the old buffer (if any)
+    //   * Allocate a new buffer with requested size on device
+    // - If requested size <= currently allocated size:
+    //   * Do nothing (reuse existing buffer)
+    // Equivalent to relloc_nz_workspace(device, new_size) in old version
+    void realloc(size_t new_size) {
+        if (new_size > allocated_) {
+            init();
+            ACL_CHECK(aclrtMalloc(&ptr_, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+            allocated_ = new_size;
         }
     }
 
-    void* get_nz_workspace(int device) {
-        auto it = g_nz_workspace_map.find(device);
-        return (it != g_nz_workspace_map.end()) ? it->second : nullptr;
-    }
+    // Return raw device pointer (may be nullptr if not allocated)
+    // Equivalent to get_nz_workspace(device) in old version
+    void* get() const { return ptr_; }
 
-} // namespace
+private:
+    void* ptr_;  // Pointer to allocated device buffer
+    size_t allocated_;  // Size of currently allocated buffer (bytes)
+};
+
+// Global array of NzWorkspace, one per device
+// g_nz_workspaces[device] corresponds to workspace of given device
+static std::array<NzWorkspace, GGML_CANN_MAX_DEVICES> g_nz_workspaces;
+
+// Accessor for workspace of a given device
+// - Throws std::out_of_range if device index is invalid
+// - Caller can then use .init(), .realloc(), .get()
+inline NzWorkspace& get_workspace(int device) {
+    if (device < 0 || device >= static_cast<int>(g_nz_workspaces.size())) {
+        throw std::out_of_range("device id out of range");
+    }
+    return g_nz_workspaces[device];
+}
+
 
 /**
  * @brief Convert tensor weights to NZ format using Ascend CANN API.
@@ -1176,9 +1197,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) 
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    relloc_nz_workspace(device, workspaceSize);
-    
-    void* g_nz_workspace = get_nz_workspace(device);
+    get_workspace(device).realloc(workspaceSize);
+
+    void* g_nz_workspace = get_workspace(device).get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -2259,7 +2280,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    release_nz_workspace(cann_ctx->device);
+    get_workspace(cann_ctx->device).init();
 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
