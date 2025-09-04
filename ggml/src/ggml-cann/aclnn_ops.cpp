@@ -975,18 +975,19 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     );
 
     // build rstd, zero...
-    size_t acl_rstd_nb[GGML_MAX_DIMS];
+    int64_t acl_rstd_ne[] = {src->ne[1], src->ne[2], src->ne[3]};
+    size_t acl_rstd_nb[GGML_MAX_DIMS - 1];
     acl_rstd_nb[0] = sizeof(float);
-    for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        acl_rstd_nb[i] = acl_rstd_nb[i - 1] * src->ne[i - 1];
+    for (int i = 1; i < GGML_MAX_DIMS - 1; i++) {
+        acl_rstd_nb[i] = acl_rstd_nb[i - 1] * acl_rstd_ne[i - 1];
     }
     aclTensor* acl_rstd = get_f32_cache_acl_tensor(
         ctx,
         &ctx.rms_norm_zero_tensor_cache.cache,
         ctx.rms_norm_zero_tensor_cache.size,
-        src->ne,
+        acl_rstd_ne,
         acl_rstd_nb,
-        GGML_MAX_DIMS,
+        GGML_MAX_DIMS - 1,
         0.0f      // value
     );
 
