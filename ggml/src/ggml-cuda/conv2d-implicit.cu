@@ -116,7 +116,7 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
         int curH = posh_ori[i] + curR * param.d_h; // input h
         int curW = posw_ori[i] + curS * param.d_w; // input w
         int inOffsetTmp = curC * inChannelOffset + curH * param.w + curW;
-        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h)
+        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && curC < param.c)
         {
             input_ldg_reg[i] = input[inOffset + inOffsetTmp];
         }
@@ -175,7 +175,7 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
             int curH = posh_ori[i] + curR * param.d_h; // input h
             int curW = posw_ori[i] + curS * param.d_w; // input w
             int inOffsetTmp = curC * inChannelOffset + curH * param.w + curW;
-            if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h)
+            if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && curC < param.c)
             {
                 input_ldg_reg[i] = input[inOffset + inOffsetTmp];
             }
