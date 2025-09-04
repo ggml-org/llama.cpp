@@ -589,9 +589,16 @@ void ggml_cann_pad(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     // the position of elements in the array means which dirction to padding,
     // each position means: [dim0.front, dim0.behind, dim1.front, dim1.behind,
     //                       dim2.front, dim2.behind, dim3.front, dim3.behind]
-    int64_t paddings[] = {
-        0, dst->ne[0] - src->ne[0], 0, dst->ne[1] - src->ne[1],
-        0, dst->ne[2] - src->ne[2], 0, dst->ne[3] - src->ne[3]};
+    const int32_t lp0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t rp0 = ggml_get_op_params_i32(dst, 1);
+    const int32_t lp1 = ggml_get_op_params_i32(dst, 2);
+    const int32_t rp1 = ggml_get_op_params_i32(dst, 3);
+    const int32_t lp2 = ggml_get_op_params_i32(dst, 4);
+    const int32_t rp2 = ggml_get_op_params_i32(dst, 5);
+    const int32_t lp3 = ggml_get_op_params_i32(dst, 6);
+    const int32_t rp3 = ggml_get_op_params_i32(dst, 7);
+
+    int64_t paddings[] = {lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3};
     aclnn_pad(ctx, acl_src, acl_dst, paddings);
     ggml_cann_release_resources(ctx, acl_src, acl_dst);
 }
@@ -975,18 +982,19 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     );
 
     // build rstd, zero...
-    size_t acl_rstd_nb[GGML_MAX_DIMS];
+    int64_t acl_rstd_ne[] = {src->ne[1], src->ne[2], src->ne[3]};
+    size_t acl_rstd_nb[GGML_MAX_DIMS - 1];
     acl_rstd_nb[0] = sizeof(float);
-    for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        acl_rstd_nb[i] = acl_rstd_nb[i - 1] * src->ne[i - 1];
+    for (int i = 1; i < GGML_MAX_DIMS - 1; i++) {
+        acl_rstd_nb[i] = acl_rstd_nb[i - 1] * acl_rstd_ne[i - 1];
     }
     aclTensor* acl_rstd = get_f32_cache_acl_tensor(
         ctx,
         &ctx.rms_norm_zero_tensor_cache.cache,
         ctx.rms_norm_zero_tensor_cache.size,
-        src->ne,
+        acl_rstd_ne,
         acl_rstd_nb,
-        GGML_MAX_DIMS,
+        GGML_MAX_DIMS - 1,
         0.0f      // value
     );
 
@@ -1955,7 +1963,7 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
     aclTensor* acl_weight_tensor;
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (weight_to_nz && is_matmul_weight(weight)) {
         int64_t acl_stride[2] = {1, transpose_ne[1]};
 

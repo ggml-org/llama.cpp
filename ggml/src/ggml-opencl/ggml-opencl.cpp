@@ -1339,7 +1339,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 
         if (!kernel_src_f16.empty() && !kernel_src_f32.empty() && !kernel_src_f32_f16.empty()) {
             const struct { int dk; int dv; int bm; int bn; } fa_dims[] = {
-                { 64,  64, 64, 64}, { 80,  80, 64, 32}, { 96,  96, 64, 32},
+                { 40,  40, 32, 32}, { 64,  64, 64, 64}, { 80,  80, 64, 32}, { 96,  96, 64, 32},
                 {112, 112, 32, 32}, {128, 128, 32, 32}, {192, 128, 16, 16},
                 {192, 192, 16, 16}, {256, 256, 16, 16},
             };
@@ -2701,7 +2701,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32; // Assuming F32 for now, can be expanded
         case GGML_OP_PAD:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                   op->src[0]->ne[3] == 1 && op->ne[3] == 1;
+                   op->src[0]->ne[3] == 1 && op->ne[3] == 1 &&
+                   (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
+                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_UPSCALE:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
@@ -2784,7 +2786,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 const int dv = v->ne[0];
 
                 const struct { int dk; int dv; } supported_dims[] = {
-                    { 64,  64}, { 80,  80}, { 96,  96},
+                    { 40,  40}, { 64,  64}, { 80,  80}, { 96,  96},
                     {112, 112}, {128, 128}, {192, 128},
                     {192, 192}, {256, 256},
                 };
