@@ -1196,7 +1196,7 @@ static void ggml_backend_cann_buffer_set_tensor(
     // Why aclrtSynchronizeDevice?
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
@@ -1279,6 +1279,10 @@ static bool ggml_backend_cann_buffer_cpy_tensor(
                                   ACL_MEMCPY_DEVICE_TO_DEVICE));
             return true;
         } else {
+#ifdef ASCEND_310P
+            // TODO: Support 310p P2P copy
+            return false;
+#endif
             // Different device but can access by peer.
             int32_t canAccessPeer = 0;
             ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device,
@@ -1439,7 +1443,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     int64_t ne0 = tensor->ne[0];
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
 
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
@@ -2000,6 +2004,8 @@ static bool ggml_backend_cann_cpy_tensor_async(
     GGML_ASSERT(ggml_backend_is_cann(backend_src) ||
                 ggml_backend_is_cann(backend_dst));
 
+    GGML_ASSERT(!is_matmul_weight((const ggml_tensor*)src));
+
     if (!ggml_backend_buffer_is_cann(src->buffer) ||
         !ggml_backend_buffer_is_cann(dst->buffer)) {
         return false;
@@ -2020,6 +2026,10 @@ static bool ggml_backend_cann_cpy_tensor_async(
         return true;
     }
     if (backend_src != backend_dst) {
+#ifdef ASCEND_310P
+        // TODO: Support 310p P2P copy
+        return false;
+#endif
         ggml_backend_cann_buffer_context* buf_ctx_src =
             (ggml_backend_cann_buffer_context*)buf_src->context;
         ggml_backend_cann_buffer_context* buf_ctx_dst =
@@ -2036,7 +2046,6 @@ static bool ggml_backend_cann_cpy_tensor_async(
         }
 
         // need open both directions for memcpyasync between devices.
-        ggml_cann_set_device(cann_ctx_dst->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_src->device, 0));
         ggml_cann_set_device(cann_ctx_src->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_dst->device, 0));
@@ -2047,8 +2056,15 @@ static bool ggml_backend_cann_cpy_tensor_async(
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
 
-        //TODO: workaround for Event didn`t work here.
-        aclrtSynchronizeStream(cann_ctx_src->stream());
+        // record event on src stream after the copy
+        if (!cann_ctx_src->copy_event) {
+            ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
+        }
+        ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
+
+        // wait on dst stream for the copy to complete
+        ggml_cann_set_device(cann_ctx_dst->device);
+        ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
     } else {
         // src and dst are on the same backend
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,

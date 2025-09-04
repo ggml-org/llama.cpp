@@ -1956,7 +1956,7 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
     aclTensor* acl_weight_tensor;
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (weight_to_nz && is_matmul_weight(weight)) {
         int64_t acl_stride[2] = {1, transpose_ne[1]};
 
