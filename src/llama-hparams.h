@@ -16,9 +16,10 @@ enum llama_expert_gating_func_type {
 };
 
 enum llama_swa_type {
-    LLAMA_SWA_TYPE_NONE     = 0,
-    LLAMA_SWA_TYPE_STANDARD = 1,
-    LLAMA_SWA_TYPE_CHUNKED  = 2,
+    LLAMA_SWA_TYPE_NONE      = 0,
+    LLAMA_SWA_TYPE_STANDARD  = 1,
+    LLAMA_SWA_TYPE_CHUNKED   = 2,
+    LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
 struct llama_hparams_posnet {
@@ -227,6 +228,8 @@ struct llama_hparams {
 
     // number of layers for which has_kv() returns true
     uint32_t n_layer_kv() const;
+
+    bool is_masked_swa(llama_pos p0, llama_pos p1) const;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

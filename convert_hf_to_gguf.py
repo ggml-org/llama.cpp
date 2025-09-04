@@ -302,10 +302,6 @@ class ModelBase:
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
 
-                # if data ends up empty, it means data_torch was a scalar tensor -> restore
-                if len(data.shape) == 0:
-                    data = data_torch.numpy()
-
                 n_dims = len(data.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
@@ -5124,6 +5120,15 @@ class Gemma3Model(TextModel):
             data_torch = data_torch + self.norm_shift
 
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Gemma3TextModel")
+class EmbeddingGemma(Gemma3Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
 
 
 @ModelBase.register("Gemma3ForConditionalGeneration")

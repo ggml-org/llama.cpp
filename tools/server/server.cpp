@@ -86,6 +86,7 @@ enum error_type {
     ERROR_TYPE_PERMISSION,
     ERROR_TYPE_UNAVAILABLE, // custom error
     ERROR_TYPE_NOT_SUPPORTED, // custom error
+    ERROR_TYPE_EXCEED_CONTEXT_SIZE, // custom error
 };
 
 static bool server_task_type_need_embd(server_task_type task_type) {
@@ -141,7 +142,7 @@ struct slot_params {
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
-    json to_json() const {
+    json to_json(bool only_metrics = false) const {
         std::vector<std::string> samplers;
         samplers.reserve(sampling.samplers.size());
         for (const auto & sampler : sampling.samplers) {
@@ -153,9 +154,55 @@ struct slot_params {
             lora.push_back({{"id", i}, {"scale", this->lora[i].scale}});
         }
 
+        if (only_metrics) {
+            return json {
+                {"n_predict",                 n_predict},     // Server configured n_predict
+                {"seed",                      sampling.seed},
+                {"temperature",               sampling.temp},
+                {"dynatemp_range",            sampling.dynatemp_range},
+                {"dynatemp_exponent",         sampling.dynatemp_exponent},
+                {"top_k",                     sampling.top_k},
+                {"top_p",                     sampling.top_p},
+                {"min_p",                     sampling.min_p},
+                {"top_n_sigma",               sampling.top_n_sigma},
+                {"xtc_probability",           sampling.xtc_probability},
+                {"xtc_threshold",             sampling.xtc_threshold},
+                {"typical_p",                 sampling.typ_p},
+                {"repeat_last_n",             sampling.penalty_last_n},
+                {"repeat_penalty",            sampling.penalty_repeat},
+                {"presence_penalty",          sampling.penalty_present},
+                {"frequency_penalty",         sampling.penalty_freq},
+                {"dry_multiplier",            sampling.dry_multiplier},
+                {"dry_base",                  sampling.dry_base},
+                {"dry_allowed_length",        sampling.dry_allowed_length},
+                {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
+                {"mirostat",                  sampling.mirostat},
+                {"mirostat_tau",              sampling.mirostat_tau},
+                {"mirostat_eta",              sampling.mirostat_eta},
+                {"max_tokens",                n_predict}, // User configured n_predict
+                {"n_keep",                    n_keep},
+                {"n_discard",                 n_discard},
+                {"ignore_eos",                sampling.ignore_eos},
+                {"stream",                    stream},
+                {"n_probs",                   sampling.n_probs},
+                {"min_keep",                  sampling.min_keep},
+                {"chat_format",               common_chat_format_name(oaicompat_chat_syntax.format)},
+                {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
+                {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
+                {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+                {"samplers",                  samplers},
+                {"speculative.n_max",         speculative.n_max},
+                {"speculative.n_min",         speculative.n_min},
+                {"speculative.p_min",         speculative.p_min},
+                {"timings_per_token",         timings_per_token},
+                {"post_sampling_probs",       post_sampling_probs},
+                {"lora",                      lora},
+            };
+        }
+
         auto grammar_triggers = json::array();
         for (const auto & trigger : sampling.grammar_triggers) {
-            server_grammar_trigger ct(std::move(trigger));
+            server_grammar_trigger ct(trigger);
             grammar_triggers.push_back(ct.to_json());
         }
 
@@ -1178,6 +1225,10 @@ static json format_error_response(const std::string & message, const enum error_
             type_str = "unavailable_error";
             code = 503;
             break;
+        case ERROR_TYPE_EXCEED_CONTEXT_SIZE:
+            type_str = "exceed_context_size_error";
+            code = 400;
+            break;
     }
     return json {
         {"code", code},
@@ -1191,12 +1242,21 @@ struct server_task_result_error : server_task_result {
     error_type err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
+    // for ERROR_TYPE_EXCEED_CONTEXT_SIZE
+    int32_t n_prompt_tokens = 0;
+    int32_t n_ctx           = 0;
+
     virtual bool is_error() override {
         return true;
     }
 
     virtual json to_json() override {
-        return format_error_response(err_msg, err_type);
+        json res = format_error_response(err_msg, err_type);
+        if (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            res["n_prompt_tokens"] = n_prompt_tokens;
+            res["n_ctx"]           = n_ctx;
+        }
+        return res;
     }
 };
 
@@ -1572,7 +1632,26 @@ struct server_slot {
         }
     }
 
-    json to_json() const {
+    json to_json(bool only_metrics = false) const {
+        if (only_metrics) {
+            return json {
+                {"id",            id},
+                {"id_task",       id_task},
+                {"n_ctx",         n_ctx},
+                {"speculative",   can_speculate()},
+                {"is_processing", is_processing()},
+                {"params",        params.to_json(true)},
+                {"next_token",
+                    {
+                        {"has_next_token", has_next_token},
+                        {"has_new_line",   has_new_line},
+                        {"n_remain",       n_remaining},
+                        {"n_decoded",      n_decoded},
+                    }
+                },
+            };
+        }
+
         return json {
             {"id",            id},
             {"id_task",       id_task},
@@ -2485,11 +2564,12 @@ struct server_context {
         return slot.has_next_token; // continue
     }
 
-    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) {
+    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
         size_t n_probs = slot.params.sampling.n_probs;
         size_t n_vocab = llama_vocab_n_tokens(vocab);
+
         if (post_sampling) {
-            const auto * cur_p = common_sampler_get_candidates(slot.smpl);
+            const auto * cur_p = common_sampler_get_candidates(slot.smpl, true);
             const size_t max_probs = cur_p->size;
 
             // set probability for sampled token
@@ -2539,16 +2619,22 @@ struct server_context {
     }
 
     void send_error(const server_slot & slot, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER) {
-        send_error(slot.id_task, error, type);
+        send_error(slot.id_task, error, type, slot.n_prompt_tokens, slot.n_ctx);
     }
 
-    void send_error(const int id_task, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER) {
+    void send_error(const int id_task, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER, const int32_t n_prompt_tokens = 0, const int32_t n_ctx = 0) {
         SRV_ERR("task id = %d, error: %s\n", id_task, error.c_str());
 
+        if (type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            GGML_ASSERT(n_ctx > 0 && n_prompt_tokens > 0);
+        }
+
         auto res = std::make_unique<server_task_result_error>();
-        res->id       = id_task;
-        res->err_type = type;
-        res->err_msg  = error;
+        res->id              = id_task;
+        res->err_type        = type;
+        res->err_msg         = error;
+        res->n_prompt_tokens = n_prompt_tokens;
+        res->n_ctx           = n_ctx;
 
         queue_results.send(std::move(res));
     }
@@ -2874,7 +2960,7 @@ struct server_context {
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
-                        json slot_data = slot.to_json();
+                        json slot_data = slot.to_json(true);
 
                         if (slot.is_processing()) {
                             n_processing_slots++;
@@ -3220,7 +3306,7 @@ struct server_context {
 
                             if (slot.n_prompt_tokens > slot.n_ctx) {
                                 slot.release();
-                                send_error(slot, "input is larger than the max context size. skipping", ERROR_TYPE_SERVER);
+                                send_error(slot, "input is larger than the max context size. skipping", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 continue;
                             }
                         } else {
@@ -3230,7 +3316,7 @@ struct server_context {
                                 //       context shift should be applied only during the generation phase
                                 if (slot.n_prompt_tokens >= slot.n_ctx) {
                                     slot.release();
-                                    send_error(slot, "the request exceeds the available context size. try increasing the context size or enable context shift", ERROR_TYPE_INVALID_REQUEST);
+                                    send_error(slot, "the request exceeds the available context size. try increasing the context size or enable context shift", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                     continue;
                                 }
                             }
@@ -4271,16 +4357,20 @@ int main(int argc, char ** argv) {
         }
     };
 
-    const auto handle_props = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_props = [&params, &ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
         // this endpoint is publicly available, please only return what is safe to be exposed
         json data = {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
             { "model_path",                  ctx_server.params_base.model.path },
-            { "modalities",                  json{
+            { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
                 {"audio",  ctx_server.oai_parser_opt.allow_audio},
             } },
+            { "endpoint_slots",              params.endpoint_slots },
+            { "endpoint_props",              params.endpoint_props },
+            { "endpoint_metrics",            params.endpoint_metrics },
+            { "webui",                       params.webui },
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},

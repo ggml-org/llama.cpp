@@ -433,15 +433,22 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/riscv/quants.c
             ggml-cpu/arch/riscv/repack.cpp
             )
-        if (GGML_RVV)
-            if (GGML_XTHEADVECTOR)
-                list(APPEND ARCH_FLAGS -march=rv64gc_zfhmin_xtheadvector -mabi=lp64d)
-            elseif (GGML_RV_ZFH)
-                list(APPEND ARCH_FLAGS -march=rv64gcv_zfhmin -mabi=lp64d)
-            else()
-                list(APPEND ARCH_FLAGS -march=rv64gcv -mabi=lp64d)
+        set(MARCH_STR "rv64gc")
+        if (GGML_RV_ZFH)
+            string(APPEND MARCH_STR "_zfh")
+        endif()
+        if (GGML_XTHEADVECTOR)
+            string(APPEND MARCH_STR "_xtheadvector")
+        elseif (GGML_RVV)
+            string(APPEND MARCH_STR "_v")
+            if (GGML_RV_ZVFH)
+                string(APPEND MARCH_STR "_zvfh")
             endif()
         endif()
+        if (GGML_RV_ZICBOP)
+            string(APPEND MARCH_STR "_zicbop")
+        endif()
+        list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
         message(STATUS "s390x detected")
         list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/s390/quants.c)
@@ -497,9 +504,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.11.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.13.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "3fe9e5ab964c375c53839296eb71eaa2")
+        set(KLEIDIAI_ARCHIVE_MD5  "d82a8de939d9814621a5ba23907bdac1")
 
         if (POLICY CMP0135)
             cmake_policy(SET CMP0135 NEW)
@@ -555,6 +562,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         list(APPEND GGML_KLEIDIAI_SOURCES
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_quant_pack_qsi8d32p_f32.c
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_quant_pack_qsi8d32p4x8sb_f32_neon.c
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_nxk_qsi4c32ps1s0scalef16_qsu4c32s16s0_neon.c
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_quant_pack_qsi8d32p_f32_neon.c
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_nxk_qsi4c32pscalef16_qsu4c32s16s0.c)
@@ -576,7 +584,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/kai_matmul_clamp_f32_qsi8d32p1x4_qsi4c32p4vlx4_1x4vl_sme2_sdot.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/kai_matmul_clamp_f32_bf16p2vlx2_bf16p2vlx2_2vlx2vl_sme2_mopa.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_pack_bf16p2vlx2_f32_sme.c
-                ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_kxn_bf16p2vlx2b_f32_x32_sme.c)
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_kxn_bf16p2vlx2b_f32_x32_sme.c
+                ${KLEIDIAI_SRC}/kai/kai_common_sme_asm.S)
             set(PRIVATE_ARCH_FLAGS "-fno-tree-vectorize;${PRIVATE_ARCH_FLAGS}+sve+sve2")
         endif()
 
