@@ -766,8 +766,9 @@ extern "C" {
     GGML_API size_t  ggml_get_max_tensor_size(const struct ggml_context * ctx);
 
     // creates a new tensor with specified dimensions array
-    // input: type (e.g. GGML_TYPE_F32), n_dims=3, ne=[128,64,32] 
-    // output: new tensor with shape [128,64,32] and uninitialized data
+    // requires: valid ggml_context, n_dims <= GGML_MAX_DIMS
+    // requires: ne array contains valid positive dimensions
+    // supports: all tensor types, data uninitialized
     GGML_API struct ggml_tensor * ggml_new_tensor(
             struct ggml_context * ctx,
             enum   ggml_type type,
@@ -792,8 +793,8 @@ extern "C" {
             int64_t ne1);
 
     // creates a new 3D tensor
-    // input: type GGML_TYPE_F32, ne0=64, ne1=64, ne2=12  
-    // output: new tensor with shape [64,64,12] and uninitialized data
+    // requires: valid ggml_context, positive dimensions ne0, ne1, ne2
+    // supports: all tensor types, data uninitialized
     GGML_API struct ggml_tensor * ggml_new_tensor_3d(
             struct ggml_context * ctx,
             enum   ggml_type type,
@@ -802,8 +803,8 @@ extern "C" {
             int64_t ne2);
 
     // creates a new 4D tensor
-    // input: type GGML_TYPE_F32, ne0=32, ne1=32, ne2=8, ne3=16
-    // output: new tensor with shape [32,32,8,16] and uninitialized data
+    // requires: valid ggml_context, positive dimensions ne0, ne1, ne2, ne3
+    // supports: all tensor types, data uninitialized
     GGML_API struct ggml_tensor * ggml_new_tensor_4d(
             struct ggml_context * ctx,
             enum   ggml_type type,
@@ -815,12 +816,12 @@ extern "C" {
     GGML_API void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes);
 
     // creates a new tensor with same shape and type as source tensor
-    // input: src tensor with shape [512,768] F32
-    // output: new tensor with shape [512,768] F32 and uninitialized data
+    // requires: valid ggml_context, valid src tensor
+    // supports: all tensor types, data uninitialized
     GGML_API struct ggml_tensor * ggml_dup_tensor (struct ggml_context * ctx, const struct ggml_tensor * src);
     // creates a view/reference to existing tensor without copying data
-    // input: src tensor with shape [1024,768]
-    // output: new tensor view with same shape [1024,768] sharing src's data
+    // requires: valid ggml_context, valid src tensor
+    // supports: all tensor types, shares data with source tensor
     GGML_API struct ggml_tensor * ggml_view_tensor(struct ggml_context * ctx, struct ggml_tensor * src);
 
     // returns the first tensor in the context's tensor list
@@ -867,8 +868,8 @@ extern "C" {
     //
 
     // duplicates tensor data into new tensor
-    // input: tensor a[512,768] with data
-    // output: new tensor[512,768] with copied data from a
+    // requires: valid ggml_context, src tensor with valid data
+    // supports: all tensor types, creates independent copy
     GGML_API struct ggml_tensor * ggml_dup(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1490,32 +1491,36 @@ extern "C" {
 
     // normalize along rows
     // layer normalization: output = (input - mean) / sqrt(variance + eps)
-    // input: tensor a[seq_len,hidden_size], eps=1e-5
-    // output: tensor result[seq_len,hidden_size] with normalized values
+    // requires: src and dst same shape, src contiguous in dim 0 (nb[0] == sizeof(float))
+    // requires: normalizes across last dimension (ne[0]) for each row
+    // supports: f32 only
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
     // layer normalization performed in-place on tensor a
-    // input: tensor a[seq_len,hidden_size], eps=1e-5
-    // output: tensor a[seq_len,hidden_size] with normalized values in-place
+    // requires: src and dst same shape, src contiguous in dim 0 (nb[0] == sizeof(float))
+    // requires: result modifies src tensor
+    // supports: f32 only
     GGML_API struct ggml_tensor * ggml_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
     // root mean square normalization: output = input / sqrt(mean(input²) + eps)
-    // input: tensor a[batch_size,embed_dim], eps=1e-6
-    // output: tensor result[batch_size,embed_dim] with RMS normalized values
+    // requires: src and dst same shape, src contiguous in dim 0 (nb[0] == sizeof(float))
+    // requires: normalizes across last dimension (ne[0]) for each row
+    // supports: f32 only
     GGML_API struct ggml_tensor * ggml_rms_norm(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 eps);
 
     // root mean square normalization performed in-place on tensor a
-    // input: tensor a[batch_size,embed_dim], eps=1e-6  
-    // output: tensor a[batch_size,embed_dim] with RMS normalized values in-place
+    // requires: src and dst same shape, src contiguous in dim 0 (nb[0] == sizeof(float))
+    // requires: result modifies src tensor
+    // supports: f32 only
     GGML_API struct ggml_tensor * ggml_rms_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1771,8 +1776,9 @@ extern "C" {
     // return view(a), b specifies the new shape
     // TODO: when we start computing gradient, make a copy instead of view
     // reshapes tensor a to have the same shape as tensor b
-    // input: tensor a[1024], tensor b[32,32] 
-    // output: tensor result[32,32] with a's data reshaped
+    // requires: a and b same total number of elements (ggml_nelements(a) == ggml_nelements(b))
+    // requires: a contiguous, b determines target shape
+    // note: returns view with modified shape metadata, no data movement
     GGML_API struct ggml_tensor * ggml_reshape(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1781,8 +1787,9 @@ extern "C" {
     // return view(a)
     // TODO: when we start computing gradient, make a copy instead of view
     // reshapes tensor a into 1D shape
-    // input: tensor a[8,16,4], ne0=512
-    // output: tensor result[512] with a's data as 1D view
+    // requires: ggml_nelements(a) == ne0 (element count must match)
+    // requires: a contiguous
+    // note: returns view with 1D shape metadata, no data movement
     GGML_API struct ggml_tensor * ggml_reshape_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
