@@ -40,11 +40,9 @@ FuseToSDPA::FuseToSDPA() {
         auto mask = pattern_to_output[m_mask];
         auto scale = pattern_to_output[m_scale];
 
-        auto v_trans =
-            register_new_node<ov::op::v1::Transpose>(v, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 2, 1}));
         auto mask_f16 = register_new_node<ov::op::v0::Convert>(mask, ov::element::f16);
         auto scale_f16 = register_new_node<ov::op::v0::Convert>(scale, ov::element::f16);
-        auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v_trans, mask_f16, scale_f16, false);
+        auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask_f16, scale_f16, false);
 
         ov::replace_node(m.get_match_root(), sdpa);
         ov::copy_runtime_info(m.get_matched_nodes(), sdpa);
