@@ -184,11 +184,15 @@ class GGUFWriter:
             if self.use_reflinks:
                 # reflinks require alignment to the filesystem blocks
                 block_size = os.stat(self.path.parent).st_blksize
-                # necessary to get an appropriate data start offset
-                # when padding for reflinks;
-                # using the real alignment (8 bytes, from safetensors)
-                # would result in a unusable base data offset
-                self.add_custom_alignment(block_size)
+                # necessary to get an appropriate data start offset when padding for reflinks;
+                # using the real alignment (8 bytes, from safetensors) would result in a unusable base data offset
+                self.data_alignment = block_size
+                # for all shards to allow reading them on their own
+                for i, kv in enumerate(self.kv_data):
+                    # insert at the start of the key-values
+                    if Keys.General.ALIGNMENT in kv:
+                        del kv[Keys.General.ALIGNMENT]
+                    self.kv_data[i] = { Keys.General.ALIGNMENT: GGUFValue(block_size, GGUFValueType.UINT32), **kv }
 
     def print_plan(self) -> list[Path]:
         logger.info("Writing the following files:")
