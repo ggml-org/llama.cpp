@@ -477,11 +477,11 @@ if __name__ == "__main__":
 
         if args.action == "format":
             formatted = format_template_content(template_content)
-            print(formatted)
+            print(formatted) # noqa: NP100
         elif args.action == "render":
             template = env.from_string(template_content)
             output = template.render(context)
-            print(output)
+            print(output) # noqa: NP100
 
     else:
         # GUI mode
