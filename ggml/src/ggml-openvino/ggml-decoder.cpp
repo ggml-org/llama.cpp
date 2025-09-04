@@ -73,6 +73,11 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
 }
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
+    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+        std::string filename = "cgraph.txt";
+        dump_cgraph(cgraph, filename);
+    }
+
     m_cgraph = cgraph;
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto* cur_node = cgraph->nodes[node_n];
@@ -173,32 +178,33 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             break;
         }
         case GGML_OP_CONT: {
-            if (ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src)) {
-                // The input comes from a PERMUTE
+            if (node->src[0]->op == GGML_OP_PERMUTE) {
                 m_op_case = 1;
-            } else {
+            } else if (node->src[0]->op == GGML_OP_TRANSPOSE) {
+                m_op_case = 2;
+            } else if (node->src[0]->op == GGML_OP_VIEW) {
                 // The input comes from a VIEW which is subtensor
-                m_op_case = 2;
-            }
-            break;
-        }
-        case GGML_OP_SET_ROWS: {
-            if (std::string(node->name).find("cache_k") == 0) {
-                m_op_case = 1;
-            } else {
-                m_op_case = 2;
+                m_op_case = 3;
             }
             break;
         }
         case GGML_OP_PERMUTE: {
-            if (node->src[0]->view_src == nullptr) {
-                // Permute Qcur
+            if (node->src[0]->op != GGML_OP_VIEW) {
                 m_op_case = 1;
             } else if (ggml_is_contiguous(node->src[0])) {
                 // Permute cache_k (view)
                 m_op_case = 2;
             } else {
-                // Permute cache_v (view)
+                // Permute cache_v (view), deprecated, cache_v will also fall to case 2
+                m_op_case = 3;
+            }
+            break;
+        }
+        case GGML_OP_MUL_MAT: {
+            if (node->src[0]->op == GGML_OP_CONT && node->src[0]->src[0]->op == GGML_OP_TRANSPOSE) {
+                m_op_case = 2;
+            } else if (node->src[0]->op == GGML_OP_VIEW && node->src[1]->op == GGML_OP_VIEW) {
+                // test-backend-ops case
                 m_op_case = 3;
             }
             break;
@@ -206,16 +212,12 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
         case GGML_OP_GET_ROWS: {
             if (node->src[1]->op == GGML_OP_VIEW) {
                 m_op_case = 2;
-            } else {
-                m_op_case = 1;
             }
             break;
         }
         case GGML_OP_ROPE: {
             if (node->src[0]->op == GGML_OP_VIEW) {
                 m_op_case = 2;
-            } else {
-                m_op_case = 1;
             }
             break;
         }
@@ -270,19 +272,9 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
     } else if (name.find("cache_k") == 0) {
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (name.find("cache_v") == 0) {
-        input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
+        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (const auto* op = get_tensor_used_op(src); op && op->op == GGML_OP_SET_ROWS) {
-        input_shape = ov::PartialShape{1, 1, -1};
-        if (m_is_static) {
-            if (m_is_first_token) {
-                // Dummy static shape, since the indices are not used in this case
-                input_shape = ov::PartialShape{1};
-            } else if (std::string(op->name).find("cache_k") == 0) {
-                input_shape = ov::PartialShape{1, 1, 1};
-            } else {
-                input_shape = ov::PartialShape{1, 1, m_num_heads_kv * m_head_size};
-            }
-        }
+        input_shape = ov::PartialShape{1, 1, m_is_static ? 1 : -1};
     } else if (src->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
         input_shape = ov::PartialShape{get_shape(src->view_src)};
@@ -610,26 +602,28 @@ void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecode
 
 const std::string& GgmlOvDecoder::get_op_type() const {
     static const std::map<ggml_op, std::string> ops = {
-        {GGML_OP_NONE,      "GGML_OP_NONE"     },
-        {GGML_OP_ACC,       "GGML_OP_ACC"      },
-        {GGML_OP_ADD,       "GGML_OP_ADD"      },
-        {GGML_OP_ADD1,      "GGML_OP_ADD1"     },
-        {GGML_OP_CONT,      "GGML_OP_CONT"     },
-        {GGML_OP_DIV,       "GGML_OP_DIV"      },
-        {GGML_OP_DUP,       "GGML_OP_DUP"      },
-        {GGML_OP_GET_ROWS,  "GGML_OP_GET_ROWS" },
-        {GGML_OP_MUL,       "GGML_OP_MUL"      },
-        {GGML_OP_MUL_MAT,   "GGML_OP_MUL_MAT"  },
-        {GGML_OP_PERMUTE,   "GGML_OP_PERMUTE"  },
-        {GGML_OP_RESHAPE,   "GGML_OP_RESHAPE"  },
-        {GGML_OP_RMS_NORM,  "GGML_OP_RMS_NORM" },
-        {GGML_OP_ROPE,      "GGML_OP_ROPE"     },
-        {GGML_OP_SCALE,     "GGML_OP_SCALE"    },
-        {GGML_OP_SOFT_MAX,  "GGML_OP_SOFT_MAX" },
-        {GGML_OP_SUB,       "GGML_OP_SUB"      },
-        {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
-        {GGML_OP_VIEW,      "GGML_OP_VIEW"     },
-        {GGML_OP_SET_ROWS,  "GGML_OP_SET_ROWS" },
+        {GGML_OP_NONE,           "GGML_OP_NONE"          },
+        {GGML_OP_ACC,            "GGML_OP_ACC"           },
+        {GGML_OP_ADD,            "GGML_OP_ADD"           },
+        {GGML_OP_ADD1,           "GGML_OP_ADD1"          },
+        {GGML_OP_CONT,           "GGML_OP_CONT"          },
+        {GGML_OP_DIV,            "GGML_OP_DIV"           },
+        {GGML_OP_DUP,            "GGML_OP_DUP"           },
+        {GGML_OP_GET_ROWS,       "GGML_OP_GET_ROWS"      },
+        {GGML_OP_MUL,            "GGML_OP_MUL"           },
+        {GGML_OP_MUL_MAT,        "GGML_OP_MUL_MAT"       },
+        {GGML_OP_PERMUTE,        "GGML_OP_PERMUTE"       },
+        {GGML_OP_RESHAPE,        "GGML_OP_RESHAPE"       },
+        {GGML_OP_RMS_NORM,       "GGML_OP_RMS_NORM"      },
+        {GGML_OP_ROPE,           "GGML_OP_ROPE"          },
+        {GGML_OP_SCALE,          "GGML_OP_SCALE"         },
+        {GGML_OP_SOFT_MAX,       "GGML_OP_SOFT_MAX"      },
+        {GGML_OP_SUB,            "GGML_OP_SUB"           },
+        {GGML_OP_TRANSPOSE,      "GGML_OP_TRANSPOSE"     },
+        {GGML_OP_VIEW,           "GGML_OP_VIEW"          },
+        {GGML_OP_SET_ROWS,       "GGML_OP_SET_ROWS"      },
+        {GGML_OP_CPY,            "GGML_OP_CPY"           },
+        {GGML_OP_FLASH_ATTN_EXT, "GGML_OP_FLASH_ATTN_EXT"},
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {
         {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },

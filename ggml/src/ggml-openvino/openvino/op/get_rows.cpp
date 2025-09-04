@@ -21,7 +21,6 @@ OutputVector translate_get_rows(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
 
     int op_case = context.get_op_case();
-    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported CONT case");
 
     Output<Node> res;
     auto data = context.get_input(0);
