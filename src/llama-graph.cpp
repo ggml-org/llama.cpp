@@ -258,6 +258,36 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+static void print_mask(float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
+    LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
+    const char * swa_type_str = (swa_type == LLAMA_SWA_TYPE_NONE) ? "LLAMA_SWA_TYPE_NONE" :
+                          (swa_type == LLAMA_SWA_TYPE_STANDARD) ? "LLAMA_SWA_TYPE_STANDARD" :
+                          (swa_type == LLAMA_SWA_TYPE_CHUNKED) ? "LLAMA_SWA_TYPE_CHUNKED" :
+                          (swa_type == LLAMA_SWA_TYPE_SYMMETRIC) ? "LLAMA_SWA_TYPE_SYMMETRIC" : "unknown";
+    LLAMA_LOG_DEBUG("%s: n_swa : %d, n_kv: %d, swq_type: %s\n", __func__, (int)n_swa, (int)n_kv, swa_type_str);
+    LLAMA_LOG_DEBUG("%s: '0' = can attend, '∞' = masked\n", __func__);
+    LLAMA_LOG_DEBUG("%s: Rows = query tokens, Columns = key/value tokens\n\n", __func__);
+
+    LLAMA_LOG_DEBUG("    ");
+    for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+        LLAMA_LOG_DEBUG("%2d", j);
+    }
+    LLAMA_LOG_DEBUG("\n");
+
+    for (int i = 0; i < std::min((int64_t)20, n_tokens); ++i) {
+        LLAMA_LOG_DEBUG(" %2d ", i);
+        for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+            float val = data[i * n_kv + j];
+            if (val == -INFINITY) {
+                LLAMA_LOG_DEBUG(" ∞");
+            } else {
+                LLAMA_LOG_DEBUG(" 0");
+            }
+        }
+        LLAMA_LOG_DEBUG("\n");
+    }
+}
+
 void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
@@ -277,20 +307,31 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                 for (int s = 0; s < ubatch->n_seq_id[i0]; ++s) {
                     const llama_seq_id s0 = ubatch->seq_id[i0][0];
 
-                    // TODO: reimplement this like in llama_kv_cache
-                    if (s0 == s1 && (!cparams.causal_attn || ubatch->pos[i0] <= ubatch->pos[i1])) {
-                        if (hparams.use_alibi) {
-                            f = -std::abs(ubatch->pos[i0] - ubatch->pos[i1]);
-                        } else {
-                            f = 0.0f;
-                        }
-                        break;
+                    if (s0 != s1) {
+                        continue; // skip different sequences
+                    }
+
+                    if (cparams.causal_attn && ubatch->pos[i0] > ubatch->pos[i1]) {
+                        continue; // skip future tokens for causal attention
+                    }
+
+                    if (hparams.is_masked_swa(ubatch->pos[i0], ubatch->pos[i1])) {
+                        continue; // skip masked tokens for SWA
+                    }
+
+                    // TODO: reimplement this like in llama_kv_cache_unified
+                    if (hparams.use_alibi) {
+                        f = -std::abs(ubatch->pos[i0] - ubatch->pos[i1]);
+                    } else {
+                        f = 0.0f;
                     }
                 }
-
                 data[h*(n_kv*n_tokens) + i1*n_kv + i0] = f;
             }
         }
+    }
+    if (debug) {
+        print_mask(data, n_tokens, n_kv, hparams.n_swa, hparams.swa_type);
     }
 }
 
