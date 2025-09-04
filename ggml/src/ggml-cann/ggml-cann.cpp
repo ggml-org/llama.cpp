@@ -1116,56 +1116,77 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
-// ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
-class NzWorkspace {
-public:
-    // Constructor: initialize with no allocated buffer
-    NzWorkspace() : ptr_(nullptr), allocated_(0) {}
+/**
+ * @brief Workspace for caching NZ buffers per device.
+ *
+ * This struct manages a device buffer used in NZ computations. It supports
+ * allocation, reallocation, and clearing of cached memory. The struct is
+ * designed to be used with a global array, one per device.
+ */
+struct ggml_cann_nz_workspace {
+    void*  ptr;       // Pointer to allocated device buffer
+    size_t allocated; // Size of currently allocated buffer in bytes
 
-    // Reset workspace to uninitialized state:
-    // - Free allocated device memory (if any)
-    // - Clear internal pointer and size
-    // Equivalent to release_nz_workspace(device) in old version
-    void init() {
-        if (ptr_) {
-            aclrtFree(ptr_);
-            ptr_ = nullptr;
-            allocated_ = 0;
+    /**
+     * @brief Constructor. Initializes the workspace with no allocated memory.
+     */
+    ggml_cann_nz_workspace() : ptr(nullptr), allocated(0) {}
+
+    /**
+     * @brief Free cached memory and reset the workspace.
+     *
+     * If a buffer has been allocated, this function releases it using
+     * aclrtFree and resets internal state.
+     */
+    void clear() {
+        if (ptr) {
+            aclrtFree(ptr);
+            ptr = nullptr;
+            allocated = 0;
         }
     }
 
-    // Allocate or reallocate the workspace buffer:
-    // - If requested size > currently allocated size:
-    //   * Free the old buffer (if any)
-    //   * Allocate a new buffer with requested size on device
-    // - If requested size <= currently allocated size:
-    //   * Do nothing (reuse existing buffer)
-    // Equivalent to relloc_nz_workspace(device, new_size) in old version
+    /**
+     * @brief Allocate or reallocate the workspace buffer.
+     *
+     * If the requested size is larger than the currently allocated size,
+     * the old buffer will be freed and a new buffer of the requested size
+     * will be allocated on the device.
+     *
+     * @param new_size Size in bytes to allocate for the workspace.
+     */
     void realloc(size_t new_size) {
-        if (new_size > allocated_) {
-            init();
-            ACL_CHECK(aclrtMalloc(&ptr_, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
-            allocated_ = new_size;
+        if (new_size > allocated) {
+            clear();
+            ACL_CHECK(aclrtMalloc(&ptr, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+            allocated = new_size;
         }
     }
 
-    // Return raw device pointer (may be nullptr if not allocated)
-    // Equivalent to get_nz_workspace(device) in old version
-    void* get() const { return ptr_; }
-
-private:
-    void* ptr_;  // Pointer to allocated device buffer
-    size_t allocated_;  // Size of currently allocated buffer (bytes)
+    /**
+     * @brief Get the device buffer pointer.
+     *
+     * @return Pointer to the allocated buffer, or nullptr if not allocated.
+     */
+    void* get() const { return ptr; }
 };
 
-// Global array of NzWorkspace, one per device
-// g_nz_workspaces[device] corresponds to workspace of given device
-static std::array<NzWorkspace, GGML_CANN_MAX_DEVICES> g_nz_workspaces;
+/**
+ * @brief Global array of NZ workspaces, one per device.
+ */
+static std::array<ggml_cann_nz_workspace, GGML_CANN_MAX_DEVICES> g_nz_workspaces;
 
-// Accessor for workspace of a given device
-// - Throws std::out_of_range if device index is invalid
-// - Caller can then use .init(), .realloc(), .get()
-inline NzWorkspace& get_workspace(int device) {
+/**
+ * @brief Get the NZ workspace for a specific device.
+ *
+ * This function returns a reference to the workspace corresponding to the
+ * given device index.
+ *
+ * @param device Device index (0-based). Must be less than GGML_CANN_MAX_DEVICES.
+ * @return Reference to the device's NZ workspace.
+ * @throws std::out_of_range if device index is invalid.
+ */
+inline ggml_cann_nz_workspace& get_nz_workspace(int device) {
     if (device < 0 || device >= static_cast<int>(g_nz_workspaces.size())) {
         throw std::out_of_range("device id out of range");
     }
@@ -1197,9 +1218,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) 
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    get_workspace(device).realloc(workspaceSize);
+    get_nz_workspace(device).realloc(workspaceSize);
 
-    void* g_nz_workspace = get_workspace(device).get();
+    void* g_nz_workspace = get_nz_workspace(device).get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -2280,7 +2301,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    get_workspace(cann_ctx->device).init();
+    get_nz_workspace(cann_ctx->device).clear();
 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
