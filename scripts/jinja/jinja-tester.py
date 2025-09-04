@@ -1,12 +1,157 @@
+#!/usr/bin/env python3
 import sys
 import json
+import argparse
+import jinja2.ext as jinja2_ext
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPlainTextEdit, QTextEdit, QPushButton
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QTextEdit,
+    QPushButton,
+    QFileDialog,
 )
 from PySide6.QtGui import QColor, QColorConstants, QTextCursor, QTextFormat
 from PySide6.QtCore import Qt, QRect, QSize
-from jinja2 import Environment, TemplateSyntaxError
+from jinja2 import TemplateSyntaxError
+from jinja2.sandbox import ImmutableSandboxedEnvironment
+from datetime import datetime
+
+
+def format_template_content(template_content):
+    """Format the Jinja template content using Jinja2's lexer."""
+    if not template_content.strip():
+        return template_content
+
+    env = ImmutableSandboxedEnvironment()
+    tokens = list(env.lex(template_content))
+    result = ""
+    indent_level = 0
+    i = 0
+
+    while i < len(tokens):
+        token = tokens[i]
+        _, token_type, token_value = token
+
+        if token_type == "block_begin":
+            block_start = i
+            # Collect all tokens for this block construct
+            construct_content = token_value
+            end_token_type = token_type.replace("_begin", "_end")
+            j = i + 1
+            while j < len(tokens) and tokens[j][1] != end_token_type:
+                construct_content += tokens[j][2]
+                j += 1
+
+            if j < len(tokens):  # Found the end token
+                construct_content += tokens[j][2]
+                i = j  # Skip to the end token
+
+                # Check for control structure keywords for indentation
+                stripped_content = construct_content.strip()
+                instr = block_start + 1
+                while tokens[instr][1] == "whitespace":
+                    instr = instr + 1
+
+                instruction_token = tokens[instr][2]
+                start_control_tokens = ["if", "for", "macro", "call", "block"]
+                end_control_tokens = ["end" + t for t in start_control_tokens]
+                is_control_start = any(
+                    instruction_token.startswith(kw) for kw in start_control_tokens
+                )
+                is_control_end = any(
+                    instruction_token.startswith(kw) for kw in end_control_tokens
+                )
+
+                # Adjust indentation for control structures
+                # For control end blocks, decrease indent BEFORE adding the content
+                if is_control_end:
+                    indent_level = max(0, indent_level - 1)
+
+                # Remove all previous whitespace before this block
+                result = result.rstrip()
+
+                # Add proper indent, but only if this is not the first token
+                added_newline = False
+                if result:  # Only add newline and indent if there's already content
+                    result += (
+                        "\n" + "  " * indent_level
+                    )  # Use 2 spaces per indent level
+                    added_newline = True
+                else:  # For the first token, don't add any indent
+                    result += ""
+
+                # Add the block content
+                result += stripped_content
+
+                # Add '-' after '%' if it wasn't there and we added a newline or indent
+                if (
+                    added_newline
+                    and stripped_content.startswith("{%")
+                    and not stripped_content.startswith("{%-")
+                ):
+                    # Add '-' at the beginning
+                    result = (
+                        result[: result.rfind("{%")]
+                        + "{%-"
+                        + result[result.rfind("{%") + 2 :]
+                    )
+                if stripped_content.endswith("%}") and not stripped_content.endswith(
+                    "-%}"
+                ):
+                    # Only add '-' if this is not the last token or if there's content after
+                    if i + 1 < len(tokens) and tokens[i + 1][1] != "eof":
+                        result = result[:-2] + "-%}"
+
+                # For control start blocks, increase indent AFTER adding the content
+                if is_control_start:
+                    indent_level += 1
+            else:
+                # Malformed template, just add the token
+                result += token_value
+        elif token_type == "variable_begin":
+            # Collect all tokens for this variable construct
+            construct_content = token_value
+            end_token_type = token_type.replace("_begin", "_end")
+            j = i + 1
+            while j < len(tokens) and tokens[j][1] != end_token_type:
+                construct_content += tokens[j][2]
+                j += 1
+
+            if j < len(tokens):  # Found the end token
+                construct_content += tokens[j][2]
+                i = j  # Skip to the end token
+
+                # For variable constructs, leave them alone
+                # Do not add indent or whitespace before or after them
+                result += construct_content
+            else:
+                # Malformed template, just add the token
+                result += token_value
+        elif token_type == "data":
+            # Handle data (text between Jinja constructs)
+            # For data content, preserve it as is
+            result += token_value
+        else:
+            # Handle any other tokens
+            result += token_value
+
+        i += 1
+
+    # Clean up leading and trailing empty lines that would change output
+    result = result.rstrip()
+
+    # But preserve the exact trailing newline behavior of the original
+    if template_content.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    elif not template_content.endswith("\n") and result.endswith("\n"):
+        result = result[:-1]
+
+    return result
 
 
 # ------------------------
@@ -48,7 +193,9 @@ class CodeEditor(QPlainTextEdit):
         if dy:
             self.line_number_area.scroll(0, dy)
         else:
-            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+            self.line_number_area.update(
+                0, rect.y(), self.line_number_area.width(), rect.height()
+            )
 
         if rect.contains(self.viewport().rect()):
             self.update_line_number_area_width(0)
@@ -56,26 +203,35 @@ class CodeEditor(QPlainTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
-        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(),
-                                                self.line_number_area_width(), cr.height()))
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height())
+        )
 
     def line_number_area_paint_event(self, event):
         from PySide6.QtGui import QPainter
+
         painter = QPainter(self.line_number_area)
         painter.fillRect(event.rect(), QColorConstants.LightGray)
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
-        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        top = int(
+            self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        )
         bottom = top + int(self.blockBoundingRect(block).height())
 
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
                 painter.setPen(QColorConstants.Black)
-                painter.drawText(0, top, self.line_number_area.width() - 2,
-                                 self.fontMetrics().height(),
-                                 Qt.AlignmentFlag.AlignRight, number)
+                painter.drawText(
+                    0,
+                    top,
+                    self.line_number_area.width() - 2,
+                    self.fontMetrics().height(),
+                    Qt.AlignmentFlag.AlignRight,
+                    number,
+                )
             block = block.next()
             top = bottom
             bottom = top + int(self.blockBoundingRect(block).height())
@@ -86,10 +242,10 @@ class CodeEditor(QPlainTextEdit):
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             line_color = QColorConstants.Yellow.lighter(160)
-            selection.format.setBackground(line_color) # type: ignore
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True) # type: ignore
-            selection.cursor = self.textCursor() # type: ignore
-            selection.cursor.clearSelection() # type: ignore
+            selection.format.setBackground(line_color)  # type: ignore
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # type: ignore
+            selection.cursor = self.textCursor()  # type: ignore
+            selection.cursor.clearSelection()  # type: ignore
             extra_selections.append(selection)
         self.setExtraSelections(extra_selections)
 
@@ -101,12 +257,14 @@ class CodeEditor(QPlainTextEdit):
             start = block.position() + max(0, col - 1)
             cursor.setPosition(start)
             if col <= len(text):
-                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter,
-                                    QTextCursor.MoveMode.KeepAnchor)
+                cursor.movePosition(
+                    QTextCursor.MoveOperation.NextCharacter,
+                    QTextCursor.MoveMode.KeepAnchor,
+                )
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160)) # type: ignore
-            extra.cursor = cursor # type: ignore
+            extra.format.setBackground(color.lighter(160))  # type: ignore
+            extra.cursor = cursor  # type: ignore
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -117,8 +275,8 @@ class CodeEditor(QPlainTextEdit):
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160)) # type: ignore
-            extra.cursor = cursor # type: ignore
+            extra.format.setBackground(color.lighter(160))  # type: ignore
+            extra.cursor = cursor  # type: ignore
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -168,12 +326,25 @@ class JinjaTester(QMainWindow):
 
         # -------- Render button and status --------
         btn_layout = QHBoxLayout()
+
+        # Load template button
+        self.load_btn = QPushButton("Load Template")
+        self.load_btn.clicked.connect(self.load_template)
+        btn_layout.addWidget(self.load_btn)
+
+        # Format template button
+        self.format_btn = QPushButton("Format")
+        self.format_btn.clicked.connect(self.format_template)
+        btn_layout.addWidget(self.format_btn)
+
         self.render_btn = QPushButton("Render")
         self.render_btn.clicked.connect(self.render_template)
         btn_layout.addWidget(self.render_btn)
-        self.status_label = QLabel("Ready")
-        btn_layout.addWidget(self.status_label)
         main_layout.addLayout(btn_layout)
+
+        # Status label below buttons
+        self.status_label = QLabel("Ready")
+        main_layout.addWidget(self.status_label)
 
         self.setCentralWidget(central)
 
@@ -191,7 +362,29 @@ class JinjaTester(QMainWindow):
             self.status_label.setText(f"❌ JSON Error: {e}")
             return
 
-        env = Environment()
+        def raise_exception(text: str) -> str:
+            raise RuntimeError(text)
+
+        env = ImmutableSandboxedEnvironment(
+            trim_blocks=True,
+            lstrip_blocks=True,
+            extensions=[jinja2_ext.loopcontrols],
+        )
+        env.filters["tojson"] = (
+            lambda x,
+            indent=None,
+            separators=None,
+            sort_keys=False,
+            ensure_ascii=False: json.dumps(
+                x,
+                indent=indent,
+                separators=separators,
+                sort_keys=sort_keys,
+                ensure_ascii=ensure_ascii,
+            )
+        )
+        env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)
+        env.globals["raise_exception"] = raise_exception
         try:
             template = env.from_string(template_str)
             output = template.render(context)
@@ -221,9 +414,78 @@ class JinjaTester(QMainWindow):
             self.output_edit.setPlainText(error_msg)
             self.status_label.setText(f"❌ {error_msg}")
 
+    def load_template(self):
+        """Load a Jinja template from a file using a file dialog."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Jinja Template",
+            "",
+            "Template Files (*.jinja *.j2 *.html *.txt);;All Files (*)",
+        )
+
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    self.template_edit.setPlainText(content)
+                    self.status_label.setText(f"✅ Loaded template from {file_path}")
+            except Exception as e:
+                self.status_label.setText(f"❌ Error loading file: {str(e)}")
+
+    def format_template(self):
+        """Format the Jinja template using Jinja2's lexer for proper parsing."""
+        try:
+            template_content = self.template_edit.toPlainText()
+            if not template_content.strip():
+                self.status_label.setText("⚠️ Template is empty")
+                return
+
+            formatted_content = format_template_content(template_content)
+            self.template_edit.setPlainText(formatted_content)
+            self.status_label.setText("✅ Template formatted")
+        except Exception as e:
+            self.status_label.setText(f"❌ Error formatting template: {str(e)}")
+
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = JinjaTester()
-    window.show()
-    sys.exit(app.exec())
+    if len(sys.argv) > 1:
+        # CLI mode
+        parser = argparse.ArgumentParser(description="Jinja Template Tester")
+        parser.add_argument(
+            "--template", required=True, help="Path to Jinja template file"
+        )
+        parser.add_argument("--context", required=True, help="JSON string for context")
+        parser.add_argument(
+            "--action",
+            choices=["format", "render", "test-idempotent", "test-output"],
+            default="render",
+            help="Action to perform",
+        )
+        args = parser.parse_args()
+
+        # Load template
+        with open(args.template, "r", encoding="utf-8") as f:
+            template_content = f.read()
+
+        # Load JSON
+        context = json.loads(args.context)
+        # Add missing variables
+        context.setdefault("bos_token", "")
+        context.setdefault("add_generation_prompt", False)
+
+        env = ImmutableSandboxedEnvironment()
+
+        if args.action == "format":
+            formatted = format_template_content(template_content)
+            print(formatted)
+        elif args.action == "render":
+            template = env.from_string(template_content)
+            output = template.render(context)
+            print(output)
+
+    else:
+        # GUI mode
+        app = QApplication(sys.argv)
+        window = JinjaTester()
+        window.show()
+        sys.exit(app.exec())
