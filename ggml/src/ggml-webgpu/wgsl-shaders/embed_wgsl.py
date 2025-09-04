@@ -46,11 +46,17 @@ def generate_variants(shader_path, output_dir, outfile):
     except ValueError:
         write_shader(shader_base_name, text, output_dir, outfile)
     else:
-        decls_map = parse_decls(extract_block(text, "DECLS"))
-        shader_template = extract_block(text, "SHADER")
+        try:
+            decls_map = parse_decls(extract_block(text, "DECLS"))
+        except ValueError:
+            decls_map = {}
 
+        shader_template = extract_block(text, "SHADER")
         for variant in variants:
-            decls = variant["DECLS"]
+            if "DECLS" in variant:
+                decls = variant["DECLS"]
+            else:
+                decls = []
             decls_code = ""
             for key in decls:
                 if key not in decls_map:
@@ -60,7 +66,12 @@ def generate_variants(shader_path, output_dir, outfile):
             shader_variant = replace_placeholders(shader_template, variant["REPLS"])
             final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
 
-            output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
+            if "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
+            elif "TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
+            else:
+                output_name = shader_base_name
             write_shader(output_name, final_shader, output_dir, outfile)
 
 
