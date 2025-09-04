@@ -879,24 +879,28 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // element-wise addition: result[i] = a[i] + b[i]
-    // input: tensor a[128,64], tensor b[128,64] 
-    // output: tensor result[128,64] where result[i,j] = a[i,j] + b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a and dst same shape, a contiguous in dim 0, dst contiguous in dim 0  
+    // supports: f32, f16, bf16, quantized types with type mixing
+    // broadcasting: smaller tensor b expanded to match larger tensor a
     GGML_API struct ggml_tensor * ggml_add(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise addition performed in-place on tensor a
-    // input: tensor a[128,64], tensor b[128,64]
-    // output: tensor a[128,64] modified where a[i,j] += b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a contiguous in dim 0, result modifies a
+    // supports: f32, f16, bf16, quantized types with type mixing
     GGML_API struct ggml_tensor * ggml_add_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise addition with type casting
-    // input: tensor a[64,32] F32, tensor b[64,32] F16, type GGML_TYPE_F32
-    // output: tensor result[64,32] F32 where result[i,j] = a[i,j] + (F32)b[i,j]  
+    // requires: a and b same shape, result cast to specified type
+    // requires: a and b contiguous in dim 0, dst contiguous in dim 0
+    // supports: any combination of f32, f16, bf16 input types  
     GGML_API struct ggml_tensor * ggml_add_cast(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -911,16 +915,18 @@ extern "C" {
             struct ggml_tensor  * ids);
 
     // adds scalar tensor b to each element of tensor a
-    // input: tensor a[128,64], scalar b[1] with value 5.0
-    // output: tensor result[128,64] where result[i,j] = a[i,j] + 5.0
+    // requires: b must be scalar tensor (ggml_is_scalar(b))
+    // requires: a and dst same shape
+    // supports: f32, f16, bf16, quantized types with type mixing
     GGML_API struct ggml_tensor * ggml_add1(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // adds scalar tensor b to each element of tensor a in-place
-    // input: tensor a[128,64], scalar b[1] with value 2.5
-    // output: tensor a[128,64] modified where a[i,j] += 2.5  
+    // requires: b must be scalar tensor (ggml_is_scalar(b))
+    // requires: result modifies a
+    // supports: f32, f16, bf16, quantized types with type mixing  
     GGML_API struct ggml_tensor * ggml_add1_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -951,48 +957,54 @@ extern "C" {
             size_t                offset);
 
     // element-wise subtraction: result[i] = a[i] - b[i]
-    // input: tensor a[64,128], tensor b[64,128]
-    // output: tensor result[64,128] where result[i,j] = a[i,j] - b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a and dst same shape, a contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_sub(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise subtraction performed in-place on tensor a
-    // input: tensor a[64,128], tensor b[64,128]
-    // output: tensor a[64,128] modified where a[i,j] -= b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a contiguous in dim 0, result modifies a
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_sub_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise multiplication: result[i] = a[i] * b[i]
-    // input: tensor a[32,64], tensor b[32,64]
-    // output: tensor result[32,64] where result[i,j] = a[i,j] * b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a and dst same shape, a contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_mul(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise multiplication performed in-place on tensor a
-    // input: tensor a[32,64], tensor b[32,64]  
-    // output: tensor a[32,64] modified where a[i,j] *= b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a contiguous in dim 0, result modifies a
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_mul_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise division: result[i] = a[i] / b[i]
-    // input: tensor a[16,32], tensor b[16,32]
-    // output: tensor result[16,32] where result[i,j] = a[i,j] / b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a and dst same shape, a contiguous in dim 0, dst contiguous in dim 0
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_div(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
     // element-wise division performed in-place on tensor a
-    // input: tensor a[16,32], tensor b[16,32]
-    // output: tensor a[16,32] modified where a[i,j] /= b[i,j]
+    // requires: ggml_can_repeat(b, a) - b must be broadcastable to a
+    // requires: a contiguous in dim 0, result modifies a
+    // supports: f32, f16, bf16 types with type mixing
     GGML_API struct ggml_tensor * ggml_div_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1542,8 +1554,10 @@ extern "C" {
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
     // result is n columns, m rows => [ne03 * x, ne02 * y, m, n]
     // matrix multiplication: C = A * B^T
-    // input: tensor a[batch,seq_len,hidden], tensor b[vocab_size,hidden] 
-    // output: tensor result[batch,seq_len,vocab_size] = a * b^T
+    // requires: a->ne[0] == b->ne[0] (inner dimensions must match)
+    // requires: a and b contiguous in dim 0, output contiguous and not permuted
+    // requires: batch dimensions a->ne[2,3] == b->ne[2,3] (if b has batch dims)
+    // supports: various quantized and float types with mixed precision
     GGML_API struct ggml_tensor * ggml_mul_mat(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1557,8 +1571,10 @@ extern "C" {
 
     // indirect matrix multiplication
     // selects matrices from 'as' using indices in 'ids' for multiplication with 'b'
-    // input: tensor as[num_experts,hidden,hidden], tensor b[batch,seq_len,hidden], tensor ids[batch,seq_len]
-    // output: tensor result[batch,seq_len,hidden] using selected expert matrices
+    // requires: as contiguous, b contiguous in dim 0, ids valid matrix indices
+    // requires: as->ne[2] == ids max value + 1 (enough expert matrices)
+    // requires: ids same batch dimensions as b in dims 1,2,3
+    // supports: expert mixture models with dynamic matrix selection
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -1569,8 +1585,9 @@ extern "C" {
     // B: p columns, n rows,
     // result is m columns, p rows
     // outer product: C[i,j] = A[i,:] * B[j,:]
-    // input: tensor a[hidden_size,seq_len_a], tensor b[hidden_size,seq_len_b]
-    // output: tensor result[seq_len_a,seq_len_b] outer product
+    // requires: a and b same number of columns (ne[0])
+    // requires: a and b 1D or 2D tensors only
+    // supports: f32 types, output always f32
     GGML_API struct ggml_tensor * ggml_out_prod(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
