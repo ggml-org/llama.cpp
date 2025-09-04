@@ -30,7 +30,7 @@ from .constants import (
 )
 
 from .quants import quant_shape_from_byte_shape
-from .utility import LocalTensorRange, best_alignment_offset, reflink_tensor_ranges
+from .utility import LocalTensorRange, best_extra_offset
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class GGUFWriter:
         self.endianess = endianess
         self.data_alignment = GGUF_DEFAULT_ALIGNMENT
         self.use_reflinks = use_reflinks and hasattr(os, "copy_file_range")
-        self.use_temp_file = use_temp_file if not self.use_reflinks else False
+        self.use_temp_file = False if self.use_reflinks else use_temp_file
         self.temp_file = None
         self.tensors = [{}]
         self.kv_data = [{}]
@@ -109,10 +109,6 @@ class GGUFWriter:
 
         if self.small_first_shard:
             self.tensors.append({})
-
-        if self.use_reflinks:
-            # common default block size for COW filesystems
-            self.add_custom_alignment(4096)
 
         self.add_architecture()
 
@@ -184,6 +180,15 @@ class GGUFWriter:
             filenames = self.print_plan()
             self.fout = [open(filename, "wb") for filename in filenames]
             self.state = WriterState.EMPTY
+
+            if self.use_reflinks:
+                # reflinks require alignment to the filesystem blocks
+                block_size = os.stat(self.path.parent).st_blksize
+                # necessary to get an appropriate data start offset
+                # when padding for reflinks;
+                # using the real alignment (8 bytes, from safetensors)
+                # would result in a unusable base data offset
+                self.add_custom_alignment(block_size)
 
     def print_plan(self) -> list[Path]:
         logger.info("Writing the following files:")
@@ -264,11 +269,11 @@ class GGUFWriter:
             offset_tensor = 0
 
             for name, ti in tensors.items():
-                align_offset = 0
+                extra_offset = 0
                 if self.use_reflinks:
                     ranges: tuple[LocalTensorRange, ...] = getattr(ti.tensor, "_ranges", ())
                     if len(ranges) > 0:
-                        align_offset = best_alignment_offset(ranges, self.data_alignment)
+                        extra_offset = best_extra_offset(ranges, offset_tensor)
 
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
@@ -276,8 +281,8 @@ class GGUFWriter:
                 for j in range(n_dims):
                     ti_data += self._pack("Q", ti.shape[n_dims - 1 - j])
                 ti_data += self._pack("I", ti.dtype)
-                ti_data += self._pack("Q", offset_tensor + align_offset)
-                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes + align_offset, self.data_alignment)
+                ti_data += self._pack("Q", offset_tensor + extra_offset)
+                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes + extra_offset, self.data_alignment)
 
             fout.write(ti_data)
             fout.flush()
@@ -405,13 +410,12 @@ class GGUFWriter:
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
-            fp.write(bytes([0] * pad))
+            fp.write(b"\x00" * pad)
 
     def write_tensor_data(self, tensor: np.ndarray[Any, Any]) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
-        assert not self.use_reflinks  # TODO: handle this here too
 
         if self.endianess == GGUFEndian.BIG:
             tensor.byteswap(inplace=True)
@@ -432,7 +436,7 @@ class GGUFWriter:
 
         self.write_padding(fout, fout.tell())
         tensor.tofile(fout)
-        self.write_padding(fout, tensor.nbytes)
+        self.write_padding(fout, fout.tell())
 
         self.state = WriterState.WEIGHTS
 
@@ -467,18 +471,14 @@ class GGUFWriter:
                 for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
-                    if self.use_reflinks and len(ranges := getattr(ti.tensor, "_ranges", ())) > 0:
+                    if self.use_reflinks and len(getattr(ti.tensor, "_ranges", ())) > 0:
                         logger.debug(f"using reflinks for {name}")
-                        start_offset = fout.tell()
-                        reflink_tensor_ranges(fout, ranges, self.data_alignment)
-                        self.write_padding(fout, fout.tell() - start_offset)
-                    else:
-                        ti.tensor.tofile(fout)
-                        self.write_padding(fout, ti.nbytes)
+                    ti.tensor.tofile(fout)
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
                         bar.update(ti.nbytes)
+                    self.write_padding(fout, fout.tell())
                     ti.tensor = None
         else:
             self.temp_file.seek(0)

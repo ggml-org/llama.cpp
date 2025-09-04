@@ -1,12 +1,13 @@
 from __future__ import annotations
 from abc import ABC, ABCMeta, abstractmethod
 
+from io import BufferedWriter
 import logging
 from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import DTypeLike
-from .utility import LocalTensorRange
+from .utility import LocalTensorRange, copy_tensor_ranges
 
 
 logger = logging.getLogger(__name__)
@@ -224,8 +225,11 @@ class LazyNumpyTensor(LazyBase):
         ranges = self._ranges if self._meta.dtype == dtype else ()
         return type(self)(meta=meta, args=full_args, kwargs=kwargs, func=(lambda a, *args, **kwargs: a.astype(*args, **kwargs)), ranges=ranges)
 
-    def tofile(self, *args, **kwargs):
-        eager = LazyNumpyTensor.to_eager(self)
-        return eager.tofile(*args, **kwargs)
+    def tofile(self, fid, *args, **kwargs):
+        if isinstance(fid, BufferedWriter) and len(self._ranges) > 0:
+            return copy_tensor_ranges(fid, self._ranges)
+        else:
+            eager = LazyNumpyTensor.to_eager(self)
+            return eager.tofile(fid, *args, **kwargs)
 
     # TODO: __array_function__
