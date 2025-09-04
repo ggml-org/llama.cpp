@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
-project("ggml" C CXX)
+project("ggml" C CXX ASM)
 include(CheckIncludeFileCXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -129,7 +129,9 @@ endif()
 option(GGML_LASX             "ggml: enable lasx"             ON)
 option(GGML_LSX              "ggml: enable lsx"              ON)
 option(GGML_RVV              "ggml: enable rvv"              ON)
-option(GGML_RV_ZFH           "ggml: enable riscv zfh"        OFF)
+option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
+option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
+option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ON)
 option(GGML_NNPA             "ggml: enable nnpa"             OFF)  # temp disabled by default, see: https://github.com/ggml-org/llama.cpp/issues/14877
