@@ -21,13 +21,12 @@ OutputVector translate_permute(const NodeContext& context) {
     num_inputs_check(context, 1, 1);
 
     int op_case = context.get_op_case();
-    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2 || op_case == 3, "Unsupported CONT case");
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2 || op_case == 3, "Unsupported PERMUTE case");
     ov::Output<Node> res;
 
     if (op_case == 1) {
-        auto perm = argsort_descend(context.get_output_stride(0));
         res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
-                                                      ov::op::v0::Constant::create(ov::element::i64, {3}, perm));
+                                                      ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
     } else {
         auto src = context.get_input(0);
         auto attention_size = context.get_input("attention_size");

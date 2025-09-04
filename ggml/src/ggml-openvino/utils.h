@@ -40,7 +40,8 @@ void set_zero_diagonal(std::vector<float>& matrix, size_t dim);
 
 bool is_prefill(struct ggml_cgraph * cgraph);
 
-ov::AnyMap get_npu_config();
+ov::AnyMap get_npu_prefill_config();
+ov::AnyMap get_npu_generate_config();
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name);
 

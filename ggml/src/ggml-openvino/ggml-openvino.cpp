@@ -270,12 +270,14 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
         }
     }
 
-    if (op->op == GGML_OP_MUL_MAT) {
-        if ((op->src[0]->view_src && op->src[0]->op != GGML_OP_PERMUTE) ||
-            (op->src[1]->view_src && op->src[1]->op != GGML_OP_PERMUTE)) {
-            GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with view_src tensors that are not PERMUTE\n");
+    if (op->op == GGML_OP_CPY) {
+        if (op->src[1] != op) {
+            GGML_LOG_WARN("OpenVINO backend only supports CPY that is a cast\n");
             return true;
         }
+    }
+
+    if (op->op == GGML_OP_MUL_MAT) {
         if (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16) {
             // Has accuracy issue, try enabling this and see `test-backend-ops -o "MUL_MAT"`
             GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with two F16 tensors\n");
@@ -346,7 +348,9 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_RMS_NORM,
                                                  GGML_OP_SCALE,
                                                  GGML_OP_SOFT_MAX,
-                                                 GGML_OP_SET_ROWS};
+                                                 GGML_OP_SET_ROWS,
+                                                 GGML_OP_FLASH_ATTN_EXT,
+                                                 GGML_OP_CPY};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_SILU,
     };

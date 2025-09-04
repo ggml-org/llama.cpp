@@ -26,6 +26,8 @@ GGML_OP_CONVERTER(translate_transpose);
 GGML_OP_CONVERTER(translate_view);
 GGML_OP_CONVERTER(translate_glu_swiglu);
 GGML_OP_CONVERTER(translate_set_rows);
+GGML_OP_CONVERTER(translate_cpy);
+GGML_OP_CONVERTER(translate_flash_attn_ext);
 
 } // namespace op
 

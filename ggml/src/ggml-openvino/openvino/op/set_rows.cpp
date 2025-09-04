@@ -32,21 +32,7 @@ OutputVector translate_set_rows(const NodeContext& context) {
     FRONT_END_OP_CONVERSION_CHECK(dst_shape[0] == 1, "Unsupported shape in SET_ROWS");
 
     if (context.is_static() && context.is_first_token()) {
-        Output<Node> res;
-        if (context.get_op_case() == 2) {
-            res = std::make_shared<ov::op::v1::Reshape>(
-                data,
-                ov::op::v0::Constant::create(
-                    ov::element::i64,
-                    {3},
-                    {context.get_context_size(), context.get_num_heads_kv(), context.get_head_size()}),
-                false);
-            res = std::make_shared<ov::op::v1::Transpose>(
-                res, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 2, 0}));
-        } else {
-            res = data;
-        }
-        return rename_outputs_with_suffix({res}, context.get_name());
+        return rename_outputs_with_suffix({data}, context.get_name());
     }
 
     auto indices = context.get_input(1);

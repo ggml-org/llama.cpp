@@ -65,6 +65,7 @@ OutputVector rename_outputs_with_suffix(const OutputVector& outputs, const std::
         name += "_";
         name += suffix;
         node->set_friendly_name(name);
+        // std::cout << name << "  " << output.get_partial_shape() << std::endl;
     }
     return outputs;
 }

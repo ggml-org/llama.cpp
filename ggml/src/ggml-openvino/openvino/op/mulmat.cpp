@@ -27,15 +27,26 @@ namespace op {
 OutputVector translate_mulmat(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
 
+    int op_case = context.get_op_case();
+
     ov::Output<Node> res;
     ov::Output<ov::Node> B = context.get_input(0);
     ov::Output<ov::Node> A = context.get_input(1);
 
+    bool transpose_b = true;
+    if (op_case == 2) {
+        B = B.get_node_shared_ptr()->input_value(0);
+        transpose_b = false;
+    } else if (op_case == 3) {
+        B = process_view_input(context, 0);
+        A = process_view_input(context, 1);
+    }
+
     bool convert_out_type = false;
     if (ov::op::util::is_constant(B.get_node()) && context.get_input_type(0) != context.get_input_type(1)) {
-        B = std::make_shared<ov::op::v0::Convert>(context.get_input(0), context.get_input_type(1));
+        B = std::make_shared<ov::op::v0::Convert>(B, context.get_input_type(1));
     } else if (context.get_input_type(0) != context.get_input_type(1)) {
-        A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
+        A = std::make_shared<ov::op::v0::Convert>(A, context.get_input_type(0));
         convert_out_type = true;
     }
 
@@ -72,10 +83,10 @@ OutputVector translate_mulmat(const NodeContext& context) {
         }
 
         if (convert_out_type) {
-            auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, true);
+            auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
             res = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
         } else {
-            res = std::make_shared<ov::op::v0::MatMul>(A, B, false, true);
+            res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
         }
 
         return rename_outputs_with_suffix({res}, context.get_name());
