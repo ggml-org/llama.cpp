@@ -457,7 +457,7 @@ if __name__ == "__main__":
         parser.add_argument("--context", required=True, help="JSON string for context")
         parser.add_argument(
             "--action",
-            choices=["format", "render", "test-idempotent", "test-output"],
+            choices=["format", "render"],
             default="render",
             help="Action to perform",
         )
