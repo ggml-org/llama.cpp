@@ -344,7 +344,7 @@ fun AppContent(
                                         modelsManagementViewModel.toggleImportMenu(false)
                                     },
                                     importFromHuggingFace = {
-                                        modelsManagementViewModel.queryModelsFromHuggingFace()
+                                        modelsManagementViewModel.queryModelsFromHuggingFace(memoryUsage)
                                         modelsManagementViewModel.toggleImportMenu(false)
                                     }
                                 ),

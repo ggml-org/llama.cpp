@@ -141,56 +141,56 @@ enum class ModelFilter(val displayName: String, val predicate: (ModelInfo) -> Bo
     }),
     SMALL_PARAMS("Small (1-3B parameters)", {
         it.metadata.basic.sizeLabel?.let { size ->
-            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 1f && n <= 3f } == true
+            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 1f && n < 4f } == true
         } == true
     }),
     MEDIUM_PARAMS("Medium (4-7B parameters)", {
         it.metadata.basic.sizeLabel?.let { size ->
-            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 4f && n <= 7f } == true
+            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 4f && n < 8f } == true
         } == true
     }),
-    LARGE_PARAMS("Large (8-13B parameters)", {
+    LARGE_PARAMS("Large (8-12B parameters)", {
         it.metadata.basic.sizeLabel?.let { size ->
-            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 8f && n <= 13f } == true
+            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 8f && n < 13f } == true
         } == true
     }),
     XLARGE_PARAMS("X-Large (>13B parameters)", {
         it.metadata.basic.sizeLabel?.let { size ->
-            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n > 13f } == true
+            size.contains("B") && size.replace("B", "").toFloatOrNull()?.let { n -> n >= 13f } == true
         } == true
     }),
 
     // Context length filters
-    TINY_CONTEXT("Tiny context (<4K)", {
-        it.metadata.dimensions?.contextLength?.let { it < 4096 } == true
+    TINY_CONTEXT("Tiny context (<4K)", { model ->
+        model.metadata.dimensions?.contextLength?.let { it < 4096 } == true
     }),
-    SHORT_CONTEXT("Short context (4-8K)", {
-        it.metadata.dimensions?.contextLength?.let { it >= 4096 && it <= 8192 } == true
+    SHORT_CONTEXT("Short context (4-8K)", { model ->
+        model.metadata.dimensions?.contextLength?.let { it >= 4096 && it <= 8192 } == true
     }),
-    MEDIUM_CONTEXT("Medium context (8-32K)", {
-        it.metadata.dimensions?.contextLength?.let { it > 8192 && it <= 32768 } == true
+    MEDIUM_CONTEXT("Medium context (8-32K)", { model ->
+        model.metadata.dimensions?.contextLength?.let { it > 8192 && it <= 32768 } == true
     }),
-    LONG_CONTEXT("Long context (32-128K)", {
-        it.metadata.dimensions?.contextLength?.let { it > 32768 && it <= 131072 } == true
+    LONG_CONTEXT("Long context (32-128K)", { model ->
+        model.metadata.dimensions?.contextLength?.let { it > 32768 && it <= 131072 } == true
     }),
-    XLARGE_CONTEXT("Extended context (>128K)", {
-        it.metadata.dimensions?.contextLength?.let { it > 131072 } == true
+    XLARGE_CONTEXT("Extended context (>128K)", { model ->
+        model.metadata.dimensions?.contextLength?.let { it > 131072 } == true
     }),
 
     // Quantization filters
-    INT2_QUANT("2-bit quantization", {
-        it.formattedQuantization.let { it.contains("Q2") || it.contains("IQ2") }
+    INT2_QUANT("2-bit quantization", { model ->
+        model.formattedQuantization.let { it.contains("Q2") || it.contains("IQ2") }
     }),
-    INT3_QUANT("3-bit quantization", {
-        it.formattedQuantization.let { it.contains("Q3") || it.contains("IQ3") }
+    INT3_QUANT("3-bit quantization", { model ->
+        model.formattedQuantization.let { it.contains("Q3") || it.contains("IQ3") }
     }),
-    INT4_QUANT("4-bit quantization", {
-        it.formattedQuantization.let { it.contains("Q4") || it.contains("IQ4") }
+    INT4_QUANT("4-bit quantization", { model ->
+        model.formattedQuantization.let { it.contains("Q4") || it.contains("IQ4") }
     }),
 
     // Special features
-    MULTILINGUAL("Multilingual", {
-        it.languages?.let { languages ->
+    MULTILINGUAL("Multilingual", { model ->
+        model.languages?.let { languages ->
             languages.size > 1 || languages.any { it.contains("multi", ignoreCase = true) }
         } == true
     }),

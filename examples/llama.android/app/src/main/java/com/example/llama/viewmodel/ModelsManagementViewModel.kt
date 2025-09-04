@@ -17,6 +17,7 @@ import com.example.llama.data.repo.ModelRepository
 import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.data.source.remote.HuggingFaceModelDetails
+import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.util.formatFileByteSize
 import com.example.llama.util.getFileNameFromUri
 import com.example.llama.util.getFileSizeFromUri
@@ -183,11 +184,12 @@ class ModelsManagementViewModel @Inject constructor(
     /**
      * Query models on HuggingFace available for download even without signing in
      */
-    fun queryModelsFromHuggingFace(cap: Int = FETCH_HUGGINGFACE_MODELS_CAP_SIZE) {
+    fun queryModelsFromHuggingFace(memoryUsage: MemoryMetrics) {
         huggingFaceQueryJob = viewModelScope.launch {
             _managementState.emit(Download.Querying)
             try {
-                val models = modelRepository.fetchPreselectedHuggingFaceModels().map(HuggingFaceModelDetails::toModel)
+                val models = modelRepository.fetchPreselectedHuggingFaceModels(memoryUsage)
+                    .map(HuggingFaceModelDetails::toModel)
                 _managementState.emit(Download.Ready(models))
             } catch (_: CancellationException) {
                 resetManagementState()
@@ -300,7 +302,6 @@ class ModelsManagementViewModel @Inject constructor(
         private val TAG = ModelsManagementViewModel::class.java.simpleName
 
         private const val FETCH_HUGGINGFACE_MODELS_LIMIT_SIZE = 50
-        private const val FETCH_HUGGINGFACE_MODELS_CAP_SIZE = 12
         private const val DELETE_SUCCESS_RESET_TIMEOUT_MS = 1000L
     }
 }

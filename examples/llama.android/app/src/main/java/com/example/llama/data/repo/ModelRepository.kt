@@ -16,6 +16,7 @@ import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.data.source.remote.HuggingFaceModelDetails
 import com.example.llama.data.source.remote.HuggingFaceRemoteDataSource
+import com.example.llama.monitoring.MemoryMetrics
 import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.util.formatFileByteSize
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -83,7 +84,7 @@ interface ModelRepository {
     /**
      * Fetch details of preselected models
      */
-    suspend fun fetchPreselectedHuggingFaceModels(): List<HuggingFaceModelDetails>
+    suspend fun fetchPreselectedHuggingFaceModels(memoryUsage: MemoryMetrics): List<HuggingFaceModelDetails>
 
     /**
      * Search models on HuggingFace
@@ -321,8 +322,8 @@ class ModelRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun fetchPreselectedHuggingFaceModels() = withContext(Dispatchers.IO) {
-        huggingFaceRemoteDataSource.fetchPreselectedModels()
+    override suspend fun fetchPreselectedHuggingFaceModels(memoryUsage: MemoryMetrics) = withContext(Dispatchers.IO) {
+        huggingFaceRemoteDataSource.fetchPreselectedModels(memoryUsage)
     }
 
     override suspend fun searchHuggingFaceModels(
