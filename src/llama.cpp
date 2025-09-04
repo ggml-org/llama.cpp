@@ -259,7 +259,7 @@ static struct llama_model * llama_model_load_from_file_impl(
     }
 
     for (auto * dev : model->devices) {
-         ggml_backend_dev_props props;
+        ggml_backend_dev_props props;
         ggml_backend_dev_get_props(dev, &props);
         LLAMA_LOG_INFO("%s: using device %s (%s) (%s) - %zu MiB free\n", __func__,
                 ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
