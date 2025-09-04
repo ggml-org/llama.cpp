@@ -945,6 +945,7 @@ struct cmd_params_instance {
                         exit(1);
                     }
                 }
+                // FIXME: use llama.cpp device selection logic
                 // add local GPU devices if any
                 for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                     ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -956,6 +957,10 @@ struct cmd_params_instance {
 
                         case GGML_BACKEND_DEVICE_TYPE_GPU:
                             devices.push_back(dev);
+                            break;
+
+                        case GGML_BACKEND_DEVICE_TYPE_IGPU:
+                            // iGPUs are not used when there are RPC servers
                             break;
                     }
                 }
