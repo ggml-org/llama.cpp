@@ -4462,12 +4462,10 @@ static void ggml_vk_instance_init() {
 
         // If no dedicated GPUs found, fall back to the first non-CPU device.
         // If only CPU devices are available, return without devices.
-        if (vk_instance.device_indices.empty()) {
-            for (size_t i = 0; i < devices.size(); i++) {
-                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
-                    vk_instance.device_indices.push_back(i);
-                    break;
-                }
+        for (size_t i = 0; i < devices.size(); i++) {
+            if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
+                vk_instance.device_indices.push_back(i);
+                break;
             }
         }
 
