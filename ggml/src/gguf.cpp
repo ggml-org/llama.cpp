@@ -1167,7 +1167,6 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
 }
 
 struct gguf_writer_base {
-    bool ok {true};
     size_t written_bytes {0u};
 
     ~gguf_writer_base(void) {}
@@ -1267,7 +1266,6 @@ struct gguf_writer_base {
 
     void pad(const size_t alignment) {
         while (written_bytes % alignment != 0) {
-            if (!ok) return;
             const int8_t zero = 0;
             write(zero);
         }
@@ -1321,21 +1319,23 @@ struct gguf_writer_file final : public gguf_writer_base {
     using gguf_writer_base::write;
 
     void write(const int8_t val) override {
-        if (!ok) return;
-        const auto ret = fputc(val, file);
+        const auto real_val = static_cast<uint8_t>(val);
+        const auto ret = fputc(real_val, file);
         written_bytes++;
-        ok = ok && ret == val;
+        if (ret != real_val) {
+            throw std::runtime_error("unexpected fputc result '" + std::to_string(ret) + "' instead of '" + std::to_string((int)real_val) + "'");
+        }
     }
 
     void write(const std::vector<int8_t> & val) override {
-        if (!ok) return;
         const auto ret = fwrite(val.data(), 1, val.size(), file);
         written_bytes += val.size();
-        ok = ok && ret == val.size();
+        if (ret != val.size()) {
+            throw std::runtime_error("unexpected fwrite number of bytes written, '" + std::to_string(ret) + "' instead of '" + std::to_string(val.size()) + "'");
+        }
     }
 
     void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
-        if (!ok) return;
         GGML_ASSERT(written_bytes - offset_data == info.offset);
 
         GGML_ASSERT(ggml_is_contiguous(&info.t));
@@ -1368,8 +1368,6 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     gw.write(n_tensors);
     gw.write(n_kv);
 
-    if (!gw.ok) return;
-
     // write key-value pairs
     for (int64_t i = 0; i < n_kv; ++i) {
         gw.write(ctx->kv[i]);
@@ -1379,8 +1377,6 @@ static void gguf_write_out(const struct gguf_context * ctx, writer_t & gw, bool 
     for (int64_t i = 0; i < n_tensors; ++i) {
         gw.write_tensor_meta(ctx->info[i]);
     }
-
-    if (!gw.ok) return;
 
     // we require the data section to be aligned
     gw.pad(ctx->alignment);
@@ -1410,14 +1406,17 @@ bool gguf_write_to_file(const struct gguf_context * ctx, const char * fname, boo
         return false;
     }
 
-    gguf_writer_file gw(file);
-    gguf_write_out(ctx, gw, only_meta);
-    if (!gw.ok) {
-        GGML_LOG_ERROR("%s: failed to write GGUF data into '%s'\n", __func__, fname);
+    try {
+        gguf_writer_file gw(file);
+        gguf_write_out(ctx, gw, only_meta);
+    } catch (const std::runtime_error& ex) {
+        GGML_LOG_ERROR("%s: failed to write GGUF data into '%s': %s\n", __func__, fname, ex.what());
+        fclose(file);
+        return false;
     }
 
     fclose(file);
-    return gw.ok;
+    return true;
 }
 
 size_t gguf_get_meta_size(const struct gguf_context * ctx) {
