@@ -242,10 +242,10 @@ class CodeEditor(QPlainTextEdit):
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             line_color = QColorConstants.Yellow.lighter(160)
-            selection.format.setBackground(line_color)  # type: ignore
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # type: ignore
-            selection.cursor = self.textCursor()  # type: ignore
-            selection.cursor.clearSelection()  # type: ignore
+            selection.format.setBackground(line_color)  # pyright: ignore[reportAttributeAccessIssue]
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # pyright: ignore[reportAttributeAccessIssue]
+            selection.cursor = self.textCursor()  # pyright: ignore[reportAttributeAccessIssue]
+            selection.cursor.clearSelection()  # pyright: ignore[reportAttributeAccessIssue]
             extra_selections.append(selection)
         self.setExtraSelections(extra_selections)
 
@@ -263,8 +263,8 @@ class CodeEditor(QPlainTextEdit):
                 )
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # type: ignore
-            extra.cursor = cursor  # type: ignore
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -275,8 +275,8 @@ class CodeEditor(QPlainTextEdit):
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # type: ignore
-            extra.cursor = cursor  # type: ignore
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -312,6 +312,19 @@ class JinjaTester(QMainWindow):
         json_label = QLabel("Context (JSON)")
         json_layout.addWidget(json_label)
         self.json_edit = CodeEditor()
+        self.json_edit.setPlainText("""
+{
+    "add_generation_prompt": true,
+    "bos_token": "",
+    "eos_token": "",
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the capital of Poland?"
+        }
+    ]
+}
+        """.strip())
         json_layout.addWidget(self.json_edit)
         input_layout.addLayout(json_layout)
 
@@ -471,6 +484,7 @@ if __name__ == "__main__":
         context = json.loads(args.context)
         # Add missing variables
         context.setdefault("bos_token", "")
+        context.setdefault("eos_token", "")
         context.setdefault("add_generation_prompt", False)
 
         env = ImmutableSandboxedEnvironment()
