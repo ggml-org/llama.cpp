@@ -669,100 +669,257 @@ extern "C" {
     typedef uint8_t ggml_guid[16];
     typedef ggml_guid * ggml_guid_t;
 
+    // compares two GGML GUIDs for equality
+    // requires: valid guid_a and guid_b pointers  
+    // supports: returns true if GUIDs match, false otherwise
     GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
 
     // misc
 
+    // returns GGML library version string
+    // requires: none
+    // supports: returns version in format "major.minor.patch"
     GGML_API const char * ggml_version(void);
+    // returns GGML library git commit hash
+    // requires: none  
+    // supports: returns short commit hash string
     GGML_API const char * ggml_commit(void);
 
+    // initializes GGML timing system - call once at program start
+    // requires: none
+    // supports: prepares high-resolution timing functionality
     GGML_API void    ggml_time_init(void); // call this once at the beginning of the program
+    // returns current time in milliseconds
+    // requires: ggml_time_init() called once
+    // supports: high-resolution monotonic time measurement
     GGML_API int64_t ggml_time_ms(void);
+    // returns current time in microseconds  
+    // requires: ggml_time_init() called once
+    // supports: high-resolution monotonic time measurement
     GGML_API int64_t ggml_time_us(void);
+    // returns current CPU cycle count
+    // requires: none
+    // supports: platform-specific cycle counter access  
     GGML_API int64_t ggml_cycles(void);
+    // returns CPU cycles per millisecond for timing calculations
+    // requires: none
+    // supports: conversion factor for cycle-based timing
     GGML_API int64_t ggml_cycles_per_ms(void);
 
     // accepts a UTF-8 path, even on Windows
     GGML_API FILE *  ggml_fopen(const char * fname, const char * mode);
 
+    // prints debug information for a single memory object
+    // requires: valid ggml_object pointer
+    // supports: debug output of object metadata and state  
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
+    // prints debug information for all objects in context
+    // requires: valid ggml_context
+    // supports: comprehensive memory usage and object listing
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
 
+    // returns total number of elements in tensor
+    // requires: valid tensor
+    // supports: product of all dimensions (ne[0] * ne[1] * ne[2] * ne[3])
     GGML_API int64_t ggml_nelements (const struct ggml_tensor * tensor);
+    // returns number of rows in tensor (ne[1] * ne[2] * ne[3])
+    // requires: valid tensor
+    // supports: used for matrix operations and data layout
     GGML_API int64_t ggml_nrows     (const struct ggml_tensor * tensor);
+    // returns total size in bytes of tensor data
+    // requires: valid tensor with allocated data
+    // supports: accounts for data type and padding
     GGML_API size_t  ggml_nbytes    (const struct ggml_tensor * tensor);
+    // returns tensor size padded to memory alignment boundary
+    // requires: valid tensor  
+    // supports: same as ggml_nbytes() but padded to GGML_MEM_ALIGN
     GGML_API size_t  ggml_nbytes_pad(const struct ggml_tensor * tensor); // same as ggml_nbytes() but padded to GGML_MEM_ALIGN
 
+    // returns block size for quantized types (1 for non-quantized)
+    // requires: valid ggml_type enum
+    // supports: elements per quantization block
     GGML_API int64_t ggml_blck_size(enum ggml_type type);
+    // returns size in bytes for all elements in a block
+    // requires: valid ggml_type enum
+    // supports: total bytes for one quantization block
     GGML_API size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
+    // returns size in bytes for all elements in a row
+    // requires: valid type and ne > 0
+    // supports: calculates row storage requirements
     GGML_API size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
 
     GGML_DEPRECATED(
     GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
     "use ggml_row_size() instead");
 
+    // returns human-readable name for tensor data type
+    // requires: valid ggml_type enum
+    // supports: string like "f32", "q4_0", "i8", etc.
     GGML_API const char * ggml_type_name(enum ggml_type type);
+    // returns human-readable name for tensor operation
+    // requires: valid ggml_op enum  
+    // supports: operation names like "add", "mul", "conv_2d"
     GGML_API const char * ggml_op_name  (enum ggml_op   op);
+    // returns symbolic representation of tensor operation
+    // requires: valid ggml_op enum
+    // supports: symbols like "+", "*", "⊗" for operations
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);
 
+    // returns name for unary operation type
+    // requires: valid ggml_unary_op enum
+    // supports: names like "sqrt", "log", "exp", "relu"
     GGML_API const char * ggml_unary_op_name(enum ggml_unary_op op);
+    // returns name for GLU operation type
+    // requires: valid ggml_glu_op enum
+    // supports: names like "swiglu", "reglu", "gelu"
     GGML_API const char * ggml_glu_op_name(enum ggml_glu_op op);
+    // returns descriptive string for tensor operation
+    // requires: valid tensor
+    // supports: combines unary/op names with operation details
     GGML_API const char * ggml_op_desc(const struct ggml_tensor * t); // unary or op name
 
+    // returns size of a single element in bytes for tensor's data type
+    // requires: valid tensor with initialized type
+    // supports: bytes per element considering quantization
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
 
+    // checks if data type uses quantization
+    // requires: valid ggml_type enum
+    // supports: returns true for quantized types (q4_0, q8_0, etc.)
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
 
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
 
+    // checks if tensor dimensions are transposed (nb[0] > nb[1])
+    // requires: valid tensor
+    // supports: detects transposed storage layout
     GGML_API bool ggml_is_transposed(const struct ggml_tensor * tensor);
+    // checks if tensor dimensions are permuted from standard order
+    // requires: valid tensor
+    // supports: detects non-standard dimension ordering
     GGML_API bool ggml_is_permuted  (const struct ggml_tensor * tensor);
+    // checks if tensor has zero elements in any dimension
+    // requires: valid tensor
+    // supports: returns true if any ne[i] == 0
     GGML_API bool ggml_is_empty     (const struct ggml_tensor * tensor);
+    // checks if tensor is a scalar (single element)
+    // requires: valid tensor
+    // supports: returns true if nelements == 1
     GGML_API bool ggml_is_scalar    (const struct ggml_tensor * tensor);
+    // checks if tensor is a vector (1D with ne[0] > 1)
+    // requires: valid tensor  
+    // supports: returns true for 1D tensors
     GGML_API bool ggml_is_vector    (const struct ggml_tensor * tensor);
+    // checks if tensor is a matrix (2D)
+    // requires: valid tensor
+    // supports: returns true for 2D tensors
     GGML_API bool ggml_is_matrix    (const struct ggml_tensor * tensor);
+    // checks if tensor is 3-dimensional
+    // requires: valid tensor
+    // supports: returns true for 3D tensors
     GGML_API bool ggml_is_3d        (const struct ggml_tensor * tensor);
+    // returns number of non-unit dimensions (returns 1 for scalars)
+    // requires: valid tensor
+    // supports: counts significant dimensions
     GGML_API int  ggml_n_dims       (const struct ggml_tensor * tensor); // returns 1 for scalars
 
-    // returns whether the tensor elements can be iterated over with a flattened index (no gaps, no permutation)
+    // checks if tensor elements can be iterated with flattened index
+    // requires: valid tensor
+    // supports: returns true if no gaps, no permutation (standard layout)
     GGML_API bool ggml_is_contiguous  (const struct ggml_tensor * tensor);
+    // checks contiguity in dimension 0 (same as ggml_is_contiguous)
+    // requires: valid tensor
+    // supports: element-wise contiguity check
     GGML_API bool ggml_is_contiguous_0(const struct ggml_tensor * tensor); // same as ggml_is_contiguous()
+    // checks if tensor is contiguous for dimensions >= 1
+    // requires: valid tensor
+    // supports: row-wise contiguity ignoring element spacing
     GGML_API bool ggml_is_contiguous_1(const struct ggml_tensor * tensor); // contiguous for dims >= 1
+    // checks if tensor is contiguous for dimensions >= 2  
+    // requires: valid tensor
+    // supports: plane-wise contiguity ignoring row/element spacing
     GGML_API bool ggml_is_contiguous_2(const struct ggml_tensor * tensor); // contiguous for dims >= 2
 
-    // returns whether the tensor elements are allocated as one contiguous block of memory (no gaps, but permutation ok)
+    // checks if tensor data is allocated as one contiguous memory block
+    // requires: valid tensor
+    // supports: returns true if no gaps in memory (permutation ok)
     GGML_API bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor);
 
-    // true for tensor that is stored in memory as CxWxHxN and has been permuted to WxHxCxN
+    // checks for CxWxHxN -> WxHxCxN permutation pattern  
+    // requires: valid tensor
+    // supports: true for channel-last to channel-first layout conversion
     GGML_API bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor);
 
-    // true if the elements in dimension 0 are contiguous, or there is just 1 block of elements
+    // checks if elements in dimension 0 are contiguous
+    // requires: valid tensor
+    // supports: true if contiguous rows or single element block
     GGML_API bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor);
 
+    // compares if two tensors have identical shapes
+    // requires: valid t0 and t1 tensors
+    // supports: returns true if ne[0-3] dimensions match
     GGML_API bool ggml_are_same_shape (const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+    // compares if two tensors have identical strides
+    // requires: valid t0 and t1 tensors  
+    // supports: returns true if nb[0-3] strides match
     GGML_API bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
 
+    // checks if tensor t0 can be broadcasted to match tensor t1 shape
+    // requires: valid t0 and t1 tensors
+    // supports: broadcasting rules for element-wise operations
     GGML_API bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
 
-    // use this to compute the memory overhead of a tensor
+    // returns memory overhead for tensor metadata structure
+    // requires: none
+    // supports: bytes needed for ggml_tensor struct itself
     GGML_API size_t ggml_tensor_overhead(void);
 
+    // validates that row data matches type requirements
+    // requires: valid type enum, data pointer, nbytes size
+    // supports: data integrity checking for tensor rows
     GGML_API bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbytes);
 
-    // main
-
+    // main context management functions
+    
+    // initializes GGML context with specified memory parameters
+    // requires: valid ggml_init_params with mem_size > 0
+    // supports: creates context for tensor allocation and computation
     GGML_API struct ggml_context * ggml_init (struct ggml_init_params params);
+    // resets context by freeing all tensors but keeping memory buffer
+    // requires: valid ggml_context
+    // supports: reuse context without deallocation/reallocation
     GGML_API void                  ggml_reset(struct ggml_context * ctx);
+    // frees GGML context and releases all allocated memory
+    // requires: valid ggml_context (safe to call with NULL)
+    // supports: cleanup of context resources
     GGML_API void                  ggml_free (struct ggml_context * ctx);
 
+    // returns amount of memory currently used by context
+    // requires: valid ggml_context
+    // supports: memory usage tracking and debugging
     GGML_API size_t  ggml_used_mem(const struct ggml_context * ctx);
 
+    // returns no-allocation flag for context
+    // requires: valid ggml_context
+    // supports: checks if context skips automatic memory allocation
     GGML_API bool    ggml_get_no_alloc(struct ggml_context * ctx);
+    // sets no-allocation flag for context  
+    // requires: valid ggml_context
+    // supports: control automatic memory allocation behavior
     GGML_API void    ggml_set_no_alloc(struct ggml_context * ctx, bool no_alloc);
 
+    // returns pointer to context's memory buffer
+    // requires: valid ggml_context
+    // supports: access to underlying memory allocation
     GGML_API void *  ggml_get_mem_buffer     (const struct ggml_context * ctx);
+    // returns total size of context's memory buffer
+    // requires: valid ggml_context
+    // supports: total allocated memory size information
     GGML_API size_t  ggml_get_mem_size       (const struct ggml_context * ctx);
+    // returns size of largest tensor that can be allocated in context
+    // requires: valid ggml_context
+    // supports: memory planning and tensor size validation  
     GGML_API size_t  ggml_get_max_tensor_size(const struct ggml_context * ctx);
 
     // creates a new tensor with specified dimensions array
@@ -813,6 +970,9 @@ extern "C" {
             int64_t ne2,
             int64_t ne3);
 
+    // allocates a new buffer of specified size in the context
+    // requires: valid ggml_context with sufficient memory, nbytes > 0
+    // supports: raw memory allocation for tensor data storage
     GGML_API void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes);
 
     // creates a new tensor with same shape and type as source tensor
@@ -837,15 +997,32 @@ extern "C" {
     // output: tensor with that name or NULL if not found
     GGML_API struct ggml_tensor * ggml_get_tensor(struct ggml_context * ctx, const char * name);
 
-    // Converts a flat index into coordinates
+    // converts a flat index into multidimensional coordinates
+    // requires: valid tensor, i within tensor bounds (0 <= i < ggml_nelements(tensor))
+    // supports: tensors up to 4 dimensions, computes i0, i1, i2, i3 coordinates
     GGML_API void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * i0, int64_t * i1, int64_t * i2, int64_t * i3);
 
+    // returns the unary operation type for the tensor
+    // requires: tensor with unary operation (OP_UNARY)
+    // supports: returns enum value for operations like sqrt, log, exp, etc.
     GGML_API enum ggml_unary_op ggml_get_unary_op(const struct ggml_tensor * tensor);
+    // returns the GLU operation type for the tensor  
+    // requires: tensor with GLU operation (OP_GLU)
+    // supports: returns enum value for GLU variants like swiglu, reglu, etc.
     GGML_API enum ggml_glu_op ggml_get_glu_op(const struct ggml_tensor * tensor);
 
+    // returns pointer to tensor's raw data  
+    // requires: tensor with allocated data buffer
+    // supports: all tensor types, returns void* to data start
     GGML_API void *  ggml_get_data    (const struct ggml_tensor * tensor);
+    // returns pointer to tensor's data as f32 array
+    // requires: tensor with allocated data buffer, type must be f32 compatible
+    // supports: f32 tensors only, unsafe for other types
     GGML_API float * ggml_get_data_f32(const struct ggml_tensor * tensor);
 
+    // returns the tensor's assigned name
+    // requires: valid tensor (may return NULL if no name assigned)
+    // supports: all tensors, returns string pointer or NULL
     GGML_API const char *         ggml_get_name   (const struct ggml_tensor * tensor);
     // assigns a name to the tensor for debugging and identification
     // input: tensor, name="layer_1_weights"  
@@ -857,10 +1034,22 @@ extern "C" {
     // output: same tensor with formatted name assigned
     GGML_API struct ggml_tensor * ggml_format_name(      struct ggml_tensor * tensor, const char * fmt, ...);
 
-    // Tensor flags
+    // Tensor flags - mark tensors for different roles in computation graph
+    // marks tensor as input to computation graph
+    // requires: valid tensor, typically used for model inputs
+    // supports: sets flag for gradient computation and graph building
     GGML_API void ggml_set_input(struct ggml_tensor * tensor);
+    // marks tensor as output of computation graph  
+    // requires: valid tensor, typically used for final results
+    // supports: sets flag for result extraction and optimization
     GGML_API void ggml_set_output(struct ggml_tensor * tensor);
+    // marks tensor as trainable parameter
+    // requires: valid tensor, used for model weights/biases
+    // supports: enables gradient computation and parameter updates
     GGML_API void ggml_set_param(struct ggml_tensor * tensor);
+    // marks tensor as loss function output
+    // requires: valid tensor, typically scalar loss value
+    // supports: enables loss-based optimization and backpropagation
     GGML_API void ggml_set_loss(struct ggml_tensor * tensor);
 
     //
@@ -2851,20 +3040,47 @@ extern "C" {
     // automatic differentiation
     //
 
+    // builds forward pass computation graph by adding tensor and dependencies
+    // requires: valid cgraph and tensor, adds tensor node to forward graph
+    // supports: automatic dependency resolution and graph construction
     GGML_API void ggml_build_forward_expand(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor);
+    // builds backward pass computation graph for gradient computation
+    // requires: valid context, forward graph, gradient accumulator array
+    // supports: automatic differentiation and gradient graph construction  
     GGML_API void ggml_build_backward_expand(
         struct ggml_context *  ctx,        // context for gradient computation
         struct ggml_cgraph  *  cgraph,
         struct ggml_tensor  ** grad_accs);
 
     // graph allocation in a context
+    // creates new computation graph with default size and no gradients
+    // requires: valid ggml_context
+    // supports: default size GGML_DEFAULT_GRAPH_SIZE, grads = false
     GGML_API struct ggml_cgraph * ggml_new_graph       (struct ggml_context * ctx); // size = GGML_DEFAULT_GRAPH_SIZE, grads = false
+    // creates new computation graph with custom size and gradient settings
+    // requires: valid context, size > 0
+    // supports: custom node capacity and gradient computation control
     GGML_API struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t size, bool grads);
+    // duplicates computation graph with optional gradient forcing  
+    // requires: valid context and source graph
+    // supports: deep copy of graph structure with gradient control
     GGML_API struct ggml_cgraph * ggml_graph_dup       (struct ggml_context * ctx, struct ggml_cgraph * cgraph, bool force_grads);
+    // copies graph structure from src to dst
+    // requires: valid source and destination graphs
+    // supports: graph structure copy without context allocation
     GGML_API void                 ggml_graph_cpy       (struct ggml_cgraph * src, struct ggml_cgraph * dst);
+    // resets gradients and optimizer states in computation graph
+    // requires: valid computation graph
+    // supports: sets regular grads + optimizer momenta to 0, loss grad to 1
     GGML_API void                 ggml_graph_reset     (struct ggml_cgraph * cgraph); // set regular grads + optimizer momenta to 0, set loss grad to 1
+    // clears all nodes and gradients from computation graph
+    // requires: valid computation graph
+    // supports: removes all nodes while preserving graph structure
     GGML_API void                 ggml_graph_clear     (struct ggml_cgraph * cgraph);
 
+    // returns the number of nodes in computation graph
+    // requires: valid computation graph
+    // supports: returns count of tensor nodes in graph
     GGML_API int                   ggml_graph_size   (struct ggml_cgraph * cgraph);
     // gets tensor node at index i from computation graph (supports negative indexing)
     // input: graph with 10 nodes, i=2 or i=-1 (last node)  
@@ -2874,11 +3090,23 @@ extern "C" {
     // input: computation graph
     // output: array pointer to all tensor nodes in graph
     GGML_API struct ggml_tensor ** ggml_graph_nodes  (struct ggml_cgraph * cgraph);
+    // returns the total number of nodes in computation graph
+    // requires: valid computation graph
+    // supports: returns node count for array indexing
     GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph * cgraph);
 
+    // adds tensor node to computation graph
+    // requires: valid graph and tensor
+    // supports: manual node addition to graph structure
     GGML_API void   ggml_graph_add_node(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor);
 
+    // returns memory overhead for default computation graph
+    // requires: none
+    // supports: returns bytes needed for graph metadata
     GGML_API size_t ggml_graph_overhead(void);
+    // returns memory overhead for custom computation graph
+    // requires: size > 0
+    // supports: calculates overhead with custom size and gradient settings
     GGML_API size_t ggml_graph_overhead_custom(size_t size, bool grads);
 
     // finds tensor by name in computation graph
@@ -2894,17 +3122,22 @@ extern "C" {
     // output: accumulated gradient tensor or NULL if not found  
     GGML_API struct ggml_tensor * ggml_graph_get_grad_acc(const struct ggml_cgraph * cgraph, const struct ggml_tensor * node);
 
-    // print info and performance information for the graph
+    // prints computation graph information and performance statistics
+    // requires: valid computation graph
+    // supports: debug output of graph structure and timing data
     GGML_API void ggml_graph_print(const struct ggml_cgraph * cgraph);
 
-    // dump the graph into a file using the dot format
+    // exports computation graph to DOT format file for visualization
+    // requires: valid backward/forward graphs, valid filename path
+    // supports: graph visualization with Graphviz tools
     GGML_API void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph * gf, const char * filename);
 
     // TODO these functions were sandwiched in the old optimization interface, is there a better place for them?
     typedef void (*ggml_log_callback)(enum ggml_log_level level, const char * text, void * user_data);
 
-    // Set callback for all future logging events.
-    // If this is not called, or NULL is supplied, everything is output on stderr.
+    // sets global logging callback for GGML library
+    // requires: valid callback function (or NULL for default stderr output)
+    // supports: custom log handling with user data context
     GGML_API void ggml_log_set(ggml_log_callback log_callback, void * user_data);
 
     // sets all elements of tensor to zero
@@ -2925,12 +3158,24 @@ extern "C" {
     //
     // note: these are thread-safe
     //
+    // initializes quantization tables for specified type
+    // requires: valid enum ggml_type for quantization
+    // supports: thread-safe initialization, idempotent calls
     GGML_API void ggml_quantize_init(enum ggml_type type);
+    // frees memory allocated by quantization initialization
+    // requires: none (safe to call without prior init)
+    // supports: cleanup of quantization tables, thread-safe
     GGML_API void ggml_quantize_free(void);
 
-    // some quantization type cannot be used without an importance matrix
+    // checks if quantization type requires importance matrix
+    // requires: valid quantization type enum
+    // supports: returns true for types needing imatrix, false otherwise
     GGML_API bool ggml_quantize_requires_imatrix(enum ggml_type type);
 
+    // quantizes a chunk of float data to specified type
+    // requires: valid type, src data, dst buffer, start >= 0, nrows/n_per_row > 0
+    // requires: dst buffer size >= quantized_size(type, nrows, n_per_row)
+    // supports: automatic init call, importance matrix for required types
     // calls ggml_quantize_init internally (i.e. can allocate memory)
     GGML_API size_t ggml_quantize_chunk(
             enum ggml_type   type,
@@ -2972,6 +3217,9 @@ extern "C" {
         ggml_from_float_t        from_float_ref;
     };
 
+    // returns type traits structure with metadata for specified type
+    // requires: valid ggml_type enum value
+    // supports: type information including size, quantization status, converters
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);
 
     // ggml threadpool
@@ -3002,8 +3250,17 @@ extern "C" {
 
     typedef struct ggml_threadpool * ggml_threadpool_t;
 
+    // creates default threadpool parameters for specified thread count
+    // requires: n_threads > 0
+    // supports: returns initialized params with default values
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default(int n_threads);
+    // initializes threadpool parameters structure with defaults
+    // requires: valid params pointer, n_threads > 0
+    // supports: in-place initialization of threadpool parameters
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
+    // compares two threadpool parameter structures for equality
+    // requires: valid p0 and p1 pointers
+    // supports: returns true if parameters match, false otherwise
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
 
 #ifdef  __cplusplus
