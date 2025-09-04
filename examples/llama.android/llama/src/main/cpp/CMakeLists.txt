@@ -27,13 +27,6 @@ target_link_libraries(kleidi-llama-cpu-detector
 # 2. Kleidi Llama library
 # --------------------------------------------------------------------------
 
-set(LLAMA_BUILD_COMMON    ON  CACHE BOOL "" FORCE)
-set(LLAMA_CURL            OFF CACHE BOOL "" FORCE)
-set(GGML_LLAMAFILE        OFF CACHE BOOL "" FORCE)
-set(GGML_CPU_KLEIDIAI     ON  CACHE BOOL "" FORCE)
-set(GGML_OPENMP           ON  CACHE BOOL "" FORCE)
-
-
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../../../)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
