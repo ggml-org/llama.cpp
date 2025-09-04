@@ -78,6 +78,11 @@ struct llm_graph_params;
 
 class llm_graph_input_i {
 public:
+    llm_graph_input_i() {
+        const char * LLAMA_GRAPH_INPUT_DEBUG = getenv("LLAMA_GRAPH_INPUT_DEBUG");
+        debug = LLAMA_GRAPH_INPUT_DEBUG ? atoi(LLAMA_GRAPH_INPUT_DEBUG) : 0;
+    }
+
     virtual ~llm_graph_input_i() = default;
 
     virtual void set_input(const llama_ubatch * ubatch) = 0;
@@ -90,6 +95,9 @@ public:
         GGML_UNUSED(params);
         return false;
     }
+protected:
+    // env: LLAMA_GRAPH_INPUT_DEBUG
+    int debug = 0;
 };
 
 using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;

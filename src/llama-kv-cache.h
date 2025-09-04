@@ -89,7 +89,6 @@ public:
                      uint32_t   n_seq_max,
                      uint32_t   n_pad,
                      uint32_t   n_swa,
-               llama_swa_type   swa_type,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
@@ -211,8 +210,6 @@ private:
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
-
-    const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
