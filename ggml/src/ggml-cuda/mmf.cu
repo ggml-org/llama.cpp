@@ -32,7 +32,7 @@ static __global__ void mul_mat_f(
 
     if (ids) {
         int match = 0;
-        for(int j0 = 0; j0 < cols_per_block; j0 += warpSize) {
+        for(int j0 = 0; j0 < cols_per_block; j0 += warp_size) {
             const int j = j0 + threadIdx.x;
             if(j < cols_per_block) {
                 match = ids[j*stride_row_id + channel_dst*stride_col_id] == expert_idx;
@@ -451,18 +451,23 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
     }
 }
 
-bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * src0_ne, const int64_t * src1_ne, const ggml_tensor * ids) {
+bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * src0_ne, const int src1_ncols, const ggml_tensor * ids) {
+
+    if (ggml_is_quantized(type)) {
+        return false;
+    }
+
     if (src0_ne[0] % (warp_size * (4/ggml_type_size(type))) != 0) {
         return false;
     }
     if (src0_ne[1] % MMF_ROWS_PER_BLOCK != 0) {
         return false;
     }
-    if (!ids && src1_ne[1] > 16) {
+    if (!ids && src1_ncols > 16) {
         return false;
     }
 
-    if (ids && src1_ne[2] > 16) {
+    if (ids && src1_ncols > 16) {
         return false;
     }
 
