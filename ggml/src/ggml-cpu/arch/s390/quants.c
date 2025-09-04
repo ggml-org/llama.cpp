@@ -23,6 +23,27 @@
 
 #define UNUSED GGML_UNUSED
 
+#if defined(__VXE__) || defined(__VXE2__)
+#define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
+#define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
+#define B3(c,s,n) B2(c,s,n ## c), B2(c,s,n ## s)
+#define B4(c,s,n) B3(c,s,n ## c), B3(c,s,n ## s)
+#define B5(c,s,n) B4(c,s,n ## c), B4(c,s,n ## s)
+#define B6(c,s,n) B5(c,s,n ## c), B5(c,s,n ## s)
+#define B7(c,s,n) B6(c,s,n ## c), B6(c,s,n ## s)
+#define B8(c,s  ) B7(c,s,     c), B7(c,s,     s)
+
+// precomputed tables for expanding 8bits to 8 bytes:
+static const __attribute__((aligned(16))) uint64_t table_b2b_0[1 << 8] = { B8(00, 10) }; // ( b ) << 4
+static const __attribute__((aligned(16))) uint64_t table_b2b_1[1 << 8] = { B8(10, 00) }; // (!b) << 4
+
+// permute mask for byteswapping
+static const uint8x16_t v_kperm = (const uint8x16_t){
+     7,  6,  5,  4,  3,  2, 1, 0,
+    15, 14, 13, 12, 11, 10, 9, 8
+};
+#endif
+
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -238,6 +259,301 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     UNUSED(ib);
     UNUSED(sumf);
     ggml_vec_dot_q4_1_q8_1_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(qk == QK5_0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q5_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    int ib = 0;
+    float sumf = 0.0f;
+
+#if defined(__VXE__) || defined(__VXE2__)
+    float32x4_t v_sum0 = vec_splats(0.0f);
+    float32x4_t v_sum1 = vec_splats(0.0f);
+
+    uint32_t qh0, qh1;
+    uint64_t tmp0[4], tmp1[4];
+
+    const uint8x16_t v_m = vec_splats((uint8_t)0x0F);
+
+    #pragma GCC unroll 4
+    for (; ib + 1 < nb; ib += 2) {
+        const block_q5_0 * GGML_RESTRICT x0 = &x[ib + 0];
+        const block_q5_0 * GGML_RESTRICT x1 = &x[ib + 1];
+        const block_q8_0 * GGML_RESTRICT y0 = &y[ib + 0];
+        const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
+
+        memcpy(&qh0, x0->qh, sizeof(qh0));
+        memcpy(&qh1, x1->qh, sizeof(qh1));
+
+        tmp0[0] = table_b2b_1[(qh0 >>  0) & 0xFF];
+        tmp0[1] = table_b2b_1[(qh0 >>  8) & 0xFF];
+        tmp0[2] = table_b2b_1[(qh0 >> 16) & 0xFF];
+        tmp0[3] = table_b2b_1[(qh0 >> 24)       ];
+
+        tmp1[0] = table_b2b_1[(qh1 >>  0) & 0xFF];
+        tmp1[1] = table_b2b_1[(qh1 >>  8) & 0xFF];
+        tmp1[2] = table_b2b_1[(qh1 >> 16) & 0xFF];
+        tmp1[3] = table_b2b_1[(qh1 >> 24)       ];
+
+        int8x16_t v_qh0l = vec_xl(0, (const int8_t *)(tmp0 + 0));
+        int8x16_t v_qh0h = vec_xl(0, (const int8_t *)(tmp0 + 2));
+        int8x16_t v_qh1l = vec_xl(0, (const int8_t *)(tmp1 + 0));
+        int8x16_t v_qh1h = vec_xl(0, (const int8_t *)(tmp1 + 2));
+
+        // required for fixing the byteorder
+        v_qh0l = vec_perm(v_qh0l, v_qh0l, v_kperm);
+        v_qh0h = vec_perm(v_qh0h, v_qh0h, v_kperm);
+        v_qh1l = vec_perm(v_qh1l, v_qh1l, v_kperm);
+        v_qh1h = vec_perm(v_qh1h, v_qh1h, v_kperm);
+
+        const uint8x16_t v_x0 = vec_xl(0, (const uint8_t *)x0->qs);
+        const uint8x16_t v_x1 = vec_xl(0, (const uint8_t *)x1->qs);
+
+        int8x16_t v_x0l = (int8x16_t)vec_and(v_x0, v_m);
+        int8x16_t v_x0h = (int8x16_t)vec_sr(v_x0, 4);
+        int8x16_t v_x1l = (int8x16_t)vec_and(v_x1, v_m);
+        int8x16_t v_x1h = (int8x16_t)vec_sr(v_x1, 4);
+
+        const int8x16_t v_x0lf = vec_sub(v_x0l, v_qh0l);
+        const int8x16_t v_x0hf = vec_sub(v_x0h, v_qh0h);
+        const int8x16_t v_x1lf = vec_sub(v_x1l, v_qh1l);
+        const int8x16_t v_x1hf = vec_sub(v_x1h, v_qh1h);
+
+        const int8x16_t v_y0l = vec_xl(0,       (const int8_t *)y0->qs);
+        const int8x16_t v_y0h = vec_xl(QK8_0/2, (const int8_t *)y0->qs);
+        const int8x16_t v_y1l = vec_xl(0,       (const int8_t *)y1->qs);
+        const int8x16_t v_y1h = vec_xl(QK8_0/2, (const int8_t *)y1->qs);
+
+        const int32x4_t v_xy0 = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_x0lf, v_y0l), v_x0hf, v_y0h);
+        const int32x4_t v_xy1 = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_x1lf, v_y1l), v_x1hf, v_y1h);
+
+        const float32x4_t v_xy0f = vec_float(v_xy0);
+        const float32x4_t v_xy1f = vec_float(v_xy1);
+
+        const float32x4_t v_d0 = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
+        const float32x4_t v_d1 = vec_splats(GGML_CPU_FP16_TO_FP32(x1->d) * GGML_CPU_FP16_TO_FP32(y1->d));
+
+        v_sum0 = vec_madd(v_xy0f, v_d0, v_sum0);
+        v_sum1 = vec_madd(v_xy1f, v_d1, v_sum1);
+    }
+
+    sumf += vec_hsum(v_sum0) + vec_hsum(v_sum1);
+
+    #pragma GCC unroll 4
+    for (; ib < nb; ++ib) {
+        const block_q5_0 * GGML_RESTRICT x0 = &x[ib];
+        const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
+
+        uint32_t qh;
+        memcpy(&qh, x0->qh, sizeof(qh));
+
+        uint64_t tmp[4];
+        tmp[0] = table_b2b_1[(qh >>  0) & 0xFF];
+        tmp[1] = table_b2b_1[(qh >>  8) & 0xFF];
+        tmp[2] = table_b2b_1[(qh >> 16) & 0xFF];
+        tmp[3] = table_b2b_1[(qh >> 24)       ];
+
+        int8x16_t v_qhl = vec_xl(0, (const int8_t *)(tmp + 0));
+        int8x16_t v_qhh = vec_xl(0, (const int8_t *)(tmp + 2));
+
+        // required for fixing the byteorder
+        v_qhl = vec_perm(v_qhl, v_qhl, v_kperm);
+        v_qhh = vec_perm(v_qhh, v_qhh, v_kperm);
+
+        const uint8x16_t v_x = vec_xl(0, (const uint8_t *)x0->qs);
+        int8x16_t v_xl = (int8x16_t)vec_and(v_x, v_m);
+        int8x16_t v_xh = (int8x16_t)vec_sr(v_x, 4);
+
+        const int8x16_t v_xlf = vec_sub(v_xl, v_qhl);
+        const int8x16_t v_xhf = vec_sub(v_xh, v_qhh);
+
+        const int8x16_t v_yl = vec_xl(0,       (const int8_t *)y0->qs);
+        const int8x16_t v_yh = vec_xl(QK8_0/2, (const int8_t *)y0->qs);
+
+        const int32x4_t v_xy = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_xlf, v_yl), v_xhf, v_yh);
+        const float32x4_t v_xyf = vec_float(v_xy);
+
+        const float32x4_t v_d = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
+        const float32x4_t v_acc = vec_madd(v_xyf, v_d, vec_splats(0.0f));
+
+        sumf += vec_hsum(v_acc);
+    }
+
+    *s = sumf;
+#else
+    UNUSED(nb);
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(ib);
+    UNUSED(sumf);
+    ggml_vec_dot_q5_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK8_1;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(qk == QK5_1);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q5_1 * GGML_RESTRICT x = vx;
+    const block_q8_1 * GGML_RESTRICT y = vy;
+
+    int ib = 0;
+    float sumf = 0.0f;
+
+#if defined(__VXE__) || defined(__VXE2__)
+    float32x4_t v_sum0 = vec_splats(0.0f);
+    float32x4_t v_sum1 = vec_splats(0.0f);
+
+    float summs0 = 0.0f;
+    float summs1 = 0.0f;
+
+    uint32_t qh0;
+    uint32_t qh1;
+
+    uint64_t tmp0[4];
+    uint64_t tmp1[4];
+
+    const uint8x16_t v_m = vec_splats((uint8_t)0x0F);
+
+    #pragma GCC unroll 4
+    for (; ib + 1 < nb; ib += 2) {
+        const block_q5_1 * GGML_RESTRICT x0 = &x[ib + 0];
+        const block_q5_1 * GGML_RESTRICT x1 = &x[ib + 1];
+        const block_q8_1 * GGML_RESTRICT y0 = &y[ib + 0];
+        const block_q8_1 * GGML_RESTRICT y1 = &y[ib + 1];
+
+        summs0 += GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
+        summs1 += GGML_CPU_FP16_TO_FP32(x1->m) * GGML_CPU_FP16_TO_FP32(y1->s);
+
+        memcpy(&qh0, x0->qh, sizeof(qh0));
+        memcpy(&qh1, x1->qh, sizeof(qh1));
+
+        tmp0[0] = table_b2b_0[(qh0 >>  0) & 0xFF];
+        tmp0[1] = table_b2b_0[(qh0 >>  8) & 0xFF];
+        tmp0[2] = table_b2b_0[(qh0 >> 16) & 0xFF];
+        tmp0[3] = table_b2b_0[(qh0 >> 24)       ];
+
+        tmp1[0] = table_b2b_0[(qh1 >>  0) & 0xFF];
+        tmp1[1] = table_b2b_0[(qh1 >>  8) & 0xFF];
+        tmp1[2] = table_b2b_0[(qh1 >> 16) & 0xFF];
+        tmp1[3] = table_b2b_0[(qh1 >> 24)       ];
+
+        int8x16_t v_qh0l = vec_xl(0, (const int8_t *)(tmp0 + 0));
+        int8x16_t v_qh0h = vec_xl(0, (const int8_t *)(tmp0 + 2));
+        int8x16_t v_qh1l = vec_xl(0, (const int8_t *)(tmp1 + 0));
+        int8x16_t v_qh1h = vec_xl(0, (const int8_t *)(tmp1 + 2));
+
+        // required for fixing the byteorder
+        v_qh0l = vec_perm(v_qh0l, v_qh0l, v_kperm);
+        v_qh0h = vec_perm(v_qh0h, v_qh0h, v_kperm);
+        v_qh1l = vec_perm(v_qh1l, v_qh1l, v_kperm);
+        v_qh1h = vec_perm(v_qh1h, v_qh1h, v_kperm);
+
+        const uint8x16_t v_x0 = vec_xl(0, x0->qs);
+        const uint8x16_t v_x1 = vec_xl(0, x1->qs);
+
+        const int8x16_t v_x0l = (int8x16_t)vec_and(v_x0, v_m);
+        const int8x16_t v_x0h = (int8x16_t)vec_sr(v_x0, 4);
+        const int8x16_t v_x1l = (int8x16_t)vec_and(v_x1, v_m);
+        const int8x16_t v_x1h = (int8x16_t)vec_sr(v_x1, 4);
+
+        const int8x16_t v_x0lf = vec_or(v_x0l, v_qh0l);
+        const int8x16_t v_x0hf = vec_or(v_x0h, v_qh0h);
+        const int8x16_t v_x1lf = vec_or(v_x1l, v_qh1l);
+        const int8x16_t v_x1hf = vec_or(v_x1h, v_qh1h);
+
+        const int8x16_t v_y0l = vec_xl(0      , y0->qs);
+        const int8x16_t v_y0h = vec_xl(QK8_1/2, y0->qs);
+        const int8x16_t v_y1l = vec_xl(0      , y1->qs);
+        const int8x16_t v_y1h = vec_xl(QK8_1/2, y1->qs);
+
+        const int32x4_t v_xy0 = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_x0lf, v_y0l), v_x0hf, v_y0h);
+        const int32x4_t v_xy1 = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_x1lf, v_y1l), v_x1hf, v_y1h);
+
+        const float32x4_t v_xy0f = vec_float(v_xy0);
+        const float32x4_t v_xy1f = vec_float(v_xy1);
+
+        const float32x4_t v_d0 = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
+        const float32x4_t v_d1 = vec_splats(GGML_CPU_FP16_TO_FP32(x1->d) * GGML_CPU_FP16_TO_FP32(y1->d));
+
+        v_sum0 = vec_madd(v_xy0f, v_d0, v_sum0);
+        v_sum1 = vec_madd(v_xy1f, v_d1, v_sum1);
+    }
+
+    sumf += vec_hsum(v_sum0) + vec_hsum(v_sum1) + summs0 + summs1;
+
+    #pragma GCC unroll 4
+    for (; ib < nb; ++ib) {
+        const block_q5_1 * GGML_RESTRICT x0 = &x[ib];
+        const block_q8_1 * GGML_RESTRICT y0 = &y[ib];
+
+        float summs = GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
+
+        uint32_t qh;
+        memcpy(&qh, x0->qh, sizeof(qh));
+
+        uint64_t tmp[4];
+        tmp[0] = table_b2b_0[(qh >>  0) & 0xFF];
+        tmp[1] = table_b2b_0[(qh >>  8) & 0xFF];
+        tmp[2] = table_b2b_0[(qh >> 16) & 0xFF];
+        tmp[3] = table_b2b_0[(qh >> 24)       ];
+
+        int8x16_t v_qhl = vec_xl(0, (const int8_t *)(tmp + 0));
+        int8x16_t v_qhh = vec_xl(0, (const int8_t *)(tmp + 2));
+
+        // required for fixing the byteorder
+        v_qhl = vec_perm(v_qhl, v_qhl, v_kperm);
+        v_qhh = vec_perm(v_qhh, v_qhh, v_kperm);
+
+        const uint8x16_t v_x = vec_xl(0, x0->qs);
+        const int8x16_t v_xl = (int8x16_t)vec_and(v_x, v_m);
+        const int8x16_t v_xh = (int8x16_t)vec_sr(v_x, 4);
+
+        const int8x16_t v_xlf = vec_or(v_xl, v_qhl);
+        const int8x16_t v_xhf = vec_or(v_xh, v_qhh);
+
+        const int8x16_t v_yl = vec_xl(0      , y0->qs);
+        const int8x16_t v_yh = vec_xl(QK8_1/2, y0->qs);
+
+        const int32x4_t v_xy = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_xlf, v_yl), v_xhf, v_yh);
+        const float32x4_t v_xyf = vec_float(v_xy);
+
+        const float32x4_t v_d = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
+        const float32x4_t v_acc = vec_madd(v_xyf, v_d, v_acc);
+
+        sumf += vec_hsum(v_acc) + summs;
+    }
+
+    *s = sumf;
+#else
+    UNUSED(nb);
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(ib);
+    UNUSED(sumf);
+    ggml_vec_dot_q5_1_q8_1_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 

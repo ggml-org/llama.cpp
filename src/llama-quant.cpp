@@ -999,7 +999,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
 
                 // TODO: temporary sanity check that the F16 -> MXFP4 is lossless
-#if 1
+#if 0
                 if (new_type == GGML_TYPE_MXFP4) {
                     auto * x = f32_data_03;
 

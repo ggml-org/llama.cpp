@@ -28,6 +28,14 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
+from gguf.vocab import MistralTokenizerType, MistralVocab
+from mistral_common.tokens.tokenizers.base import TokenizerVersion
+from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
+from mistral_common.tokens.tokenizers.tekken import Tekkenizer
+from mistral_common.tokens.tokenizers.sentencepiece import (
+    SentencePieceTokenizer,
+)
+
 
 logger = logging.getLogger("hf-to-gguf")
 
@@ -64,6 +72,7 @@ class ModelBase:
     endianess: gguf.GGUFEndian
     use_temp_file: bool
     lazy: bool
+    dry_run: bool
     part_names: list[str]
     is_safetensors: bool
     hparams: dict[str, Any]
@@ -81,11 +90,16 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
+    # Mistral format specifics
+    is_mistral_format: bool = False
+    disable_mistral_community_chat_template: bool = False
+
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
+                 disable_mistral_community_chat_template: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -98,6 +112,7 @@ class ModelBase:
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
         self.lazy = not eager or (remote_hf_model_id is not None)
+        self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         if remote_hf_model_id is not None:
             self.is_safetensors = True
@@ -106,16 +121,17 @@ class ModelBase:
                 logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
                 remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
-                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
+                for name, remote_tensor in remote_tensors.items():
                     yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
 
             self.get_tensors = get_remote_tensors
         else:
-            self.part_names = ModelBase.get_model_part_names(self.dir_model, "model", ".safetensors")
+            prefix = "model" if not self.is_mistral_format else "consolidated"
+            self.part_names = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
             self.is_safetensors = len(self.part_names) > 0
             if not self.is_safetensors:
                 self.part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
-        self.hparams = ModelBase.load_hparams(self.dir_model) if hparams is None else hparams
+        self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.tensor_names = None
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -136,6 +152,9 @@ class ModelBase:
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
+        # Mistral specific
+        self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
+
     @classmethod
     def add_prefix_to_filename(cls, path: Path, prefix: str) -> Path:
         stem, suffix = path.stem, path.suffix
@@ -153,19 +172,23 @@ class ModelBase:
     def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
         tensor_names_from_parts: set[str] = set()
 
-        index_name = "model.safetensors" if self.is_safetensors else "pytorch_model.bin"
-        index_name += ".index.json"
-        index_file = self.dir_model / index_name
+        if not self.is_mistral_format:
+            index_name = "model.safetensors" if self.is_safetensors else "pytorch_model.bin"
+            index_name += ".index.json"
+            index_file = self.dir_model / index_name
 
-        if index_file.is_file():
-            self.tensor_names = set()
-            logger.info(f"gguf: loading model weight map from '{index_name}'")
-            with open(index_file, "r", encoding="utf-8") as f:
-                index: dict[str, Any] = json.load(f)
-                weight_map = index.get("weight_map")
-                if weight_map is None or not isinstance(weight_map, dict):
-                    raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
-                self.tensor_names.update(weight_map.keys())
+            if index_file.is_file():
+                self.tensor_names = set()
+                logger.info(f"gguf: loading model weight map from '{index_name}'")
+                with open(index_file, "r", encoding="utf-8") as f:
+                    index: dict[str, Any] = json.load(f)
+                    weight_map = index.get("weight_map")
+                    if weight_map is None or not isinstance(weight_map, dict):
+                        raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
+                    self.tensor_names.update(weight_map.keys())
+            else:
+                self.tensor_names = tensor_names_from_parts
+                weight_map = {}
         else:
             self.tensor_names = tensor_names_from_parts
             weight_map = {}
@@ -278,10 +301,6 @@ class ModelBase:
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
-
-                # if data ends up empty, it means data_torch was a scalar tensor -> restore
-                if len(data.shape) == 0:
-                    data = data_torch.numpy()
 
                 n_dims = len(data.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
@@ -426,7 +445,12 @@ class ModelBase:
         return part_names
 
     @staticmethod
-    def load_hparams(dir_model: Path):
+    def load_hparams(dir_model: Path, is_mistral_format: bool):
+        if is_mistral_format:
+            with open(dir_model / "params.json", "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return config
+
         try:
             # for security reason, we don't allow loading remote code by default
             # if a model need remote code, we will fallback to config.json
@@ -476,7 +500,10 @@ class TextModel(ModelBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.hf_arch = get_model_architecture(self.hparams, self.model_type)
+        if not self.is_mistral_format:
+            self.hf_arch = get_model_architecture(self.hparams, self.model_type)
+        else:
+            self.hf_arch = ""
 
         if "text_config" in self.hparams:
             # move the text_config to the root level
@@ -542,14 +569,14 @@ class TextModel(ModelBase):
             self.gguf_writer.add_head_count(n_head)
             logger.info(f"gguf: head count = {n_head}")
 
-        if (n_head_kv := self.hparams.get("num_key_value_heads")) is not None:
+        if (n_head_kv := self.find_hparam(["num_key_value_heads", "n_kv_heads"], optional=True)) is not None:
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
 
         if (rope_theta := self.hparams.get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base(rope_theta)
             logger.info(f"gguf: rope theta = {rope_theta}")
-        if (f_rms_eps := self.hparams.get("rms_norm_eps")) is not None:
+        if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
             logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
         if (f_norm_eps := self.find_hparam(["layer_norm_eps", "layer_norm_epsilon", "norm_epsilon"], optional=True)) is not None:
@@ -1187,6 +1214,55 @@ class TextModel(ModelBase):
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
 
+    def _set_vocab_interns1(self):
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
+                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab._set_special_token("bos", 151643)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
@@ -1210,12 +1286,19 @@ class MmprojModel(ModelBase):
             raise TypeError("MmprojModel must be subclassed with model_arch = gguf.MODEL_ARCH.MMPROJ")
 
         # get n_embd of the text model
-        if "text_config" not in self.hparams:
-            self.hparams["text_config"] = {}
-        if "audio_config" not in self.hparams:
-            self.hparams["audio_config"] = {}
-        text_config = {**self.hparams, **self.hparams["text_config"]}
-        self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
+        if not self.is_mistral_format:
+            if "text_config" not in self.hparams:
+                self.hparams["text_config"] = {}
+            if "audio_config" not in self.hparams:
+                self.hparams["audio_config"] = {}
+            text_config = {**self.hparams, **self.hparams["text_config"]}
+            self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
+        else:
+            text_config = {
+                k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
+            }
+            self.n_embd_text = text_config.get("hidden_dim", 0)
+
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
         # move vision config to the top level, while preserving the original hparams in global_config
@@ -1236,11 +1319,13 @@ class MmprojModel(ModelBase):
         self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
 
         # load preprocessor config
-        with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
-            self.preprocessor_config = json.load(f)
+        if not self.is_mistral_format:
+            with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
+                self.preprocessor_config = json.load(f)
 
     def get_vision_config(self) -> dict[str, Any] | None:
-        return self.global_config.get("vision_config")
+        config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
+        return self.global_config.get(config_name)
 
     def get_audio_config(self) -> dict[str, Any] | None:
         return self.global_config.get("audio_config")
@@ -1264,8 +1349,11 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads"]))
 
             # preprocessor config
-            self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
-            self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
+            image_mean = DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
+            image_std = DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
+
+            self.gguf_writer.add_vision_image_mean(image_mean)
+            self.gguf_writer.add_vision_image_std(image_std)
 
         if self.has_audio_encoder:
             self.gguf_writer.add_clip_has_audio_encoder(True)
@@ -1298,6 +1386,12 @@ class MmprojModel(ModelBase):
         if optional:
             return None
         raise KeyError(f"could not find any of: {keys}")
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd.weight" in new_name:
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return False
 
 
 @ModelBase.register("GPTNeoXForCausalLM")
@@ -1924,11 +2018,72 @@ class LlamaModel(TextModel):
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
+    def _set_vocab_mistral(self):
+        vocab = MistralVocab(self.dir_model)
+        logger.info(
+            f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
+        )
+
+        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
+
+        tokens = []
+        scores = []
+        toktypes = []
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size, (
+            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
+        )
+
+        if vocab.tokenizer_type == MistralTokenizerType.tekken:
+            self.gguf_writer.add_tokenizer_pre("tekken")
+            self.gguf_writer.add_token_merges(
+                vocab.extract_vocab_merges_from_model()
+            )
+
+        logger.info(
+            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
+        )
+
+        self.gguf_writer.add_bos_token_id(vocab.bos_id)
+        self.gguf_writer.add_eos_token_id(vocab.eos_id)
+        self.gguf_writer.add_unk_token_id(vocab.unk_id)
+        self.gguf_writer.add_pad_token_id(vocab.pad_id)
+
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_vocab_size(vocab.vocab_size)
+
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(False)
+
+        template_dir = Path(__file__).parent / "models/templates/"
+
+        if not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+            # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
+            if self.is_mistral_format:
+                logger.info(
+                    "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
+                    "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
+                )
+            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
+            self.gguf_writer.add_chat_template(template)
+        else:
+            logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+
     def set_vocab(self):
+        if self.is_mistral_format:
+            return self._set_vocab_mistral()
+
         path_tekken_json = self.dir_model / "tekken.json"
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
-            return self.set_vocab_tekken()
+            self._set_vocab_mistral()
 
         try:
             self._set_vocab_sentencepiece()
@@ -1962,56 +2117,12 @@ class LlamaModel(TextModel):
         if self.hparams.get("vocab_size", 32000) == 49152:
             self.gguf_writer.add_add_bos_token(False)
 
-    def set_vocab_tekken(self):
-        vocab = gguf.vocab.MistralVocab(self.dir_model)
-        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
-
-        tokens = []
-        scores = []
-        toktypes = []
-
-        for text, score, toktype in vocab.all_tokens():
-            tokens.append(text)
-            scores.append(score)
-            toktypes.append(toktype)
-
-        assert len(tokens) == vocab.vocab_size, (
-            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
-        )
-
-        if vocab.tokenizer_type == gguf.vocab.MistralTokenizerType.tekken:
-            self.gguf_writer.add_tokenizer_pre("tekken")
-            self.gguf_writer.add_token_merges(
-                vocab.extract_vocab_merges_from_model()
-            )
-
-        logger.info(
-            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
-        )
-
-        self.gguf_writer.add_bos_token_id(vocab.bos_id)
-        self.gguf_writer.add_eos_token_id(vocab.eos_id)
-        self.gguf_writer.add_unk_token_id(vocab.unk_id)
-        self.gguf_writer.add_pad_token_id(vocab.pad_id)
-
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
-        self.gguf_writer.add_vocab_size(vocab.vocab_size)
-
-        self.gguf_writer.add_add_bos_token(True)
-        self.gguf_writer.add_add_eos_token(False)
-
-        script_dir = Path(__file__).parent
-        template_path = script_dir / "models/templates/unsloth-mistral-Devstral-Small-2507.jinja"
-        with open(template_path, "r", encoding="utf-8") as f:
-            template = f.read()
-            self.gguf_writer.add_chat_template(template)
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        if not self.is_mistral_format:
+            self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
         if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
@@ -2033,13 +2144,25 @@ class LlamaModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        n_head = self.hparams["num_attention_heads"]
-        n_kv_head = self.hparams.get("num_key_value_heads")
+        n_head = self.find_hparam(["n_heads", "num_attention_heads"])
+        n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
+
+        vision_prefixes = [
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        ]
+
         is_multimodal_tensor = "vision_tower" in name \
             or "vision_model" in name \
             or "audio_tower" in name \
             or "model.connector" in name \
-            or "multi_modal_projector" in name
+            or "multi_modal_projector" in name \
+            or any(
+                name.startswith(prefix)
+                for prefix in vision_prefixes
+            )
 
         if is_multimodal_tensor:
             return [] # skip vision tensors
@@ -2155,13 +2278,18 @@ class LlavaVisionModel(MmprojModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.hparams["model_type"] == "pixtral":
+        if self.hparams.get("model_type") == "pixtral":
             # layer_norm_eps is not in config.json, it is hard-coded in modeling_pixtral.py
             self.hparams["layer_norm_eps"] = self.hparams.get("layer_norm_eps", 1e-5)
             self.img_break_tok_id = self.get_token_id("[IMG_BREAK]")
-            logger.info(f"Image break token id: {self.img_break_tok_id}")
+        elif self.is_mistral_format:
+            # hparams is already vision config here so norm_eps is only defined in global_config.
+            self.hparams["norm_eps"] = self.global_config.get("norm_eps", None)
+            assert self.hparams["norm_eps"] is not None, "norm_eps not found in params.json"
+            self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
+        logger.info(f"Image break token id: {self.img_break_tok_id}")
 
     def get_token_id(self, token: str) -> int:
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
@@ -2175,7 +2303,7 @@ class LlavaVisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if hparams["model_type"] == "pixtral":
+        if hparams.get("model_type") == "pixtral":
             self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
             self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
 
@@ -2193,18 +2321,30 @@ class LlavaVisionModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        n_head = self.hparams["num_attention_heads"]
+        n_head = (
+            self.hparams["num_attention_heads"] if not self.is_mistral_format else self.find_vparam(["num_attention_heads"])
+        )
         n_kv_head = n_head
 
-        if name.startswith("multi_modal_projector.") or name.startswith("vision_tower."):
+        valid_prefixes = (
+            "multi_modal_projector.",
+            "vision_tower.",
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        )
+
+        if any(name.startswith(prefix) for prefix in valid_prefixes):
             # process vision tensors
-            if name.endswith(("q_proj.weight", "q_proj.bias")):
+            if name.endswith(("q_proj.weight", "q_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-            if name.endswith(("k_proj.weight", "k_proj.bias")):
+            if name.endswith(("k_proj.weight", "k_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
             return [(self.map_tensor_name(name), data_torch)]
 
-        if self.img_break_tok_id > 0 and "embed_tokens.weight" in name:
+        embed_key = "embed_tokens.weight" if not self.is_mistral_format else "tok_embeddings.weight"
+        if self.img_break_tok_id > 0 and embed_key in name:
             logger.info(f"Extracting [IMG_BREAK] token embedding from {name}")
             # for pixtral model, we need to extract the [IMG_BREAK] token embedding
             img_break_embd = data_torch[self.img_break_tok_id]
@@ -2233,10 +2373,9 @@ class SmolVLMModel(MmprojModel):
         self.gguf_writer.add_vision_use_gelu(True)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".embeddings." in name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -2840,7 +2979,8 @@ class Qwen2Model(TextModel):
         if "language_model." in name:
             name = name.replace("language_model.", "") # for InternVL
         if name.startswith("mlp") or name.startswith("multi_modal_projector") \
-                or name.startswith("vision_model") or name.startswith("audio_tower"):
+                or name.startswith("vision_model") or name.startswith("audio_tower") \
+                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
             # skip vision and audio tensors
             return []
         yield from super().modify_tensors(data_torch, name, bid)
@@ -3017,7 +3157,7 @@ class LLaDAModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Ernie4_5_ForCausalLM")
+@ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
 
@@ -3224,12 +3364,9 @@ class Qwen2VLVisionModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
-        if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -3302,10 +3439,9 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
         yield ("audio_tower.embed_positions.weight", pos_embd)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".conv" in name and ".weight" in name:
             return gguf.GGMLQuantizationType.F16
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("thinker."):
@@ -3328,7 +3464,13 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
     def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
+        if isinstance(self.hparams_vision['image_size'], list):
+            self.hparams_vision['image_size'] = self.hparams_vision['image_size'][0]
+        if isinstance(self.hparams_vision['patch_size'], list):
+            self.hparams_vision['patch_size'] = self.hparams_vision['patch_size'][0]
         super().set_gguf_parameters()
+
         hparams = self.hparams
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.INTERNVL)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
@@ -3345,21 +3487,34 @@ class InternVisionModel(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
-        if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def _mapping_interns1_name(self, name):
+        names_map = {
+            "model.multi_modal_projector.layer_norm.bias": "mlp1.0.bias",
+            "model.multi_modal_projector.layer_norm.weight": "mlp1.0.weight",
+            "model.multi_modal_projector.linear_1.bias": "mlp1.1.bias",
+            "model.multi_modal_projector.linear_1.weight": "mlp1.1.weight",
+            "model.multi_modal_projector.linear_2.bias": "mlp1.3.bias",
+            "model.multi_modal_projector.linear_2.weight": "mlp1.3.weight",
+        }
+        if name in names_map:
+            name = names_map[name]
+        return name
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        if name.startswith("vision_model") or name.startswith("mlp"):
+        vision_prefix = ['vision_model', 'mlp', 'model.vision_tower', 'model.multi_modal_projector']
+        # deal with intern-s1 special case
+        name = self._mapping_interns1_name(name)
+        if any([name.startswith(prefix) for prefix in vision_prefix]):
             # process visual tensors
             # correct name
             if name.startswith("vision_model"):
                 name = "vision_tower." + name
-            if (".ls" in name or "position_embedding" in name) and not name.endswith(".weight"):
+            if (".ls" in name or ".lambda_" in name or "position_embedding" in name) and not name.endswith(".weight"):
                 name += ".weight"
             # split QKV tensors if needed
             if ".qkv." in name:
@@ -3445,6 +3600,10 @@ class Qwen2MoeModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
+            # skip visual tensors
+            return []
         if name.find("experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
@@ -3493,10 +3652,36 @@ class Qwen2MoeModel(TextModel):
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
+        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+
+    def set_vocab(self):
+        # deal with intern-s1-mini
+        if self.origin_hf_arch == 'InternS1ForConditionalGeneration':
+            self._set_vocab_interns1()
+            return
+
+        super().set_vocab()
+
 
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = ModelBase.load_hparams(self.dir_model, False)
+        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+
+    def set_vocab(self):
+        # deal with intern-s1
+        if self.origin_hf_arch == 'InternS1ForConditionalGeneration':
+            self._set_vocab_interns1()
+            return
+
+        super().set_vocab()
 
 
 @ModelBase.register("GPT2LMHeadModel")
@@ -4578,7 +4763,7 @@ class NomicBertModel(BertModel):
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
-            hparams = ModelBase.load_hparams(dir_model)
+            hparams = ModelBase.load_hparams(dir_model, False)
 
         self.is_moe = bool(hparams.get("moe_every_n_layers"))
         self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE if self.is_moe else gguf.MODEL_ARCH.NOMIC_BERT
@@ -4684,10 +4869,34 @@ class NeoBert(BertModel):
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
+    _lora_files = {}
+    _lora_names = []
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        if lora_names := hparams.get("lora_adaptations"):
+            self._lora_names = lora_names
+            self.model_arch = gguf.MODEL_ARCH.JINA_BERT_V3
+
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
         self._xlmroberta_tokenizer_init()
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        if self._lora_names:
+            for name in self._lora_names:
+                fname = self.add_prefix_to_filename(self.fname_out, f"lora-{name}-")
+                self._lora_files[name] = gguf.GGUFWriter(fname, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file, dry_run=self.dry_run)
+
+        return super().generate_extra_tensors()
+
+    def set_type(self):
+        for lora_writer in self._lora_files.values():
+            lora_writer.add_type(gguf.GGUFType.ADAPTER)
+            lora_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
+        super().set_type()
 
     def set_vocab(self):
         self._xlmroberta_set_vocab()
@@ -4698,12 +4907,61 @@ class XLMRobertaModel(BertModel):
         if name.startswith("roberta."):
             name = name[8:]
 
+        # jina-embeddings-v3
+        if ".parametrizations." in name:
+            name = name.replace(".parametrizations.", ".")
+            if name.endswith(".original"):
+                name = name[:-9]
+
         # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
         if name == "embeddings.position_embeddings.weight":
             if self._position_offset is not None:
                 data_torch = data_torch[self._position_offset:,:]
 
+        if name.endswith(".0.lora_A") or name.endswith(".0.lora_B"):
+            if name.startswith("pooler.dense"):
+                return []
+
+            num_loras = data_torch.size(0)
+            assert num_loras == len(self._lora_names)
+
+            # Split out each LoRA in their own GGUF
+            for i, lora_writer in enumerate(self._lora_files.values()):
+                new_name = self.map_tensor_name(name[:-9]) + name[-7:].lower()
+                data = data_torch[i, :, :]
+                # Transpose/flip token_embd/types into correct shape
+                if new_name == "token_embd.weight.lora_b":
+                    data = data.T
+                elif new_name.startswith("token_types.weight."):
+                    new_name = new_name[:-1] + ("a" if new_name[-1:] == "b" else "b")
+                lora_writer.add_tensor(new_name, data.float().numpy(), raw_dtype=gguf.GGMLQuantizationType.F32)
+
+            return []
+
         return super().modify_tensors(data_torch, name, bid)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # jina-embeddings-v3
+        if rotary_emb_base := self.hparams.get("rotary_emb_base"):
+            self.gguf_writer.add_rope_freq_base(rotary_emb_base)
+        lora_alpha = self.hparams.get("lora_alpha")
+        if lora_prompt_prefixes := self.hparams.get("task_instructions"):
+            assert self._lora_files and all(lora_name in lora_prompt_prefixes for lora_name in self._lora_files.keys())
+        for lora_name, lora_writer in self._lora_files.items():
+            lora_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, lora_alpha if lora_alpha is not None else 1.0)
+            lora_writer.add_string(gguf.Keys.Adapter.LORA_TASK_NAME, lora_name)
+            if lora_prompt_prefixes:
+                lora_writer.add_string(gguf.Keys.Adapter.LORA_PROMPT_PREFIX, lora_prompt_prefixes[lora_name])
+
+    def write(self):
+        super().write()
+        for lora_writer in self._lora_files.values():
+            lora_writer.write_header_to_file()
+            lora_writer.write_kv_data_to_file()
+            lora_writer.write_tensors_to_file(progress=True)
+            lora_writer.close()
 
 
 @ModelBase.register("GemmaForCausalLM")
@@ -4864,6 +5122,15 @@ class Gemma3Model(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+@ModelBase.register("Gemma3TextModel")
+class EmbeddingGemma(Gemma3Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+
 @ModelBase.register("Gemma3ForConditionalGeneration")
 class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):
@@ -4885,13 +5152,12 @@ class Gemma3VisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         # related to https://github.com/ggml-org/llama.cpp/issues/13025
         if "input_projection" in name:
             return gguf.GGMLQuantizationType.F16
         if ".embeddings." in name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -5665,6 +5931,11 @@ class OlmoModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+@ModelBase.register("SeedOssForCausalLM")
+class SeedOssModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.SEED_OSS
+
+
 @ModelBase.register("Olmo2ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
@@ -6063,9 +6334,11 @@ class DeepseekModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("DeepseekV2ForCausalLM")
-@ModelBase.register("DeepseekV3ForCausalLM")
-@ModelBase.register("KimiVLForConditionalGeneration")
+@ModelBase.register(
+    "DeepseekV2ForCausalLM",
+    "DeepseekV3ForCausalLM",
+    "KimiVLForConditionalGeneration",
+)
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
@@ -7278,9 +7551,13 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ]
 
         # n_group and d_inner are used during reshape_tensors for mamba2
-        self.d_model = self.find_hparam(["hidden_size", "d_model"])
-        self.n_group = self.find_hparam(["n_groups"])
-        self.d_inner = self.find_hparam(["expand"]) * self.d_model
+        # NOTE: Explicitly include hparam prefix prefix for d_model to
+        #   disambiguate with top-level head_dim
+        # NOTE 2: If needed for future models, this can be isolated in a method
+        #   to separate the prefix setting and teh keys used
+        self.d_model = self.find_hparam([f"{self.hparam_prefixes[0]}_head_dim", "hidden_size", "d_model"])
+        self.n_group = self.find_hparam(["n_groups", "num_groups"])
+        self.d_inner = self.find_hparam(["expand", "num_heads"]) * self.d_model
 
     def get_attn_layers(self):
         # Explicit list of layer type names
@@ -7341,12 +7618,12 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
         ## Mamba mixer params ##
         self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
-        self.gguf_writer.add_ssm_state_size(self.find_hparam(["state_size", "d_state"]))
+        self.gguf_writer.add_ssm_state_size(self.find_hparam(["state_size", "d_state", "state_dim", "ssm_state_size"]))
         self.gguf_writer.add_ssm_group_count(self.n_group)
         self.gguf_writer.add_ssm_inner_size(self.d_inner)
         # NOTE: The mamba_dt_rank is _not_ the right field for how this is used
         #   in llama.cpp
-        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
+        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads", "num_heads"]))
 
         ## Attention params ##
         head_count_kv = self.find_hparam(["num_key_value_heads", "n_head_kv"])
@@ -7371,6 +7648,55 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
     def set_vocab(self):
         self.hparams["pad_vocab_size_multiple"] = 8
         Mamba2Model.set_vocab(self)
+
+
+@ModelBase.register("NemotronHForCausalLM")
+class NemotronHModel(GraniteHybridModel):
+    """Hybrid mamba2/attention model from NVIDIA"""
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Save the top-level head_dim for later
+        self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
+        assert self.head_dim is not None, "Could not find the attention head dim in config"
+
+        # Don't use expand to calculate d_inner
+        self.d_inner = self.find_hparam(["num_heads"]) * self.d_model
+
+        # Update the ssm / attn / mlp layers
+        # M: Mamba2, *: Attention, -: MLP
+        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
+        self._ssm_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "M"]
+        self._mlp_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "-"]
+
+    def get_attn_layers(self):
+        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
+        assert len(hybrid_override_pattern) == self.block_count, "Mismatch between hybrid override and num_hidden_layers!"
+        return [i for i, val in enumerate(hybrid_override_pattern) if val == "*"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_key_length(self.head_dim)
+        self.gguf_writer.add_value_length(self.head_dim)
+
+        # Set feed_forward_length
+        # NOTE: This will trigger an override warning. This is preferrable to
+        #   duplicating all the parent logic
+        n_ff = self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"])
+        self.gguf_writer.add_feed_forward_length([
+            n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
+        ])
+
+    def set_vocab(self):
+        super().set_vocab()
+
+        # The tokenizer _does_ add a BOS token (via post_processor type
+        # TemplateProcessing) but does not set add_bos_token to true in the
+        # config, so we need to explicitly override it here.
+        self.gguf_writer.add_add_bos_token(True)
 
 
 @ModelBase.register("BailingMoeForCausalLM")
@@ -7550,10 +7876,9 @@ class WhisperEncoderModel(MmprojModel):
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".conv" in name and ".weight" in name:
             return gguf.GGMLQuantizationType.F16
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -7997,7 +8322,6 @@ class GptOssModel(TextModel):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         blocks0: Tensor = torch.zeros(1)
         blocks1: Tensor = torch.zeros(1)
-        found_mxfp4_tensors = False
         # we assume that tensors are loaded in the correct order
         for name, data_torch in self.get_tensors():
             if "mlp.experts.down_proj_blocks" in name:
@@ -8005,7 +8329,6 @@ class GptOssModel(TextModel):
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
                 self.repack_mxfp4(new_name, blocks0, data_torch)
-                found_mxfp4_tensors = True
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
             elif "mlp.experts.gate_up_proj_scales" in name:
@@ -8014,9 +8337,6 @@ class GptOssModel(TextModel):
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
                 self.repack_mxfp4(new_name_gate, blocks0, scales0)
                 self.repack_mxfp4(new_name_up, blocks1, scales1)
-                found_mxfp4_tensors = True
-        if not found_mxfp4_tensors:
-            raise ValueError("No MXFP4 tensors found in the model. Please make sure you are using MXFP4 model.")
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -8029,7 +8349,12 @@ class GptOssModel(TextModel):
         if "down_proj" in name:
             if name.endswith("_bias"):
                 name = name.replace("down_proj_bias", "down_proj.bias")
+            elif "_blocks" not in name and "_scales" not in name:
+                logger.warning(f"{name} is not in MXFP4, performance may be degraded")
+                name = name.replace("down_proj", "down_proj.weight")
+                data_torch = data_torch.transpose(-1, -2)
             else:
+                # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
 
         # split the gate_up into gate and up
@@ -8042,7 +8367,18 @@ class GptOssModel(TextModel):
                     (self.map_tensor_name(name_gate), gate_proj_bias),
                     (self.map_tensor_name(name_up), up_proj_bias)
                 ]
+            elif "_blocks" not in name and "_scales" not in name:
+                logger.warning(f"{name} is not in MXFP4, performance may be degraded")
+                name_up = name.replace("gate_up_proj", "up_proj.weight")
+                name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+                data_torch = data_torch.transpose(-1, -2)
+                gate_proj_weight, up_proj_weight = data_torch[:, ::2, :], data_torch[:, 1::2, :]
+                return [
+                    (self.map_tensor_name(name_gate), gate_proj_weight),
+                    (self.map_tensor_name(name_up), up_proj_weight)
+                ]
             else:
+                # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
 
         return [(self.map_tensor_name(name), data_torch)]
@@ -8063,8 +8399,7 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling.get("original_max_position_embeddings", 4096))
 
 
-@ModelBase.register("Lfm2ForCausalLM")
-@ModelBase.register("LFM2ForCausalLM")
+@ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
@@ -8099,11 +8434,53 @@ class LFM2Model(TextModel):
         self._add_feed_forward_length()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+        if is_vision_tensor:
+            # skip vision tensors
+            return []
+
+        name = name.replace("language_model.", "")
+
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Lfm2VlForConditionalGeneration")
+class LFM2VLModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # TODO(tarek): for dynamic resolution image_size is not specified, setting here for compatibility
+        self.hparams_vision["image_size"] = 256
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LFM2)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.find_vparam(["layer_norm_eps"]))
+        self.gguf_writer.add_vision_projector_scale_factor(self.global_config.get("downsample_factor", 2))
+        self.gguf_writer.add_vision_use_gelu(True)
+        # python notation, e.g. for vision_feature_layer == -1, we pick last layer -> vision_feature_layers_to_drop = 0
+        vision_feature_layers_to_drop = -(self.global_config.get("vision_feature_layer", -1) + 1)
+        self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys) - vision_feature_layers_to_drop)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+
+        if is_vision_tensor:
+            # remove "model." prefix
+            name = name.replace("model.vision_tower.", "vision_tower.")
+            name = name.replace("model.multi_modal_projector.", "multi_modal_projector.")
+
+            if "patch_embedding.weight" in name:
+                data_torch = data_torch.view(data_torch.shape[0], 16, 16, 3).permute(0, 3, 1, 2)
+
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
 
 
 @ModelBase.register("SmallThinkerForCausalLM")
@@ -8187,6 +8564,120 @@ class SmallThinkerModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+class MistralModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA
+    model_name = "Mistral"
+    hf_arch = ""
+    is_mistral_format = True
+    undo_permute = False
+
+    @staticmethod
+    def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
+        assert TokenizerVersion is not None, "mistral_common is not installed"
+        assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
+            f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
+        )
+
+        if vocab.tokenizer.version == TokenizerVersion.v1:
+            return "mistral-v1"
+        elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.spm:
+            return "mistral-v3"
+        elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+            return "mistral-v3-tekken"
+        elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.spm:
+            return "mistral-v7"
+        elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+            return "mistral-v7-tekken"
+        elif vocab.tokenizer.version == TokenizerVersion.v11:
+            template_file = "Mistral-Small-3.2-24B-Instruct-2506.jinja"
+        elif vocab.tokenizer.version == TokenizerVersion.v13:
+            template_file = "unsloth-mistral-Devstral-Small-2507.jinja"
+        else:
+            err_message = f"Unknown tokenizer type: {vocab.tokenizer_type} and version {vocab.tokenizer.version}"
+            if is_mistral_format:
+                err_message += (
+                    " . Please pass --disable-mistral-community-chat-template argument to the CLI "
+                    "if you want to skip this error and use the Mistral official `mistral-common` pre-processing library."
+                )
+            raise ValueError(err_message)
+
+        template_path = templates_dir / template_file
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = f.read()
+
+        return template
+
+
+class PixtralModel(LlavaVisionModel):
+    model_name = "Pixtral"
+    hf_arch = ""
+    is_mistral_format = True
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
+
+        self.gguf_writer.add_vision_attention_layernorm_eps(
+            self.find_hparam(["norm_eps"])
+        )
+        self.gguf_writer.add_rope_freq_base(self.find_vparam(["rope_theta"]))
+
+        self.gguf_writer.add_vision_use_silu(True)
+
+        # spatial_merge_size
+        if self.find_vparam(["mm_projector_id"]) == "patch_merge":
+            self.gguf_writer.add_vision_spatial_merge_size(
+                self.find_vparam(["spatial_merge_size"])
+            )
+
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+        if name == "vision_language_adapter.w_in.weight":
+            return "mm.1.weight"
+        elif name == "vision_language_adapter.w_out.weight":
+            return "mm.2.weight"
+        return super().map_tensor_name(name, try_suffixes)
+
+
+@ModelBase.register("KimiVLForConditionalGeneration")
+class KimiVLModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.hparams_vision["image_size"] = 64 * 14 # for compatibility
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.KIMIVL)
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_projector_scale_factor(2)
+        # eps is the same as pytorch's default value
+        assert self.hparams_vision is not None
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-5))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+
+        if is_vision_tensor:
+            if "pos_emb.weight" in name:
+                data_torch = data_torch.view(data_torch.shape[0] * data_torch.shape[1], data_torch.shape[2])
+            elif "wqkv" in name:
+                split_dim = 0 if "weight" in name else -1
+                wq, wk, wv = data_torch.chunk(3, dim=split_dim)
+                return [
+                    (self.map_tensor_name(name.replace("wqkv", "wq")), wq),
+                    (self.map_tensor_name(name.replace("wqkv", "wk")), wk),
+                    (self.map_tensor_name(name.replace("wqkv", "wv")), wv)
+                ]
+
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
 
 ###### CONVERSION LOGIC ######
 
@@ -8338,6 +8829,17 @@ def parse_args() -> argparse.Namespace:
         "--mmproj", action="store_true",
         help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
     )
+    parser.add_argument(
+        "--mistral-format", action="store_true",
+        help="Whether the model is stored following the Mistral format.",
+    )
+    parser.add_argument(
+        "--disable-mistral-community-chat-template", action="store_true",
+        help=(
+            "Whether to disable usage of Mistral community chat templates. If set, use the Mistral official `mistral-common` library for tokenization and detokenization of Mistral models. "
+            "Using `mistral-common` ensure correctness and zero-day support of tokenization for models converted from the Mistral format but requires to manually setup the tokenization server."
+        )
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -8443,17 +8945,26 @@ def main() -> None:
         if "mmproj" not in fname_out.name:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
+    is_mistral_format = args.mistral_format
+    disable_mistral_community_chat_template = args.disable_mistral_community_chat_template
+
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
         model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
-        hparams = ModelBase.load_hparams(dir_model)
-        model_architecture = get_model_architecture(hparams, model_type)
-        logger.info(f"Model architecture: {model_architecture}")
-        try:
-            model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
-        except NotImplementedError:
-            logger.error(f"Model {model_architecture} is not supported")
-            sys.exit(1)
+        hparams = ModelBase.load_hparams(dir_model, is_mistral_format)
+        if not is_mistral_format:
+            model_architecture = get_model_architecture(hparams, model_type)
+            logger.info(f"Model architecture: {model_architecture}")
+            try:
+                model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
+            except NotImplementedError:
+                logger.error(f"Model {model_architecture} is not supported")
+                sys.exit(1)
+        elif args.mmproj:
+            assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
+            model_class = PixtralModel
+        else:
+            model_class = MistralModel
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
@@ -8462,7 +8973,8 @@ def main() -> None:
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
-                                     remote_hf_model_id=hf_repo_id)
+                                     remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template
+                                     )
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
