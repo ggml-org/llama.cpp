@@ -28,7 +28,8 @@ def format_template_content(template_content):
         return template_content
 
     env = ImmutableSandboxedEnvironment()
-    tokens = list(env.lex(template_content))
+    tc_rstrip = template_content.rstrip()
+    tokens = list(env.lex(tc_rstrip))
     result = ""
     indent_level = 0
     i = 0
@@ -146,7 +147,6 @@ def format_template_content(template_content):
     result = result.rstrip()
 
     # Copy the newline / space count from the original
-    tc_rstrip = template_content.rstrip()
     if (trailing_length := len(template_content) - len(tc_rstrip)):
         result += template_content[-trailing_length:]
 
