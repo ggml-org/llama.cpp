@@ -385,3 +385,20 @@ def test_logit_bias():
     output_text = res.choices[0].message.content
     assert output_text
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
+
+def test_context_size_exceeded():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ] * 100, # make the prompt too long
+    })
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert res.body["error"]["type"] == "exceed_context_size_error"
+    assert res.body["error"]["n_prompt_tokens"] > 0
+    assert server.n_ctx is not None
+    assert server.n_slots is not None
+    assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
