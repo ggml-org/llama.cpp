@@ -1140,7 +1140,7 @@ struct ggml_cann_nz_workspace {
      */
     void clear() {
         if (ptr) {
-            aclrtFree(ptr);
+            ACL_CHECK(aclrtFree(ptr));
             ptr = nullptr;
             allocated = 0;
         }
@@ -1174,25 +1174,7 @@ struct ggml_cann_nz_workspace {
 /**
  * @brief Global array of NZ workspaces, one per device.
  */
-static std::array<ggml_cann_nz_workspace, GGML_CANN_MAX_DEVICES> g_nz_workspaces;
-
-/**
- * @brief Get the NZ workspace for a specific device.
- *
- * This function returns a reference to the workspace corresponding to the
- * given device index.
- *
- * @param device Device index (0-based). Must be less than GGML_CANN_MAX_DEVICES.
- * @return Reference to the device's NZ workspace.
- * @throws std::out_of_range if device index is invalid.
- */
-inline ggml_cann_nz_workspace& get_nz_workspace(int device) {
-    if (device < 0 || device >= static_cast<int>(g_nz_workspaces.size())) {
-        throw std::out_of_range("device id out of range");
-    }
-    return g_nz_workspaces[device];
-}
-
+static ggml_cann_nz_workspace g_nz_workspaces[GGML_CANN_MAX_DEVICES];
 
 /**
  * @brief Convert tensor weights to NZ format using Ascend CANN API.
@@ -1218,9 +1200,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) 
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    get_nz_workspace(device).realloc(workspaceSize);
+    g_nz_workspaces[device].realloc(workspaceSize);
 
-    void* g_nz_workspace = get_nz_workspace(device).get();
+    void* g_nz_workspace = g_nz_workspaces[device].get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -2301,7 +2283,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    get_nz_workspace(cann_ctx->device).clear();
+    g_nz_workspaces[cann_ctx->device].clear();
 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
