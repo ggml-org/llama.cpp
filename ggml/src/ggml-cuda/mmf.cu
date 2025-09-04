@@ -27,42 +27,57 @@ static __global__ void mul_mat_f(
 
     const int row0        = blockIdx.x * rows_per_block;
 
-    const int expert_idx  = ids ? (blockIdx.y % nchannels_x) : 0;
-    const int channel_dst = ids ? (blockIdx.y / nchannels_x) : blockIdx.y;
+    const bool has_ids     = ids != nullptr;
+    const int  expert_idx  = has_ids ? blockIdx.y : 0;
+    const int  channel_dst = has_ids ? 0 : blockIdx.y;
 
-    if (ids) {
-        int match = 0;
-        for(int j0 = 0; j0 < cols_per_block; j0 += warp_size) {
-            const int j = j0 + threadIdx.x;
-            if(j < cols_per_block) {
-                match = ids[j*stride_row_id + channel_dst*stride_col_id] == expert_idx;
-            }
-        }
-
-        match = warp_reduce_any(match);
-
-        if(!match) {
-            return;
-        }
-    }
-
-    const int channel_x   = ids ? expert_idx : (channel_dst / channel_ratio);
+    const int channel_x   = has_ids ? expert_idx : (channel_dst / channel_ratio);
     const int channel_y   = channel_dst;
     const int sample_dst  = blockIdx.z;
     const int sample_x    = sample_dst / sample_ratio;
     const int sample_y    = sample_dst;
 
     x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x  + row0*stride_row ;
-    y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
-    dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
+    y   += int64_t(sample_y)  *stride_sample_y   + (has_ids ? 0 : channel_y  *stride_channel_y);
+    dst += int64_t(sample_dst)*stride_sample_dst + (has_ids ? 0 : channel_dst*stride_channel_dst);
 
     const float2 * y2 = (const float2 *) y;
 
     extern __shared__ char data_mmv[];
 
+    char * shmem_base = data_mmv;
+    int  * slot_map   = (int *) shmem_base;
+    char * compute_base = has_ids ? (shmem_base + cols_per_block * sizeof(int32_t)) : shmem_base;
+
     tile_C C[ntA][ntB];
 
-    T * tile_xy = (T *) data_mmv + threadIdx.y*(tile_A::I * tile_k_padded);
+    T * tile_xy = (T *) compute_base + threadIdx.y*(tile_A::I * tile_k_padded);
+
+    if (has_ids) {
+        __shared__ int has_any;
+        if (threadIdx.y == 0) {
+            int local_has_any = 0;
+            for (int j = threadIdx.x; j < cols_per_block; j += warp_size) {
+                int slot = -1;
+                for (int k = 0; k < nchannels_dst; ++k) {
+                    const int idv = ids[j*stride_row_id + k*stride_col_id];
+                    if (idv == expert_idx) {
+                        slot = k;
+                        break;
+                    }
+                }
+                if (j < cols_per_block) {
+                    local_has_any |= (slot >= 0);
+                    slot_map[j] = slot;
+                }
+            }
+            has_any = warp_reduce_any(local_has_any);
+        }
+        __syncthreads();
+        if (has_any == 0) {
+            return;
+        }
+    }
 
     for (int col = threadIdx.y*warp_size + threadIdx.x; col < ncols; col += nwarps*warp_size) {
         tile_A A[ntA][warp_size / tile_A::J];
@@ -85,15 +100,38 @@ static __global__ void mul_mat_f(
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + itB*tile_B::I;
 
-                    tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[j*stride_col_y + col] : 0.0f;
+                    if (!has_ids) {
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[j*stride_col_y + col] : 0.0f;
+                    } else {
+                        float val = 0.0f;
+                        if (j < cols_per_block) {
+                            const int slot = slot_map[j];
+                            if (slot >= 0) {
+                                val = y[slot*stride_channel_y + j*stride_col_y + col];
+                            }
+                        }
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = val;
+                    }
                 }
             } else if constexpr (std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) {
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + itB*tile_B::I;
 
-                    const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
-                    tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+                    if (!has_ids) {
+                        const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+                    } else {
+                        float2 tmp = make_float2(0.0f, 0.0f);
+                        if (j < cols_per_block) {
+                            const int slot = slot_map[j];
+                            if (slot >= 0) {
+                                const float2 * y2_slot = (const float2 *)(y + slot*stride_channel_y);
+                                tmp = y2_slot[j*stride_col_y + col];
+                            }
+                        }
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+                    }
                 }
             } else {
                 static_assert(std::is_same_v<T, void>, "unsupported type");
@@ -110,7 +148,7 @@ static __global__ void mul_mat_f(
         }
     }
 
-    float * buf_iw = (float *) data_mmv;
+    float * buf_iw = (float *) compute_base;
     constexpr int kiw = nwarps*rows_per_block + 4;
 
     if (nwarps > 1) {
@@ -150,8 +188,13 @@ static __global__ void mul_mat_f(
             sum += buf_iw[j*kiw + i];
         }
 
-        if (!ids || ids[j*stride_row_id + channel_dst*stride_col_id] == expert_idx) {
+        if (!has_ids) {
             dst[j*stride_col_dst + row0 + threadIdx.x] = sum;
+        } else {
+            const int slot = (j < cols_per_block) ? slot_map[j] : -1;
+            if (slot >= 0) {
+                dst[slot*stride_channel_dst + j*stride_col_dst + row0 + threadIdx.x] = sum;
+            }
         }
     }
 #else
@@ -203,63 +246,65 @@ static void mul_mat_f_cuda(
     const int nbytes_shared_iter = nwarps_best * tile_A::I * (warp_size + 4) * 4;
     const int nbytes_shared_combine = GGML_PAD(cols_per_block, tile_B::I) * (nwarps_best*rows_per_block + 4) * 4;
     const int nbytes_shared = std::max(nbytes_shared_iter, nbytes_shared_combine);
-    const int64_t grid_y = ids ? nchannels_dst * nchannels_x : nchannels_dst; //For mul_mat_id: n_expert_used * n_experts
+    const int nbytes_slotmap = ids ? (int)(cols_per_block * sizeof(int32_t)) : 0;
+    const int nbytes_shared_total = nbytes_shared + nbytes_slotmap;
+    const int64_t grid_y = ids ? nchannels_x : nchannels_dst; // per expert when ids present
 
     const dim3 block_nums(nrows_x/rows_per_block, grid_y, nsamples_dst);
     const dim3 block_dims(warp_size, nwarps_best, 1);
 
     switch (nwarps_best) {
         case 1: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 1><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 1><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 2: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 2><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 2><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 3: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 3><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 3><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 4: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 4><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 4><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 5: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 5><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 5><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 6: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 6><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 6><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 7: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 7><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 7><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 8: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 8><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_f<T, rows_per_block, cols_per_block, 8><<<block_nums, block_dims, nbytes_shared_total, stream>>>
                 (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
                  stride_col_id, stride_row_id,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
