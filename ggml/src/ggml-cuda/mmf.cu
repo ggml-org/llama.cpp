@@ -7,7 +7,7 @@ using namespace ggml_cuda_mma;
 
 #define MMF_ROWS_PER_BLOCK 32
 
-template <typename T, int rows_per_block, int cols_per_block, int nwarps>
+template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids>
 __launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
 static __global__ void mul_mat_f(
         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
@@ -27,9 +27,8 @@ static __global__ void mul_mat_f(
 
     const int row0        = blockIdx.x * rows_per_block;
 
-    const bool has_ids     = ids != nullptr;
-    const int  expert_idx  = has_ids ? blockIdx.y : 0;
-    const int  channel_dst = has_ids ? 0 : blockIdx.y;
+    const int expert_idx  = has_ids ? blockIdx.y : 0;
+    const int channel_dst = has_ids ? 0 : blockIdx.y;
 
     const int channel_x   = has_ids ? expert_idx : (channel_dst / channel_ratio);
     const int channel_y   = channel_dst;
@@ -47,13 +46,13 @@ static __global__ void mul_mat_f(
 
     char * shmem_base = data_mmv;
     int  * slot_map   = (int *) shmem_base;
-    char * compute_base = has_ids ? (shmem_base + cols_per_block * sizeof(int32_t)) : shmem_base;
+    char * compute_base = has_ids ? (shmem_base + cols_per_block * sizeof(int)) : shmem_base;
 
     tile_C C[ntA][ntB];
 
     T * tile_xy = (T *) compute_base + threadIdx.y*(tile_A::I * tile_k_padded);
 
-    if (has_ids) {
+    if constexpr (has_ids) {
         __shared__ int has_any;
         if (threadIdx.y == 0) {
             int local_has_any = 0;
@@ -100,7 +99,7 @@ static __global__ void mul_mat_f(
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + itB*tile_B::I;
 
-                    if (!has_ids) {
+                    if constexpr (!has_ids) {
                         tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[j*stride_col_y + col] : 0.0f;
                     } else {
                         float val = 0.0f;
@@ -118,7 +117,7 @@ static __global__ void mul_mat_f(
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const int j = j0 + itB*tile_B::I;
 
-                    if (!has_ids) {
+                    if constexpr (!has_ids) {
                         const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                     } else {
@@ -188,7 +187,7 @@ static __global__ void mul_mat_f(
             sum += buf_iw[j*kiw + i];
         }
 
-        if (!has_ids) {
+        if constexpr (!has_ids) {
             dst[j*stride_col_dst + row0 + threadIdx.x] = sum;
         } else {
             const int slot = (j < cols_per_block) ? slot_map[j] : -1;
@@ -255,60 +254,124 @@ static void mul_mat_f_cuda(
 
     switch (nwarps_best) {
         case 1: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 1><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 1, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 1, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 2: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 2><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 2, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 2, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 3: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 3><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 3, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 3, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 4: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 4><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 4, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 4, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 5: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 5><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 5, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 5, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 6: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 6><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 6, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 6, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 7: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 7><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 7, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 7, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         case 8: {
-            mul_mat_f<T, rows_per_block, cols_per_block, 8><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-                (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-                 stride_col_id, stride_row_id,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            if (ids) {
+                mul_mat_f<T, rows_per_block, cols_per_block, 8, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            } else {
+                mul_mat_f<T, rows_per_block, cols_per_block, 8, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                    (x, y, ids, dst, ncols_x, nchannels_y, nchannels_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                     stride_col_id, stride_row_id,
+                     channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                     sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+            }
         } break;
         default: {
             GGML_ABORT("fatal error");
