@@ -2267,6 +2267,12 @@ struct server_context {
 
         metrics.init();
 
+        // thinking is enabled if:
+        // 1. It's not explicitly disabled (reasoning_budget == 0)
+        // 2. The chat template supports it
+        const bool enable_thinking = params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        SRV_INF("Enable thinking? %d\n", enable_thinking);
+
         oai_parser_opt = {
             /* use_jinja             */ params_base.use_jinja,
             /* prefill_assistant     */ params_base.prefill_assistant,
@@ -2275,7 +2281,7 @@ struct server_context {
             /* common_chat_templates */ chat_templates.get(),
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-            /* enable_thinking       */ params_base.reasoning_budget != 0,
+            /* enable_thinking       */ enable_thinking,
         };
     }
 

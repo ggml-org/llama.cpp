@@ -163,6 +163,19 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
     throw std::runtime_error("Invalid tool_choice: " + tool_choice);
 }
 
+bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {
+    common_chat_templates_inputs dummy_inputs;
+    common_chat_msg msg;
+    msg.role = "user";
+    msg.content = "test";
+    dummy_inputs.messages = {msg};
+    dummy_inputs.enable_thinking = false;
+    const auto rendered_no_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
+    dummy_inputs.enable_thinking = true;
+    const auto rendered_with_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
+    return rendered_no_thinking.prompt != rendered_with_thinking.prompt;
+}
+
 template <>
 std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messages) {
     std::vector<common_chat_msg> msgs;
