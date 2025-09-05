@@ -2238,7 +2238,7 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
         if (all_match) {
             lru_cache.matched_graph = graph_ptr;
             return false;
-        } 
+        }
     }
     lru_cache.matched_graph = nullptr;
     return true;
