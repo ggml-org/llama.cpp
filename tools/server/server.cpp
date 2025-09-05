@@ -5085,13 +5085,26 @@ int main(int argc, char ** argv) {
         const auto & loras = ctx_server.params_base.lora_adapters;
         for (size_t i = 0; i < loras.size(); ++i) {
             auto & lora = loras[i];
-            result.push_back({
+            json entry = {
                 {"id", i},
                 {"path", lora.path},
                 {"scale", lora.scale},
                 {"task_name", lora.task_name},
                 {"prompt_prefix", lora.prompt_prefix},
-            });
+            };
+            std::string alora_invocation_string = "";
+            const uint64_t n_alora_tokens = llama_adapter_get_alora_n_invocation_tokens(lora.ptr);
+            std::vector<llama_token> alora_invocation_tokens;
+            if (n_alora_tokens) {
+                const llama_token * alora_tokens = llama_adapter_get_alora_invocation_tokens(lora.ptr);
+                for (uint64_t i = 0; i < n_alora_tokens; ++i) {
+                    alora_invocation_string += common_token_to_piece(ctx_server.ctx, alora_tokens[i]);
+                    alora_invocation_tokens.push_back(alora_tokens[i]);
+                }
+                entry["alora_invocation_string"] = alora_invocation_string;
+                entry["alora_invocation_tokens"] = alora_invocation_tokens;
+            }
+            result.push_back(std::move(entry));
         }
         res_ok(res, result);
         res.status = 200; // HTTP OK
