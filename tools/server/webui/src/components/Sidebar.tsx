@@ -149,14 +149,16 @@ export default function Sidebar() {
                       navigate('/');
                     }
                   }}
-                  onDownload={() => {
+                  onDownload={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot download conversation while generating'
                       );
                       return;
                     }
-                    const conversationJson = JSON.stringify(conv, null, 2);
+                    const msgs = await StorageUtils.getMessages(conv.id);
+                    const dict = { conv: conv, messages: msgs };
+                    const conversationJson = JSON.stringify(dict, null, 2);
                     const blob = new Blob([conversationJson], {
                       type: 'application/json',
                     });
