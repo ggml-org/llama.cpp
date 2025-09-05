@@ -2140,21 +2140,31 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
  * @param cgraph    The ggml computational graph.
  */
 static void set_ggml_graph_node_properties(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
-        ggml_tensor * node = cgraph->nodes[node_idx];
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_address = node->data;
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_op = node->op;
+    std::shared_ptr<ggml_cann_graph> &matched_graph = cann_ctx->graph_lru_cache.matched_graph;
+    if (!matched_graph) {
+        matched_graph.reset(new ggml_cann_graph());
+        matched_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
+            ggml_tensor * node = cgraph->nodes[node_idx];
+            matched_graph->ggml_graph_properties[node_idx].node_address = node->data;
+            matched_graph->ggml_graph_properties[node_idx].node_op = node->op;
 
-        for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].ne[dim] = node->ne[dim];
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].nb[dim] = node->nb[dim];
+            for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
+                matched_graph->ggml_graph_properties[node_idx].ne[dim] = node->ne[dim];
+                matched_graph->ggml_graph_properties[node_idx].nb[dim] = node->nb[dim];
+            }
+            for (int src = 0; src < GGML_MAX_SRC; src++) {
+                matched_graph->ggml_graph_properties[node_idx].src_address[src] =
+                    node->src[src] ? node->src[src]->data : nullptr;
+            }
+            memcpy(matched_graph->ggml_graph_properties[node_idx].op_params, node->op_params, GGML_MAX_OP_PARAMS);
         }
-        for (int src = 0; src < GGML_MAX_SRC; src++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].src_address[src] =
-                node->src[src] ? node->src[src]->data : nullptr;
-        }
-        memcpy(cann_ctx->cann_graph->ggml_graph_properties[node_idx].op_params, node->op_params, GGML_MAX_OP_PARAMS);
+
+        cann_ctx->graph_lru_cache.push(matched_graph);
+    } else {
+        cann_ctx->graph_lru_cache.move_to_front(matched_graph);
     }
+    return;
 }
 
 /**
@@ -2209,21 +2219,29 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
  * @return true if an update is required; false otherwise.
  */
 static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    // The number of nodes is different, so the graph needs to be reconstructed.
-    if (cann_ctx->cann_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
-        cann_ctx->cann_graph->ggml_graph_properties.resize(cgraph->n_nodes);
-        return true;
-    }
-
-    // The number of nodes is the same; iterate over each node to check whether they match.
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        bool has_matching_properties = ggml_graph_node_has_matching_properties(
-            cgraph->nodes[i], &cann_ctx->cann_graph->ggml_graph_properties[i]);
-        if(!has_matching_properties) {
-            return true;
+    ggml_cann_graph_lru_cache &lru_cache = cann_ctx->graph_lru_cache;
+    for (auto &graph_ptr : lru_cache.cache_list) {
+        // The number of nodes is different, so the graph needs to be reconstructed.
+        if (graph_ptr->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
+            continue;
         }
+        // The number of nodes is the same; iterate over each node to check whether they match.
+        bool all_match = true;
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            bool has_matching_properties = ggml_graph_node_has_matching_properties(
+                cgraph->nodes[i], &graph_ptr->ggml_graph_properties[i]);
+            if(!has_matching_properties) {
+                all_match = false;
+                break;
+            }
+        }
+        if (all_match) {
+            lru_cache.matched_graph = graph_ptr;
+            return false;
+        } 
     }
-    return false;
+    lru_cache.matched_graph = nullptr;
+    return true;
 }
 #endif  // USE_ACL_GRAPH
 
@@ -2244,14 +2262,13 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
     bool & use_cann_graph, bool & cann_graph_update_required) {
 #ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) {
-        if (cann_ctx->cann_graph->graph != nullptr) {
-            ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
-            cann_ctx->cann_graph->graph = nullptr;
+        if (cann_ctx->graph_lru_cache.matched_graph->graph != nullptr) {
+            ACL_CHECK(aclmdlRIDestroy(cann_ctx->graph_lru_cache.matched_graph->graph));
+            cann_ctx->graph_lru_cache.matched_graph->graph = nullptr;
         }
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
 #endif // USE_ACL_GRAPH
-
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
     if (!use_cann_graph || cann_graph_update_required) {
@@ -2272,12 +2289,12 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 
 #ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
-        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
+        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->graph_lru_cache.matched_graph->graph));
     }
 
     if (use_cann_graph) {
         // Execute graph
-        ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->cann_graph->graph, cann_ctx->stream()));
+        ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->graph_lru_cache.matched_graph->graph, cann_ctx->stream()));
     }
 #endif // USE_ACL_GRAPH
 }
@@ -2311,11 +2328,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     }
 
     if (use_cann_graph) {
-        if (cann_ctx->cann_graph == nullptr) {
-            cann_ctx->cann_graph.reset(new ggml_cann_graph());
-            cann_graph_update_required = true;
-        }
-
+        // TODO: refactor to lru_cache
         cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
         set_ggml_graph_node_properties(cann_ctx, cgraph);
     }
@@ -2323,7 +2336,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = false;
     bool cann_graph_update_required = false;
 #endif  // USE_ACL_GRAPH
-
     evaluate_and_capture_cann_graph(
         cann_ctx,
         cgraph,
