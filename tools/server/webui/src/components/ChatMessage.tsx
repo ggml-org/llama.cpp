@@ -61,8 +61,9 @@ export default function ChatMessage({
     if (msg.content === null || msg.role !== 'assistant') {
       return { content: msg.content };
     }
-    const REGEX_THINK_OPEN = /<think>|<\|channel\|>analysis<\|message\|>/;
-    const REGEX_THINK_CLOSE = /<\/think>|<\|end\|>/;
+    const REGEX_THINK_OPEN =
+      /<think>|<seed:think>|<\|channel\|>analysis<\|message\|>/;
+    const REGEX_THINK_CLOSE = /<\/think>|<\/seed:think>|<\|end\|>/;
     let actualContent = '';
     let thought = '';
     let isThinking = false;
