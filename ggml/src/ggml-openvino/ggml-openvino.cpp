@@ -173,14 +173,15 @@ static void ggml_backend_openvino_device_get_memory(ggml_backend_dev_t dev, size
     GGML_ASSERT(free != nullptr);
     GGML_ASSERT(total != nullptr);
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *)dev->context;
-    // Placeholder
     GGML_ASSERT(ctx->device >= 0);
     // ggml_openvino_set_device(ctx->device);
+    *total = 1;
+    *free = 1;
 }
 
 static enum ggml_backend_dev_type ggml_backend_openvino_device_get_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
+    return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
@@ -293,7 +294,7 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
             GGML_LOG_WARN("OpenVINO backend does not support ROPE with mode %d\n", mode);
             return true;
         }
-        if (n_dims != op->src[0]->ne[0]) {
+        if (n_dims != 0.0f && n_dims != op->src[0]->ne[0]) {
             GGML_LOG_WARN("OpenVINO backend does not support ROPE with n_dims %d != src[0]->ne[0] %ld\n",
                           n_dims,
                           op->src[0]->ne[0]);
@@ -305,7 +306,7 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
         }
         float freq_scale;
         memcpy(&freq_scale, op_params + 6, sizeof(float));
-        if (freq_scale != 1.0f) {
+        if (freq_scale != 0.0f && freq_scale != 1.0f) {
             GGML_LOG_WARN("OpenVINO backend does not support ROPE with freq_scale %f != 1.0f\n", freq_scale);
             return true;
         }
