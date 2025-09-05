@@ -1,5 +1,6 @@
 import { config } from '$lib/stores/settings.svelte';
 import { slotsService } from './slots';
+import type { ApiErrorResponse, ApiContextSizeError } from '$lib/types/api';
 
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
@@ -63,7 +64,7 @@ export class ChatService {
 			min_p,
 			xtc_probability,
 			xtc_threshold,
-			typical_p,
+			typ_p,
 			// Penalty parameters
 			repeat_last_n,
 			repeat_penalty,
@@ -119,7 +120,7 @@ export class ChatService {
 		if (min_p !== undefined) requestBody.min_p = min_p;
 		if (xtc_probability !== undefined) requestBody.xtc_probability = xtc_probability;
 		if (xtc_threshold !== undefined) requestBody.xtc_threshold = xtc_threshold;
-		if (typical_p !== undefined) requestBody.typical_p = typical_p;
+		if (typ_p !== undefined) requestBody.typ_p = typ_p;
 
 		if (repeat_last_n !== undefined) requestBody.repeat_last_n = repeat_last_n;
 		if (repeat_penalty !== undefined) requestBody.repeat_penalty = repeat_penalty;
@@ -159,29 +160,12 @@ export class ChatService {
 			});
 
 			if (!response.ok) {
-				let errorMessage = `Server error (${response.status})`;
-
-				switch (response.status) {
-					case 400:
-						errorMessage = 'Invalid request - check your message format';
-						break;
-					case 401:
-						errorMessage = 'Unauthorized - check server authentication';
-						break;
-					case 404:
-						errorMessage = 'Chat endpoint not found - server may not support chat completions';
-						break;
-					case 500:
-						errorMessage = 'Server internal error - check server logs';
-						break;
-					case 503:
-						errorMessage = 'Server unavailable - try again later';
-						break;
-					default:
-						errorMessage = `Server error (${response.status}): ${response.statusText}`;
+				// Use the new parseErrorResponse method to handle structured errors
+				const error = await this.parseErrorResponse(response);
+				if (onError) {
+					onError(error);
 				}
-
-				throw new Error(errorMessage);
+				throw error;
 			}
 
 			if (stream) {
@@ -627,7 +611,40 @@ export class ChatService {
 	}
 
 	/**
-	 * Updates the processing state with timing data from streaming response
+	 * Parses error response and creates appropriate error with context information
+	 * @param response - HTTP response object
+	 * @returns Promise<Error> - Parsed error with context info if available
+	 */
+	private async parseErrorResponse(response: Response): Promise<Error> {
+		try {
+			const errorText = await response.text();
+			const errorData: ApiErrorResponse = JSON.parse(errorText);
+			
+			if (errorData.error?.type === 'exceed_context_size_error') {
+				const contextError = errorData.error as ApiContextSizeError;
+				const error = new Error(contextError.message);
+				error.name = 'ContextError';
+				// Attach structured context information
+				(error as Error & { contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number } }).contextInfo = {
+					promptTokens: contextError.n_prompt_tokens,
+					maxContext: contextError.n_ctx,
+					estimatedTokens: contextError.n_prompt_tokens
+				};
+				return error;
+			}
+			
+			// Fallback for other error types
+			const message = errorData.error?.message || 'Unknown server error';
+			return new Error(message);
+		} catch {
+			// If we can't parse the error response, return a generic error
+			return new Error(`Server error (${response.status}): ${response.statusText}`);
+		}
+	}
+
+	/**
+	 * Updates the processing state with timing information from the server response
+	 * @param timings - Timing data from the API response
 	 */
 	private updateProcessingState(timings: {
 		prompt_n?: number;

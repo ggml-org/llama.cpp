@@ -1,21 +1,27 @@
 <script lang="ts">
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 
 	const processingState = useProcessingState();
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	let showSlotsInfo = $derived(isLoading());
+	let showSlotsInfo = $derived(
+		isLoading() || (config().keepStatsVisible && processingDetails.length > 0)
+	);
 
-	// Monitor during loading and add delay before stopping to capture final updates
+	// Monitor during loading and handle keepStatsVisible setting
 	$effect(() => {
 		if (isLoading()) {
 			processingState.startMonitoring();
 		} else {
-			// Delay stopping to capture final context updates after streaming
+			// Always delay stopping to capture final context updates after streaming
 			setTimeout(() => {
-				processingState.stopMonitoring();
+				// Only stop monitoring if keepStatsVisible is disabled
+				if (!config().keepStatsVisible) {
+					processingState.stopMonitoring();
+				}
 			}, 2000); // 2 second delay to ensure we get final updates
 		}
 	});

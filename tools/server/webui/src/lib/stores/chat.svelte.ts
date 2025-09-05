@@ -258,8 +258,8 @@ class ChatStore {
 		if (currentConfig.xtc_threshold !== undefined && currentConfig.xtc_threshold !== null) {
 			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
 		}
-		if (currentConfig.typical_p !== undefined && currentConfig.typical_p !== null) {
-			apiOptions.typical_p = Number(currentConfig.typical_p);
+		if (currentConfig.typ_p !== undefined && currentConfig.typ_p !== null) {
+			apiOptions.typ_p = Number(currentConfig.typ_p);
 		}
 		if (currentConfig.repeat_last_n !== undefined && currentConfig.repeat_last_n !== null) {
 			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
@@ -384,10 +384,30 @@ class ChatStore {
 						DatabaseStore.deleteMessage(assistantMessage.id).catch(console.error);
 					}
 
+					// Use structured context info from new exceed_context_size_error format if available
+					const contextInfo = (error as Error & { contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number } }).contextInfo;
+					let estimatedTokens = 0;
+					let maxContext = serverStore.serverProps?.default_generation_settings.n_ctx || 8192;
+
+					if (contextInfo) {
+						// Use precise token counts from server response
+						estimatedTokens = contextInfo.promptTokens;
+						maxContext = contextInfo.maxContext;
+					} else {
+						// Fallback to estimation for older error format
+						try {
+							// Rough estimation: ~4 characters per token
+							const messageContent = JSON.stringify(messages);
+							estimatedTokens = Math.ceil(messageContent.length / 4);
+						} catch {
+							estimatedTokens = 0;
+						}
+					}
+
 					this.maxContextError = {
 						message: error.message,
-						estimatedTokens: 0, // Server-side error, we don't have client estimates
-						maxContext: serverStore.serverProps?.default_generation_settings.n_ctx || null
+						estimatedTokens,
+						maxContext
 					};
 
 					if (onError) {

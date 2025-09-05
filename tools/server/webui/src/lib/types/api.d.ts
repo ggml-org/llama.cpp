@@ -10,6 +10,22 @@ export interface ApiChatMessageContentPart {
 	};
 }
 
+export interface ApiContextSizeError {
+	code: number;
+	message: string;
+	type: 'exceed_context_size_error';
+	n_prompt_tokens: number;
+	n_ctx: number;
+}
+
+export interface ApiErrorResponse {
+	error: ApiContextSizeError | {
+		code: number;
+		message: string;
+		type?: string;
+	};
+}
+
 export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
@@ -35,7 +51,7 @@ export interface ApiLlamaCppServerProps {
 			top_n_sigma: number;
 			xtc_probability: number;
 			xtc_threshold: number;
-			typical_p: number;
+			typ_p: number;
 			repeat_last_n: number;
 			repeat_penalty: number;
 			presence_penalty: number;
@@ -113,7 +129,7 @@ export interface ApiChatCompletionRequest {
 	min_p?: number;
 	xtc_probability?: number;
 	xtc_threshold?: number;
-	typical_p?: number;
+	typ_p?: number;
 	// Penalty parameters
 	repeat_last_n?: number;
 	repeat_penalty?: number;

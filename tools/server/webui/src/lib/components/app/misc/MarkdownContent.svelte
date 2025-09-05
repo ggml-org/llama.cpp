@@ -32,6 +32,20 @@
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
+	function enhanceLinks(html: string): string {
+		const tempDiv = document.createElement('div');
+		tempDiv.innerHTML = html;
+
+		// Make all links open in new tabs
+		const linkElements = tempDiv.querySelectorAll('a[href]');
+		for (const link of linkElements) {
+			link.setAttribute('target', '_blank');
+			link.setAttribute('rel', 'noopener noreferrer');
+		}
+
+		return tempDiv.innerHTML;
+	}
+
 	function enhanceCodeBlocks(html: string): string {
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
@@ -96,8 +110,9 @@
 		try {
 			const result = await processor().process(text);
 			const html = String(result);
+			const enhancedLinks = enhanceLinks(html);
 
-			return enhanceCodeBlocks(html);
+			return enhanceCodeBlocks(enhancedLinks);
 		} catch (error) {
 			console.error('Markdown processing error:', error);
 

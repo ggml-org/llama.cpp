@@ -30,6 +30,7 @@ export interface UseProcessingStateReturn {
 export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let processingState = $state<ApiProcessingState | null>(null);
+	let lastKnownState = $state<ApiProcessingState | null>(null);
 	let unsubscribe: (() => void) | null = null;
 
 	async function startMonitoring(): Promise<void> {
@@ -39,6 +40,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 		unsubscribe = slotsService.subscribe((state) => {
 			processingState = state;
+			if (state) {
+				lastKnownState = state;
+			}
 		});
 
 		try {
@@ -46,6 +50,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 			if (currentState) {
 				processingState = currentState;
+				lastKnownState = currentState;
 			}
 
 			if (slotsService.isStreaming()) {
@@ -61,7 +66,16 @@ export function useProcessingState(): UseProcessingStateReturn {
 		if (!isMonitoring) return;
 
 		isMonitoring = false;
-		processingState = null;
+
+		// Only clear processing state if keepStatsVisible is disabled
+		// This preserves the last known state for display when stats should remain visible
+		const currentConfig = config();
+		if (!currentConfig.keepStatsVisible) {
+			processingState = null;
+		} else if (lastKnownState) {
+			// Keep the last known state visible when keepStatsVisible is enabled
+			processingState = lastKnownState;
+		}
 
 		if (unsubscribe) {
 			unsubscribe();
@@ -90,7 +104,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	function getProcessingDetails(): string[] {
-		if (!processingState) {
+		// Use current processing state or fall back to last known state
+		const stateToUse = processingState || lastKnownState;
+		if (!stateToUse) {
 			return [];
 		}
 
@@ -98,35 +114,38 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const currentConfig = config(); // Get fresh config each time
 
 		// Always show context info when we have valid data
-		if (processingState.contextUsed >= 0 && processingState.contextTotal > 0) {
-			const contextPercent = Math.round(
-				(processingState.contextUsed / processingState.contextTotal) * 100
-			);
+		if (stateToUse.contextUsed >= 0 && stateToUse.contextTotal > 0) {
+			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(
-				`Context: ${processingState.contextUsed}/${processingState.contextTotal} (${contextPercent}%)`
+				`Context: ${stateToUse.contextUsed}/${stateToUse.contextTotal} (${contextPercent}%)`
 			);
 		}
 
-		if (processingState.outputTokensUsed > 0) {
-			const outputPercent = Math.round(
-				(processingState.outputTokensUsed / processingState.outputTokensMax) * 100
-			);
+		if (stateToUse.outputTokensUsed > 0) {
+			// Handle infinite max_tokens (-1) case
+			if (stateToUse.outputTokensMax <= 0) {
+				details.push(`Output: ${stateToUse.outputTokensUsed}/∞`);
+			} else {
+				const outputPercent = Math.round(
+					(stateToUse.outputTokensUsed / stateToUse.outputTokensMax) * 100
+				);
 
-			details.push(
-				`Output: ${processingState.outputTokensUsed}/${processingState.outputTokensMax} (${outputPercent}%)`
-			);
+				details.push(
+					`Output: ${stateToUse.outputTokensUsed}/${stateToUse.outputTokensMax} (${outputPercent}%)`
+				);
+			}
 		}
 
 		if (
 			currentConfig.showTokensPerSecond &&
-			processingState.tokensPerSecond &&
-			processingState.tokensPerSecond > 0
+			stateToUse.tokensPerSecond &&
+			stateToUse.tokensPerSecond > 0
 		) {
-			details.push(`${processingState.tokensPerSecond.toFixed(1)} tokens/sec`);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} tokens/sec`);
 		}
 
-		if (processingState.speculative) {
+		if (stateToUse.speculative) {
 			details.push('Speculative decoding enabled');
 		}
 

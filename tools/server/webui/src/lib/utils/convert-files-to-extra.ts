@@ -107,6 +107,14 @@ export async function parseFilesToMessageExtras(
 					try {
 						const images = await convertPDFToImage(file.file);
 
+						// Show success toast for PDF image processing
+						toast.success(
+							`PDF "${file.name}" processed as ${images.length} images for vision model.`,
+							{
+								duration: 3000
+							}
+						);
+
 						extras.push({
 							type: 'pdfFile',
 							name: file.name,
@@ -135,6 +143,11 @@ export async function parseFilesToMessageExtras(
 				} else {
 					// Process PDF as text (default or forced for non-vision models)
 					const content = await convertPDFToText(file.file);
+
+					// Show success toast for PDF text processing
+					toast.success(`PDF "${file.name}" processed as text content.`, {
+						duration: 3000
+					});
 
 					extras.push({
 						type: 'pdfFile',

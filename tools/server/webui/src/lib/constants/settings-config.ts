@@ -6,10 +6,11 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	theme: 'system',
 	showTokensPerSecond: false,
 	showThoughtInProgress: true,
+	keepStatsVisible: false,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	// make sure these default values are in sync with `common.h`
-	samplers: 'top_k;tfs_z;typical_p;top_p;min_p;temperature',
+	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -18,7 +19,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	min_p: 0.05,
 	xtc_probability: 0.0,
 	xtc_threshold: 0.1,
-	typical_p: 1.0,
+	typ_p: 1.0,
 	repeat_last_n: 64,
 	repeat_penalty: 1.0,
 	presence_penalty: 0.0,
@@ -27,7 +28,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	dry_base: 1.75,
 	dry_allowed_length: 2,
 	dry_penalty_last_n: -1,
-	max_tokens: 2048,
+	max_tokens: -1,
 	custom: '', // custom json-stringified object
 	// experimental features
 	pyInterpreterEnabled: false
@@ -41,7 +42,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	pasteLongTextToFileLen:
 		'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
 	samplers:
-		'The order at which samplers are applied, in simplified way. Default is "top_k;tfs_z;typical_p;top_p;min_p;temperature": top_k->tfs_z->typical_p->top_p->min_p->temperature',
+		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:
@@ -56,7 +57,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'XTC sampler cuts out top tokens; this parameter controls the chance of cutting tokens at all. 0 disables XTC.',
 	xtc_threshold:
 		'XTC sampler cuts out top tokens; this parameter controls the token probability that is required to cut that token.',
-	typical_p: 'Sorts and limits tokens based on the difference between log-probability and entropy.',
+	typ_p: 'Sorts and limits tokens based on the difference between log-probability and entropy.',
 	repeat_last_n: 'Last n tokens to consider for penalizing repetition',
 	repeat_penalty: 'Controls the repetition of token sequences in the generated text',
 	presence_penalty: 'Limits tokens based on whether they appear in the output or not.',
@@ -69,10 +70,11 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the allowed length for DRY sampling.',
 	dry_penalty_last_n:
 		'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
-	max_tokens: 'The maximum number of token per output.',
+	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showTokensPerSecond: 'Display generation speed in tokens per second during streaming.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
+	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'

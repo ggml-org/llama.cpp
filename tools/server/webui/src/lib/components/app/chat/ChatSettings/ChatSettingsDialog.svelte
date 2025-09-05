@@ -51,6 +51,11 @@
 					type: 'checkbox'
 				},
 				{
+					key: 'keepStatsVisible',
+					label: 'Keep stats visible after generation',
+					type: 'checkbox'
+				},
+				{
 					key: 'pasteLongTextToFileLen',
 					label: 'Paste long text to file length',
 					type: 'input'
@@ -175,7 +180,7 @@
 					type: 'input'
 				},
 				{
-					key: 'typical_p',
+					key: 'typ_p',
 					label: 'Typical P',
 					type: 'input'
 				},
@@ -268,7 +273,7 @@
 			'pasteLongTextToFileLen',
 			'dynatemp_range',
 			'dynatemp_exponent',
-			'typical_p',
+			'typ_p',
 			'xtc_probability',
 			'xtc_threshold',
 			'repeat_last_n',

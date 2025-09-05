@@ -23,7 +23,7 @@ export interface SettingsChatServiceOptions {
 	min_p?: number;
 	xtc_probability?: number;
 	xtc_threshold?: number;
-	typical_p?: number;
+	typ_p?: number;
 	// Penalty parameters
 	repeat_last_n?: number;
 	repeat_penalty?: number;
