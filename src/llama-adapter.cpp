@@ -235,16 +235,6 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
                 (const llama_token *)data,
                 (const llama_token *)data + seq_len,
                 adapter.alora_invocation_tokens.begin());
-            std::stringstream ss;
-            ss << "[";
-            for (size_t i = 0; i < adapter.alora_invocation_tokens.size(); ++i) {
-                ss << adapter.alora_invocation_tokens[i];
-                if (i < adapter.alora_invocation_tokens.size() - 1) {
-                    ss << ", ";
-                }
-            }
-            ss << "]";
-            LLAMA_LOG_INFO("%s: %s = %s\n", __func__, key.c_str(), ss.str().c_str());
         }
     }
 
