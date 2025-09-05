@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from io import BufferedReader, BufferedWriter
 from pathlib import Path
 from typing import Literal
 
 import os
 import json
-import shutil
 import logging
 import numpy as np
 
@@ -285,115 +283,6 @@ class LocalTensorRange:
     block_size: int
     offset: int
     size: int
-
-
-def best_extra_offset(ranges: tuple[LocalTensorRange, ...], current_offset: int) -> int:
-    hist: dict[int, int] = {}
-
-    max_block_size = 0
-    for r in ranges:
-        # Ensure minimal alignment is 8 bytes (common with safetensors)
-        # and that the block size is valid
-        if r.offset % 8 == 0 and r.block_size > 0:
-            align_offset = r.offset % r.block_size
-            if align_offset not in hist:
-                hist[align_offset] = 0
-            hist[align_offset] += r.size
-            if r.block_size > max_block_size:
-                max_block_size = r.block_size
-
-    best_offset = 0
-    best_size = 0
-    for offset, size in hist.items():
-        if size > best_size:
-            best_size = size
-            best_offset = offset
-
-    if max_block_size > 0:
-        # the offset needs to be aligned properly
-        # or else there's probably a block size mismatch
-        assert current_offset % max_block_size == 0, current_offset % max_block_size
-
-    return best_offset
-
-
-# Copy tensor ranges using os.copy_file_range with aligned offsets and sizes
-# to make it more likely that copy-on-write is used where possible.
-# Block alignment is necessary for BTRFS and XFS (and likely for ZFS too).
-#
-# Falls back to shutil.copyfileobj when os.copy_file_range is not present.
-def copy_tensor_ranges(fout: BufferedWriter, ranges: tuple[LocalTensorRange, ...]):
-    assert len(ranges) > 0
-    dst_offset = fout.tell()
-    extra_offset = best_extra_offset(ranges, dst_offset)
-
-    if extra_offset > 0:
-        # initial padding
-        fout.write(b"\x00" * extra_offset)
-
-    dst_offset += extra_offset
-    start_offset = dst_offset
-
-    src_files: dict[Path, BufferedReader] = {}
-    for r in ranges:
-        if r.filename not in src_files:
-            src_files[r.filename] = open(r.filename, "rb")
-
-    has_copy_file_range = hasattr(os, "copy_file_range")
-
-    for i, r in enumerate(ranges):
-        src = src_files[r.filename]
-        if has_copy_file_range:
-            if r.block_size > 0 and (r.offset % r.block_size) == (start_offset % r.block_size):
-                # Attempting to align copies for reflinking
-
-                # Block  0,      1,      2,      3,      4,
-                # |___0000|0000000|0001111|1111111|111____|
-                #
-                # 1. block 0 is partially overwritten with contents from range[0]
-                # 2. blocks 1 and 2 are copied from range[0] using os.copy_file_range
-                # 3. block 2 is partially overwritten with contents from range[1]
-                # 4. blocks 3 and 4 are copied from range[1] using os.copy_file_range
-                # (repeated for further ranges)
-                if dst_offset % r.block_size == 0:
-                    extra_size = 0
-                else:
-                    extra_size = r.block_size - (dst_offset % r.block_size)
-                    extra_size = min(extra_size, r.size)
-                    src.seek(r.offset)
-                    buf = src.read(extra_size)
-                    fout.seek(dst_offset)
-                    fout.write(buf)
-                    dst_offset += extra_size
-                    if extra_size == r.size:
-                        continue
-
-                assert dst_offset % r.block_size == 0, dst_offset % r.block_size
-
-                offset_src = r.offset + extra_size
-                offset_src_end = r.offset + r.size
-                if offset_src_end % r.block_size != 0:
-                    offset_src_end += r.block_size - (offset_src_end % r.block_size)
-                size = offset_src_end - offset_src
-                os.copy_file_range(src.fileno(), fout.fileno(), size, offset_src, dst_offset)
-                dst_offset += r.size - extra_size
-            else:
-                if r.block_size > 0:
-                    logger.debug(f"misaligned for reflinking, falling back to copy ({i}/{len(ranges)})")
-                # not trying to use reflinks, but still using os.copy_file_range for speed
-                os.copy_file_range(src.fileno(), fout.fileno(), r.size, r.offset, dst_offset)
-                dst_offset += r.size
-        else:
-            # not using reflinks, fallback when os.copy_file_range is not supported
-            src.seek(r.offset)
-            fout.seek(dst_offset)
-            shutil.copyfileobj(src, fout, r.size)
-            dst_offset += r.size
-
-    for f in src_files.values():
-        f.close()
-
-    fout.seek(dst_offset)
 
 
 @dataclass

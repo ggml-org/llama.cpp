@@ -29,8 +29,8 @@ from .constants import (
     ExpertGatingFuncType,
 )
 
+from .lazy import best_extra_offset, count_reflinkable_size
 from .quants import quant_shape_from_byte_shape
-from .utility import LocalTensorRange, best_extra_offset
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ class GGUFWriter:
                     # insert at the start of the key-values
                     if Keys.General.ALIGNMENT in kv:
                         del kv[Keys.General.ALIGNMENT]
-                    self.kv_data[i] = { Keys.General.ALIGNMENT: GGUFValue(block_size, GGUFValueType.UINT32), **kv }
+                    self.kv_data[i] = {Keys.General.ALIGNMENT: GGUFValue(block_size, GGUFValueType.UINT32), **kv}
 
     def print_plan(self) -> list[Path]:
         logger.info("Writing the following files:")
@@ -200,7 +200,9 @@ class GGUFWriter:
         filenames = self.format_shard_names(self.path)
         assert len(filenames) == len(self.tensors)
         for name, tensors in zip(filenames, self.tensors):
-            logger.info(f"{name}: n_tensors = {len(tensors)}, total_size = {GGUFWriter.format_n_bytes_to_str(sum(ti.nbytes for ti in tensors.values()))}")
+            total_size = sum(ti.nbytes for ti in tensors.values())
+            reflinkable_size = count_reflinkable_size(ti.tensor for ti in tensors.values()) if self.use_reflinks else 0
+            logger.info(f"{name}: n_tensors = {len(tensors)}, total_size = {GGUFWriter.format_n_bytes_to_str(total_size)}{', reflinked = ' + GGUFWriter.format_n_bytes_to_str(total_size - reflinkable_size) if self.use_reflinks else ''}")
 
         if self.dry_run:
             logger.info("Dry run, not writing files")
@@ -275,9 +277,7 @@ class GGUFWriter:
             for name, ti in tensors.items():
                 extra_offset = 0
                 if self.use_reflinks:
-                    ranges: tuple[LocalTensorRange, ...] = getattr(ti.tensor, "_ranges", ())
-                    if len(ranges) > 0:
-                        extra_offset = best_extra_offset(ranges, offset_tensor)
+                    extra_offset = best_extra_offset(ti.tensor, offset_tensor)
 
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
@@ -472,11 +472,9 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for name, ti in tensors.items():
+                for ti in tensors.values():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
-                    if self.use_reflinks and len(getattr(ti.tensor, "_ranges", ())) > 0:
-                        logger.debug(f"using reflinks for {name}")
                     ti.tensor.tofile(fout)
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
