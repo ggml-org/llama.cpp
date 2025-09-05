@@ -166,6 +166,10 @@ llama_pos llama_memory_hybrid::seq_pos_max(llama_seq_id seq_id) const {
     return std::min(mem_attn->seq_pos_max(seq_id), mem_recr->seq_pos_max(seq_id));
 }
 
+size_t llama_memory_hybrid::memory_use(ggml_backend_dev_t dev) const {
+    return mem_attn->memory_use(dev) + mem_recr->memory_use(dev);
+}
+
 void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 

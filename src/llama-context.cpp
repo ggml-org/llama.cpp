@@ -2028,6 +2028,48 @@ void llama_context::perf_reset() {
 }
 
 //
+// backend
+//
+
+size_t llama_context::backend_count() const {
+    return backends.size();
+}
+
+llama_backend_info_data llama_context::backend_info(size_t index) const {
+    ggml_backend_t     backend = backends[index].get();
+    ggml_backend_dev_t dev     = ggml_backend_get_device(backend);
+
+    ggml_backend_dev_props dev_props;
+    ggml_backend_dev_get_props(dev, &dev_props);
+
+    const size_t self_model = model.memory_use(dev);
+    const size_t self_context = memory->memory_use(dev);
+    const size_t self_compute = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+    const size_t self = self_model + self_context + self_compute;
+
+    const size_t free = ggml_backend_is_cpu(backend) ? dev_props.memory_total - self : dev_props.memory_free;
+    GGML_ASSERT(dev_props.memory_total >= free + self);
+    const size_t unaccounted = dev_props.memory_total - (free + self);
+
+    return {
+        /*name =*/ ggml_backend_name(backend),
+
+        /*device =*/ {
+            /*name                     =*/ dev_props.name,
+            /*description              =*/ dev_props.description,
+
+            /*memory_total             =*/ dev_props.memory_total,
+            /*memory_free              =*/ free,
+            /*memory_used_self         =*/ self,
+            /*memory_used_self_model   =*/ self_model,
+            /*memory_used_self_context =*/ self_context,
+            /*memory_used_self_compute =*/ self_compute,
+            /*memory_used_unaccounted  =*/ unaccounted,
+        },
+    };
+}
+
+//
 // training
 //
 
@@ -2763,6 +2805,77 @@ void llama_perf_context_print(const llama_context * ctx) {
 
 void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
+}
+
+//
+// backend
+//
+
+size_t llama_backend_count(const struct llama_context * ctx) {
+    return ctx->backend_count();
+}
+
+llama_backend_info_data llama_backend_info(const struct llama_context * ctx, size_t index) {
+    return ctx->backend_info(index);
+}
+
+void llama_print_memory_breakdown(const struct llama_context * ctx) {
+    const size_t backend_count = llama_backend_count(ctx);
+    std::vector<std::array<std::string, 9>> table_data(backend_count + 1);
+    const std::string template_header  = "%s: %s %s   %s    %s   %s   %s   %s    %s\n";
+    const std::string template_default = "%s: %s %s = %s + (%s = %s + %s + %s) + %s\n";
+    const std::string template_cpu     = "%s: %s %s   %s    %s = %s + %s + %s    %s\n";
+
+    table_data[0] = {template_header, "memory breakdown:", "total", "free", "self", "model", "context", "compute", "unaccounted"};
+
+    constexpr size_t MiB = 1024 * 1024;
+    const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
+    const std::vector<std::string> desc_suffixes_strip = {
+        " 2-Core Processor", " 4-Core Processor", " 6-Core Processor", " 8-Core Processor", " 12-Core Processor", " 16-Core Processor",
+        " 24-Core Processor", " 32-Core Processor", " 40-Core Processor", " 48-Core Processor", " 56-Core Processor", " 64-Core Processor"};
+
+    for (size_t i = 0; i < backend_count; i++) {
+        llama_backend_info_data info = llama_backend_info(ctx, i);
+
+        std::string desc = info.device.description;
+        for (const std::string & prefix : desc_prefixes_strip) {
+            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
+                desc = desc.substr(prefix.length());
+            }
+        }
+        for (const std::string & suffix : desc_suffixes_strip) {
+            if (desc.length() >= suffix.length() && desc.substr(desc.length() - suffix.length()) == suffix) {
+                desc = desc.substr(0, desc.length() - suffix.length());
+            }
+        }
+
+        const bool is_cpu = info.name == std::string("CPU");
+        table_data[i + 1][0] = is_cpu ? template_cpu : template_default;
+        table_data[i + 1][1] = std::string("  - ") + info.name + " (" + desc + "):";
+        table_data[i + 1][2] =               std::to_string(info.device.memory_total / MiB);
+        table_data[i + 1][3] = is_cpu ? "" : std::to_string(info.device.memory_free / MiB);
+        table_data[i + 1][4] =               std::to_string(info.device.memory_used_self / MiB);
+        table_data[i + 1][5] =               std::to_string(info.device.memory_used_self_model / MiB);
+        table_data[i + 1][6] =               std::to_string(info.device.memory_used_self_context / MiB);
+        table_data[i + 1][7] =               std::to_string(info.device.memory_used_self_compute / MiB);
+        table_data[i + 1][8] = is_cpu ? "" : std::to_string(info.device.memory_used_unaccounted / MiB);
+    }
+    for (size_t j = 1; j < table_data[0].size(); j++) {
+        size_t max_len = 0;
+        for (const auto & td : table_data) {
+            max_len = std::max(max_len, td[j].length());
+        }
+        for (size_t i = 0; i < backend_count + 1; i++) {
+            auto & td = table_data[i];
+            td[j].insert(j == 1 ? td[j].length() : 0, max_len - td[j].length(), ' ');
+        }
+    }
+    for (size_t i = 0; i < backend_count + 1; i++) {
+        const auto & td = table_data[i];
+        LLAMA_LOG_INFO(td[0].c_str(),
+            __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
+            td[6].c_str(), td[7].c_str(), td[8].c_str());
+    }
 }
 
 //

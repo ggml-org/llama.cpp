@@ -359,6 +359,20 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
+size_t llama_memory_recurrent::memory_use(ggml_backend_dev_t dev) const {
+    ggml_backend_buffer_type_t buft_dev = ggml_backend_dev_buffer_type(dev);
+
+    size_t n_bytes = 0;
+    for (const ggml_backend_buffer_ptr & buf_ptr : bufs) {
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf_ptr.get());
+        if (buft != buft_dev) {
+            continue;
+        }
+        n_bytes += ggml_backend_buffer_get_size(buf_ptr.get());
+    }
+    return n_bytes;
+}
+
 llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
         balloc.split_reset();

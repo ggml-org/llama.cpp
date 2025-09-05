@@ -144,6 +144,9 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
+    size_t                  backend_count() const;
+    llama_backend_info_data backend_info(size_t index) const;
+
     //
     // training
     //
