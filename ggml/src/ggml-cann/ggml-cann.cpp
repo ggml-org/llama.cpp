@@ -1116,30 +1116,65 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
-// ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
-namespace {
-    void* g_nz_workspace = nullptr;
-    size_t g_nz_workspace_allocated = 0;
+/**
+ * @brief Workspace for caching NZ buffers per device.
+ *
+ * This struct manages a device buffer used in NZ computations. It supports
+ * allocation, reallocation, and clearing of cached memory. The struct is
+ * designed to be used with a global array, one per device.
+ */
+struct ggml_cann_nz_workspace {
+    void*  ptr;       // Pointer to allocated device buffer
+    size_t allocated; // Size of currently allocated buffer in bytes
 
-    void release_nz_workspace() {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
-            g_nz_workspace_allocated = 0;
+    /**
+     * @brief Constructor. Initializes the workspace with no allocated memory.
+     */
+    ggml_cann_nz_workspace() : ptr(nullptr), allocated(0) {}
+
+    /**
+     * @brief Free cached memory and reset the workspace.
+     *
+     * If a buffer has been allocated, this function releases it using
+     * aclrtFree and resets internal state.
+     */
+    void clear() {
+        if (ptr) {
+            ACL_CHECK(aclrtFree(ptr));
+            ptr = nullptr;
+            allocated = 0;
         }
     }
 
-    void relloc_nz_workspace(size_t new_size) {
-        if (new_size > g_nz_workspace_allocated) {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
+    /**
+     * @brief Allocate or reallocate the workspace buffer.
+     *
+     * If the requested size is larger than the currently allocated size,
+     * the old buffer will be freed and a new buffer of the requested size
+     * will be allocated on the device.
+     *
+     * @param new_size Size in bytes to allocate for the workspace.
+     */
+    void realloc(size_t new_size) {
+        if (new_size > allocated) {
+            clear();
+            ACL_CHECK(aclrtMalloc(&ptr, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+            allocated = new_size;
         }
-        ACL_CHECK(aclrtMalloc(&g_nz_workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
-        g_nz_workspace_allocated = new_size;
     }
-    }
-}
+
+    /**
+     * @brief Get the device buffer pointer.
+     *
+     * @return Pointer to the allocated buffer, or nullptr if not allocated.
+     */
+    void* get() const { return ptr; }
+};
+
+/**
+ * @brief Global array of NZ workspaces, one per device.
+ */
+static ggml_cann_nz_workspace g_nz_workspaces[GGML_CANN_MAX_DEVICES];
 
 /**
  * @brief Convert tensor weights to NZ format using Ascend CANN API.
@@ -1149,13 +1184,13 @@ namespace {
  * improve performance on certain hardware.
  *
  * @param tensor Pointer to the input ggml_tensor containing the weights.
- * @param data Pointer to the raw data buffer for the tensor weights.
  * @param offset Byte offset within the tensor data buffer where weights start.
+ * @param device device id.
  *
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
+static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) {
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1165,7 +1200,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, size_t offset) {
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    relloc_nz_workspace(workspaceSize);
+    g_nz_workspaces[device].realloc(workspaceSize);
+
+    void* g_nz_workspace = g_nz_workspaces[device].get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -1196,14 +1233,14 @@ static void ggml_backend_cann_buffer_set_tensor(
     // Why aclrtSynchronizeDevice?
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, offset);
+            weight_format_to_nz(tensor, offset, ctx->device);
         }
     } else {
         void *transform_buffer = malloc(size);
@@ -1279,6 +1316,10 @@ static bool ggml_backend_cann_buffer_cpy_tensor(
                                   ACL_MEMCPY_DEVICE_TO_DEVICE));
             return true;
         } else {
+#ifdef ASCEND_310P
+            // TODO: Support 310p P2P copy
+            return false;
+#endif
             // Different device but can access by peer.
             int32_t canAccessPeer = 0;
             ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device,
@@ -1439,7 +1480,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     int64_t ne0 = tensor->ne[0];
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
 
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
@@ -2000,6 +2041,8 @@ static bool ggml_backend_cann_cpy_tensor_async(
     GGML_ASSERT(ggml_backend_is_cann(backend_src) ||
                 ggml_backend_is_cann(backend_dst));
 
+    GGML_ASSERT(!is_matmul_weight((const ggml_tensor*)src));
+
     if (!ggml_backend_buffer_is_cann(src->buffer) ||
         !ggml_backend_buffer_is_cann(dst->buffer)) {
         return false;
@@ -2020,6 +2063,10 @@ static bool ggml_backend_cann_cpy_tensor_async(
         return true;
     }
     if (backend_src != backend_dst) {
+#ifdef ASCEND_310P
+        // TODO: Support 310p P2P copy
+        return false;
+#endif
         ggml_backend_cann_buffer_context* buf_ctx_src =
             (ggml_backend_cann_buffer_context*)buf_src->context;
         ggml_backend_cann_buffer_context* buf_ctx_dst =
@@ -2036,7 +2083,6 @@ static bool ggml_backend_cann_cpy_tensor_async(
         }
 
         // need open both directions for memcpyasync between devices.
-        ggml_cann_set_device(cann_ctx_dst->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_src->device, 0));
         ggml_cann_set_device(cann_ctx_src->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_dst->device, 0));
@@ -2047,8 +2093,15 @@ static bool ggml_backend_cann_cpy_tensor_async(
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
 
-        //TODO: workaround for Event didn`t work here.
-        aclrtSynchronizeStream(cann_ctx_src->stream());
+        // record event on src stream after the copy
+        if (!cann_ctx_src->copy_event) {
+            ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
+        }
+        ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
+
+        // wait on dst stream for the copy to complete
+        ggml_cann_set_device(cann_ctx_dst->device);
+        ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
     } else {
         // src and dst are on the same backend
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
@@ -2246,11 +2299,15 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    release_nz_workspace();
+    g_nz_workspaces[cann_ctx->device].clear();
 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
+
+    if (!cann_ctx->acl_graph_mode) {
+        use_cann_graph = false;
+    }
 
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
@@ -2401,14 +2458,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float ext_factor = 0.0f;
-            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
-                return false;
-            }
-            // TODO: ext_factor != 0
-            if (ext_factor != 0) {
                 return false;
             }
 
@@ -2419,10 +2470,11 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (mode & GGML_ROPE_TYPE_VISION) {
                 return false;
             }
-
+#ifdef ASCEND_310P
             if(!ggml_is_contiguous(op->src[0])){
                 return false;
             }
+#endif
             return true;
         }
         case GGML_OP_UPSCALE: {
@@ -2484,12 +2536,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARGMAX:
         case GGML_OP_COS:
         case GGML_OP_SIN:
-        case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_LOG:
         case GGML_OP_MEAN:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
+            return (op->src[0]->ne[0] - 1) <= 255;
         case GGML_OP_SCALE:
             float bias;
             memcpy(&bias, (const float *)(op->op_params) + 1, sizeof(float));
@@ -2521,13 +2575,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
                 // different head sizes of K and V are not supported yet
-                return false;
-            }
-            if (op->src[0]->ne[0] == 192) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 576) {
-                // DeepSeek MLA
                 return false;
             }
             if (op->src[0]->ne[0] % 16 != 0) {

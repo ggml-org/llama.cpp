@@ -494,6 +494,9 @@ void main() {
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 }
             }
+#if defined(ACC_TYPE_MAX)
+            [[unroll]] for (uint i = 0; i < sum.length(); ++i) { sum[i] = clamp(sum[i], -ACC_TYPE_MAX, ACC_TYPE_MAX); }
+#endif
 
             // Convert from ACC_TYPE to D_TYPE
             coopmat<D_TYPE, gl_ScopeWorkgroup, BM, BNover4, gl_MatrixUseAccumulator> mat_d;
@@ -535,6 +538,9 @@ void main() {
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 }
             }
+#if defined(ACC_TYPE_MAX)
+            [[unroll]] for (uint i = 0; i < sum.length(); ++i) { sum[i] = clamp(sum[i], -ACC_TYPE_MAX, ACC_TYPE_MAX); }
+#endif
 
             // Convert from ACC_TYPE to D_TYPE
             coopmat<D_TYPE, gl_ScopeWorkgroup, BM, BNover2, gl_MatrixUseAccumulator> mat_d;

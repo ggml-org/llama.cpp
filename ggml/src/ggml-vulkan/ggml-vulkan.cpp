@@ -529,6 +529,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_relu[2];
     vk_pipeline pipeline_tanh[2];
     vk_pipeline pipeline_sigmoid[2];
+    vk_pipeline pipeline_hardsigmoid[2];
+    vk_pipeline pipeline_hardswish[2];
 
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
@@ -1370,6 +1372,7 @@ struct vk_instance_t {
     PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
     std::vector<size_t> device_indices;
+    std::vector<bool>   device_supports_membudget;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
 
@@ -2339,7 +2342,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
 
     std::vector<std::future<void>> compiles;
-    auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& pipeline, const std::string &name, size_t spv_size, const void* spv_data, const std::string &entrypoint,
+    auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& pipeline, const char *name, size_t spv_size, const void* spv_data, const char *entrypoint,
                                               uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
                                               uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
 
@@ -2374,6 +2377,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
         compiles.push_back(std::async(ggml_vk_create_pipeline_func, std::ref(device), std::ref(pipeline), spv_size, spv_data, entrypoint,
                                       parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
+    };
+
+    auto const &ggml_vk_create_pipeline2 = [&](vk_device& device, vk_pipeline& pipeline, const std::string &name, size_t spv_size, const void* spv_data, const char *entrypoint,
+                                              uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
+                                              uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
+        return ggml_vk_create_pipeline(device, pipeline, name.c_str(), spv_size, spv_data, entrypoint,
+                                       parameter_count, push_constant_size, wg_denoms, specialization_constants,
+                                       align, disable_robustness, require_full_subgroups, required_subgroup_size);
     };
 
     auto const &fa_wg_denoms = [&](FaCodePath path, uint32_t hsk, uint32_t hsv, uint32_t clamp, ggml_type type, bool small_rows) -> std::array<uint32_t, 3> {
@@ -2777,11 +2788,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
         // Create 6 variants, {s,m,l}x{unaligned,aligned}
 #define CREATE_MM(TYPE, PIPELINE_NAME, NAMELC, F16ACC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID, REQSUBGROUPSIZE) \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1, REQSUBGROUPSIZE > 0, false, REQSUBGROUPSIZE);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1, false, REQSUBGROUPSIZE > 0, REQSUBGROUPSIZE);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, 1, REQSUBGROUPSIZE > 0, false, REQSUBGROUPSIZE);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, 1, false, REQSUBGROUPSIZE > 0, REQSUBGROUPSIZE);   \
         if (device->mul_mat ## ID ## _s[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, 1, REQSUBGROUPSIZE > 0, false, REQSUBGROUPSIZE);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _fp32_len, NAMELC ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, 1, false, REQSUBGROUPSIZE > 0, REQSUBGROUPSIZE);   \
         if (device->mul_mat ## ID ## _l[TYPE]) \
             ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l, #NAMELC #F16ACC "_aligned_l", NAMELC ## _aligned ## F16ACC ## _fp32_len, NAMELC ## _aligned ## F16ACC ## _fp32_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, l_align, false, REQSUBGROUPSIZE > 0, REQSUBGROUPSIZE);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
@@ -2926,9 +2937,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
     // Ensure a subgroup size >= 16 is available
-    const bool use_subgroups16 = use_subgroups &&
-                                    (!device->subgroup_size_control && device->subgroup_size >= 16 ||
-                                    device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16);
+    const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
 
     const uint32_t subgroup_size = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16) ? 16 : device->subgroup_size;
     const uint32_t subgroup_size16 = std::max(subgroup_size, 16u);
@@ -3111,9 +3120,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     for (uint32_t i = 0; i < p021_max_gqa_ratio; ++i) {
         if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
-            ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_subgroup_add_len, mul_mat_vec_p021_f16_f32_subgroup_add_data, "main", 3, 6 * sizeof(uint32_t), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true, true);
+            ggml_vk_create_pipeline2(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_subgroup_add_len, mul_mat_vec_p021_f16_f32_subgroup_add_data, "main", 3, 6 * sizeof(uint32_t), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true, true);
         } else {
-            ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_len,              mul_mat_vec_p021_f16_f32_data,              "main", 3, 6 * sizeof(uint32_t), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true);
+            ggml_vk_create_pipeline2(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_len,              mul_mat_vec_p021_f16_f32_data,              "main", 3, 6 * sizeof(uint32_t), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true);
         }
     }
     ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_nc_f16_f32, "mul_mat_vec_nc_f16_f32", mul_mat_vec_nc_f16_f32_len, mul_mat_vec_nc_f16_f32_data, "main", 3, 12 * sizeof(uint32_t), {1, 1, 1}, {}, 1);
@@ -3197,7 +3206,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     bool rte = device->float_controls_rte_fp16;
 #define CREATE_BINARY(name, namemod, spec, bindings) \
     for (int s0 : {0,1}) for (int s1 : {0,1}) for (int d : {0,1}) \
-        ggml_vk_create_pipeline(device, device->pipeline_ ## name ## namemod[s0][s1][d], \
+        ggml_vk_create_pipeline2(device, device->pipeline_ ## name ## namemod[s0][s1][d], \
                                 #name + get_suffix(s0, s1, d) + #namemod, name ## _len[s0][s1][d][rte], name ## _data[s0][s1][d][rte], \
                                 "main", (bindings), sizeof(vk_op_binary_push_constants), {512, 1, 1}, spec, 1);
 
@@ -3215,8 +3224,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     if (device->multi_add) {
         for (uint32_t i = 0; i < MAX_FUSED_ADDS; ++i) {
-            ggml_vk_create_pipeline(device, device->pipeline_multi_add[i],     "multi_add_f32_"     + std::to_string(i+1), multi_add_f32_len,     multi_add_f32_data,     "main", MAX_PARAMETER_COUNT, sizeof(vk_op_multi_add_push_constants), {512, 1, 1}, {i+2}, 1);
-            ggml_vk_create_pipeline(device, device->pipeline_multi_add_rms[i], "multi_add_rms_f32_" + std::to_string(i+1), multi_add_rms_f32_len, multi_add_rms_f32_data, "main", MAX_PARAMETER_COUNT, sizeof(vk_op_multi_add_push_constants), {512, 1, 1}, {i+2}, 1);
+            ggml_vk_create_pipeline2(device, device->pipeline_multi_add[i],     "multi_add_f32_"     + std::to_string(i+1), multi_add_f32_len,     multi_add_f32_data,     "main", MAX_PARAMETER_COUNT, sizeof(vk_op_multi_add_push_constants), {512, 1, 1}, {i+2}, 1);
+            ggml_vk_create_pipeline2(device, device->pipeline_multi_add_rms[i], "multi_add_rms_f32_" + std::to_string(i+1), multi_add_rms_f32_len, multi_add_rms_f32_data, "main", MAX_PARAMETER_COUNT, sizeof(vk_op_multi_add_push_constants), {512, 1, 1}, {i+2}, 1);
         }
     }
 
@@ -3260,6 +3269,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(relu)
     CREATE_UNARY(tanh)
     CREATE_UNARY(sigmoid)
+    CREATE_UNARY(hardsigmoid)
+    CREATE_UNARY(hardswish)
 #undef CREATE_UNARY
 
 #define CREATE_GLU(name)  \
@@ -3308,7 +3319,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
 
     for (uint32_t i = 0; i < num_argsort_pipelines; ++i) {
-        ggml_vk_create_pipeline(device, device->pipeline_argsort_f32[i], "argsort_f32_"+std::to_string(i), argsort_f32_len, argsort_f32_data, "main", 2, sizeof(vk_op_argsort_push_constants), {1u<<i, 1, 1}, {1u<<i, i}, 1, true);
+        ggml_vk_create_pipeline2(device, device->pipeline_argsort_f32[i], "argsort_f32_"+std::to_string(i), argsort_f32_len, argsort_f32_data, "main", 2, sizeof(vk_op_argsort_push_constants), {1u<<i, 1, 1}, {1u<<i, i}, 1, true);
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
@@ -4266,7 +4277,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 }
 
-static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
+static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
@@ -4287,7 +4298,7 @@ static void ggml_vk_instance_init() {
     vk::ApplicationInfo app_info{ "ggml-vulkan", 1, nullptr, 0, api_version };
 
     const std::vector<vk::ExtensionProperties> instance_extensions = vk::enumerateInstanceExtensionProperties();
-    const bool validation_ext = ggml_vk_instance_validation_ext_available(instance_extensions);
+    const bool validation_ext = ggml_vk_instance_validation_ext_available();
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
@@ -4340,15 +4351,16 @@ static void ggml_vk_instance_init() {
         vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
         vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
         vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
-
     }
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
+    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
-        size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+        size_t num_available_devices = devices.size();
 
         std::string devices(devices_env);
         std::replace(devices.begin(), devices.end(), ',', ' ');
@@ -4363,8 +4375,6 @@ static void ggml_vk_instance_init() {
             vk_instance.device_indices.push_back(tmp);
         }
     } else {
-        std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
-
         // If no vulkan devices are found, return early
         if (devices.empty()) {
             GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
@@ -4469,6 +4479,19 @@ static void ggml_vk_instance_init() {
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
 
     for (size_t i = 0; i < vk_instance.device_indices.size(); i++) {
+        vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
+        std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
+
+        bool membudget_supported = false;
+        for (const auto & ext : extensionprops) {
+            if (strcmp(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, ext.extensionName) == 0) {
+                membudget_supported = true;
+                break;
+            }
+        }
+
+        vk_instance.device_supports_membudget.push_back(membudget_supported);
+
         ggml_vk_print_gpu_info(i);
     }
 }
@@ -4662,7 +4685,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
 
     // heuristic to choose workgroup size
     uint32_t dmmv_wg = DMMV_WG_SIZE_SUBGROUP;
-    if (ctx->device->vendor_id == VK_VENDOR_ID_NVIDIA || ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
+    if ((ctx->device->vendor_id == VK_VENDOR_ID_NVIDIA && ctx->device->architecture != vk_device_architecture::NVIDIA_PRE_TURING) || ctx->device->vendor_id == VK_VENDOR_ID_INTEL) {
         // Prefer larger workgroups when M is small, to spread the work out more
         // and keep more SMs busy.
         // q6_k seems to prefer small workgroup size even for "medium" values of M.
@@ -7520,6 +7543,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_tanh[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_SIGMOID:
                 return ctx->device->pipeline_sigmoid[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_HARDSIGMOID:
+                return ctx->device->pipeline_hardsigmoid[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_HARDSWISH:
+                return ctx->device->pipeline_hardswish[dst->type == GGML_TYPE_F16];
             default:
                 break;
         }
@@ -10188,6 +10215,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
+        case GGML_UNARY_OP_HARDSIGMOID:
+        case GGML_UNARY_OP_HARDSWISH:
             break;
         default:
             return false;
@@ -10558,6 +10587,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
+        case GGML_UNARY_OP_HARDSIGMOID:
+        case GGML_UNARY_OP_HARDSWISH:
             ggml_vk_unary(ctx, compute_ctx, src0, node, dryrun);
             break;
         default:
@@ -10800,6 +10831,8 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
+        case GGML_UNARY_OP_HARDSIGMOID:
+        case GGML_UNARY_OP_HARDSWISH:
             buf = tensor->buffer;
             break;
         default:
@@ -11654,15 +11687,29 @@ void ggml_backend_vk_get_device_description(int device, char * description, size
 
 void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total) {
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
+    GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());
 
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
+    vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
+    vk::PhysicalDeviceMemoryProperties2 memprops = {};
+    bool membudget_supported = vk_instance.device_supports_membudget[device];
 
-    vk::PhysicalDeviceMemoryProperties memprops = vkdev.getMemoryProperties();
+    if (membudget_supported) {
+        memprops.pNext = &budgetprops;
+    }
+    vkdev.getMemoryProperties2(&memprops);
 
-    for (const vk::MemoryHeap& heap : memprops.memoryHeaps) {
+    for (uint32_t i = 0; i < memprops.memoryProperties.memoryHeapCount; ++i) {
+        const vk::MemoryHeap & heap = memprops.memoryProperties.memoryHeaps[i];
+
         if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
             *total = heap.size;
-            *free = heap.size;
+
+            if (membudget_supported && i < budgetprops.heapUsage.size()) {
+                *free = budgetprops.heapBudget[i] - budgetprops.heapUsage[i];
+            } else {
+                *free = heap.size;
+            }
             break;
         }
     }
@@ -11737,6 +11784,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_HARDSWISH:
                     return ggml_is_contiguous(op->src[0]) &&
                            (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
@@ -12027,7 +12076,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_ACC:
         case GGML_OP_CONCAT:
         case GGML_OP_SCALE:
+            return true;
         case GGML_OP_PAD:
+            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
+                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_ROLL:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
@@ -12169,22 +12221,23 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 }
 
 // Extension availability
-static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions) {
+static bool ggml_vk_instance_validation_ext_available() {
 #ifdef GGML_VULKAN_VALIDATE
-    bool portability_enumeration_ext = false;
-    // Check for portability enumeration extension for MoltenVK support
-    for (const auto& properties : instance_extensions) {
-        if (strcmp("VK_KHR_portability_enumeration", properties.extensionName) == 0) {
-            return true;
+    // Check if validation layer provides the extension
+    const std::string layer_name = "VK_LAYER_KHRONOS_validation";
+    for (const auto& layer : vk::enumerateInstanceLayerProperties()) {
+        if (layer_name == layer.layerName.data()) {
+            for (const auto& ext : vk::enumerateInstanceExtensionProperties(layer_name)) {
+                if (strcmp("VK_EXT_validation_features", ext.extensionName.data()) == 0) {
+                    return true;
+                }
+            }
         }
     }
-    if (!portability_enumeration_ext) {
-        std::cerr << "ggml_vulkan: WARNING: Instance extension VK_KHR_portability_enumeration not found." << std::endl;
-    }
+
+    std::cerr << "ggml_vulkan: WARNING: Validation layer or layer extension VK_EXT_validation_features not found." << std::endl;
 #endif
     return false;
-
-    UNUSED(instance_extensions);
 }
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions) {
 #ifdef __APPLE__
@@ -12552,6 +12605,12 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             break;
         case GGML_UNARY_OP_SIGMOID:
             tensor_clone = ggml_sigmoid(ggml_ctx, src_clone[0]);
+            break;
+        case GGML_UNARY_OP_HARDSIGMOID:
+            tensor_clone = ggml_hardsigmoid(ggml_ctx, src_clone[0]);
+            break;
+        case GGML_UNARY_OP_HARDSWISH:
+            tensor_clone = ggml_hardswish(ggml_ctx, src_clone[0]);
             break;
         default:
             std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
