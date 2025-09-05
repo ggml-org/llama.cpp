@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <functional>
 #include <optional>
+#include <list>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
@@ -358,6 +359,57 @@ struct ggml_cann_graph {
 
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 };
+
+/**
+ * @brief LRU cache for managing ggml_cann_graph objects.
+ *
+ * This class maintains a list of shared_ptr to ggml_cann_graph objects
+ * and enforces a maximum capacity. It provides methods to push new graphs,
+ * move existing graphs to the front (most recently used), and clear the cache.
+ */
+struct ggml_cann_graph_lru_cache {
+    size_t capacity = 12;  /**< Maximum number of graphs in the cache. */
+
+    std::list<std::shared_ptr<ggml_cann_graph>> cache_list; /**< List storing cached graphs. */
+
+    std::shared_ptr<ggml_cann_graph> matched_graph = nullptr; /**< Pointer to a recently matched graph. */
+
+    /**
+     * @brief Push a new graph to the front of the cache.
+     * If the cache exceeds capacity, the least recently used graph is removed.
+     * @param new_node Shared pointer to the new ggml_cann_graph to cache.
+     */
+    void push(std::shared_ptr<ggml_cann_graph> new_node) {
+        if (cache_list.size() >= capacity) {
+            cache_list.pop_back();
+        }
+
+        cache_list.push_front(new_node);
+    }
+
+    /**
+     * @brief Move an existing graph to the front of the cache.
+     * @param node Shared pointer to the ggml_cann_graph to move.
+     */
+    void move_to_front(std::shared_ptr<ggml_cann_graph> node) {
+        cache_list.remove(node);
+        cache_list.push_front(node);
+    }
+
+    /**
+     * @brief Clear all graphs from the cache.
+     */
+    void clear() {
+        cache_list.clear();
+    }
+
+    /**
+     * @brief Destructor that clears the cache upon object destruction.
+     */
+    ~ggml_cann_graph_lru_cache() {
+        clear();
+    }
+};
 #endif  // USE_ACL_GRAPH
 
 struct ggml_cann_rope_cache {
@@ -394,7 +446,7 @@ struct ggml_backend_cann_context {
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
-    std::unique_ptr<ggml_cann_graph> cann_graph;
+    ggml_cann_graph_lru_cache graph_lru_cache;
     bool acl_graph_mode = true;
 #endif
     cann_task_queue task_queue;
