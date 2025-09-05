@@ -82,8 +82,7 @@ class ModelTensorInfo:
     load: Callable[[], Tensor]
     size: int  # in elements
     src_type: str
-    src_qtype: gguf.GGMLQuantizationType | None = None
-    dst_qtype: gguf.GGMLQuantizationType | None = None
+    auto_qtype: gguf.GGMLQuantizationType | None = None
 
 
 class ModelBase:
@@ -162,17 +161,17 @@ class ModelBase:
             # find out the most common type
             hist: dict[gguf.GGMLQuantizationType, int] = {}
             for t in self.model_tensors.values():
-                if t.dst_qtype is not None:
-                    if t.dst_qtype not in hist:
-                        hist[t.dst_qtype] = 0
-                    hist[t.dst_qtype] += t.size
+                if t.auto_qtype is not None:
+                    if t.auto_qtype not in hist:
+                        hist[t.auto_qtype] = 0
+                    hist[t.auto_qtype] += t.size
             max_qtype = gguf.GGMLQuantizationType.F32
             max_size = 0
             for qtype, size in hist.items():
                 if size > max_size:
                     max_qtype = qtype
                     max_size = size
-            # TODO: add more type if they're used as dst_qtypes
+            # TODO: add more type if they're used as auto_qtype
             if max_qtype == gguf.GGMLQuantizationType.F32:
                 self.ftype = gguf.LlamaFileType.ALL_F32
             elif max_qtype == gguf.GGMLQuantizationType.F16:
@@ -223,8 +222,7 @@ class ModelBase:
                     load=lambda r=remote_tensor: LazyTorchTensor.from_remote_tensor(r),
                     size=math.prod(remote_tensor.shape),
                     src_type=str(dtype),
-                    src_qtype=qtype,
-                    dst_qtype=qtype,
+                    auto_qtype=qtype,
                 )
 
             return tensors
@@ -288,8 +286,7 @@ class ModelBase:
                         load=data_gen,
                         size=size,
                         src_type=str(dtype),
-                        src_qtype=qtype,
-                        dst_qtype=qtype,
+                        auto_qtype=qtype,
                     )
 
         # verify tensor name presence and identify potentially missing files
@@ -393,8 +390,7 @@ class ModelBase:
                             load=lambda w=w, s=s: dequant_bitnet(w.load(), s.load()),
                             size=w.size,
                             src_type="bitnet",
-                            src_qtype=gguf.GGMLQuantizationType.F32,
-                            dst_qtype=gguf.GGMLQuantizationType.TQ1_0,
+                            auto_qtype=gguf.GGMLQuantizationType.TQ1_0,
                         )
                         tensors_to_remove.append(name)
             elif quant_method == "fp8":
@@ -407,8 +403,7 @@ class ModelBase:
                             load=lambda w=w, s=s: dequant_simple(w.load(), s.load()),
                             size=w.size,
                             src_type=w.src_type,
-                            src_qtype=gguf.GGMLQuantizationType.F32,
-                            dst_qtype=gguf.GGMLQuantizationType.BF16, # TODO: change to FP8 once natively supported
+                            auto_qtype=gguf.GGMLQuantizationType.BF16, # TODO: change to FP8 once natively supported
                         )
                         tensors_to_remove.append(name)
             elif quant_method == "gptq":
@@ -426,8 +421,7 @@ class ModelBase:
                             ),
                             size=qweight.size,  # TODO: use more accurate value
                             src_type=f"GPTQ-{bits}bit",
-                            src_qtype=gguf.GGMLQuantizationType.F32,
-                            dst_qtype=gguf.GGMLQuantizationType.Q8_0 if bits == 8 else gguf.GGMLQuantizationType.Q4_1,
+                            auto_qtype=gguf.GGMLQuantizationType.Q8_0 if bits == 8 else gguf.GGMLQuantizationType.Q4_1,
                         )
                         tensors_to_remove += [
                             base_name + n
@@ -592,7 +586,7 @@ class ModelBase:
                 # No override (data_qtype is False), or wants to be quantized (data_qtype is True)
                 if isinstance(data_qtype, bool):
                     if self.ftype_guessed:
-                        data_qtype = old_qtype if tensor_info is None or tensor_info.dst_qtype is None else tensor_info.dst_qtype
+                        data_qtype = old_qtype if tensor_info is None or tensor_info.auto_qtype is None else tensor_info.auto_qtype
                     elif self.ftype == gguf.LlamaFileType.ALL_F32:
                         data_qtype = gguf.GGMLQuantizationType.F32
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_F16:
@@ -10084,7 +10078,7 @@ class LazyTorchTensor(gguf.LazyBase):
             meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(dtype, self.shape),
             args=(self,),
             func=(lambda s: s.numpy()),
-            ranges=self._ranges
+            ranges=self._ranges,
         )
 
     @classmethod
