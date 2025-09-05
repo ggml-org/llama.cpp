@@ -2270,19 +2270,7 @@ struct server_context {
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
-        bool enable_thinking = params_base.reasoning_budget != 0;
-        if (enable_thinking) {
-            common_chat_templates_inputs dummy_inputs;
-            common_chat_msg msg;
-            msg.role = "user";
-            msg.content = "test";
-            dummy_inputs.messages = {msg};
-            dummy_inputs.enable_thinking = false;
-            const auto rendered_no_thinking = common_chat_templates_apply(chat_templates.get(), dummy_inputs);
-            dummy_inputs.enable_thinking = true;
-            const auto rendered_with_thinking = common_chat_templates_apply(chat_templates.get(), dummy_inputs);
-            enable_thinking = rendered_no_thinking.prompt != rendered_with_thinking.prompt;
-        }
+        const bool enable_thinking = params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates);
         SRV_INF("Enable thinking? %d\n", enable_thinking);
 
         oai_parser_opt = {
