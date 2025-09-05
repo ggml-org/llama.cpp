@@ -299,6 +299,13 @@ void GgmlOvDecoder::add_extra_inputs() {
             attention_size = mask->ne[0];
             break;
         }
+        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            auto* mask = node->src[3];
+            if (std::string(mask->name).find("KQ_mask") != 0) {
+                throw std::runtime_error("Unexpected flash attention node: " + std::string(mask->name));
+            }
+            attention_size = mask->ne[0];
+        }
     }
 
     {

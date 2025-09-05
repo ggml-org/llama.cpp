@@ -36,6 +36,7 @@ namespace ggml {
 using namespace ov::op;
 
 namespace {
+
 ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     const std::shared_ptr<ov::Model>& model, const std::map<std::string, std::string>& kv_param_res_names) {
     ov::pass::MakeStateful::ParamResPairs pairs;
@@ -76,6 +77,16 @@ void add_token_len(TensorMap& tensor_map) {
     tensor_map.insert({"token_len", token_len->output(0)});
 }
 
+void add_sliced_mask(TensorMap& tensor_map) {
+    auto mask = tensor_map.at("KQ_mask").get_node_shared_ptr();
+    auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
+    auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+    auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+    std::shared_ptr<ov::Node> mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
+    mask_sliced->set_friendly_name("KQ_mask_sliced");
+    tensor_map.insert({"KQ_mask_sliced", mask_sliced->output(0)});
+}
+
 void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     int32_t* rope_params = ggml_model_decoder.get_rope_params();
     auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
@@ -97,6 +108,7 @@ void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 // Create common patterns
 void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     add_token_len(tensor_map);
+    add_sliced_mask(tensor_map);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 

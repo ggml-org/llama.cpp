@@ -62,7 +62,7 @@ OutputVector translate_mulmat(const NodeContext& context) {
         auto B_batch_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{B_batch});
         auto factor_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{factor});
 
-        auto Z_last_two_dim = get_dimensions(Z.get_node_shared_ptr(), {1, 2});
+        auto Z_last_two_dims = get_dimensions(Z.get_node_shared_ptr(), {1, 2});
 
         auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {1});
         auto Z_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(Z, unsqueeze_axes);
@@ -70,26 +70,26 @@ OutputVector translate_mulmat(const NodeContext& context) {
         Output<Node> batch_small = A_batch_larger ? B_batch_node : A_batch_node;
         Output<Node> batch_large = A_batch_larger ? A_batch_node : B_batch_node;
         auto broadcast_shape =
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_small, factor_node, Z_last_two_dim}, 0);
+            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_small, factor_node, Z_last_two_dims}, 0);
         auto Z_broadcasted = std::make_shared<ov::op::v3::Broadcast>(Z_unsqueezed, broadcast_shape);
 
-        auto new_Z_shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_large, Z_last_two_dim}, 0);
+        auto new_Z_shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_large, Z_last_two_dims}, 0);
         Z = std::make_shared<ov::op::v1::Reshape>(Z_broadcasted, new_Z_shape, false);
-        }
-        if (A_batch_larger) {
-            B = Z;
-        } else {
-            A = Z;
-        }
+    }
+    if (A_batch_larger) {
+        B = Z;
+    } else {
+        A = Z;
+    }
 
-        if (convert_out_type) {
-            auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
-            res = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
-        } else {
-            res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
-        }
+    if (convert_out_type) {
+        auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
+        res = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
+    } else {
+        res = std::make_shared<ov::op::v0::MatMul>(A, B, false, transpose_b);
+    }
 
-        return rename_outputs_with_suffix({res}, context.get_name());
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op
