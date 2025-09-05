@@ -2,6 +2,7 @@
 
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_control_flow_attributes : require
 
 #ifdef A_TYPE_FP16
     #define A_VEC4_TYPE f16vec4
@@ -14,6 +15,17 @@
     #define A_VEC4_ZERO vec4(0.0f)
     #define A_VEC4_CAST(v) (v)
 #endif
+
+layout(constant_id = 0) const uint BM = 64;
+layout(constant_id = 1) const uint BN = 64;
+layout(constant_id = 2) const uint BK = 16;
+layout(constant_id = 3) const uint TM = 4;
+layout(constant_id = 4) const uint TN = 8;
+
+const uint WG_X = BN / TN;
+const uint WG_Y = BM / TM;
+const uint WG_SIZE = WG_X * WG_Y;
+const uint VEC_K = BK / 4;
 
 layout(local_size_x = 16, local_size_y = 8, local_size_z = 1) in;
 
@@ -31,19 +43,6 @@ layout (push_constant) uniform parameter
     uint stride_d;
 } p;
 
-const uint BM = 32;
-const uint BN = 32;
-const uint BK = 32;
-
-const uint TM = 4;
-const uint TN = 2;
-
-const uint WG_X = 16;
-const uint WG_Y = 8;
-const uint WG_SIZE = WG_X * WG_Y;
-
-const uint VEC_K = BK / 4;
-
 shared A_VEC4_TYPE buf_a[BM][VEC_K];
 shared vec4        buf_b[BN][VEC_K];
 
@@ -56,44 +55,64 @@ void main() {
     const uint group_n = gl_WorkGroupID.y * BN;
 
     float sums[TM][TN];
-    #pragma unroll
+    [[unroll]]
     for (uint i = 0; i < TM; i++) {
-        #pragma unroll
+        [[unroll]]
         for (uint j = 0; j < TN; j++) {
             sums[i][j] = 0.0f;
         }
     }
 
     const uint num_k_tiles = (p.K + BK - 1) / BK;
+    const uint A_LOADS_PER_THREAD = (BM * VEC_K) / WG_SIZE;
+    const uint B_LOADS_PER_THREAD = (BN * VEC_K) / WG_SIZE;
 
     for (uint t = 0; t < num_k_tiles; t++) {
         const uint k_tile_start = t * BK;
 
-        #pragma unroll
-        for(uint i = 0; i < 2; ++i) {
+        [[unroll]]
+        for(uint i = 0; i < A_LOADS_PER_THREAD; ++i) {
             uint load_idx = lid + i * WG_SIZE;
             uint m = load_idx / VEC_K;
             uint k = load_idx % VEC_K;
             uint global_m = group_m + m;
             uint k_scalar = k_tile_start + k * 4;
-            if (global_m < p.M && k_scalar + 3 < p.K) {
+
+            if (global_m < p.M && k_scalar < p.K) {
                 uint base_idx = global_m * p.stride_a + k_scalar;
-                buf_a[m][k] = A_VEC4_TYPE(data_a[base_idx], data_a[base_idx+1], data_a[base_idx+2], data_a[base_idx+3]);
+                if (k_scalar + 3 < p.K) {
+                    buf_a[m][k] = A_VEC4_TYPE(data_a[base_idx], data_a[base_idx+1], data_a[base_idx+2], data_a[base_idx+3]);
+                } else {
+                    A_SCALAR_TYPE temp[4] = {A_SCALAR_TYPE(0), A_SCALAR_TYPE(0), A_SCALAR_TYPE(0), A_SCALAR_TYPE(0)};
+                    if (k_scalar < p.K) temp[0] = data_a[base_idx];
+                    if (k_scalar + 1 < p.K) temp[1] = data_a[base_idx+1];
+                    if (k_scalar + 2 < p.K) temp[2] = data_a[base_idx+2];
+                    buf_a[m][k] = A_VEC4_TYPE(temp[0], temp[1], temp[2], temp[3]);
+                }
             } else {
                 buf_a[m][k] = A_VEC4_ZERO;
             }
         }
 
-        #pragma unroll
-        for(uint i = 0; i < 2; ++i) {
+        [[unroll]]
+        for(uint i = 0; i < B_LOADS_PER_THREAD; ++i) {
             uint load_idx = lid + i * WG_SIZE;
             uint n = load_idx / VEC_K;
             uint k = load_idx % VEC_K;
             uint global_n = group_n + n;
             uint k_scalar = k_tile_start + k * 4;
-            if (global_n < p.N && k_scalar + 3 < p.K) {
+
+            if (global_n < p.N && k_scalar < p.K) {
                 uint base_idx = global_n * p.stride_b + k_scalar;
-                buf_b[n][k] = vec4(data_b[base_idx], data_b[base_idx+1], data_b[base_idx+2], data_b[base_idx+3]);
+                if (k_scalar + 3 < p.K) {
+                     buf_b[n][k] = vec4(data_b[base_idx], data_b[base_idx+1], data_b[base_idx+2], data_b[base_idx+3]);
+                } else {
+                    float temp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    if (k_scalar < p.K) temp[0] = data_b[base_idx];
+                    if (k_scalar + 1 < p.K) temp[1] = data_b[base_idx+1];
+                    if (k_scalar + 2 < p.K) temp[2] = data_b[base_idx+2];
+                    buf_b[n][k] = vec4(temp[0], temp[1], temp[2], temp[3]);
+                }
             } else {
                 buf_b[n][k] = vec4(0.0f);
             }
@@ -101,59 +120,47 @@ void main() {
 
         barrier();
 
-        uint m_base = lidy * TM;
-        uint n_base = lidx * TN;
-
-        A_VEC4_TYPE a_reg[TM];
-        vec4 b_reg[TN];
-        A_VEC4_TYPE a_reg_next[TM];
-        vec4 b_reg_next[TN];
-
-        #pragma unroll
-        for (uint i = 0; i < TM; i++) { a_reg[i] = buf_a[m_base + i][0]; }
-        #pragma unroll
-        for (uint j = 0; j < TN; j++) { b_reg[j] = buf_b[n_base + j][0]; }
-
-        for (uint k = 1; k < VEC_K; k++) {
-            #pragma unroll
-            for (uint i = 0; i < TM; i++) { a_reg_next[i] = buf_a[m_base + i][k]; }
-            #pragma unroll
-            for (uint j = 0; j < TN; j++) { b_reg_next[j] = buf_b[n_base + j][k]; }
-
-            #pragma unroll
+        [[unroll]]
+        for (uint k = 0; k < VEC_K; k++) {
+            A_VEC4_TYPE a_reg[TM];
+            [[unroll]]
             for (uint i = 0; i < TM; i++) {
-                #pragma unroll
-                for (uint j = 0; j < TN; j++) {
-                    sums[i][j] += dot(A_VEC4_CAST(a_reg[i]), b_reg[j]);
-                }
+                a_reg[i] = buf_a[lidy + i * WG_Y][k];
             }
 
-            a_reg = a_reg_next;
-            b_reg = b_reg_next;
-        }
-
-        #pragma unroll
-        for (uint i = 0; i < TM; i++) {
-            #pragma unroll
+            vec4 b_reg[TN];
+            [[unroll]]
             for (uint j = 0; j < TN; j++) {
-                sums[i][j] += dot(A_VEC4_CAST(a_reg[i]), b_reg[j]);
+                b_reg[j] = buf_b[lidx + j * WG_X][k];
+            }
+
+            [[unroll]]
+            for (uint i = 0; i < TM; i++) {
+                vec4 a_f32 = A_VEC4_CAST(a_reg[i]);
+
+                sums[i][0] += a_f32.x * b_reg[0].x + a_f32.y * b_reg[0].y + a_f32.z * b_reg[0].z + a_f32.w * b_reg[0].w;
+                sums[i][1] += a_f32.x * b_reg[1].x + a_f32.y * b_reg[1].y + a_f32.z * b_reg[1].z + a_f32.w * b_reg[1].w;
+                sums[i][2] += a_f32.x * b_reg[2].x + a_f32.y * b_reg[2].y + a_f32.z * b_reg[2].z + a_f32.w * b_reg[2].w;
+                sums[i][3] += a_f32.x * b_reg[3].x + a_f32.y * b_reg[3].y + a_f32.z * b_reg[3].z + a_f32.w * b_reg[3].w;
+                sums[i][4] += a_f32.x * b_reg[4].x + a_f32.y * b_reg[4].y + a_f32.z * b_reg[4].z + a_f32.w * b_reg[4].w;
+                sums[i][5] += a_f32.x * b_reg[5].x + a_f32.y * b_reg[5].y + a_f32.z * b_reg[5].z + a_f32.w * b_reg[5].w;
+                sums[i][6] += a_f32.x * b_reg[6].x + a_f32.y * b_reg[6].y + a_f32.z * b_reg[6].z + a_f32.w * b_reg[6].w;
+                sums[i][7] += a_f32.x * b_reg[7].x + a_f32.y * b_reg[7].y + a_f32.z * b_reg[7].z + a_f32.w * b_reg[7].w;
             }
         }
-
         barrier();
     }
 
-    uint m_base = lidy * TM;
-    uint n_base = lidx * TN;
-
-    #pragma unroll
+    [[unroll]]
     for (uint i = 0; i < TM; i++) {
-        uint global_m = group_m + m_base + i;
-        #pragma unroll
-        for (uint j = 0; j < TN; j++) {
-            uint global_n = group_n + n_base + j;
-            if (global_m < p.M && global_n < p.N) {
-                data_d[global_n * p.stride_d + global_m] = sums[i][j];
+        uint global_m = group_m + lidy + i * WG_Y;
+        if (global_m < p.M) {
+            [[unroll]]
+            for (uint j = 0; j < TN; j++) {
+                uint global_n = group_n + lidx + j * WG_X;
+                if (global_n < p.N) {
+                    data_d[global_n * p.stride_d + global_m] = sums[i][j];
+                }
             }
         }
     }
