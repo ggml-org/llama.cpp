@@ -624,7 +624,7 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
         ctx->size = 0;
         for (size_t i = 0; i < ctx->info.size(); ++i) {
             const gguf_tensor_info & ti = ctx->info[i];
-            // alignment offset is only necessary for GGUF converted with reflinks
+            // alignment offset only exists for GGUF converted with reflinks
             const size_t align_offset = ti.offset % ctx->alignment;
             if (ti.offset - align_offset != ctx->size) {
                 GGML_LOG_ERROR("%s: tensor '%s' has offset %" PRIu64 ", expected %zu\n",
