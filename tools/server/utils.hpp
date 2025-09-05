@@ -1002,6 +1002,47 @@ static bool are_lora_equal(
     return true;
 }
 
+// get the ids of all enabled loras
+static std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras) {
+    std::vector<size_t> enabled_ids;
+    for (size_t i = 0; i < loras.size(); ++i) {
+        if (loras[i].scale > 0) {
+            enabled_ids.push_back(i);
+        }
+    }
+    return enabled_ids;
+}
+
+// check whether the given lora set has only aloras activated (empty => false)
+static bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras) {
+    bool found_alora = false;
+    for (const auto & lora : loras) {
+        if (lora.scale != 0) {
+            if (llama_adapter_get_alora_n_invocation_tokens(lora.ptr) == 0) {
+                return false;
+            }
+            found_alora = true;
+        }
+    }
+    return found_alora;
+}
+
+// if the two sets of loras are different, they require a cache clear unless the
+// change is only from aloras to aloras.
+static bool lora_should_clear_cache(
+        const std::vector<common_adapter_lora_info> & current,
+        const std::vector<common_adapter_lora_info> & next) {
+
+    // This should always be called after determining that the two sets are
+    // _not_ equal. This assert is therefore some slightly wasted work and
+    // should be safe to remove as long as this method is called correctly.
+    GGML_ASSERT(!are_lora_equal(current, next));
+
+    return (
+        !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
+        !lora_all_alora(next));
+}
+
 // parse lora config from JSON request, returned a copy of lora_base with updated scale
 static std::vector<common_adapter_lora_info> parse_lora_request(
         const std::vector<common_adapter_lora_info> & lora_base,
