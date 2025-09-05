@@ -1,9 +1,19 @@
 #include "conv2d.cuh"
 #include "convert.cuh"
 
-#include <mma.h>
-using namespace nvcuda;
-
+#ifdef FP16_MMA_AVAILABLE
+#    if !defined(GGML_USE_HIP)
+#        include <mma.h>
+#        ifdef GGML_USE_MUSA
+namespace wmma = mtmusa::wmma;
+#        else
+namespace wmma = nvcuda::wmma;
+#        endif
+#    else
+#        include <rocwmma/rocwmma.hpp>
+namespace wmma = rocwmma;
+#    endif
+#endif
 struct conv_params {
     const int64_t IW, IH;
     const int64_t OW, OH;
@@ -111,6 +121,8 @@ class float_mma {
     __device__ __forceinline__ float * store_result() const { return buf; }
 };
 
+#if (__CUDA_ARCH__ == GGML_CUDA_CC_VOLTA || (defined(FP16_MMA_AVAILABLE)))
+
 class half_mma {
   private:
     wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float>              acc;
@@ -135,6 +147,42 @@ class half_mma {
         return buf;
     }
 };
+
+#else
+
+class half_mma {
+  public:
+    float * buf;
+
+    __device__ __forceinline__ half_mma(float * scratch) {
+        buf               = scratch;
+        const int lane_id = threadIdx.x % warpSize;
+#    pragma unroll
+        for (int i = lane_id; i < WMMA_M * WMMA_N; i += warpSize) {
+            buf[i] = 0.0f;
+        }
+    }
+
+    __device__ __forceinline__ void mma(const half * A_sh, const half * B_sh, const int strideA, const int strideB) {
+        const int lane_id = threadIdx.x % warpSize;
+#    pragma unroll
+        for (int e = lane_id; e < (WMMA_M * WMMA_N); e += warpSize) {
+            int   m   = e / WMMA_N;
+            int   n   = e % WMMA_N;
+            float sum = buf[m * WMMA_N + n];
+#    pragma unroll
+            for (int k = 0; k < WMMA_K; k++) {
+                float a = A_sh[m * strideA + k];
+                float b = B_sh[k * strideB + n];
+                sum     = fmaf(__half2float(a), __half2float(b), sum);
+            }
+            buf[m * WMMA_N + n] = sum;
+        }
+    }
+
+    __device__ __forceinline__ float * store_result() const { return buf; }
+};
+#endif  // defined((__CUDA_ARCH__ == GGML_CUDA_CC_VOLTA || defined(FP16_MMA_AVAILABLE))
 
 template <typename T, typename layout, typename mma>
 static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT, const conv_params P) {
