@@ -5122,6 +5122,15 @@ class Gemma3Model(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+@ModelBase.register("Gemma3TextModel")
+class EmbeddingGemma(Gemma3Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+
 @ModelBase.register("Gemma3ForConditionalGeneration")
 class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):

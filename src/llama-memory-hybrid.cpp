@@ -17,7 +17,6 @@ llama_memory_hybrid::llama_memory_hybrid(
                  uint32_t   kv_size,
                  uint32_t   n_pad,
                  uint32_t   n_swa,
-           llama_swa_type   swa_type,
                             /* recurrent */
                 ggml_type   type_r,
                 ggml_type   type_s,
@@ -41,7 +40,6 @@ llama_memory_hybrid::llama_memory_hybrid(
         n_seq_max,
         n_pad,
         n_swa,
-        swa_type,
         filter_attn == nullptr ?
             [&](int32_t il) { return !hparams.is_recurrent(il); }
             : filter_attn,
