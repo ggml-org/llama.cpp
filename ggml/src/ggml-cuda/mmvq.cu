@@ -141,7 +141,7 @@ template <ggml_type type, int ncols_dst>
 __launch_bounds__(calc_nwarps(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q(
         const void * __restrict__ vx, const void * __restrict__ vy, const int32_t * __restrict__ ids, float * __restrict__ dst,
-        const uint32_t ncols_x, const uint32_t nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
+        const uint32_t ncols_x, const uint3 nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
         const uint32_t stride_col_dst, const uint3 channel_ratio, const uint32_t stride_channel_x,
         const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
         const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst) {
@@ -163,8 +163,8 @@ static __global__ void mul_mat_vec_q(
 
     // The MUL_MAT_ID code path with ids != nullptr is only implemented for ncols_dst == 1.
     const uint32_t channel_dst = blockIdx.y;
-    const uint32_t channel_x   = ncols_dst == 1 && ids ? ids[channel_dst]          : fastdiv(channel_dst, channel_ratio);
-    const uint32_t channel_y   = ncols_dst == 1 && ids ? channel_dst % nchannels_y : channel_dst;
+    const uint32_t channel_x   = ncols_dst == 1 && ids ? ids[channel_dst]                     : fastdiv(channel_dst, channel_ratio);
+    const uint32_t channel_y   = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
     const uint32_t sample_dst  = blockIdx.z;
     const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
     const uint32_t sample_y    = sample_dst;
@@ -248,8 +248,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
     GGML_ASSERT(ncols_x % ggml_blck_size(type) == 0);
     GGML_ASSERT(ncols_dst <= MMVQ_MAX_BATCH_SIZE);
 
-    const uint3 channel_ratio = init_fastdiv_values(nchannels_dst / nchannels_x);
-    const uint3 sample_ratio  = init_fastdiv_values(nsamples_dst  / nsamples_x);
+    const uint3 nchannels_y_fd   = ids ? init_fastdiv_values(nchannels_y) : make_uint3(0, 0, 0);
+    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0)              : init_fastdiv_values(nchannels_dst / nchannels_x);
+    const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst  / nsamples_x);
 
     const int device = ggml_cuda_get_device();
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
@@ -261,65 +262,65 @@ static void mul_mat_vec_q_switch_ncols_dst(
             constexpr int c_ncols_dst = 1;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 2: {
             constexpr int c_ncols_dst = 2;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 3: {
             constexpr int c_ncols_dst = 3;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 4: {
             constexpr int c_ncols_dst = 4;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 5: {
             constexpr int c_ncols_dst = 5;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 6: {
             constexpr int c_ncols_dst = 6;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 7: {
             constexpr int c_ncols_dst = 7;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         case 8: {
             constexpr int c_ncols_dst = 8;
             std::pair<dim3, dim3> dims = calc_launch_params(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q<type, c_ncols_dst><<<dims.first, dims.second, 0, stream>>>
-                (vx, vy, ids, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+                (vx, vy, ids, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst);
         } break;
         default:
             GGML_ABORT("fatal error");
