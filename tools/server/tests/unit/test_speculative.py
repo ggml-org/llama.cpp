@@ -14,6 +14,7 @@ def create_server():
     server.model_draft = download_file(MODEL_DRAFT_FILE_URL)
     server.draft_min = 4
     server.draft_max = 8
+    server.fa = "off"
 
 
 @pytest.fixture(autouse=True)
