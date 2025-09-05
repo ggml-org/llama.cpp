@@ -738,7 +738,6 @@ class TextModel(ModelBase):
         super().prepare_metadata(vocab_only=vocab_only)
 
         total_params = self.gguf_writer.get_total_parameter_count()[0]
-
         # Extract the encoding scheme from the file type name. e.g. 'gguf.LlamaFileType.MOSTLY_Q8_0' --> 'Q8_0'
         output_type: str = self.ftype.name.partition("_")[2]
 

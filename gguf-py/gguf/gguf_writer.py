@@ -93,7 +93,7 @@ class GGUFWriter:
         self.arch = arch
         self.endianess = endianess
         self.data_alignment = GGUF_DEFAULT_ALIGNMENT
-        self.use_reflinks = use_reflinks and hasattr(os, "copy_file_range")
+        self.use_reflinks = use_reflinks
         self.use_temp_file = False if self.use_reflinks else use_temp_file
         self.temp_file = None
         self.tensors = [{}]
