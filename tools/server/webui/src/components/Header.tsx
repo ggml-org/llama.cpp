@@ -12,7 +12,16 @@ import {
 
 export default function Header() {
   const [selectedTheme, setSelectedTheme] = useState(StorageUtils.getTheme());
-  const { setShowSettings } = useAppContext();
+  const { setShowSettings, serverProps } = useAppContext();
+
+  const fullFile = serverProps?.model_path?.split(/[/\\]/).pop() ?? '';
+  const build = serverProps?.build_info ?? '?';
+
+  // Extract model name from model_path and remove the sharding suffix if present
+  const modelName = serverProps?.model_path
+    ?.split(/(\\|\/)/)
+    .pop()
+    ?.replace(/-\d{5}-of-\d{5}(?=\.gguf$)/, '');
 
   const setTheme = (theme: string) => {
     StorageUtils.setTheme(theme);
@@ -34,7 +43,12 @@ export default function Header() {
         <Bars3Icon className="h-5 w-5" />
       </label>
 
-      <div className="grow text-2xl font-bold ml-2">llama.cpp</div>
+      <div
+        className="grow text-xl font-bold ml-2 truncate"
+        title={`${fullFile}\nllama.cpp build ${build}`}
+      >
+        llama.cpp: {modelName}
+      </div>
 
       {/* action buttons (top right) */}
       <div className="flex items-center">
