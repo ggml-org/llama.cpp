@@ -34,10 +34,28 @@ if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
     
     # Run the format command
     npm run format
-    
+
     # Check if format command succeeded
     if [ $? -ne 0 ]; then
         echo "Error: npm run format failed"
+        exit 1
+    fi
+
+    # Run the check command
+    npm run check
+    
+    # Check if check command succeeded
+    if [ $? -ne 0 ]; then
+        echo "Error: npm run check failed"
+        exit 1
+    fi
+
+    # Run the build command
+    npm run build
+    
+    # Check if build command succeeded
+    if [ $? -ne 0 ]; then
+        echo "Error: npm run build failed"
         exit 1
     fi
     
