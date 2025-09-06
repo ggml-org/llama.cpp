@@ -512,6 +512,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
+`return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 3 values: `total`, `cache` and `processed`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. Default: `false`
+
 `post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
 
 `response_fields`: A list of response fields, for example: `"response_fields": ["content", "generation_settings/n_predict"]`. If the specified field is missing, it will simply be omitted from the response without triggering an error. Note that fields with a slash will be unnested; for example, `generation_settings/n_predict` will move the field `n_predict` from the `generation_settings` object to the root of the response and give it a new name.
@@ -1275,6 +1277,34 @@ curl http://localhost:8080/v1/chat/completions \
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
 **See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
+
+*Timings and context usage*
+
+The response contains a `timings` object, for example:
+
+```js
+{
+  "choices": [],
+  "created": 1757141666,
+  "id": "chatcmpl-ecQULm0WqPrftUqjPZO1CFYeDjGZNbDu",
+  // ...
+  "timings": {
+    "cache_n": 236, // number of prompt tokens reused from cache
+    "prompt_n": 1, // number of prompt tokens being processed
+    "prompt_ms": 30.958,
+    "prompt_per_token_ms": 30.958,
+    "prompt_per_second": 32.301828283480845,
+    "predicted_n": 35, // number of predicted tokens
+    "predicted_ms": 661.064,
+    "predicted_per_token_ms": 18.887542857142858,
+    "predicted_per_second": 52.94494935437416
+  }
+}
+```
+
+This provides information on the performance of the server. It also allows calculating the current context usage.
+
+The total number of tokens in context is equal to `prompt_n + cache_n + predicted_n`
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
