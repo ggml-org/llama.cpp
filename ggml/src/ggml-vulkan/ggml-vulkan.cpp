@@ -78,6 +78,8 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 #define VK_VENDOR_ID_ARM 0x13B5
+#define VK_VENDOR_ID_QUALCOMM 0x5143
+
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -2905,15 +2907,23 @@ static void ggml_vk_load_shaders(vk_device& device) {
         }
     }
 
-    if (device->vendor_id == VK_VENDOR_ID_ARM) {
+    if (device->vendor_id == VK_VENDOR_ID_ARM || device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
         // Shader workgroup size is 16x8 = 128
         const uint32_t wg_x = 16;
         const uint32_t wg_y = 8;
 
         // Tile sizes for the workgroup
-        const uint32_t bm = 64;
-        const uint32_t bn = 64;
-        const uint32_t bk = 16;
+        uint32_t bm, bn, bk;
+
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            bm = 32;
+            bn = 128;
+            bk = 8;
+        } else {
+            bm = 64;
+            bn = 64;
+            bk = 16;
+        }
 
         // Threads per tile
         const uint32_t tm = bm / wg_y;
@@ -5755,7 +5765,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     const uint64_t ne12 = src1->ne[2];
     const uint64_t ne13 = src1->ne[3];
 
-    if (ctx->device->vendor_id == VK_VENDOR_ID_ARM &&
+    if ((ctx->device->vendor_id == VK_VENDOR_ID_ARM || ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM) &&
         (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type)) &&
         src1->type == GGML_TYPE_F32 && ggml_vk_dim01_contiguous(src1) &&
         ne02 == 1 && ne03 == 1 &&
