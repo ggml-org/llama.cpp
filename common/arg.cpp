@@ -244,6 +244,10 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
     return false;
 }
 
+struct FILE_deleter {
+    void operator()(FILE * f) const { fclose(f); }
+};
+
 // download one single file from remote URL to local path
 static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token, bool offline) {
     // Check if the file already exists locally
@@ -389,13 +393,6 @@ static bool common_download_file_single(const std::string & url, const std::stri
         }
 
         // Set the output file
-
-        struct FILE_deleter {
-            void operator()(FILE * f) const {
-                fclose(f);
-            }
-        };
-
         std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "wb"));
         if (!outfile) {
             LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path.c_str());
@@ -744,6 +741,206 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 }
 
 #endif // LLAMA_USE_CURL
+
+//
+// Docker registry functions
+//
+
+static std::string common_docker_get_token(const std::string & repo) {
+    std::string url = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repo + ":pull";
+
+    common_remote_params params;
+    auto res = common_remote_get_content(url, params);
+
+    if (res.first != 200) {
+        throw std::runtime_error("Failed to get Docker registry token, HTTP code: " + std::to_string(res.first) +
+                                 ", URL: " + url);
+    }
+
+    std::string response_str(res.second.begin(), res.second.end());
+    json response;
+    try {
+        response = json::parse(response_str);
+    } catch (const nlohmann::json::parse_error & e) {
+        throw std::runtime_error(std::string("Failed to parse Docker registry token response as JSON: ") + e.what() +
+                                 "\nResponse: " + response_str);
+    }
+
+    if (!response.contains("token")) {
+        throw std::runtime_error("Docker registry token response missing 'token' field");
+    }
+
+    return response["token"].get<std::string>();
+}
+
+#ifdef LLAMA_USE_CURL
+
+// Helper function to download Docker blob directly to file
+static bool common_docker_download_blob(const std::string & blob_url,
+                                        const std::string & token,
+                                        const std::string & local_path) {
+    curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
+    if (!curl.get()) {
+        LOG_ERR("%s: curl_easy_init() failed\n", __func__);
+        return false;
+    }
+
+    // Prepare temporary filename for safe downloading
+    std::string                         path_temporary = local_path + ".tmp";
+    std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "wb"));
+    if (!outfile) {
+        LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path_temporary.c_str());
+        return false;
+    }
+
+    // Set up CURL options
+    curl_easy_setopt(curl.get(), CURLOPT_URL, blob_url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    // Set up write callback to stream directly to file
+    typedef size_t (*CURLOPT_WRITEFUNCTION_PTR)(void * data, size_t size, size_t nmemb, void * fd);
+    auto write_callback = [](void * data, size_t size, size_t nmemb, void * fd) -> size_t {
+        return fwrite(data, size, nmemb, (FILE *) fd);
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, outfile.get());
+
+#    if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#    endif
+
+    // Set headers
+    curl_slist_ptr http_headers;
+    http_headers.ptr        = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    std::string auth_header = "Authorization: Bearer " + token;
+    http_headers.ptr        = curl_slist_append(http_headers.ptr, auth_header.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    // Perform the download
+    CURLcode res = curl_easy_perform(curl.get());
+    if (res != CURLE_OK) {
+        LOG_ERR("%s: curl_easy_perform() failed: %s\n", __func__, curl_easy_strerror(res));
+        outfile.reset();  // Close file before removing
+        std::filesystem::remove(path_temporary);
+        return false;
+    }
+
+    // Check HTTP response code
+    long response_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response_code);
+    if (response_code != 200) {
+        LOG_ERR("%s: HTTP error %ld\n", __func__, response_code);
+        outfile.reset();  // Close file before removing
+        std::filesystem::remove(path_temporary);
+        return false;
+    }
+
+    // Close the file and move to final location
+    outfile.reset();
+
+    if (std::filesystem::exists(local_path)) {
+        std::filesystem::remove(local_path);
+    }
+
+    std::filesystem::rename(path_temporary, local_path);
+
+    return true;
+}
+
+#else
+
+static bool common_docker_download_blob(const std::string &, const std::string &, const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download Docker blob\n");
+    return false;
+}
+
+#endif  // LLAMA_USE_CURL
+
+std::string common_docker_resolve_model(const std::string & docker_url) {
+    // Parse docker://ai/smollm2:135M-Q4_K_M
+    if (docker_url.substr(0, 9) != "docker://") {
+        return docker_url;  // Not a docker URL, return as-is
+    }
+
+    std::string model_spec = docker_url.substr(9);  // Remove "docker://"
+
+    // Parse ai/smollm2:135M-Q4_K_M
+    size_t      colon_pos = model_spec.find(':');
+    std::string repo;
+    std::string tag;
+    if (colon_pos != std::string::npos) {
+        repo = model_spec.substr(0, colon_pos);
+        tag  = model_spec.substr(colon_pos + 1);
+    } else {
+        repo = model_spec;
+        tag  = "latest";
+    }
+
+    LOG_INF("Downloading Docker AI model: %s:%s\n", repo.c_str(), tag.c_str());
+    try {
+        std::string token = common_docker_get_token(repo);  // Get authentication token
+
+        // Get manifest
+        std::string          manifest_url = "https://registry-1.docker.io/v2/" + repo + "/manifests/" + tag;
+        common_remote_params manifest_params;
+        manifest_params.headers.push_back("Authorization: Bearer " + token);
+        manifest_params.headers.push_back(
+            "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json");
+        auto manifest_res = common_remote_get_content(manifest_url, manifest_params);
+        if (manifest_res.first != 200) {
+            throw std::runtime_error("Failed to get Docker manifest for repo: '" + repo + "', tag: '" + tag +
+                                     "', URL: '" + manifest_url +
+                                     "', HTTP code: " + std::to_string(manifest_res.first));
+        }
+
+        std::string manifest_str(manifest_res.second.begin(), manifest_res.second.end());
+        json        manifest;
+        try {
+            manifest = json::parse(manifest_str);
+        } catch (const nlohmann::json::parse_error & e) {
+            throw std::runtime_error("Malformed Docker manifest JSON: " + std::string(e.what()));
+        }
+        std::string gguf_digest;  // Find the GGUF layer
+        if (manifest.contains("layers")) {
+            for (const auto & layer : manifest["layers"]) {
+                if (layer.contains("mediaType")) {
+                    std::string media_type = layer["mediaType"].get<std::string>();
+                    if (media_type == "application/vnd.docker.ai.gguf.v3") {
+                        gguf_digest = layer["digest"].get<std::string>();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (gguf_digest.empty()) {
+            throw std::runtime_error("No GGUF layer found in Docker manifest");
+        }
+
+        // Prepare local filename
+        std::string model_filename = repo;
+        std::replace(model_filename.begin(), model_filename.end(), '/', '_');
+        model_filename += "_" + tag + ".gguf";
+        std::string local_path = fs_get_cache_file(model_filename);
+        if (std::filesystem::exists(local_path)) {  // Check if already downloaded
+            LOG_INF("Docker model already cached: %s\n", local_path.c_str());
+            return local_path;
+        }
+
+        // Download the blob using streaming approach
+        std::string blob_url = "https://registry-1.docker.io/v2/" + repo + "/blobs/" + gguf_digest;
+        if (!common_docker_download_blob(blob_url, token, local_path)) {
+            throw std::runtime_error("Failed to download Docker blob");
+        }
+
+        LOG_INF("Downloaded Docker model to: %s\n", local_path.c_str());
+        return local_path;
+    } catch (const std::exception & e) {
+        LOG_ERR("Docker model download failed: %s\n", e.what());
+        throw;
+    }
+}
 
 //
 // utils
