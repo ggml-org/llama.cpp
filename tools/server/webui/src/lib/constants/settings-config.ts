@@ -4,9 +4,9 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	apiKey: '',
 	systemMessage: '',
 	theme: 'system',
-	showTokensPerSecond: false,
+	showTokensPerSecond: true,
 	showThoughtInProgress: true,
-	keepStatsVisible: false,
+	keepStatsVisible: true,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	// make sure these default values are in sync with `common.h`

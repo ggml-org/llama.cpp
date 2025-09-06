@@ -152,13 +152,8 @@ export class SlotsService {
 
 		// Get output max tokens from user settings
 		const currentConfig = config();
-		const outputTokensMax = currentConfig.max_tokens;
-
-		// Validate required data is available
-		if (!outputTokensMax) {
-			console.warn('No max_tokens setting available');
-			return null;
-		}
+		// Default to -1 (infinite) if max_tokens is not set, matching ChatService behavior
+		const outputTokensMax = currentConfig.max_tokens || -1;
 
 		// Calculate context and output based on team requirements
 		const contextUsed = promptTokens + predictedTokens; // tokens_used_in_conversation

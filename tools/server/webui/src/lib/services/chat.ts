@@ -111,7 +111,8 @@ export class ChatService {
 		requestBody.reasoning_format = 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
-		if (max_tokens !== undefined) requestBody.max_tokens = max_tokens;
+		// Set max_tokens to -1 (infinite) if not provided or empty
+		requestBody.max_tokens = max_tokens !== undefined && max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
