@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include "ggml-backend.h"
 
 #include <fstream>
 
@@ -42,6 +43,12 @@ struct callback_data {
     // NEW: per-tensor streams + base directory
     std::string base_dir; // e.g., "<output_prefix>/tensors"
     std::unordered_map<std::string, std::unique_ptr<std::ofstream>> streams;
+};
+
+struct sampling_cfg {
+    int   top_k   = -1;    // <1 = disabled
+    float top_p   = 1.0f;  // >=1 = disabled
+    float temp    = 1.0f;  // we will always apply temperature (min clamp)
 };
 
 static bool matches_target(const std::string &name, const callback_data *cb) {
@@ -150,17 +157,38 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
 }
 
 
-static bool run(llama_context * ctx, const common_params & params, callback_data & cb_data) {
+static bool run(llama_context * ctx,
+                const common_params & params,
+                const sampling_cfg & samp,
+                callback_data & cb_data){
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
 
-    auto sparams = llama_sampler_chain_default_params();
-    sparams.no_perf = false;
-    llama_sampler * sampler = llama_sampler_chain_init(sparams);
-    llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+    auto chain_params = llama_sampler_chain_default_params();
+    chain_params.no_perf = false;
+    llama_sampler * sampler = llama_sampler_chain_init(chain_params);
+
+    // Always apply provided temperature (clamped to >0 above)
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(samp.temp));
+
+    // Optional: top-k
+    if (samp.top_k > 0) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(samp.top_k));
+    }
+
+    // Optional: top-p
+    if (samp.top_p < 1.0f) {
+        // min_keep = 1 is sane
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(samp.top_p, 1));
+    }
+
+    // Add RNG distribution so temp/top-k/top-p actually randomize
+    uint32_t seed = (uint32_t) ggml_time_us();
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed));
+
 
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
     cb_data.current_token_index = -1;
@@ -210,6 +238,8 @@ int main(int argc, char **argv) {
     std::string output_prefix = "default";
 
     callback_data cb_data;
+    sampling_cfg samp;    // <-- add this
+
     common_params params;
     bool list_layers = false;
     std::string list_layers_filter = "";
@@ -220,68 +250,115 @@ int main(int argc, char **argv) {
     filtered_argv.push_back(argv[0]);
     params.n_gpu_layers = 20;
 
-    // --------- ARG PARSING ---------
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg.compare(0, 2, "--") == 0) {
-            std::replace(arg.begin(), arg.end(), '_', '-');
-        }
-
-        if (arg == "--parse-layer") {
-            if (i + 1 < argc) {
-                std::string raw = argv[++i];
-                // allow comma-separated list
-                size_t start = 0;
-                while (true) {
-                    size_t pos = raw.find(',', start);
-                    std::string item = raw.substr(start, pos - start);
-                    if (!item.empty()) parse_layer_values.push_back(item);
-                    if (pos == std::string::npos) break;
-                    start = pos + 1;
-                }
-            } else {
-                fprintf(stderr, "error: --parse-layer requires an argument\n");
-                return 1;
-            }
-            continue;
-
-        } else if (arg == "--prompt") {
-            if (i + 1 < argc) {
-                prompts.emplace_back(argv[++i]);
-            } else {
-                fprintf(stderr, "error: --prompt requires an argument\n");
-                return 1;
-            }
-            continue;
-
-        } else if (arg == "--output-prefix") {
-            if (i + 1 < argc) {
-                output_prefix = argv[++i];
-            } else {
-                fprintf(stderr, "error: --output-prefix requires a string argument\n");
-                return 1;
-            }
-            continue;
-
-        } else if (arg == "--n-gpu-layers") {
-            if (i + 1 < argc) {
-                params.n_gpu_layers = std::stoi(argv[++i]);  // override default
-            } else {
-                fprintf(stderr, "error: --n-gpu-layers requires an integer argument\n");
-                return 1;
-            }
-            continue;
-
-        } else if (arg == "--list-layers") {
-            list_layers = true;
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                list_layers_filter = argv[++i];  // optional filter (unused below)
-            }
-            continue;
-        }
-
-        filtered_argv.push_back(argv[i]);
+// --------- ARG PARSING ---------
+for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+    if (arg.compare(0, 2, "--") == 0) {
+        std::replace(arg.begin(), arg.end(), '_', '-');
     }
+
+    // --parse-layer <a,b,c>
+    if (arg == "--parse-layer") {
+        if (i + 1 < argc) {
+            std::string raw = argv[++i];
+            size_t start = 0;
+            while (true) {
+                size_t pos  = raw.find(',', start);
+                std::string item = raw.substr(start, pos - start);
+                if (!item.empty()) parse_layer_values.push_back(item);
+                if (pos == std::string::npos) break;
+                start = pos + 1;
+            }
+        } else {
+            fprintf(stderr, "error: --parse-layer requires an argument\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --prompt "..."
+    if (arg == "--prompt") {
+        if (i + 1 < argc) {
+            prompts.emplace_back(argv[++i]);
+        } else {
+            fprintf(stderr, "error: --prompt requires an argument\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --top-k N
+    if (arg == "--top-k") {
+        if (i + 1 < argc) {
+            samp.top_k = std::stoi(argv[++i]);
+            if (samp.top_k < 1) samp.top_k = -1;   // disable if <1
+        } else {
+            fprintf(stderr, "error: --top-k requires an int\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --top-p F
+    if (arg == "--top-p") {
+        if (i + 1 < argc) {
+            samp.top_p = std::stof(argv[++i]);
+            if (samp.top_p <= 0.0f) samp.top_p = 1.0f;
+            if (samp.top_p > 1.0f)  samp.top_p = 1.0f; // clamp
+        } else {
+            fprintf(stderr, "error: --top-p requires a float\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --temp F   (or --temperature F)
+    if (arg == "--temp" || arg == "--temperature") {
+        if (i + 1 < argc) {
+            samp.temp = std::stof(argv[++i]);
+            if (samp.temp <= 0.0f) samp.temp = 1e-6f; // avoid greedy (force >0)
+        } else {
+            fprintf(stderr, "error: --temperature requires a float\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --output-prefix STR
+    if (arg == "--output-prefix") {
+        if (i + 1 < argc) {
+            output_prefix = argv[++i];
+        } else {
+            fprintf(stderr, "error: --output-prefix requires a string argument\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --n-gpu-layers N
+    if (arg == "--n-gpu-layers") {
+        if (i + 1 < argc) {
+            params.n_gpu_layers = std::stoi(argv[++i]);
+        } else {
+            fprintf(stderr, "error: --n-gpu-layers requires an integer argument\n");
+            return 1;
+        }
+        continue;
+    }
+
+    // --list-layers [optional_filter]
+    if (arg == "--list-layers") {
+        list_layers = true;
+        if (i + 1 < argc && argv[i + 1][0] != '-') {
+            list_layers_filter = argv[++i];  // optional, currently unused
+        }
+        continue;
+    }
+
+    // Unrecognized flag/arg: pass through to common_params_parse
+    filtered_argv.push_back(argv[i]);
+}
+
 
     // open standard outputs
     prompt_output_file.open(output_prefix + "_prompt_output.txt");
@@ -353,7 +430,7 @@ int main(int argc, char **argv) {
         params.n_predict = 1;
         params.prompt = "dummy";  // any valid prompt to trigger eval
 
-        if (!run(ctx, params, cb_data)) {
+        if (!run(ctx, params, samp, cb_data)) {
             LOG_ERR("Failed during layer listing run\n");
             return 1;
         }
@@ -369,13 +446,13 @@ int main(int argc, char **argv) {
     for (const auto& prompt : prompts) {
         prompt_output_file << "Running prompt: " << prompt << "\n";
         params.prompt = prompt;
-        if (!run(ctx, params, cb_data)) {
+        if (!run(ctx, params, samp, cb_data)) {
             LOG_ERR("Failed on prompt: %s\n", prompt.c_str());
             return 1;
         }
     }
 
-    LOG("\n");
+    LOG_INF("\n");
     llama_perf_context_print(ctx);
 
     llama_backend_free();
