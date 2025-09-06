@@ -1920,12 +1920,28 @@ static void test_template_output_parsers() {
                     /* .thinking_forced_open = */ true,
                     /* .parse_tool_calls = */ true,
                 }));
-        // variant: thinking forced open + tool call in reasoning content + no closing think
+        // variant: thinking forced open + tool call in reasoning content + no closing think + not partial
+        //          This is a bit of a fine tuning issue on the model's part IMO. It really should not be attempting
+        //          to make tool calls in reasoning content according to the model card, but it does sometimes, so
+        //          add the reasoning content as regular content and parse the tool calls.
         assert_msg_equals(
-            simple_assist_msg("", "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING", "", ""),
+            simple_assist_msg("REASONING", "", "get_time", "{\"city\":\"Tokyo\"}"),
             common_chat_parse(
-                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING",
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                 /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: thinking forced open + tool call in reasoning content + no closing think + partial
+        assert_msg_equals(
+            simple_assist_msg("", "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>", "", ""),
+            common_chat_parse(
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ true,
                 {
                     COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,

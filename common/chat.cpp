@@ -1514,7 +1514,14 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     // First try to parse using the standard reasoning parsing method
     LOG_DBG("%s: thinking_forced_open: %s\n", __func__, std::to_string(builder.syntax().thinking_forced_open).c_str());
 
-    if (builder.try_parse_reasoning("<think>", "</think>")) {
+    auto start_pos = builder.pos();
+    auto found_end_think = builder.try_find_literal("</think>");
+    builder.move_to(start_pos);
+
+    if (builder.syntax().thinking_forced_open && !builder.is_partial() && !found_end_think) {
+        LOG_DBG("%s: no end_think, not partial, adding content\n", __func__);
+        common_chat_parse_deepseek_v3_1_content(builder);
+    } else if (builder.try_parse_reasoning("<think>", "</think>")) {
         // If reasoning was parsed successfully, the remaining content is regular content
         LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
         // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
@@ -1531,6 +1538,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
             builder.add_reasoning_content(builder.consume_rest());
         } else {
+            LOG_DBG("%s: no thinking_forced_open, adding content\n", __func__);
             // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
             common_chat_parse_deepseek_v3_1_content(builder);
         }
