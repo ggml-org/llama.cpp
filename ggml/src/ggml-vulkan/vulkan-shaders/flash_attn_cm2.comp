@@ -283,6 +283,10 @@ void main() {
 
     O = Ldiag*O;
 
+#if defined(ACC_TYPE_MAX)
+    [[unroll]] for (uint i = 0; i < O.length(); ++i) { O[i] = clamp(O[i], -ACC_TYPE_MAX, ACC_TYPE_MAX); }
+#endif
+
     uint32_t o_offset = iq3*p.ne2*p.ne1*HSV;
 
     coopmat<D_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O_D = coopmat<D_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(O);

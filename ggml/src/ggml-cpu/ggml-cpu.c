@@ -1876,6 +1876,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_im2col_back_f32(params, tensor);
             } break;
+        case GGML_OP_IM2COL_3D:
+            {
+                ggml_compute_forward_im2col_3d(params, tensor);
+            } break;
         case GGML_OP_CONV_2D:
             {
                 ggml_compute_forward_conv_2d(params, tensor);
@@ -2255,6 +2259,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_BACK:
+        case GGML_OP_IM2COL_3D:
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_3D:
         case GGML_OP_CONV_2D_DW:
@@ -3206,20 +3211,12 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
         __m128i y_vec = _mm_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
         _mm_storel_epi64((__m128i *)(y + i), y_vec);
     }
-#elif defined(__NNPA__)
-    for (; i + 7 < n; i += 8) {
-        float32x4_t v_xh = vec_xl(0, (const float *)(x + i + 0));
-        float32x4_t v_xl = vec_xl(0, (const float *)(x + i + 4));
-        uint16x8_t v_yd = vec_round_from_fp32(v_xh, v_xl, 0);
-        uint16x8_t v_y = vec_convert_to_fp16(v_yd, 0);
-        vec_xst(v_y, 0, (ggml_fp16_t *)(y + i));
-    }
-    for (; i + 3 < n; i += 4) {
-        float32x4_t v_x = vec_xl(0, (const float *)(x + i));
-        float32x4_t v_zero = vec_splats(0.0f);
-        uint16x8_t v_yd = vec_round_from_fp32(v_x, v_zero, 0);
-        uint16x8_t v_y = vec_convert_to_fp16(v_yd, 0);
-        vec_xst(v_y, 0, (ggml_fp16_t *)(y + i));
+#elif defined(__riscv_zvfh)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat16m1_t vy = __riscv_vfncvt_f_f_w_f16m1(vx, vl);
+        __riscv_vse16_v_f16m1((_Float16 *)&y[i], vy, vl);
     }
 #endif
     for (; i < n; ++i) {
@@ -3246,21 +3243,6 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         __m128i x_vec = _mm_loadl_epi64((const __m128i *)(x + i));
         __m128 y_vec = _mm_cvtph_ps(x_vec);
         _mm_storeu_ps(y + i, y_vec);
-    }
-#elif defined(__NNPA__)
-    for (; i + 7 < n; i += 8) {
-        uint16x8_t v_x = vec_xl(0, (const ggml_fp16_t *)(x + i));
-        uint16x8_t v_yd = vec_convert_from_fp16(v_x, 0);
-        float32x4_t v_yh = vec_extend_to_fp32_hi(v_yd, 0);
-        float32x4_t v_yl = vec_extend_to_fp32_lo(v_yd, 0);
-        vec_xst(v_yh, 0, (float *)(y + i + 0));
-        vec_xst(v_yl, 0, (float *)(y + i + 4));
-    }
-    for (; i + 3 < n; i += 4) {
-        uint16x8_t v_x = vec_xl(0, (const ggml_fp16_t *)(x + i));
-        uint16x8_t v_yd = vec_convert_from_fp16(v_x, 0);
-        float32x4_t v_yh = vec_extend_to_fp32_hi(v_yd, 0);
-        vec_xst(v_yh, 0, (float *)(y + i));
     }
 #endif
 
@@ -3459,14 +3441,6 @@ int ggml_cpu_has_vsx(void) {
 
 int ggml_cpu_has_vxe(void) {
 #if defined(__VXE__) || defined(__VXE2__)
-    return 1;
-#else
-    return 0;
-#endif
-}
-
-int ggml_cpu_has_nnpa(void) {
-#if defined(GGML_NNPA)
     return 1;
 #else
     return 0;

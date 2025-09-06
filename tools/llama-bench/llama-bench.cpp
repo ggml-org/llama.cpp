@@ -987,16 +987,16 @@ struct cmd_params_instance {
     llama_context_params to_llama_cparams() const {
         llama_context_params cparams = llama_context_default_params();
 
-        cparams.n_ctx        = n_prompt + n_gen + n_depth;
-        cparams.n_batch      = n_batch;
-        cparams.n_ubatch     = n_ubatch;
-        cparams.type_k       = type_k;
-        cparams.type_v       = type_v;
-        cparams.offload_kqv  = !no_kv_offload;
-        cparams.flash_attn   = flash_attn;
-        cparams.embeddings   = embeddings;
-        cparams.op_offload   = !no_op_offload;
-        cparams.swa_full     = false;
+        cparams.n_ctx           = n_prompt + n_gen + n_depth;
+        cparams.n_batch         = n_batch;
+        cparams.n_ubatch        = n_ubatch;
+        cparams.type_k          = type_k;
+        cparams.type_v          = type_v;
+        cparams.offload_kqv     = !no_kv_offload;
+        cparams.flash_attn_type = flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        cparams.embeddings      = embeddings;
+        cparams.op_offload      = !no_op_offload;
+        cparams.swa_full        = false;
 
         return cparams;
     }
