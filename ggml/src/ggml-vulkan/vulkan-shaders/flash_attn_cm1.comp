@@ -373,6 +373,9 @@ void main() {
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             Of[r][d] *= ACC_TYPE(Lfrcp[r]);
+#if defined(ACC_TYPE_MAX)
+            Of[r][d] = clamp(Of[r][d], -ACC_TYPE_MAX, ACC_TYPE_MAX);
+#endif
         }
     }
 
