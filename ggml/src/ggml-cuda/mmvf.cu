@@ -163,6 +163,7 @@ static void launch_mul_mat_vec_f_cuda(
     const int nbytes_shared = warp_size*sizeof(float);
     const dim3 block_nums(nrows, nchannels_dst, nsamples_dst);
     const dim3 block_dims(block_size_best, 1, 1);
+
     switch (block_size_best) {
         case   32: {
             mul_mat_vec_f<T, type_acc, ncols_dst,  32><<<block_nums, block_dims, nbytes_shared, stream>>>
