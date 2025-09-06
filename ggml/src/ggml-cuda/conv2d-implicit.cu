@@ -37,16 +37,16 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
     
     
     // Warp tile
-    const int lane_id = threadIdx.x % 32;
-    const int warp_id = threadIdx.x / 32;
-    const int mma_tid_x = (lane_id / 2) % 8;
-    const int mma_tid_y = (lane_id / 16) * 2 + (lane_id % 2);
+    const int lane_id = threadIdx.x & 31;
+    const int warp_id = threadIdx.x >> 5;
+    const int mma_tid_x = (lane_id >> 1) % 8;
+    const int mma_tid_y = (lane_id >> 4) * 2 + (lane_id & 1);
     // lds addr
-    int weight_lds_addr = (warp_id / 2) * 32 + mma_tid_y * 4;
-    int input_lds_addr = (warp_id % 2) * 64 + mma_tid_x * 4;
+    int weight_lds_addr = (warp_id >> 1) * 32 + mma_tid_y * 4;
+    int input_lds_addr = (warp_id & 1) * 64 + mma_tid_x * 4;
 
-    int x = bx * 128 + input_lds_addr;
-    int y = by * 128 + weight_lds_addr;
+    // int x = bx * 128 + input_lds_addr;
+    // int y = by * 128 + weight_lds_addr;
     int z = blockIdx.z;
 
     T weight_ldg_reg[4];
@@ -56,20 +56,20 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
     int posw_ori[4];
 #pragma unroll
     for (int i = 0; i < 4; ++i){
-        posh_ori[i] = ((bx * 128 + tx % 32 + i * 32) / param.Ow) * param.u - param.p;
-        posw_ori[i] = ((bx * 128 + tx % 32 + i * 32) % param.Ow) * param.v - param.q;
+        posh_ori[i] = ((bx * 128 + lane_id + i * 32) / param.Ow) * param.u - param.p;
+        posw_ori[i] = ((bx * 128 + lane_id + i * 32) % param.Ow) * param.v - param.q;
     }
 
     int inOffset = z * param.c * param.h * param.w;
-    int weiOffset = (by * 128 + tx / 8 * 4) * param.c * param.r * param.s;
+    int weiOffset = (by * 128 + (tx >> 3) * 4) * param.c * param.r * param.s;
     int inChannelOffset = param.h * param.w;
-    int weightChannelOffset = param.r * param.s;
+    // int weightChannelOffset = param.r * param.s;
     int weightKOffset = param.c * param.r * param.s;
 
     // sts addr
-    int weight_sts_addr = (tx % 8) * 132 +
-                          (tx / 8) * 4;
-    int input_sts_addr = (tx / 32) * 128 + (tx % 32);
+    int weight_sts_addr = (tx & 7) * 132 +
+                          (tx >> 3) * 4;
+    int input_sts_addr = (warp_id) * 128 + (lane_id);
 
     int write_flag = 1;
     T weight_frag[2][8];
@@ -85,16 +85,16 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
 // ldg
 #pragma unroll
     for (int i = 0; i < 4; ++i){
-        if (tx % 8 < weightKOffset && by * 128 + tx / 8 * 4 + i < param.k){
-            weight_ldg_reg[i] = kernel[weiOffset + tx % 8 + i * weightKOffset];
+        if (tx % 8 < weightKOffset && by * 128 + (tx >> 3) * 4 + i < param.k){
+            weight_ldg_reg[i] = kernel[weiOffset + (tx & 7) + i * weightKOffset];
         }
         else{
             weight_ldg_reg[i] = (T)0.f;
         }
     }
-    int curC = (tx / 32) / (param.r * param.s);             // channel offset
-    int curR = ((tx / 32) % (param.r * param.s)) / param.s; // kernel r offset
-    int curS = ((tx / 32) % (param.r * param.s)) % param.s; // kernel s offset
+    int curC = (warp_id) / (param.r * param.s);             // channel offset
+    int curR = ((warp_id) % (param.r * param.s)) / param.s; // kernel r offset
+    int curS = ((warp_id) % (param.r * param.s)) % param.s; // kernel s offset
 #pragma unroll
     for (int i = 0; i < 4; ++i){
         int curH = posh_ori[i] + curR * param.d_h; // input h
@@ -127,21 +127,23 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
         input_frag[0][i] = smeminput[input_lds_addr + i];
         input_frag[0][i + 4] = smeminput[input_lds_addr + i + 32];
     }
+
+    // main loop
     for (int crs = 0; crs < param.r * param.s * param.c; crs += 8){
         // ldg
-        int weiOffsetTmp = crs + 8 + tx % 8;
+        int weiOffsetTmp = crs + 8 + (tx & 7);
 #pragma unroll
         for (int i = 0; i < 4; ++i){
-            if (weiOffsetTmp < weightKOffset && by * 128 + tx / 8 * 4 + i < param.k){
+            if (weiOffsetTmp < weightKOffset && by * 128 + (tx >> 3) * 4 + i < param.k){
                 weight_ldg_reg[i] = kernel[weiOffset + weiOffsetTmp + i * weightKOffset];
             }
             else{
                 weight_ldg_reg[i] = (T)0.f;
             }
         }
-        curC = (crs + 8 + tx / 32) / (param.r * param.s);             // channel offset
-        curR = ((crs + 8 + tx / 32) % (param.r * param.s)) / param.s; // kernel r offset
-        curS = ((crs + 8 + tx / 32) % (param.r * param.s)) % param.s; // kernel s offset
+        curC = (crs + 8 + warp_id) / (param.r * param.s);             // channel offset
+        curR = ((crs + 8 + warp_id) % (param.r * param.s)) / param.s; // kernel r offset
+        curS = ((crs + 8 + warp_id) % (param.r * param.s)) % param.s; // kernel s offset
 
 #pragma unroll
         for (int i = 0; i < 4; ++i){
@@ -160,13 +162,25 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
         for (int subcrs = 0; subcrs < 8 - 1; ++subcrs){
 #pragma unroll
             for (int i = 0; i < 4; ++i){
-                weight_frag[(subcrs + 1) % 2][i] = smemweight[load_flag * 132 * 8 + weight_lds_addr + (subcrs + 1) * 132 + i];
-                weight_frag[(subcrs + 1) % 2][i + 4] = smemweight[load_flag * 132 * 8 + weight_lds_addr + (subcrs + 1) * 132 + i + 16];
+                weight_frag[(subcrs + 1) & 1][i] = smemweight[load_flag * 132 * 8 + weight_lds_addr + (subcrs + 1) * 132 + i];
+                weight_frag[(subcrs + 1) & 1][i + 4] = smemweight[load_flag * 132 * 8 + weight_lds_addr + (subcrs + 1) * 132 + i + 16];
             }
+            // // compute base pointer once
+            // T* base_ptr = smemweight + load_flag * 132 * 8 + weight_lds_addr + (subcrs + 1) * 132;
+
+            // // first 4 values -> weight_frag[...][0..3]
+            // float4 v0 = *reinterpret_cast<const float4*>(base_ptr);
+
+            // // next 4 values (offset +16) -> weight_frag[...][4..7]
+            // float4 v1 = *reinterpret_cast<const float4*>(base_ptr + 16);
+
+            // // unpack into weight_frag
+            // *reinterpret_cast<float4*>(&weight_frag[(subcrs + 1) % 2][0]) = v0;
+            // *reinterpret_cast<float4*>(&weight_frag[(subcrs + 1) % 2][4]) = v1;
 #pragma unroll
             for (int i = 0; i < 4; ++i){
-                input_frag[(subcrs + 1) % 2][i] = smeminput[load_flag * 128 * 8 + input_lds_addr + (subcrs + 1) * 128 + i];
-                input_frag[(subcrs + 1) % 2][i + 4] = smeminput[load_flag * 128 * 8 + input_lds_addr + (subcrs + 1) * 128 + i + 32];
+                input_frag[(subcrs + 1) & 1][i] = smeminput[load_flag * 128 * 8 + input_lds_addr + (subcrs + 1) * 128 + i];
+                input_frag[(subcrs + 1) & 1][i + 4] = smeminput[load_flag * 128 * 8 + input_lds_addr + (subcrs + 1) * 128 + i + 32];
             }
 
 #pragma unroll
