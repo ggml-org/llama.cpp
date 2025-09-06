@@ -843,9 +843,10 @@ public:
                 _build_object_rule(
                     properties, required, name,
                     schema.contains("additionalProperties") ? schema["additionalProperties"] : json()));
-        } else if ((schema_type.is_null() || schema_type == "object") && schema.contains("allOf")) {
+        } else if ((schema_type.is_null() || schema_type == "object" || schema_type == "string") && schema.contains("allOf")) {
             std::unordered_set<std::string> required;
             std::vector<std::pair<std::string, json>> properties;
+            std::vector<std::string> enum_values;
             std::string hybrid_name = name;
             std::function<void(const json &, bool)> add_component = [&](const json & comp_schema, bool is_required) {
                 if (comp_schema.contains("$ref")) {
@@ -856,6 +857,10 @@ public:
                         if (is_required) {
                             required.insert(prop.key());
                         }
+                    }
+                } else if (comp_schema.contains("enum")) {
+                    for (const auto & v : comp_schema["enum"]) {
+                        enum_values.push_back(_generate_constant_rule(v));
                     }
                 } else {
                   // todo warning
@@ -869,6 +874,9 @@ public:
                 } else {
                     add_component(t, true);
                 }
+            }
+            if (!enum_values.empty()) {
+                return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ") space");
             }
             return _add_rule(rule_name, _build_object_rule(properties, required, hybrid_name, json()));
         } else if ((schema_type.is_null() || schema_type == "array") && (schema.contains("items") || schema.contains("prefixItems"))) {
