@@ -1211,7 +1211,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
-        "allOf with enum values",
+        "allOf with enum schema",
         R"""({
             "allOf": [
                 {"$ref": "#/definitions/foo"}
@@ -1225,6 +1225,31 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             root ::= ("\"a\"" | "\"b\"") space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf with multiple enum schemas",
+        R"""({
+            "allOf": [
+                {"$ref": "#/definitions/foo"},
+                {"$ref": "#/definitions/bar"}
+            ],
+            "definitions": {
+                "foo": {
+                    "type": "string",
+                    "enum": ["a", "b", "c"]
+                },
+                "bar": {
+                    "type": "string",
+                    "enum": ["b", "c", "d"]
+                }
+            }
+        })""",
+        R"""(
+            root ::= ("\"b\"" | "\"c\"") space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
