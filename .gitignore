@@ -148,3 +148,6 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 .ccache/
+
+# emscripten
+a.out.*
