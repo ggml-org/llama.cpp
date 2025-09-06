@@ -112,7 +112,8 @@ export class ChatService {
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		// Set max_tokens to -1 (infinite) if not provided or empty
-		requestBody.max_tokens = max_tokens !== undefined && max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		requestBody.max_tokens =
+			max_tokens !== undefined && max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
@@ -620,20 +621,24 @@ export class ChatService {
 		try {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
-			
+
 			if (errorData.error?.type === 'exceed_context_size_error') {
 				const contextError = errorData.error as ApiContextSizeError;
 				const error = new Error(contextError.message);
 				error.name = 'ContextError';
 				// Attach structured context information
-				(error as Error & { contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number } }).contextInfo = {
+				(
+					error as Error & {
+						contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
+					}
+				).contextInfo = {
 					promptTokens: contextError.n_prompt_tokens,
 					maxContext: contextError.n_ctx,
 					estimatedTokens: contextError.n_prompt_tokens
 				};
 				return error;
 			}
-			
+
 			// Fallback for other error types
 			const message = errorData.error?.message || 'Unknown server error';
 			return new Error(message);

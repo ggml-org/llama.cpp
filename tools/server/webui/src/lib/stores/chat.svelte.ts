@@ -385,7 +385,11 @@ class ChatStore {
 					}
 
 					// Use structured context info from new exceed_context_size_error format if available
-					const contextInfo = (error as Error & { contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number } }).contextInfo;
+					const contextInfo = (
+						error as Error & {
+							contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
+						}
+					).contextInfo;
 					let estimatedTokens = 0;
 					let maxContext = serverStore.serverProps?.default_generation_settings.n_ctx || 8192;
 

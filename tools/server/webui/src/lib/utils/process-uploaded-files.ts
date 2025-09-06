@@ -93,26 +93,23 @@ export async function processFilesToChatUploaded(files: File[]): Promise<ChatUpl
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 				// PDFs handled later when building extras; keep metadata only
 				results.push(base);
-				
+
 				// Show suggestion toast if vision model is available but PDF as image is disabled
 				const hasVisionSupport = supportsVision();
 				const currentConfig = settingsStore.config;
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
-					toast.info(
-						`You can enable parsing PDF as images with vision models.`,
-						{
-							duration: 8000,
-							action: {
-								label: 'Enable PDF as Images',
-								onClick: () => {
-									settingsStore.updateConfig('pdfAsImage', true);
-									toast.success('PDF parsing as images enabled!', {
-										duration: 3000
-									});
-								}
+					toast.info(`You can enable parsing PDF as images with vision models.`, {
+						duration: 8000,
+						action: {
+							label: 'Enable PDF as Images',
+							onClick: () => {
+								settingsStore.updateConfig('pdfAsImage', true);
+								toast.success('PDF parsing as images enabled!', {
+									duration: 3000
+								});
 							}
 						}
-					);
+					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 				// Generate preview URL for audio files
