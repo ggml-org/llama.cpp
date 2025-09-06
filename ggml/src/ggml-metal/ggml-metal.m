@@ -6016,10 +6016,35 @@ static enum ggml_status ggml_metal_graph_compute(
             }
         }
 
+        // wait for any previous processing
+        // TODO: find a more cannonincal Metal way to do it
+        //       or maybe we can create a new set of command buffers and avoid the wait here. need to figure out how
+        //         to release old command buffers that have already completed. maybe MTLCommandBufferStatus?
+        {
+            {
+                id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
+                if (cmd_buf) {
+                    [cmd_buf waitUntilCompleted];
+                    [cmd_buf release];
+                    ctx->cmd_bufs[n_cb].obj = nil;
+                }
+            }
+
+            for (int i = 0; i < n_cb; ++i) {
+                id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
+                if (cmd_buf) {
+                    [cmd_buf waitUntilCompleted];
+                    [cmd_buf release];
+                    ctx->cmd_bufs[i].obj = nil;
+                }
+            }
+        }
+
         // the main thread commits the first few commands immediately
         // cmd_buf[n_cb]
         {
             id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            [cmd_buf retain];
             ctx->cmd_bufs[n_cb].obj = cmd_buf;
 
             [cmd_buf enqueue];
@@ -6030,6 +6055,7 @@ static enum ggml_status ggml_metal_graph_compute(
         // cmd_buf[0.. n_cb)
         for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
             id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            [cmd_buf retain];
             ctx->cmd_bufs[cb_idx].obj = cmd_buf;
 
             // always enqueue the first two command buffers
@@ -6043,52 +6069,52 @@ static enum ggml_status ggml_metal_graph_compute(
 
         // wait for completion and check status of each command buffer
         // needed to detect if the device ran out-of-memory for example (#1881)
-        {
-            id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
-            [cmd_buf waitUntilCompleted];
+        //{
+        //    id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
+        //    [cmd_buf waitUntilCompleted];
 
-            MTLCommandBufferStatus status = [cmd_buf status];
-            if (status != MTLCommandBufferStatusCompleted) {
-                GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, n_cb, status);
-                if (status == MTLCommandBufferStatusError) {
-                    GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
-                }
+        //    MTLCommandBufferStatus status = [cmd_buf status];
+        //    if (status != MTLCommandBufferStatusCompleted) {
+        //        GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, n_cb, status);
+        //        if (status == MTLCommandBufferStatusError) {
+        //            GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
+        //        }
 
-                return GGML_STATUS_FAILED;
-            }
-        }
+        //        return GGML_STATUS_FAILED;
+        //    }
+        //}
 
-        for (int i = 0; i < n_cb; ++i) {
-            id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
-            [cmd_buf waitUntilCompleted];
+        //for (int i = 0; i < n_cb; ++i) {
+        //    id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
+        //    [cmd_buf waitUntilCompleted];
 
-            MTLCommandBufferStatus status = [cmd_buf status];
-            if (status != MTLCommandBufferStatusCompleted) {
-                GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, i, status);
-                if (status == MTLCommandBufferStatusError) {
-                    GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
-                }
+        //    MTLCommandBufferStatus status = [cmd_buf status];
+        //    if (status != MTLCommandBufferStatusCompleted) {
+        //        GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, i, status);
+        //        if (status == MTLCommandBufferStatusError) {
+        //            GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
+        //        }
 
-                return GGML_STATUS_FAILED;
-            }
+        //        return GGML_STATUS_FAILED;
+        //    }
 
-            id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->cmd_bufs[i + 1].obj : nil);
-            if (!next_buffer) {
-                continue;
-            }
+        //    id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->cmd_bufs[i + 1].obj : nil);
+        //    if (!next_buffer) {
+        //        continue;
+        //    }
 
-            const bool next_queued = ([next_buffer status] != MTLCommandBufferStatusNotEnqueued);
-            if (next_queued) {
-                continue;
-            }
+        //    const bool next_queued = ([next_buffer status] != MTLCommandBufferStatusNotEnqueued);
+        //    if (next_queued) {
+        //        continue;
+        //    }
 
-            if (ctx->abort_callback && ctx->abort_callback(ctx->abort_callback_data)) {
-                GGML_LOG_INFO("%s: command buffer %d aborted", __func__, i);
-                return GGML_STATUS_ABORTED;
-            }
+        //    if (ctx->abort_callback && ctx->abort_callback(ctx->abort_callback_data)) {
+        //        GGML_LOG_INFO("%s: command buffer %d aborted", __func__, i);
+        //        return GGML_STATUS_ABORTED;
+        //    }
 
-            [next_buffer commit];
-        }
+        //    [next_buffer commit];
+        //}
 
         if (!should_capture && ctx->capture_started) {
             [ctx->capture_scope endScope];
@@ -6422,6 +6448,54 @@ static void ggml_backend_metal_free(ggml_backend_t backend) {
     free(backend);
 }
 
+// TODO: tmp impl to make the results good
+//       I think here we have to waitUntilCompleted on all existing MTLCommandBuffers in the backend's context
+static void ggml_backend_metal_synchronize(ggml_backend_t backend) {
+    struct ggml_backend_metal_context * ctx = backend->context;
+
+    const int n_cb = ctx->n_cb;
+
+    {
+        id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
+        if (cmd_buf) {
+            [cmd_buf waitUntilCompleted];
+        }
+    }
+
+    for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
+        id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
+        if (cmd_buf) {
+            [cmd_buf waitUntilCompleted];
+        }
+    }
+}
+
+static void ggml_backend_metal_set_tensor_async(ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    // TODO: figure out how Metal does async copies
+    //       I think one way is:
+    //         - wrap the src and dst in MTLBuffers with newBufferWithBytesNoCopy (i.e. views)
+    //         - create an MTLCommandBuffer and encode a copy command in it
+    //         - commit the command buffer to the backend's queue
+    //         - keep the command buffer in the backend context so we can later wait for completion and release it?
+    ggml_backend_metal_synchronize(backend);
+
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_metal_buffer_set_tensor(buf, tensor, data, offset, size);
+}
+
+static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size) {
+    // TODO: figure out how Metal does async copies (see above)
+    ggml_backend_metal_synchronize(backend);
+
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_metal_buffer_get_tensor(buf, tensor, data, offset, size);
+}
+
+//static bool ggml_backend_metal_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+//    TODO: figure out how Metal does async copies (see above)
+//    return true;
+//}
+
 static enum ggml_status ggml_backend_metal_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     return ggml_metal_graph_compute(backend, cgraph);
 }
@@ -6502,15 +6576,17 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 static struct ggml_backend_i ggml_backend_metal_i = {
     /* .get_name                = */ ggml_backend_metal_name,
     /* .free                    = */ ggml_backend_metal_free,
-    /* .set_tensor_async        = */ NULL,
-    /* .get_tensor_async        = */ NULL,
-    /* .cpy_tensor_async        = */ NULL,
-    /* .synchronize             = */ NULL,
+    /* .set_tensor_async        = */ ggml_backend_metal_set_tensor_async,
+    /* .get_tensor_async        = */ ggml_backend_metal_get_tensor_async,
+    /* .cpy_tensor_async        = */ /*ggml_backend_metal_cpy_tensor_async*/ NULL, // TODO
+    /* .synchronize             = */ ggml_backend_metal_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_metal_graph_compute,
+
+    // TODO:  https://developer.apple.com/documentation/metal/mtlcommandbuffer#Synchronizing-Passes-with-Events
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
 };
