@@ -3792,6 +3792,7 @@ static int ggml_metal_encode_node(
                             {
                                 nsg = N_SG_Q8_0;
                                 nr0 = N_R0_Q8_0;
+                                smem = 32*sizeof(float)*N_R0_Q8_0;
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_Q8_0_F32].pipeline;
                             } break;
                         case GGML_TYPE_MXFP4:
@@ -3928,7 +3929,12 @@ static int ggml_metal_encode_node(
                     if (smem > 0) {
                         [encoder setThreadgroupMemoryLength:smem atIndex:0];
                     }
-                    [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0*nsg - 1)/(nr0*nsg), (ne11 + nr1 - 1)/nr1, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+
+                    if (src0t == GGML_TYPE_Q8_0) {
+                        [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0 - 1)/(nr0), (ne11 + nr1 - 1)/nr1, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+                    } else {
+                        [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0*nsg - 1)/(nr0*nsg), (ne11 + nr1 - 1)/nr1, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+                    }
                 }
             } break;
         case GGML_OP_MUL_MAT_ID:
@@ -4149,6 +4155,7 @@ static int ggml_metal_encode_node(
                             {
                                 nsg = N_SG_Q8_0;
                                 nr0 = N_R0_Q8_0;
+                                smem = 32*sizeof(float)*N_R0_Q8_0;
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_ID_Q8_0_F32].pipeline;
                             } break;
                         case GGML_TYPE_MXFP4:
@@ -4294,7 +4301,12 @@ static int ggml_metal_encode_node(
                     if (smem > 0) {
                         [encoder setThreadgroupMemoryLength:smem atIndex:0];
                     }
-                    [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0*nsg - 1)/(nr0*nsg), (_ne1 + nr1 - 1)/nr1, ne123) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+
+                    if (src0t == GGML_TYPE_Q8_0) {
+                        [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0 - 1)/(nr0), (_ne1 + nr1 - 1)/nr1, ne123) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+                    } else {
+                        [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nr0*nsg - 1)/(nr0*nsg), (_ne1 + nr1 - 1)/nr1, ne123) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+                    }
                 }
             } break;
         case GGML_OP_GET_ROWS:
