@@ -84,7 +84,7 @@ std::string format(const char * fmt, ...) {
     va_list ap2;
     va_start(ap, fmt);
     va_copy(ap2, ap);
-    int size = vsnprintf(NULL, 0, fmt, ap);
+    int size = vsnprintf(nullptr, 0, fmt, ap);
     GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
     std::vector<char> buf(size + 1);
     int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);

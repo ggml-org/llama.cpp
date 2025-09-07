@@ -57,12 +57,12 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
             // try to get token embeddings
             embd = llama_get_embeddings_ith(ctx, i);
             embd_pos = i;
-            GGML_ASSERT(embd != NULL && "failed to get token embeddings");
+            GGML_ASSERT(embd != nullptr && "failed to get token embeddings");
         } else {
             // try to get sequence embeddings - supported only when pooling_type is not NONE
             embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
             embd_pos = batch.seq_id[i][0];
-            GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
+            GGML_ASSERT(embd != nullptr && "failed to get sequence embeddings");
         }
 
         float * out = output + embd_pos * n_embd;
@@ -107,7 +107,7 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }

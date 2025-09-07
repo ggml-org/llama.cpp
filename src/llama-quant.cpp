@@ -114,7 +114,7 @@ static void llama_tensor_dequantize_impl(
 
     const ggml_type_traits * qtype = ggml_get_type_traits(tensor->type);
     if (ggml_is_quantized(tensor->type)) {
-        if (qtype->to_float == NULL) {
+        if (qtype->to_float == nullptr) {
             throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available", ggml_type_name(tensor->type)));
         }
     } else if (tensor->type != GGML_TYPE_F16 &&

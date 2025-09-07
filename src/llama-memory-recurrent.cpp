@@ -39,7 +39,7 @@ llama_memory_recurrent::llama_memory_recurrent(
         if (it == ctx_map.end()) {
             ggml_init_params params = {
                 /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead()),
-                /*.mem_buffer =*/ NULL,
+                /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
             };
 

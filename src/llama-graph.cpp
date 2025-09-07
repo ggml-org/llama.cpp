@@ -744,7 +744,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_gelu", il);
-                if (act_scales != NULL) {
+                if (act_scales != nullptr) {
                     cur = ggml_div(ctx0, cur, act_scales);
                     cb(cur, "ffn_act", il);
                 }

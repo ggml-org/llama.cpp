@@ -285,7 +285,7 @@ static void generate_uuidv5(const unsigned char sha1_digest[20], unsigned char u
 
 static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
     const std::string & fname = hash_params.input;
-    struct ggml_context * ctx_data = NULL;
+    struct ggml_context * ctx_data = nullptr;
 
     struct gguf_init_params params = {
         /*.no_alloc = */ false,
@@ -293,10 +293,10 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
     };
 
     // xxh64 init
-    XXH64_state_t* xxh64_model_hash_state = NULL;
+    XXH64_state_t* xxh64_model_hash_state = nullptr;
     if (hash_params.xxh64) {
         xxh64_model_hash_state = XXH64_createState();
-        if (xxh64_model_hash_state==NULL) {
+        if (xxh64_model_hash_state==nullptr) {
             abort();
         }
 

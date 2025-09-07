@@ -43,7 +43,7 @@ int main(int argc, char ** argv) {
     llama_model_ptr    & model      = llama_init.model;
     llama_context_ptr  & ctx        = llama_init.context;
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }

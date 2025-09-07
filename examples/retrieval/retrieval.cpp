@@ -98,9 +98,9 @@ static void batch_process(llama_context * ctx, llama_batch & batch, float * outp
 
         // try to get sequence embeddings - supported only when pooling_type is not NONE
         const float * embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-        if (embd == NULL) {
+        if (embd == nullptr) {
             embd = llama_get_embeddings_ith(ctx, i);
-            if (embd == NULL) {
+            if (embd == nullptr) {
                 LOG_ERR("%s: failed to get embeddings for token %d\n", __func__, i);
                 continue;
             }
@@ -154,7 +154,7 @@ int main(int argc, char ** argv) {
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }

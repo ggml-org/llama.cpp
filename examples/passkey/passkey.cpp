@@ -66,7 +66,7 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return 1;
     }
@@ -82,7 +82,7 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(ctx_params.n_batch % n_grp == 0 && "n_batch must be divisible by n_grp");
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
         LOG_ERR("%s: failed to create the llama_context\n" , __func__);
         return 1;
     }

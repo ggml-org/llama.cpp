@@ -254,7 +254,7 @@ struct my_llama_layer {
 };
 
 struct my_llama_model {
-    struct ggml_context * ctx = NULL;
+    struct ggml_context * ctx = nullptr;
 
     std::string name;
 
@@ -333,7 +333,7 @@ static void print_params(struct my_llama_hparams * params) {
 }
 
 static void print_tensor_info(const struct ggml_context * ctx) {
-    for (auto * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+    for (auto * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
         LOG_INF("%s: Allocating ", __func__);
         int64_t total = 1;
         int i = 0;
@@ -443,7 +443,7 @@ struct my_llama_file {
 
     my_llama_file(const char * fname, const char * mode) {
         fp = std::fopen(fname, mode);
-        if (fp == NULL) {
+        if (fp == nullptr) {
             size = 0;
         } else {
             seek(0, SEEK_END);
@@ -530,7 +530,7 @@ static std::string llama_escape_whitespaces(const std::string & text) {
 static void load_vocab(const char * filename, const Config * config, struct my_llama_vocab * vocab) {
     if (is_ggml_file(filename)) {
         LOG_INF("%s: Loading vocabulary from gguf file %s\n", __func__, filename);
-        struct ggml_context * ctx_data = NULL;
+        struct ggml_context * ctx_data = nullptr;
 
         struct gguf_init_params params = {
             /*.no_alloc = */ false,
@@ -538,7 +538,7 @@ static void load_vocab(const char * filename, const Config * config, struct my_l
         };
 
         struct gguf_context * ctx = gguf_init_from_file(filename, params);
-        GGML_ASSERT(ctx != NULL);
+        GGML_ASSERT(ctx != nullptr);
 
         const int model_idx = gguf_find_key(ctx, KV_TOKENIZER_MODEL);
         GGML_ASSERT(model_idx >= 0);
@@ -925,7 +925,7 @@ int main(int argc, char ** argv) {
 
     struct ggml_init_params lcparams;
     lcparams.mem_size   = 1024ll*1024ll*1024ll*((size_t) params.mem_model_gb);
-    lcparams.mem_buffer = NULL;
+    lcparams.mem_buffer = nullptr;
     lcparams.no_alloc   = false;
 
     model.ctx = ggml_init(lcparams);

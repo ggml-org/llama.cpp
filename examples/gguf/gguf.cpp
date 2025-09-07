@@ -40,7 +40,7 @@ static bool gguf_ex_write(const std::string & fname) {
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ 128ull*1024ull*1024ull,
-        /*.mem_buffer =*/ NULL,
+        /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ false,
     };
 
@@ -86,7 +86,7 @@ static bool gguf_ex_write(const std::string & fname) {
 static bool gguf_ex_read_0(const std::string & fname) {
     struct gguf_init_params params = {
         /*.no_alloc = */ false,
-        /*.ctx      = */ NULL,
+        /*.ctx      = */ nullptr,
     };
 
     struct gguf_context * ctx = gguf_init_from_file(fname.c_str(), params);
@@ -148,7 +148,7 @@ static bool gguf_ex_read_0(const std::string & fname) {
 
 // read and create ggml_context containing the tensors and their data
 static bool gguf_ex_read_1(const std::string & fname, bool check_data) {
-    struct ggml_context * ctx_data = NULL;
+    struct ggml_context * ctx_data = nullptr;
 
     struct gguf_init_params params = {
         /*.no_alloc = */ false,

@@ -44,7 +44,7 @@
 static std::string llama_format_win_err(DWORD err) {
     LPSTR buf;
     size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                 NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buf, 0, NULL);
+                                 nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buf, 0, nullptr);
     if (!size) {
         return "FormatMessageA failed";
     }
@@ -61,9 +61,9 @@ struct llama_file::impl {
     HANDLE fp_win32;
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
-        LPSTR lpMsgBuf = NULL;
+        LPSTR lpMsgBuf = nullptr;
         DWORD bufLen = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                    NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&lpMsgBuf, 0, NULL);
+                                    nullptr, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&lpMsgBuf, 0, nullptr);
         if (!bufLen) {
             ret = format("Win32 error code: %lx", error_code);
         } else {
@@ -76,7 +76,7 @@ struct llama_file::impl {
 
     impl(const char * fname, const char * mode) {
         fp = ggml_fopen(fname, mode);
-        if (fp == NULL) {
+        if (fp == nullptr) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
         }
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
@@ -103,7 +103,7 @@ struct llama_file::impl {
 
         LARGE_INTEGER li;
         li.QuadPart = offset;
-        BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
+        BOOL ret = SetFilePointerEx(fp_win32, li, nullptr, whence);
         if (!ret) {
             throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
@@ -114,7 +114,7 @@ struct llama_file::impl {
         while (bytes_read < len) {
             size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
             DWORD chunk_read = 0;
-            BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
+            BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, nullptr);
             if (!result) {
                 throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
@@ -137,7 +137,7 @@ struct llama_file::impl {
         while (bytes_written < len) {
             size_t chunk_size = std::min<size_t>(len - bytes_written, 64*1024*1024);
             DWORD chunk_written = 0;
-            BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
+            BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, nullptr);
             if (!result) {
                 throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
@@ -161,7 +161,7 @@ struct llama_file::impl {
 #else
     impl(const char * fname, const char * mode) {
         fp = ggml_fopen(fname, mode);
-        if (fp == NULL) {
+        if (fp == nullptr) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
         }
         seek(0, SEEK_END);
@@ -285,7 +285,7 @@ struct llama_mmap::impl {
         }
         if (prefetch) { flags |= MAP_POPULATE; }
 #endif
-        addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+        addr = mmap(nullptr, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
@@ -369,9 +369,9 @@ struct llama_mmap::impl {
 
         HANDLE hFile = (HANDLE) _get_osfhandle(file->file_id());
 
-        HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        HANDLE hMapping = CreateFileMappingA(hFile, nullptr, PAGE_READONLY, 0, 0, nullptr);
 
-        if (hMapping == NULL) {
+        if (hMapping == nullptr) {
             DWORD error = GetLastError();
             throw std::runtime_error(format("CreateFileMappingA failed: %s", llama_format_win_err(error).c_str()));
         }
@@ -380,7 +380,7 @@ struct llama_mmap::impl {
         DWORD error = GetLastError();
         CloseHandle(hMapping);
 
-        if (addr == NULL) {
+        if (addr == nullptr) {
             throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
         }
 
@@ -554,10 +554,10 @@ struct llama_mlock::impl {
     static void raw_unlock(const void * addr, size_t len) {}
 #endif
 
-    impl() : addr(NULL), size(0), failed_already(false) {}
+    impl() : addr(nullptr), size(0), failed_already(false) {}
 
     void init(void * ptr) {
-        GGML_ASSERT(addr == NULL && size == 0);
+        GGML_ASSERT(addr == nullptr && size == 0);
         addr = ptr;
     }
 

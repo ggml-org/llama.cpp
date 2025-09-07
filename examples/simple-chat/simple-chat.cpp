@@ -101,7 +101,7 @@ int main(int argc, char ** argv) {
         const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
 
         // tokenize the prompt
-        const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
+        const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, is_first, true);
         std::vector<llama_token> prompt_tokens(n_prompt_tokens);
         if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), is_first, true) < 0) {
             GGML_ABORT("failed to tokenize the prompt\n");

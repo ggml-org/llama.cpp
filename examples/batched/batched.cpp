@@ -43,7 +43,7 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: error: unable to load model\n" , __func__);
         return 1;
     }
@@ -76,7 +76,7 @@ int main(int argc, char ** argv) {
     llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sampling.temp));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sampling.seed));
 
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
         LOG_ERR("%s: error: failed to create the llama_context\n" , __func__);
         return 1;
     }

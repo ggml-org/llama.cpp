@@ -61,7 +61,7 @@ struct naive_trie {
             return &res->second;
         }
 
-        return NULL;
+        return nullptr;
     }
     std::map<char, struct naive_trie> children;
     bool has_value;
@@ -799,10 +799,10 @@ struct llm_tokenizer_ugm : llm_tokenizer {
     // escaped space symbol - U+2581 (Lower One Eighth Block)
     const std::string escaped_space = "\xE2\x96\x81";
 
-    const char * prefix_replacements = NULL;
+    const char * prefix_replacements = nullptr;
     size_t prefix_replacements_size = 0;
 
-    const uint32_t * xcda_array = NULL;
+    const uint32_t * xcda_array = nullptr;
     size_t xcda_array_size = 0;
 
     struct naive_trie user_defined_token_matcher;
@@ -859,7 +859,7 @@ struct llm_tokenizer_ugm_session {
             const struct best_tokenization & current_best = tokenization_results[input_offset];
             const struct naive_trie * node = tokenizer.token_matcher.traverse(normalized[prefix_offset++]);
 
-            while (prefix_offset <= input_len && node != NULL) {
+            while (prefix_offset <= input_len && node != nullptr) {
                 // check if we found valid token in prefix
                 if (node->has_value) {
                     // check if it corresponds to the whole UTF code point
@@ -1176,7 +1176,7 @@ struct llm_tokenizer_rwkv_session {
         uint32_t position = 0;
         while (position < text.size()) {
             const struct naive_trie * node = tokenizer.token_matcher.traverse(text[position]);
-            if (node == NULL) {
+            if (node == nullptr) {
                 // no matching token found, add unknown token
                 output.push_back(vocab.token_unk());
                 position += 1;
@@ -1186,7 +1186,7 @@ struct llm_tokenizer_rwkv_session {
             // traverse the trie to find the longest matching token
             uint32_t token_id = 0;
             uint32_t token_length = 0;
-            while (node != NULL) {
+            while (node != nullptr) {
                 if (node->has_value) {
                     token_id = node->value;
                     token_length = position + 1;
@@ -2550,7 +2550,7 @@ uint8_t llama_vocab::impl::token_to_byte(llama_token id) const {
         case LLAMA_VOCAB_TYPE_SPM:
         case LLAMA_VOCAB_TYPE_UGM: {
             auto buf = token_data.text.substr(3, 2);
-            return strtol(buf.c_str(), NULL, 16);
+            return strtol(buf.c_str(), nullptr, 16);
         }
         case LLAMA_VOCAB_TYPE_BPE: {
             GGML_ABORT("fatal error");

@@ -42,7 +42,7 @@ bool llama_adapter_cvec::init(const llama_model & model) {
         if (it == ctx_map.end()) {
             ggml_init_params params = {
                 /*.mem_size   =*/ hparams.n_layer*ggml_tensor_overhead(),
-                /*.mem_buffer =*/ NULL,
+                /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
             };
 
@@ -248,7 +248,7 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
             // add a new context
             ggml_init_params params = {
                 /*.mem_size   =*/ n_tensors*ggml_tensor_overhead(),
-                /*.mem_buffer =*/ NULL,
+                /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
             };
             ggml_context * buft_ctx = ggml_init(params);

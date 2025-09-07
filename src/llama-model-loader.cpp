@@ -487,7 +487,7 @@ llama_model_loader::llama_model_loader(
     tensor_buft_overrides = param_tensor_buft_overrides_p;
 
     // Load the main GGUF
-    struct ggml_context * ctx = NULL;
+    struct ggml_context * ctx = nullptr;
     struct gguf_init_params params = {
         /*.no_alloc = */ true,
         /*.ctx      = */ &ctx,
@@ -760,9 +760,9 @@ struct ggml_tensor * llama_model_loader::require_tensor_meta(const std::string &
 const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const {
     const struct ggml_tensor * cur = get_tensor_meta(name.c_str());
 
-    if (cur == NULL) {
+    if (cur == nullptr) {
         if (!required) {
-            return NULL;
+            return nullptr;
         }
         throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name.c_str()));
     }
@@ -791,8 +791,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx
     LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, name.c_str());
     const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED));
 
-    if (cur == NULL) {
-        return NULL;
+    if (cur == nullptr) {
+        return nullptr;
     }
 
     bool duplicated = flags & TENSOR_DUPLICATED;
@@ -813,8 +813,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx
 struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required) {
     const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
 
-    if (cur == NULL) {
-        return NULL;
+    if (cur == nullptr) {
+        return nullptr;
     }
 
     if (cur->type != base->type) {
@@ -1017,7 +1017,7 @@ bool llama_model_loader::load_all_data(
             ggml_backend_name(upload_backend));
     }
 
-    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != nullptr; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
             // this can happen with split experts models

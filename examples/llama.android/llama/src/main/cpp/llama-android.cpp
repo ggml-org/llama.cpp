@@ -152,7 +152,7 @@ Java_android_llama_cpp_LLamaAndroid_backend_1free(JNIEnv *, jobject) {
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_log_1to_1android(JNIEnv *, jobject) {
-    llama_log_set(log_callback, NULL);
+    llama_log_set(log_callback, nullptr);
 }
 
 extern "C"

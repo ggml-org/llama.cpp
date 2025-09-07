@@ -71,7 +71,7 @@ void llama_backend_init(void) {
 
     // needed to initialize f16 tables
     {
-        struct ggml_init_params params = { 0, NULL, false };
+        struct ggml_init_params params = { 0, nullptr, false };
         struct ggml_context * ctx = ggml_init(params);
         ggml_free(ctx);
     }
@@ -158,7 +158,7 @@ static struct llama_model * llama_model_load_from_file_impl(
     }
 
     unsigned cur_percentage = 0;
-    if (params.progress_callback == NULL) {
+    if (params.progress_callback == nullptr) {
         params.progress_callback_user_data = &cur_percentage;
         params.progress_callback = [](float progress, void * ctx) {
             unsigned * cur_percentage_p = (unsigned *) ctx;

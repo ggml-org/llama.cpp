@@ -78,27 +78,27 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 
-    if (model == NULL) {
+    if (model == nullptr) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
         return 1;
     }
 
     // Extract basename from model_path
     const char * basename = strrchr(model_path.c_str(), '/');
-    basename = (basename == NULL) ? model_path.c_str() : basename + 1;
+    basename = (basename == nullptr) ? model_path.c_str() : basename + 1;
 
     char model_name[256];
     strncpy(model_name, basename, 255);
     model_name[255] = '\0';
 
     char * dot = strrchr(model_name, '.');
-    if (dot != NULL && strcmp(dot, ".gguf") == 0) {
+    if (dot != nullptr && strcmp(dot, ".gguf") == 0) {
         *dot = '\0';
     }
     printf("Model name: %s\n", model_name);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, true, true);
+    const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
 
     std::vector<llama_token> prompt_tokens(n_prompt);
     if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
@@ -117,7 +117,7 @@ int main(int argc, char ** argv) {
     }
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
         fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
         return 1;
     }
@@ -167,7 +167,7 @@ int main(int argc, char ** argv) {
     printf("Saving logits to %s\n", bin_filename);
 
     FILE * f = fopen(bin_filename, "wb");
-    if (f == NULL) {
+    if (f == nullptr) {
         fprintf(stderr, "%s: error: failed to open binary output file\n", __func__);
         return 1;
     }
@@ -178,7 +178,7 @@ int main(int argc, char ** argv) {
     char txt_filename[512];
     snprintf(txt_filename, sizeof(txt_filename), "data/llamacpp-%s%s.txt", model_name, type);
     f = fopen(txt_filename, "w");
-    if (f == NULL) {
+    if (f == nullptr) {
         fprintf(stderr, "%s: error: failed to open text output file\n", __func__);
         return 1;
     }

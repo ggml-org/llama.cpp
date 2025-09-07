@@ -80,7 +80,7 @@ bool llama_batch_allocr::init(
 
     if (!batch.seq_id) {
         seq_id.resize(batch.n_tokens + 1);
-        seq_id[batch.n_tokens] = NULL;
+        seq_id[batch.n_tokens] = nullptr;
         for (int32_t i = 0; i < batch.n_tokens; i++) {
             seq_id[i] = seq_id_0.data();
         }

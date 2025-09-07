@@ -85,7 +85,7 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 
-    if (model == NULL) {
+    if (model == nullptr) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
         return 1;
     }
@@ -94,7 +94,7 @@ int main(int argc, char ** argv) {
     // tokenize the prompt
 
     // find the number of tokens in the prompt
-    const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, true, true);
+    const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
 
     // allocate space for the tokens and tokenize the prompt
     std::vector<llama_token> prompt_tokens(n_prompt);
@@ -115,7 +115,7 @@ int main(int argc, char ** argv) {
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
         fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
         return 1;
     }

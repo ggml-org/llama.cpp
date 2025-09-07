@@ -1120,7 +1120,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // plot the computation graph in dot format (for debugging purposes)
         //if (n_past%100 == 0) {
-        //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
+        //    ggml_graph_dump_dot(gf, nullptr, "llama.dot");
         //}
 
         auto * t_logits = res->get_logits();
@@ -2287,7 +2287,7 @@ llama_context * llama_init_from_model(
                  llama_model * model,
         llama_context_params   params) {
     if (!model) {
-        LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
+        LLAMA_LOG_ERROR("%s: model cannot be nullptr\n", __func__);
         return nullptr;
     }
 

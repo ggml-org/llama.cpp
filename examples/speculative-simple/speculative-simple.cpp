@@ -33,11 +33,11 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    llama_model * model_tgt = NULL;
-    //llama_model * model_dft = NULL;
+    llama_model * model_tgt = nullptr;
+    //llama_model * model_dft = nullptr;
 
-    llama_context * ctx_tgt = NULL;
-    llama_context * ctx_dft = NULL;
+    llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
 
     // load the target model
     common_init_result llama_init_tgt = common_init_from_params(params);

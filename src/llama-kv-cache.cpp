@@ -44,7 +44,7 @@ llama_kv_cache::llama_kv_cache(
         if (it == ctx_map.end()) {
             ggml_init_params params = {
                 /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer_kv*ggml_tensor_overhead()),
-                /*.mem_buffer =*/ NULL,
+                /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
             };
 
