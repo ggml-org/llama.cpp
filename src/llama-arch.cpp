@@ -237,10 +237,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_FIM_REP_ID,           "tokenizer.ggml.fim_rep_token_id"         },
     { LLM_KV_TOKENIZER_FIM_SEP_ID,           "tokenizer.ggml.fim_sep_token_id"         },
 
-    { LLM_KV_ADAPTER_TYPE,               "adapter.type"               },
-    { LLM_KV_ADAPTER_LORA_ALPHA,         "adapter.lora.alpha"         },
-    { LLM_KV_ADAPTER_LORA_TASK_NAME,     "adapter.lora.task_name"     },
-    { LLM_KV_ADAPTER_LORA_PROMPT_PREFIX, "adapter.lora.prompt_prefix" },
+    { LLM_KV_ADAPTER_TYPE,                    "adapter.type"               },
+    { LLM_KV_ADAPTER_LORA_ALPHA,              "adapter.lora.alpha"         },
+    { LLM_KV_ADAPTER_LORA_TASK_NAME,          "adapter.lora.task_name"     },
+    { LLM_KV_ADAPTER_LORA_PROMPT_PREFIX,      "adapter.lora.prompt_prefix" },
+    { LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS, "adapter.alora.invocation_tokens" },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },

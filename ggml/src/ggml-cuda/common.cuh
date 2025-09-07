@@ -570,6 +570,8 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 //
 // n/d = (mulhi(n, mp) + n) >> L;
 static const uint3 init_fastdiv_values(uint32_t d) {
+    GGML_ASSERT(d != 0);
+
     // compute L = ceil(log2(d));
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {

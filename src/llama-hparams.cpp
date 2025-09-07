@@ -180,7 +180,7 @@ uint32_t llama_hparams::n_layer_kv() const {
     return res;
 }
 
-bool llama_hparams::is_masked_swa(llama_pos p0, llama_pos p1) const {
+bool llama_hparams::is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1) {
     assert(p0 >= 0 && p1 >= 0);
 
     switch (swa_type) {
