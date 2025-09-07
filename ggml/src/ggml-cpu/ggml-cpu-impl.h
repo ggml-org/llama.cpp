@@ -483,8 +483,13 @@ inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
 /**
  * @see https://github.com/ggml-org/llama.cpp/pull/14037
  */
-inline static float vec_hsum(float32x4_t v) {
+inline static float vec_hsum_f32x4(float32x4_t v) {
     float32x4_t v_temp = v + vec_reve(v);
+    return v_temp[0] + v_temp[1];
+}
+
+inline static int32_t vec_hsum_i32x4(int32x4_t v) {
+    int32x4_t v_temp = v + vec_reve(v);
     return v_temp[0] + v_temp[1];
 }
 
