@@ -1945,6 +1945,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_APERTUS:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                hparams.n_ctx_orig_yarn = 8192;
+                switch (hparams.n_layer) {
+                    case 32: type = LLM_TYPE_8B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
@@ -5717,6 +5726,55 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
                         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
                         layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+                    }
+                } break;
+            case LLM_ARCH_APERTUS:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+
+                        if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
+                            layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+                            layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+                        }
+                        else {
+                            layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+                        }
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_gqa }, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_gqa }, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+
+                        // optional bias tensors
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), { n_embd },     TENSOR_NOT_REQUIRED);
+                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), { n_embd_gqa }, TENSOR_NOT_REQUIRED);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), { n_embd_gqa }, TENSOR_NOT_REQUIRED);
+                        layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), { n_embd },     TENSOR_NOT_REQUIRED);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+                        layer.ffn_up = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, n_ff }, 0);
+
+                        // Q and K layernorms for Apertus
+                        layer.attn_q_norm   = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+                        layer.attn_q_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "bias",   i), { n_embd_head_k }, TENSOR_NOT_REQUIRED);
+                        layer.attn_k_norm   = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+                        layer.attn_k_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "bias",   i), { n_embd_head_k }, TENSOR_NOT_REQUIRED);
+
+                        // xIELU parameters for Apertus
+                        layer.ffn_act_alpha_n = create_tensor(tn(LLM_TENSOR_FFN_ACT_ALPHA_N, i), { 1 }, 0);
+                        layer.ffn_act_alpha_p = create_tensor(tn(LLM_TENSOR_FFN_ACT_ALPHA_P, i), { 1 }, 0);
+                        layer.ffn_act_beta    = create_tensor(tn(LLM_TENSOR_FFN_ACT_BETA, i), { 1 }, 0);
+                        layer.ffn_act_eps     = create_tensor(tn(LLM_TENSOR_FFN_ACT_EPS, i), { 1 }, 0);
                     }
                 } break;
             default:
@@ -18620,6 +18678,262 @@ struct llm_build_smallthinker : public llm_graph_context{
     }
 };
 
+// TODO: maybe put this as a general helper in ggml.c?
+static float get_scalar_f32_val(const ggml_tensor *t) {
+    float onef;
+    if (t->buffer) {
+        ggml_backend_tensor_get(t, &onef, 0, sizeof(float));
+    } else {
+        GGML_ASSERT(t->data);
+        onef = *((float *) t->data);
+    }
+    return onef;
+}
+
+static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
+    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+    float v;
+    if (type == GGML_TYPE_F16) {
+        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+    } else if (type == GGML_TYPE_F32) {
+        v = *(float *) &data[i];
+    } else if (type == GGML_TYPE_I64) {
+        v = (float) *(int64_t *) &data[i];
+    } else if (type == GGML_TYPE_I32) {
+        v = (float) *(int32_t *) &data[i];
+    } else if (type == GGML_TYPE_I16) {
+        v = (float) *(int16_t *) &data[i];
+    } else if (type == GGML_TYPE_I8) {
+        v = (float) *(int8_t *) &data[i];
+    } else {
+        GGML_ABORT("fatal error");
+    }
+    return v;
+}
+
+static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
+    GGML_ASSERT(n > 0);
+    float sum = 0;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
+                    sum += v;
+                }
+            }
+        }
+    }
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        LLAMA_LOG_DEBUG("                                     [\n");
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            if (i2 == n && ne[2] > 2*n) {
+                LLAMA_LOG_DEBUG("                                      ..., \n");
+                i2 = ne[2] - n;
+            }
+            LLAMA_LOG_DEBUG("                                      [\n");
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                if (i1 == n && ne[1] > 2*n) {
+                    LLAMA_LOG_DEBUG("                                       ..., \n");
+                    i1 = ne[1] - n;
+                }
+                LLAMA_LOG_DEBUG("                                       [");
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    if (i0 == n && ne[0] > 2*n) {
+                        LLAMA_LOG_DEBUG("..., ");
+                        i0 = ne[0] - n;
+                    }
+                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
+                    LLAMA_LOG_DEBUG("%12.4f", v);
+                    if (i0 < ne[0] - 1) LLAMA_LOG_DEBUG(", ");
+                }
+                LLAMA_LOG_DEBUG("],\n");
+            }
+            LLAMA_LOG_DEBUG("                                      ],\n");
+        }
+        LLAMA_LOG_DEBUG("                                     ]\n");
+        LLAMA_LOG_DEBUG("                                     sum = %f\n", sum);
+    }
+
+    // TODO: make this abort configurable/optional?
+    if (std::isnan(sum)) {
+        LLAMA_LOG_ERROR("encountered NaN - aborting\n");
+        exit(0);
+    }
+}
+
+// Apertus model graph builder with xIELU activation
+struct llm_build_apertus : public llm_graph_context {
+    llm_build_apertus(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        ggml_tensor * inp_pos = build_inp_pos();
+        auto * inp_attn = build_attn_inp_kv();
+
+        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention
+            {
+                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+
+                // compute Q and K and RoPE them
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                ggml_tensor * Q2d = ggml_reshape_2d(ctx0, Qcur, n_embd_head, n_head * n_tokens);
+                ggml_tensor * K2d = ggml_reshape_2d(ctx0, Kcur, n_embd_head, n_head_kv * n_tokens);
+
+                cb(Q2d, "Q2D", il);
+                cb(K2d, "K2D", il);
+
+                // apply existing rms-norm which was originally written for 2D
+                Q2d = build_norm(Q2d, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+                K2d = build_norm(K2d, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+
+                cb(Q2d, "Q2D_normed", il);
+                cb(K2d, "K2D_normed", il);
+
+                // reshape back to 3D
+                Qcur = ggml_reshape_3d(ctx0, Q2d, n_embd_head, n_head, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, K2d, n_embd_head, n_head_kv, n_tokens);
+
+                cb(Qcur, "Qcur_normed", il);
+                cb(Kcur, "Kcur_normed", il);
+                
+                // // copy the data from the GPU memory if needed
+                // const bool is_host = ggml_backend_buffer_is_host(rope_factors->buffer);
+
+                // auto n_bytes = ggml_nbytes(rope_factors);
+                // uint8_t loaded_data[n_bytes];
+                // if (!is_host) {    
+                //     ggml_backend_tensor_get(rope_factors, &loaded_data, 0, n_bytes);
+                // }
+
+                // if (!ggml_is_quantized(rope_factors->type)) {
+                //     uint8_t * data = is_host ? (uint8_t *) rope_factors->data : &loaded_data[0];
+                //     ggml_print_tensor(data, rope_factors->type, rope_factors->ne, rope_factors->nb, 64);
+                // }
+
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                cb(Qcur, "Qcur_pos", il);
+                cb(Kcur, "Kcur_pos", il);
+                cb(Vcur, "Vcur_pos", il);
+
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward network with xIELU activation
+            {
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                // Up projection
+                ggml_tensor * up = build_lora_mm(model.layers[il].ffn_up, cur);
+                cb(up, "ffn_up", il);
+
+                // xIELU activation
+                // Get the xIELU parameters from the model layers
+                ggml_tensor * alpha_n = model.layers[il].ffn_act_alpha_n;
+                ggml_tensor * alpha_p = model.layers[il].ffn_act_alpha_p;
+                ggml_tensor * beta = model.layers[il].ffn_act_beta;
+                ggml_tensor * eps = model.layers[il].ffn_act_eps;
+
+                float alpha_n_val = get_scalar_f32_val(alpha_n);
+                float alpha_p_val = get_scalar_f32_val(alpha_p);
+                float beta_val = get_scalar_f32_val(beta);
+                float eps_val = get_scalar_f32_val(eps);
+
+                // Apply xIELU activation
+                ggml_tensor * activated = ggml_xielu(ctx0, up, alpha_n_val, alpha_p_val, beta_val, eps_val);
+                cb(activated, "ffn_xielu", il);
+
+                // Down projection
+                cur = build_lora_mm(model.layers[il].ffn_down, activated);
+                cb(cur, "ffn_down", il);
+            }
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "ffn_out", il);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -19132,6 +19446,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                     llm = std::make_unique<llm_build_smallthinker<false>>(*this, params);
                 }
             } break;
+        case LLM_ARCH_APERTUS:
+            {
+                llm = std::make_unique<llm_build_apertus>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -19288,6 +19606,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
+        case LLM_ARCH_APERTUS:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

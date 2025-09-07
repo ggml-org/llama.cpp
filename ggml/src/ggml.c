@@ -1017,9 +1017,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "XIELU",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 90");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1121,9 +1122,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "xielu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 90");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1146,7 +1148,6 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
 };
 
 static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
-
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2644,6 +2645,26 @@ struct ggml_tensor * ggml_silu(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary(ctx, a, GGML_UNARY_OP_SILU);
+}
+
+// ggml_xielu
+struct ggml_tensor * ggml_xielu(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float alpha_n,
+        float alpha_p,
+        float beta,
+        float eps) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    // Store the parameters as operation parameters
+    float params[] = { alpha_n, alpha_p, beta, eps };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_XIELU;
+    result->src[0] = a;
+
+    return result;
 }
 
 struct ggml_tensor * ggml_silu_inplace(

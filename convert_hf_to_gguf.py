@@ -8566,6 +8566,17 @@ class SmallThinkerModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("ApertusForCausalLM")
+class ApertusModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.APERTUS
+
+    def modify_tensors(self, data_torch, name, bid):
+        # Handle xIELU activation parameters
+        if name.endswith(".act_fn.alpha_n") or name.endswith(".act_fn.alpha_p") or name.endswith(".act_fn.beta") or name.endswith(".act_fn.eps"):
+            return [(self.map_tensor_name(name), data_torch)]
+                    
+        return super().modify_tensors(data_torch, name, bid)
+
 class MistralModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     model_name = "Mistral"
