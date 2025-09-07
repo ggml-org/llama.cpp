@@ -300,6 +300,7 @@ static std::string var_to_str(ggml_scale_mode mode) {
 #define VARS_TO_STR13(a, b, c, d, e, f, g, h, i, j, k, l, m) VAR_TO_STR(a) + "," + VARS_TO_STR12(b, c, d, e, f, g, h, i, j, k, l, m)
 #define VARS_TO_STR14(a, b, c, d, e, f, g, h, i, j, k, l, m, n) VAR_TO_STR(a) + "," + VARS_TO_STR13(b, c, d, e, f, g, h, i, j, k, l, m, n)
 #define VARS_TO_STR15(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) VAR_TO_STR(a) + "," + VARS_TO_STR14(b, c, d, e, f, g, h, i, j, k, l, m, n, o)
+#define VARS_TO_STR16(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) VAR_TO_STR(a) + "," + VARS_TO_STR15(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p)
 
 #ifdef GGML_USE_SYCL
 static bool inline _isinf(float f) {
@@ -4047,9 +4048,10 @@ struct test_im2col_3d : public test_case {
     const int d2;
 
     const int64_t IC;
+    const bool v;
 
     std::string vars() override {
-        return VARS_TO_STR15(type_input, type_kernel, dst_type, ne_input, ne_kernel, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+        return VARS_TO_STR16(type_input, type_kernel, dst_type, ne_input, ne_kernel, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, v);
     }
 
     test_im2col_3d(ggml_type type_input = GGML_TYPE_F32, ggml_type type_kernel = GGML_TYPE_F16, ggml_type dst_type = GGML_TYPE_F32,
@@ -4058,13 +4060,19 @@ struct test_im2col_3d : public test_case {
                 int64_t IC = 3,
                 int s0 = 1, int s1 = 1, int s2 = 1,
                 int p0 = 1, int p1 = 1, int p2 = 1,
-                int d0 = 1, int d1 = 1, int d2 = 1)
-        : type_input(type_input), type_kernel(type_kernel), dst_type(dst_type), ne_input(ne_input), ne_kernel(ne_kernel), s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), IC(IC) {}
+                int d0 = 1, int d1 = 1, int d2 = 1,
+                bool v = false)
+        : type_input(type_input), type_kernel(type_kernel), dst_type(dst_type), ne_input(ne_input), ne_kernel(ne_kernel), s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), IC(IC), v(v) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, type_input, 4, ne_input.data());
         ggml_set_param(input);
         ggml_set_name(input, "input");
+
+        if (v) {
+            input = ggml_view_4d(ctx, input, ne_input[0] - 2, ne_input[1] - 2, ne_input[2] - 2, ne_input[3] - 2, input->nb[1], input->nb[2], input->nb[3], 0);
+            ggml_set_name(input, "view_of_input");
+        }
 
         ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
@@ -5729,9 +5737,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             for (int d0 : {1, 3}) {
                                 for (int d1 : {1, 3}) {
                                     for (int d2 : {1, 3}) {
-                                        test_cases.emplace_back(new test_im2col_3d(
-                                            GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {20, 20, 10, 3}, {3, 3, 3, 3},
-                                            3, s0, s1, s2, p0, p1, p2, d0, d1, d2));
+                                        for (int IC : {1, 3}) {
+                                            for (bool v : {false, true}) {
+                                                test_cases.emplace_back(new test_im2col_3d(
+                                                    GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {20, 20, 10, 3}, {3, 3, 3, 3},
+                                                    IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, v));
+                                            }
+                                        }
                                     }
                                 }
                             }
