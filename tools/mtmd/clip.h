@@ -46,9 +46,6 @@ int32_t clip_get_hidden_size(const struct clip_ctx * ctx);
 // TODO: should be enum, not string
 const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 
-const int32_t * clip_image_grid(const struct clip_ctx * ctx);
-size_t get_clip_image_grid_size(const struct clip_ctx * ctx);
-
 int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img);
 
 // for M-RoPE, this will be the number of token positions in X and Y directions
@@ -84,11 +81,6 @@ struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch
  * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes
  */
 void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
-
-bool clip_image_load_from_file(const char * fname, struct clip_image_u8 * img);
-
-/** interpret bytes as an image file with length bytes_length, and use the result to populate img */
-bool clip_image_load_from_bytes(const unsigned char * bytes, size_t bytes_length, struct clip_image_u8 * img);
 
 /** preprocess img and store the result in res_imgs, pad_to_square may be overridden to false depending on model configuration */
 bool clip_image_preprocess(struct clip_ctx * ctx, const struct clip_image_u8 * img, struct clip_image_f32_batch * res_imgs );

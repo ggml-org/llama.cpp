@@ -361,7 +361,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -525,7 +525,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
-    // from llama_eval above.  Now, based on https://huggingface.co/docs/transformers/perplexity,
+    // from llama_decode below.  Now, based on https://huggingface.co/docs/transformers/perplexity,
     // calculate the perplexity over the last half of the window (so the model always has
     // some context to predict the token).
     //
@@ -547,7 +547,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -559,7 +559,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
             for (int seq = 0; seq < n_seq_batch; seq++) {
                 int seq_start = batch_start + seq*n_ctx;
 
-                // save original token and restore it after eval
+                // save original token and restore it after decode
                 const auto token_org = tokens[seq_start];
 
                 // add BOS token for the first batch of each chunk
@@ -584,7 +584,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
             }
 
             if (llama_decode(ctx, batch)) {
-                LOG_INF("%s : failed to eval\n", __func__);
+                LOG_INF("%s : failed to decode\n", __func__);
                 return {tokens, -1, logit_history, prob_history};
             }
 
@@ -920,11 +920,11 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
             return;
         }
 
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1213,11 +1213,11 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, data[i0].required_tokens);
             return;
         }
 
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1548,6 +1548,10 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 
             int num_answers = cur_task.seq_tokens.size();
             if (s0 + num_answers > max_seq) {
+                if (s0 == 0) {
+                    LOG_ERR("%s : task %zu requires a higher -np|--parallel value (at least %d)\n", __func__, i0, num_answers);
+                    return;
+                }
                 break;
             }
 
@@ -1588,11 +1592,11 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, tasks[i0].required_tokens);
             return;
         }
 
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1782,7 +1786,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         }
 
         // clear the KV cache
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 qnt=(q8_0 q6_k q5_k q5_1 q5_0 q4_k q4_1 q4_0 q3_k q2_k)
 args=""

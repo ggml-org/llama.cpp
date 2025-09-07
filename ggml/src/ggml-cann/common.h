@@ -37,6 +37,7 @@
 #include <thread>
 #include <unistd.h>
 #include <functional>
+#include <optional>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
@@ -102,6 +103,9 @@ const ggml_cann_device_info& ggml_cann_info();
 
 void ggml_cann_set_device(int32_t device);
 int32_t ggml_cann_get_device();
+
+std::optional<std::string> get_env(const std::string& name);
+bool parse_bool(const std::string& value);
 
 /**
  * @brief Abstract base class for memory pools used by CANN.
@@ -333,6 +337,53 @@ private:
     int32_t device_;
 };
 
+#ifdef USE_ACL_GRAPH
+struct ggml_graph_node_properties {
+    void * node_address;
+    ggml_op node_op;
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
+    void * src_address[GGML_MAX_SRC];
+    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+};
+
+struct ggml_cann_graph {
+    ~ggml_cann_graph() {
+        if (graph != nullptr) {
+            aclmdlRIDestroy(graph);
+        }
+    }
+
+    aclmdlRI graph = nullptr;
+
+    std::vector<ggml_graph_node_properties> ggml_graph_properties;
+};
+#endif  // USE_ACL_GRAPH
+
+struct ggml_cann_rope_cache {
+    ~ggml_cann_rope_cache() {
+        if(theta_scale_cache != nullptr) {
+            ACL_CHECK(aclrtFree(theta_scale_cache));
+        }
+    }
+
+    void* theta_scale_cache = nullptr;
+    int64_t theta_scale_length = 0;
+    float theta_scale = 0.0f;
+    float freq_scale = 0.0f;
+};
+
+struct ggml_cann_tensor_cache {
+    ~ggml_cann_tensor_cache() {
+        if(cache != nullptr) {
+            ACL_CHECK(aclrtFree(cache));
+        }
+    }
+
+    void* cache = nullptr;
+    int64_t size = 0;
+};
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -341,8 +392,18 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+#ifdef USE_ACL_GRAPH
+    /// Cached CANN ACL graph used for executing the current ggml computation graph.
+    std::unique_ptr<ggml_cann_graph> cann_graph;
+    bool acl_graph_mode = true;
+#endif
     cann_task_queue task_queue;
     bool async_mode;
+    // Rope Cache
+    ggml_cann_rope_cache rope_cache;
+    // Constant Pool
+    ggml_cann_tensor_cache rms_norm_one_tensor_cache;
+    ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -354,9 +415,17 @@ struct ggml_backend_cann_context {
         : device(device), name("CANN" + std::to_string(device)), task_queue(1024, device) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
-        async_mode = (getenv("GGML_CANN_ASYNC_MODE") != nullptr);
+
+        async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
+#ifdef USE_ACL_GRAPH
+        acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
+        GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n",
+              __func__, device,
+              acl_graph_mode ? "GRAPH" : "EAGER",
+              acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
+#endif
     }
 
     /**

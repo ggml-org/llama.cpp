@@ -97,6 +97,9 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # Qwen2-Audio and SeaLLM-Audio
 # note: no pre-quantized GGUF this model, as they have very poor result
 # ref: https://github.com/ggml-org/llama.cpp/pull/13760
+
+# Mistral's Voxtral
+(tool_name) -hf ggml-org/Voxtral-Mini-3B-2507-GGUF
 ```
 
 **Mixed modalities**:
@@ -107,3 +110,7 @@ NOTE: some models may require large context window, for example: `-c 8192`
 (tool_name) -hf ggml-org/Qwen2.5-Omni-3B-GGUF
 (tool_name) -hf ggml-org/Qwen2.5-Omni-7B-GGUF
 ```
+
+## Finding more models:
+
+GGUF models on Huggingface with vision capabilities can be found here: https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending&search=gguf

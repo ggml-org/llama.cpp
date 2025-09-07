@@ -15,6 +15,12 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.n_parallel == 1) {
+        // the example uses 2 sequences, so when n_parallel == 1, we need to enable unified kv cache
+        printf("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
+        params.kv_unified = true;
+    }
+
     common_init();
 
     if (params.n_predict < 0) {
@@ -196,7 +202,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         // erase whole kv
-        llama_kv_self_clear(ctx3);
+        llama_memory_clear(llama_get_memory(ctx3), true);
         fprintf(stderr, "%s : kv cache cleared\n", __func__);
 
         // restore kv into seq 1

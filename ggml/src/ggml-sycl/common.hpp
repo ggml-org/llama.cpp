@@ -149,8 +149,6 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
-static const int8_t kvalues_iq4nl[16]={-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -201,7 +199,7 @@ struct sycl_device_info {
     // size_t  smpb;               // max. shared memory per block
     bool    vmm;                // virtual memory support
     size_t  total_vram;
-    sycl_hw_info hw_info;
+    //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
     optimize_feature opt_feature;
 };
 
@@ -287,29 +285,6 @@ struct ggml_tensor_extra_gpu {
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
-
-inline optimize_feature check_gpu_optimize_feature(syclex::architecture &arch) {
-    optimize_feature opt;
-
-    opt.reorder =
-        (arch == syclex::architecture::intel_gpu_dg1 ||
-         arch == syclex::architecture::intel_gpu_acm_g10 ||
-         arch == syclex::architecture::intel_gpu_acm_g11 ||
-         arch == syclex::architecture::intel_gpu_acm_g12 ||
-         arch == syclex::architecture::intel_gpu_pvc ||
-         arch == syclex::architecture::intel_gpu_pvc_vg ||
-         arch == syclex::architecture::intel_gpu_mtl_u ||
-         arch == syclex::architecture::intel_gpu_mtl_s ||
-         arch == syclex::architecture::intel_gpu_mtl_h ||
-         arch == syclex::architecture::intel_gpu_arl_u ||
-         arch == syclex::architecture::intel_gpu_arl_s ||
-         arch == syclex::architecture::intel_gpu_arl_h ||
-         arch == syclex::architecture::intel_gpu_bmg_g21 ||
-         arch == syclex::architecture::intel_gpu_lnl_m
-        );
-
-    return opt;
-}
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
@@ -515,9 +490,9 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 
 bool gpu_has_xmx(sycl::device &dev);
 
-template <int N, class T> void debug_print_array(const std::string & prefix, const T array[N]) {
+template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
-        return;
+        return "";
     }
     std::stringstream ss;
     ss << prefix << "=[";
@@ -528,29 +503,26 @@ template <int N, class T> void debug_print_array(const std::string & prefix, con
         ss << array[N - 1];
     }
     ss << "]";
-    GGML_SYCL_DEBUG("%s", ss.str().c_str());
+    return ss.str();
 }
 
-inline void debug_print_tensor(const std::string & prefix, const ggml_tensor * tensor,
-                               const std::string & suffix = "") {
-    if (LIKELY(!g_ggml_sycl_debug)) {
-        return;
-    }
-    GGML_SYCL_DEBUG("%s=", prefix.c_str());
+inline std::string debug_get_tensor_str(const std::string &prefix,
+        const ggml_tensor *tensor, const std::string &suffix = "") {
+    std::stringstream ss;
+    if (LIKELY(!g_ggml_sycl_debug)) { return ss.str(); }
+    ss << prefix.c_str() << "=";
     if (tensor) {
-        GGML_SYCL_DEBUG("'%s':type=%s", tensor->name, ggml_type_name(tensor->type));
-        debug_print_array<GGML_MAX_DIMS>(";ne", tensor->ne);
-        debug_print_array<GGML_MAX_DIMS>(";nb", tensor->nb);
-        if (!ggml_is_contiguous(tensor)) {
-            GGML_SYCL_DEBUG(";strided");
-        }
-        if (ggml_is_permuted(tensor)) {
-            GGML_SYCL_DEBUG(";permuted");
-        }
+        ss << "'" << tensor->name << "':type=" << ggml_type_name(tensor->type);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";ne", tensor->ne);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";nb", tensor->nb);
+
+        if (!ggml_is_contiguous(tensor)) { ss << ";strided"; }
+        if (ggml_is_permuted(tensor)) { ss << ";permuted"; }
     } else {
-        GGML_SYCL_DEBUG("nullptr");
+        ss << "nullptr";
     }
-    GGML_SYCL_DEBUG("%s", suffix.c_str());
+    ss << suffix;
+    return ss.str();
 }
 
 // Use scope_op_debug_print to log operations coming from running a model
@@ -566,10 +538,10 @@ struct scope_op_debug_print {
             return;
         }
         GGML_SYCL_DEBUG("[SYCL][OP] call %s%s:", func.data(), func_suffix.data());
-        debug_print_tensor(" dst", dst);
+        GGML_SYCL_DEBUG("%s", debug_get_tensor_str(" dst", dst).c_str());
         if (dst) {
             for (std::size_t i = 0; i < num_src; ++i) {
-                debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
+                GGML_SYCL_DEBUG("%s", debug_get_tensor_str("\tsrc" + std::to_string(i), dst->src[i]).c_str());
             }
         }
         GGML_SYCL_DEBUG("%s\n", suffix.data());

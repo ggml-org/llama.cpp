@@ -72,27 +72,29 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
     content = ""
     last_cmpl_id = None
     for i, data in enumerate(res):
-        choice = data["choices"][0]
-        if i == 0:
-            # Check first role message for stream=True
-            assert choice["delta"]["content"] is None
-            assert choice["delta"]["role"] == "assistant"
+        if data["choices"]:
+            choice = data["choices"][0]
+            if i == 0:
+                # Check first role message for stream=True
+                assert choice["delta"]["content"] is None
+                assert choice["delta"]["role"] == "assistant"
+            else:
+                assert "role" not in choice["delta"]
+            assert data["system_fingerprint"].startswith("b")
+            assert "gpt-3.5" in data["model"] # DEFAULT_OAICOMPAT_MODEL, maybe changed in the future
+            if last_cmpl_id is None:
+                last_cmpl_id = data["id"]
+            assert last_cmpl_id == data["id"] # make sure the completion id is the same for all events in the stream
+            if choice["finish_reason"] in ["stop", "length"]:
+                assert "content" not in choice["delta"]
+                assert match_regex(re_content, content)
+                assert choice["finish_reason"] == finish_reason
+            else:
+                assert choice["finish_reason"] is None
+                content += choice["delta"]["content"] or ''
         else:
-            assert "role" not in choice["delta"]
-        assert data["system_fingerprint"].startswith("b")
-        assert "gpt-3.5" in data["model"] # DEFAULT_OAICOMPAT_MODEL, maybe changed in the future
-        if last_cmpl_id is None:
-            last_cmpl_id = data["id"]
-        assert last_cmpl_id == data["id"] # make sure the completion id is the same for all events in the stream
-        if choice["finish_reason"] in ["stop", "length"]:
             assert data["usage"]["prompt_tokens"] == n_prompt
             assert data["usage"]["completion_tokens"] == n_predicted
-            assert "content" not in choice["delta"]
-            assert match_regex(re_content, content)
-            assert choice["finish_reason"] == finish_reason
-        else:
-            assert choice["finish_reason"] is None
-            content += choice["delta"]["content"] or ''
 
 
 def test_chat_completion_with_openai_library():
@@ -130,6 +132,28 @@ def test_chat_template():
     assert res.status_code == 200
     assert "__verbose" in res.body
     assert res.body["__verbose"]["prompt"] == "<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+
+
+@pytest.mark.parametrize("prefill,re_prefill", [
+    ("Whill", "Whill"),
+    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Whill"),
+])
+def test_chat_template_assistant_prefill(prefill, re_prefill):
+    global server
+    server.chat_template = "llama3"
+    server.debug = True  # to get the "__verbose" object in the response
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+            {"role": "assistant", "content": prefill},
+        ]
+    })
+    assert res.status_code == 200
+    assert "__verbose" in res.body
+    assert res.body["__verbose"]["prompt"] == f"<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}"
 
 
 def test_apply_chat_template():
@@ -228,6 +252,7 @@ def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re
     [{"role": "system", "content": 123}],
     # [{"content": "hello"}], # TODO: should not be a valid case
     [{"role": "system", "content": "test"}, {}],
+    [{"role": "user", "content": "test"}, {"role": "assistant", "content": "test"}, {"role": "assistant", "content": "test"}],
 ])
 def test_invalid_chat_completion_req(messages):
     global server
@@ -255,12 +280,14 @@ def test_chat_completion_with_timings_per_token():
             assert data["choices"][0]["delta"]["role"] == "assistant"
             assert "timings" not in data, f'First event should not have timings: {data}'
         else:
-            assert "role" not in data["choices"][0]["delta"]
-            assert "timings" in data
-            assert "prompt_per_second" in data["timings"]
-            assert "predicted_per_second" in data["timings"]
-            assert "predicted_n" in data["timings"]
-            assert data["timings"]["predicted_n"] <= 10
+            if data["choices"]:
+                assert "role" not in data["choices"][0]["delta"]
+            else:
+                assert "timings" in data
+                assert "prompt_per_second" in data["timings"]
+                assert "predicted_per_second" in data["timings"]
+                assert "predicted_n" in data["timings"]
+                assert data["timings"]["predicted_n"] <= 10
 
 
 def test_logprobs():
@@ -309,22 +336,117 @@ def test_logprobs_stream():
     output_text = ''
     aggregated_text = ''
     for i, data in enumerate(res):
-        choice = data.choices[0]
-        if i == 0:
-            # Check first role message for stream=True
-            assert choice.delta.content is None
-            assert choice.delta.role == "assistant"
-        else:
-            assert choice.delta.role is None
-            if choice.finish_reason is None:
-                if choice.delta.content:
-                    output_text += choice.delta.content
-                assert choice.logprobs is not None
-                assert choice.logprobs.content is not None
-                for token in choice.logprobs.content:
-                    aggregated_text += token.token
-                    assert token.logprob <= 0.0
-                    assert token.bytes is not None
-                    assert token.top_logprobs is not None
-                    assert len(token.top_logprobs) > 0
+        if data.choices:
+            choice = data.choices[0]
+            if i == 0:
+                # Check first role message for stream=True
+                assert choice.delta.content is None
+                assert choice.delta.role == "assistant"
+            else:
+                assert choice.delta.role is None
+                if choice.finish_reason is None:
+                    if choice.delta.content:
+                        output_text += choice.delta.content
+                    assert choice.logprobs is not None
+                    assert choice.logprobs.content is not None
+                    for token in choice.logprobs.content:
+                        aggregated_text += token.token
+                        assert token.logprob <= 0.0
+                        assert token.bytes is not None
+                        assert token.top_logprobs is not None
+                        assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
+
+
+def test_logit_bias():
+    global server
+    server.start()
+
+    exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
+
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " " + " ".join(exclude) + " ",
+    })
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    logit_bias = {tok: -100 for tok in tokens}
+
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.chat.completions.create(
+        model="gpt-3.5-turbo-instruct",
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        max_tokens=64,
+        logit_bias=logit_bias
+    )
+    output_text = res.choices[0].message.content
+    assert output_text
+    assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
+
+def test_context_size_exceeded():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ] * 100, # make the prompt too long
+    })
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert res.body["error"]["type"] == "exceed_context_size_error"
+    assert res.body["error"]["n_prompt_tokens"] > 0
+    assert server.n_ctx is not None
+    assert server.n_slots is not None
+    assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
+
+
+@pytest.mark.parametrize(
+    "n_batch,batch_count,reuse_cache",
+    [
+        (64, 15, False),
+        (64, 1, True),
+    ]
+)
+def test_return_progresssss(n_batch, batch_count, reuse_cache):
+    global server
+    server.n_batch = n_batch
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.start()
+    def make_cmpl_request():
+        return server.make_stream_request("POST", "/chat/completions", data={
+            "max_tokens": 10,
+            "messages": [
+                {"role": "user", "content": "This is a test" * 100},
+            ],
+            "stream": True,
+            "return_progress": True,
+        })
+    if reuse_cache:
+        # make a first request to populate the cache
+        res0 = make_cmpl_request()
+        for _ in res0:
+            pass # discard the output
+
+    res = make_cmpl_request()
+    last_progress = None
+    total_batch_count = 0
+    for data in res:
+        cur_progress = data.get("prompt_progress", None)
+        if cur_progress is None:
+            continue
+        if last_progress is not None:
+            assert cur_progress["total"] == last_progress["total"]
+            assert cur_progress["cache"] == last_progress["cache"]
+            assert cur_progress["processed"] > last_progress["processed"]
+        total_batch_count += 1
+        last_progress = cur_progress
+
+    assert last_progress is not None
+    assert last_progress["total"] > 0
+    assert last_progress["processed"] == last_progress["total"]
+    assert total_batch_count == batch_count

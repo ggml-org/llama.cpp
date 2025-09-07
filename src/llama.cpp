@@ -25,6 +25,18 @@
 // interface implementation
 //
 
+const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type) {
+    switch (flash_attn_type) {
+        case LLAMA_FLASH_ATTN_TYPE_AUTO:
+            return "auto";
+        case LLAMA_FLASH_ATTN_TYPE_DISABLED:
+            return "disabled";
+        case LLAMA_FLASH_ATTN_TYPE_ENABLED:
+            return "enabled";
+    }
+    GGML_ABORT("fatal error");
+}
+
 struct llama_sampler_chain_params llama_sampler_chain_default_params() {
     struct llama_sampler_chain_params result = {
         /*.no_perf                     =*/ true,
@@ -198,14 +210,18 @@ static struct llama_model * llama_model_load_from_file_impl(
 
     // if using single GPU mode, remove all except the main GPU
     if (params.split_mode == LLAMA_SPLIT_MODE_NONE) {
-        if (params.main_gpu < 0 || params.main_gpu >= (int)model->devices.size()) {
-            LLAMA_LOG_ERROR("%s: invalid value for main_gpu: %d (available devices: %d)\n", __func__, params.main_gpu, (int)model->devices.size());
-            llama_model_free(model);
-            return nullptr;
+        if (params.main_gpu < 0) {
+            model->devices.clear();
+        } else {
+            if (params.main_gpu >= (int)model->devices.size()) {
+                LLAMA_LOG_ERROR("%s: invalid value for main_gpu: %d (available devices: %zu)\n", __func__, params.main_gpu, model->devices.size());
+                llama_model_free(model);
+                return nullptr;
+            }
+            ggml_backend_dev_t main_gpu = model->devices[params.main_gpu];
+            model->devices.clear();
+            model->devices.push_back(main_gpu);
         }
-        ggml_backend_dev_t main_gpu = model->devices[params.main_gpu];
-        model->devices.clear();
-        model->devices.push_back(main_gpu);
     }
 
     for (auto * dev : model->devices) {

@@ -207,7 +207,7 @@ struct mtmd_context {
             tok_row_end_trail = false; // no trailing end-of-row token
             ov_img_first      = true;
 
-        } else if (minicpmv_version == 3 || minicpmv_version == 4) {
+        } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6) {
             // minicpmv 2.6 format:
             // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
             slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
@@ -288,6 +288,10 @@ struct mtmd_context {
             // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
             aud_beg = "<|audio_bos|>";
             aud_end = "<|audio_eos|>";
+
+        } else if (proj == PROJECTOR_TYPE_ULTRAVOX) {
+            // [BEGIN_AUDIO] ... (embeddings) ...
+            aud_beg = "[BEGIN_AUDIO]";
 
         }
     }
@@ -501,7 +505,10 @@ struct mtmd_tokenizer {
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
             ) {
+                const int n_col = batch_f32.grid_x;
+                const int n_row = batch_f32.grid_y;
                 // split batch into chunks of single images
+                // NOTE: batch_f32 will be invalidated after this call
                 auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
                 GGML_ASSERT(chunks.size() > 0);
 
@@ -521,8 +528,7 @@ struct mtmd_tokenizer {
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
-                    const int n_col = batch_f32.grid_x;
-                    const int n_row = batch_f32.grid_y;
+                    GGML_ASSERT((int)chunks.size() == n_row * n_col);
                     if (ctx->tok_slices_start != LLAMA_TOKEN_NULL) {
                         add_text({ctx->tok_slices_start});
                     }

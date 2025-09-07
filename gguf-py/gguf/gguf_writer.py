@@ -138,8 +138,9 @@ class GGUFWriter:
                 size = prod(shape)
 
                 if "_exps." in name:
-                    expert_params += (size // shape[-3])
-                    expert_sum += shape[-3]
+                    expert_count = shape[-2 if ".bias" in name else -3]
+                    expert_params += (size // expert_count)
+                    expert_sum += expert_count
                     n_expert_tensors += 1
                 else:
                     shared_params += size
@@ -271,7 +272,7 @@ class GGUFWriter:
 
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
         if any(key in kv_data for kv_data in self.kv_data):
-            raise ValueError(f'Duplicated key name {key!r}')
+            logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
 
@@ -648,6 +649,9 @@ class GGUFWriter:
     def add_convnext_block_count(self, length: int) -> None:
         self.add_uint32(Keys.ConvNext.BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_shortconv_l_cache(self, length: int) -> None:
+        self.add_uint32(Keys.ShortConv.L_CACHE.format(arch=self.arch), length)
+
     def add_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_COUNT.format(arch=self.arch), length)
 
@@ -671,6 +675,18 @@ class GGUFWriter:
 
     def add_decoder_start_token_id(self, id: int) -> None:
         self.add_uint32(Keys.LLM.DECODER_START_TOKEN_ID.format(arch=self.arch), id)
+
+    def add_embedding_length_per_layer_input(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.EMBD_LENGTH_PER_LAYER_INP.format(arch=self.arch), value)
+
+    def add_altup_active_idx(self, val: int) -> None:
+        self.add_uint32(Keys.LLM.ALTUP_ACTIVE_IDX.format(arch=self.arch), val)
+
+    def add_altup_num_inputs(self, val: int) -> None:
+        self.add_uint32(Keys.LLM.ALTUP_NUM_INPUTS.format(arch=self.arch), val)
+
+    def add_activation_sparsity_scale(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.ACTIVATION_SPARSITY_SCALE.format(arch=self.arch), values)
 
     def add_head_count(self, count: int | Sequence[int]) -> None:
         if isinstance(count, int):
@@ -702,6 +718,12 @@ class GGUFWriter:
     def add_clamp_kqv(self, value: float) -> None:
         self.add_float32(Keys.Attention.CLAMP_KQV.format(arch=self.arch), value)
 
+    def add_shared_kv_layers(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
+
+    def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
+
     def add_logit_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.LOGIT_SCALE.format(arch=self.arch), value)
 
@@ -731,6 +753,9 @@ class GGUFWriter:
 
     def add_moe_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_EVERY_N_LAYERS.format(arch=self.arch), value)
+
+    def add_nextn_predict_layers(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
 
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
@@ -843,6 +868,9 @@ class GGUFWriter:
     def add_ssm_time_step_rank(self, value: int) -> None:
         self.add_uint32(Keys.SSM.TIME_STEP_RANK.format(arch=self.arch), value)
 
+    def add_ssm_group_count(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.GROUP_COUNT.format(arch=self.arch), value)
+
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
@@ -891,6 +919,9 @@ class GGUFWriter:
     def add_add_eos_token(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_EOS, value)
 
+    def add_add_sep_token(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.ADD_SEP, value)
+
     def add_add_space_prefix(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_PREFIX, value)
 
@@ -934,6 +965,9 @@ class GGUFWriter:
 
     def add_eom_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOM_ID, id)
+
+    def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
+        self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
 
     # for vision models
 
@@ -1016,6 +1050,11 @@ class GGUFWriter:
 
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    # diffusion models
+
+    def add_diffusion_shift_logits(self, value: bool) -> None:
+        self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
 
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''

@@ -49,12 +49,21 @@ bool common_chat_msg_parser::add_tool_call(const std::string & name, const std::
 
     // LOG_DBG("Tool call arguments:\n\traw: %s\n\tresult: %s\n", arguments.c_str(), tool_call.arguments.c_str());
     result_.tool_calls.emplace_back(tool_call);
+
     return true;
 }
 bool common_chat_msg_parser::add_tool_call(const json & tool_call) {
     std::string name = tool_call.contains("name") ? tool_call.at("name") : "";
     std::string id = tool_call.contains("id") ? tool_call.at("id") : "";
-    std::string arguments = tool_call.contains("arguments") ? tool_call.at("arguments") : "";
+    std::string arguments = "";
+    if (tool_call.contains("arguments")) {
+        if (tool_call.at("arguments").is_object()) {
+            arguments = tool_call.at("arguments").dump();
+        } else {
+            arguments = tool_call.at("arguments");
+        }
+    }
+
     return add_tool_call(name, id, arguments);
 }
 
@@ -377,4 +386,8 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
         cleaned,
         /* .is_partial = */ found_healing_marker,
     };
+}
+
+void common_chat_msg_parser::clear_tools() {
+    result_.tool_calls.clear();
 }

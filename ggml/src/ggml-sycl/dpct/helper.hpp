@@ -13,10 +13,10 @@
 #ifndef GGML_SYCL_DPCT_HELPER_HPP
 #define GGML_SYCL_DPCT_HELPER_HPP
 
+#include <map>
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
 #include <syclcompat/math.hpp>
-#include <map>
 
 #ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
@@ -115,6 +115,36 @@ inline auto get_onemath_backend(sycl::queue& queue)
     return queue;
 #else
     static_assert(false, "Unsupported backend");
+#endif
+}
+
+#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
+    namespace syclex = sycl::ext::oneapi::experimental;
+#endif
+
+template <int NR, typename Func>
+__dpct_inline__ void sycl_parallel_for(sycl::handler & cgh, sycl::nd_range<NR> nd_range, Func && func) {
+#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
+    syclex::nd_launch(cgh, nd_range, func);
+#else
+    cgh.parallel_for(nd_range, func);
+#endif
+}
+
+template <int NR, typename Func>
+__dpct_inline__ void sycl_parallel_for(sycl::queue * q, sycl::nd_range<NR> nd_range, Func && func) {
+#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
+    syclex::nd_launch(*q, nd_range, func);
+#else
+    q->parallel_for(nd_range, func);
+#endif
+}
+
+template <typename Func> __dpct_inline__ void sycl_launch(sycl::queue * stream, Func && func) {
+#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
+    syclex::submit(*stream, func);
+#else
+    stream->submit(func);
 #endif
 }
 

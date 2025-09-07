@@ -5,10 +5,43 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/build.yml',
+      '.github/workflows/build-linux-cross.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp'
+    ]
+
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/build.yml',
+      '.github/workflows/build-linux-cross.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp'
+    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -31,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
@@ -51,7 +84,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=OFF \
+            -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -70,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
@@ -101,6 +135,53 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
+  macOS-latest-cmake-arm64-webgpu:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64-webgpu
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-macos-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export CMAKE_PREFIX_PATH=dawn
+          cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
   ubuntu-cpu-cmake:
     strategy:
       matrix:
@@ -118,7 +199,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
@@ -170,7 +251,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
@@ -249,7 +330,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-rpc
           evict-old-files: 1d
@@ -282,7 +363,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
           evict-old-files: 1d
@@ -306,12 +387,63 @@ jobs:
         id: cmake_test
         run: |
           cd build
+          export GGML_VK_VISIBLE_DEVICES=0
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 4200
+
+  ubuntu-22-cmake-webgpu:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-webgpu
+          evict-old-files: 1d
+
+      - name: Vulkan SDK Dependencies
+        id: vulkan-depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-ubuntu-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export Dawn_DIR=dawn/lib64/cmake/Dawn
+          cmake -B build -DGGML_WEBGPU=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.0.2
+    container: rocm/dev-ubuntu-22.04:6.1.2
 
     steps:
       - name: Clone
@@ -325,7 +457,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
@@ -339,19 +471,9 @@ jobs:
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
-      - name: Build with legacy HIP support
-        id: cmake_build_legacy_hip
-        run: |
-          cmake -B build2 -S . \
-            -DCMAKE_C_COMPILER=hipcc \
-            -DCMAKE_CXX_COMPILER=hipcc \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGGML_HIP=ON
-          cmake --build build2 --config Release -j $(nproc)
-
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
+    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -365,7 +487,7 @@ jobs:
           apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
@@ -410,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
@@ -458,7 +580,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
@@ -477,6 +599,9 @@ jobs:
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
 
+  build-cmake-pkg:
+    uses: ./.github/workflows/build-cmake-pkg.yml
+
   macOS-latest-cmake-ios:
     runs-on: macos-latest
 
@@ -486,7 +611,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
@@ -523,7 +648,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
@@ -595,7 +720,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
@@ -627,7 +752,7 @@ jobs:
           ./build-xcframework.sh
 
   windows-msys2:
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     strategy:
       fail-fast: false
@@ -641,7 +766,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-msys2
           variant: ccache
@@ -677,28 +802,31 @@ jobs:
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows-latest-cmake:
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.4.309.0
+      VULKAN_VERSION: 1.4.313.2
 
     strategy:
       matrix:
         include:
-          - build: 'cpu-x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
+          - build: 'cpu-x64 (static)'
+            arch: 'x64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
           - build: 'openblas-x64'
+            arch: 'x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
+            arch: 'x64'
+            defines: '-DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'llvm-arm64'
+            arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
           - build: 'llvm-arm64-opencl-adreno'
+            arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
-         # - build: 'kompute-x64'
-         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
 
     steps:
       - name: Clone
@@ -706,17 +834,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
-
-      - name: Clone Kompute submodule
-        id: clone_kompute
-        if: ${{ matrix.build == 'kompute-x64' }}
-        run: |
-          git submodule update --init ggml/src/ggml-kompute/kompute
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -733,9 +855,9 @@ jobs:
 
       - name: Install Vulkan SDK
         id: get_vulkan
-        if: ${{ matrix.build == 'kompute-x64' || matrix.build == 'vulkan-x64' }}
+        if: ${{ matrix.build == 'vulkan-x64' }}
         run: |
-          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/VulkanSDK-${env:VULKAN_VERSION}-Installer.exe"
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
@@ -768,6 +890,8 @@ jobs:
       - name: libCURL
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
+        with:
+          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
 
       - name: Build
         id: cmake_build
@@ -777,6 +901,7 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} `
             -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+          cp $env:CURL_PATH/bin/libcurl-*.dll build/bin/Release
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
@@ -787,7 +912,7 @@ jobs:
 
       - name: Test
         id: cmake_test
-        if: ${{ matrix.build != 'llvm-arm64' && matrix.build != 'llvm-arm64-opencl-adreno' }}
+        if: ${{ matrix.arch == 'x64' }}
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
@@ -823,7 +948,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libcurl4-openssl-dev
 
         - name: ccache
-          uses: hendrikmuhs/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.16
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
@@ -839,12 +964,12 @@ jobs:
               -DGGML_CUDA=ON
             cmake --build build
 
-  windows-2019-cmake-cuda:
-    runs-on: windows-2019
+  windows-2022-cmake-cuda:
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        cuda: ['12.4', '11.7']
+        cuda: ['12.4']
 
     steps:
       - name: Clone
@@ -852,7 +977,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -878,7 +1003,7 @@ jobs:
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_NATIVE=OFF ^
@@ -892,7 +1017,7 @@ jobs:
           cmake --build build --config Release
 
   windows-latest-cmake-sycl:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     defaults:
       run:
@@ -908,7 +1033,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
           variant: ccache
@@ -926,7 +1051,7 @@ jobs:
 
   windows-latest-cmake-hip:
     if: ${{ github.event.inputs.create_release != 'true' }}
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Clone
@@ -945,7 +1070,8 @@ jobs:
           write-host "Downloading AMD HIP SDK Installer"
           Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
-          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
+          $proc.WaitForExit(600000)
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm
@@ -954,7 +1080,7 @@ jobs:
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -987,6 +1113,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Build
         id: cmake_build
@@ -1021,7 +1152,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: android-build
           evict-old-files: 1d

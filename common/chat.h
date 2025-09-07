@@ -7,6 +7,7 @@
 #include <chrono>
 #include <string>
 #include <vector>
+#include <map>
 
 struct common_chat_templates;
 
@@ -108,6 +109,10 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1,
     COMMON_CHAT_FORMAT_HERMES_2_PRO,
     COMMON_CHAT_FORMAT_COMMAND_R7B,
+    COMMON_CHAT_FORMAT_GRANITE,
+    COMMON_CHAT_FORMAT_GPT_OSS,
+    COMMON_CHAT_FORMAT_SEED_OSS,
+    COMMON_CHAT_FORMAT_NEMOTRON_V2,
 
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
@@ -125,6 +130,9 @@ struct common_chat_templates_inputs {
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
     bool enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    std::map<std::string, std::string> chat_template_kwargs;
+    bool add_bos = false;
+    bool add_eos = false;
 };
 
 struct common_chat_params {
@@ -181,13 +189,17 @@ std::string common_chat_format_single(
 // Returns an example of formatted chat
 std::string common_chat_format_example(
     const struct common_chat_templates * tmpls,
-    bool use_jinja);
+    bool use_jinja,
+    const std::map<std::string, std::string> & chat_template_kwargs);
 
 const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
+common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
+
+bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
 // Parses a JSON array of messages in OpenAI's chat completion API format.
 // T can be std::string containing JSON or nlohmann::ordered_json

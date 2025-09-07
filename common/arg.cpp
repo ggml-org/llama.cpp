@@ -24,6 +24,7 @@
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
+#include <list>
 #include <regex>
 #include <set>
 #include <string>
@@ -748,6 +749,39 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 // utils
 //
 
+// Helper function to parse tensor buffer override strings
+static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
+    std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        if (buft) {
+            buft_list[ggml_backend_buft_name(buft)] = buft;
+        }
+    }
+
+    for (const auto & override : string_split<std::string>(value, ',')) {
+        std::string::size_type pos = override.find('=');
+        if (pos == std::string::npos) {
+            throw std::invalid_argument("invalid value");
+        }
+        std::string tensor_name = override.substr(0, pos);
+        std::string buffer_type = override.substr(pos + 1);
+
+        if (buft_list.find(buffer_type) == buft_list.end()) {
+            printf("Available buffer types:\n");
+            for (const auto & it : buft_list) {
+                printf("  %s\n", ggml_backend_buft_name(it.second));
+            }
+            throw std::invalid_argument("unknown buffer type");
+        }
+        // keep strings alive and avoid leaking memory by storing them in a static vector
+        static std::list<std::string> buft_overrides;
+        buft_overrides.push_back(tensor_name);
+        overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
+    }
+}
+
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
@@ -988,6 +1022,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & seq_breaker : params.sampling.dry_sequence_breakers) {
             string_process_escapes(seq_breaker);
         }
+        for (auto & pair : params.speculative.replacements) {
+            string_process_escapes(pair.first);
+            string_process_escapes(pair.second);
+        }
     }
 
     if (!params.kv_overrides.empty()) {
@@ -999,8 +1037,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (params.reranking && params.embedding) {
-        throw std::invalid_argument("error: either --embedding or --reranking can be specified, but not both");
+    if (!params.speculative.tensor_buft_overrides.empty()) {
+        params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
@@ -1079,7 +1117,7 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
     printf("\"\n\n");
 
     printf("    case \"$prev\" in\n");
-    printf("        --model)\n");
+    printf("        --model|-m)\n");
     printf("            COMPREPLY=( $(compgen -f -X '!*.gguf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
     printf("            return 0\n");
     printf("            ;;\n");
@@ -1211,6 +1249,7 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
+        params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         ctx_arg.params = params_org;
@@ -1233,6 +1272,18 @@ static std::string list_builtin_chat_templates() {
         msg << tmpl << (&tmpl == &supported_tmpl.back() ? "" : ", ");
     }
     return msg.str();
+}
+
+static bool is_truthy(const std::string & value) {
+    return value == "on" || value == "enabled" || value == "1";
+}
+
+static bool is_falsey(const std::string & value) {
+    return value == "off" || value == "disabled" || value == "0";
+}
+
+static bool is_autoy(const std::string & value) {
+    return value == "auto" || value == "-1";
 }
 
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
@@ -1480,6 +1531,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
+        {"--swa-checkpoints"}, "N",
+        string_format("max number of SWA checkpoints per slot to create (default: %d)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_swa_checkpoints),
+        [](common_params & params, int value) {
+            params.n_swa_checkpoints = value;
+        }
+    ).set_env("LLAMA_ARG_SWA_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--kv-unified", "-kvu"},
+        string_format("use single unified KV buffer for the KV cache of all sequences (default: %s)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)", params.kv_unified ? "true" : "false"),
+        [](common_params & params) {
+            params.kv_unified = true;
+        }
+    ).set_env("LLAMA_ARG_KV_SPLIT"));
+    add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {
@@ -1487,19 +1554,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
+        {"--context-shift"},
+        string_format("enables context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.ctx_shift = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
+    add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {
             params.n_chunks = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
-    add_opt(common_arg(
-        {"-fa", "--flash-attn"},
-        string_format("enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.flash_attn = true;
-        }
-    ).set_env("LLAMA_ARG_FLASH_ATTN"));
+    add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
+                       string_format("set Flash Attention use ('on', 'off', or 'auto', default: '%s')",
+                                     llama_flash_attn_type_name(params.flash_attn_type)),
+                       [](common_params & params, const std::string & value) {
+                           if (is_truthy(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+                           } else if (is_falsey(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+                           } else if (is_autoy(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+                           } else {
+                               throw std::runtime_error(
+                                   string_format("error: unkown value for --flash-attn: '%s'\n", value.c_str()));
+                           }
+                       }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
@@ -1619,7 +1701,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.antiprompt.emplace_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-sp", "--special"},
         string_format("special tokens output enabled (default: %s)", params.special ? "true" : "false"),
@@ -1704,7 +1786,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -1779,7 +1861,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.sampling.top_n_sigma = std::stof(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}).set_sparam());
+    ).set_sparam());
     add_opt(common_arg(
         {"--xtc-probability"}, "N",
         string_format("xtc probability (default: %.1f, 0.0 = disabled)", (double)params.sampling.xtc_probability),
@@ -2099,6 +2181,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"-nr", "--no-repack"},
+        "disable weight repacking",
+        [](common_params & params) {
+            params.no_extra_bufts = true;
+        }
+    ).set_env("LLAMA_ARG_NO_REPACK"));
+    add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
             "KV cache data type for K\n"
@@ -2196,9 +2285,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"-dt", "--defrag-thold"}, "N",
-        string_format("KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold),
+        string_format("KV cache defragmentation threshold (DEPRECATED)"),
         [](common_params & params, const std::string & value) {
-            params.defrag_thold = std::stof(value);
+            GGML_UNUSED(params);
+            GGML_UNUSED(value);
+            LOG_WRN("DEPRECATED: --defrag-thold is deprecated and no longer necessary to specify\n");
         }
     ).set_env("LLAMA_ARG_DEFRAG_THOLD"));
     add_opt(common_arg(
@@ -2344,41 +2435,61 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--override-tensor", "-ot"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type", [](common_params & params, const std::string & value) {
-            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
-            if (buft_list.empty()) {
-                // enumerate all the devices and add their buffer types to the list
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        buft_list[ggml_backend_buft_name(buft)] = buft;
-                    }
-                }
-            }
-
-            for (const auto & override : string_split<std::string>(value, ',')) {
-                std::string::size_type pos = override.find('=');
-                if (pos == std::string::npos) {
-                    throw std::invalid_argument("invalid value");
-                }
-                std::string tensor_name = override.substr(0, pos);
-                std::string buffer_type = override.substr(pos + 1);
-
-                if (buft_list.find(buffer_type) == buft_list.end()) {
-                    printf("Available buffer types:\n");
-                    for (const auto & it : buft_list) {
-                        printf("  %s\n", ggml_backend_buft_name(it.second));
-                    }
-                    throw std::invalid_argument("unknown buffer type");
-                }
-                // FIXME: this leaks memory
-                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
-            }
+            parse_tensor_buffer_overrides(value, params.tensor_buft_overrides);
         }
     ));
     add_opt(common_arg(
+        {"--override-tensor-draft", "-otd"}, "<tensor name pattern>=<buffer type>,...",
+        "override tensor buffer type for draft model", [](common_params & params, const std::string & value) {
+            parse_tensor_buffer_overrides(value, params.speculative.tensor_buft_overrides);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cpu-moe", "-cmoe"},
+        "keep all Mixture of Experts (MoE) weights in the CPU",
+        [](common_params & params) {
+            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+        }
+    ).set_env("LLAMA_ARG_CPU_MOE"));
+    add_opt(common_arg(
+        {"--n-cpu-moe", "-ncmoe"}, "N",
+        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            for (int i = 0; i < value; ++i) {
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+            }
+        }
+    ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--cpu-moe-draft", "-cmoed"},
+        "keep all Mixture of Experts (MoE) weights in the CPU for the draft model",
+        [](common_params & params) {
+            params.speculative.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CPU_MOE_DRAFT"));
+    add_opt(common_arg(
+        {"--n-cpu-moe-draft", "-ncmoed"}, "N",
+        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            for (int i = 0; i < value; ++i) {
+                static std::list<std::string> buft_overrides_draft;
+                buft_overrides_draft.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                params.speculative.tensor_buft_overrides.push_back({buft_overrides_draft.back().c_str(), ggml_backend_cpu_buffer_type()});
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
+    add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
-        "number of layers to store in VRAM",
+        string_format("max. number of layers to store in VRAM (default: %d)", params.n_gpu_layers),
         [](common_params & params, int value) {
             params.n_gpu_layers = value;
             if (!llama_supports_gpu_offload()) {
@@ -2475,7 +2586,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0, nullptr });
+            params.lora_adapters.push_back({ std::string(value), 1.0, "", "", nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -2483,7 +2594,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora-scaled"}, "FNAME", "SCALE",
         "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale), nullptr });
+            params.lora_adapters.push_back({ fname, std::stof(scale), "", "", nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -2626,12 +2737,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
         [](common_params & params, int value) {
             params.n_out_freq = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--output-format"}, "{gguf,dat}",
+        string_format("output format for imatrix file (default: %s)", params.imat_dat > 0 ? "dat" : "gguf"),
+        [](common_params & params, const std::string & value) {
+            /**/ if (value == "gguf") { params.imat_dat = -1; }
+            else if (value == "dat")  { params.imat_dat = 1;  }
+            else { throw std::invalid_argument("invalid output format"); }
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -2660,6 +2780,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("start processing the input from chunk N (default: %d)", params.i_chunk),
         [](common_params & params, int value) {
             params.i_chunk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--show-statistics"},
+        string_format("show imatrix statistics and then exit (default: %s)", params.show_statistics ? "true" : "false"),
+        [](common_params & params) {
+            params.show_statistics = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -2722,6 +2849,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
+        {"--cls-separator"}, "STRING",
+        "separator of classification sequences (default \\t) for example \"<#seq#>\"",
+        [](common_params & params, const std::string & value) {
+            params.cls_sep = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
+    add_opt(common_arg(
         {"--host"}, "HOST",
         string_format("ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: %s)", params.hostname.c_str()),
         [](common_params & params, const std::string & value) {
@@ -2743,6 +2877,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
     add_opt(common_arg(
+        {"--api-prefix"}, "PREFIX",
+        string_format("prefix path the server serves from, without the trailing slash (default: %s)", params.api_prefix.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.api_prefix = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
+    add_opt(common_arg(
         {"--no-webui"},
         string_format("Disable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
         [](common_params & params) {
@@ -2758,9 +2899,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--reranking", "--rerank"},
-        string_format("enable reranking endpoint on server (default: %s)", params.reranking ? "enabled" : "disabled"),
+        string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
-            params.reranking = true;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
     add_opt(common_arg(
@@ -2802,6 +2944,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
     add_opt(common_arg(
+        {"--chat-template-kwargs"}, "STRING",
+        string_format("sets additional params for the json template parser"),
+        [](common_params & params, const std::string &  value) {
+            auto parsed = json::parse(value);
+            for (const auto & item : parsed.items()) {
+                params.default_template_kwargs[item.key()] = item.value().dump();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_CHAT_TEMPLATE_KWARGS"));
+    add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
         [](common_params & params, int value) {
@@ -2834,19 +2986,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_METRICS"));
     add_opt(common_arg(
-        {"--slots"},
-        string_format("enable slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.endpoint_slots = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
-    add_opt(common_arg(
         {"--props"},
         string_format("enable changing global properties via POST /props (default: %s)", params.endpoint_props ? "enabled" : "disabled"),
         [](common_params & params) {
             params.endpoint_props = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_PROPS"));
+    add_opt(common_arg(
+        {"--slots"},
+        string_format("enable slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.endpoint_slots = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
     add_opt(common_arg(
         {"--no-slots"},
         "disables slots monitoring endpoint",
@@ -2877,12 +3029,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
-        "(default: deepseek)",
+        "(default: auto)",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
-            else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
-            else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
-            else { throw std::invalid_argument("invalid value"); }
+            params.reasoning_format = common_reasoning_format_from_name(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
@@ -3008,13 +3157,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_file(common_log_main(), value.c_str());
         }
     ));
-    add_opt(common_arg(
-        {"--log-colors"},
-        "Enable colored logging",
-        [](common_params &) {
-            common_log_set_colors(common_log_main(), true);
-        }
-    ).set_env("LLAMA_LOG_COLORS"));
+    add_opt(common_arg({ "--log-colors" }, "[on|off|auto]",
+                       "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
+                       "'auto' enables colors when output is to a terminal",
+                       [](common_params &, const std::string & value) {
+                           if (is_truthy(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_ENABLED);
+                           } else if (is_falsey(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_DISABLED);
+                           } else if (is_autoy(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
+                           } else {
+                               throw std::invalid_argument(
+                                   string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+                           }
+                       }).set_env("LLAMA_LOG_COLORS"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
@@ -3063,7 +3220,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.speculative.cpuparams.n_threads = std::thread::hardware_concurrency();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-tbd", "--threads-batch-draft"}, "N",
         "number of threads to use during batch and prompt processing (default: same as --threads-draft)",
@@ -3073,7 +3230,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.speculative.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-Cd", "--cpu-mask-draft"}, "M",
         "Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)",
@@ -3224,6 +3381,39 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
+    add_opt(common_arg(
+        {"--spec-replace"}, "TARGET", "DRAFT",
+        "translate the string in TARGET into DRAFT if the draft model and main model are not compatible",
+        [](common_params & params, const std::string & tgt, const std::string & dft) {
+            params.speculative.replacements.push_back({ tgt, dft });
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-ctkd", "--cache-type-k-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for K for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_k)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_k = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_DRAFT"));
+    add_opt(common_arg(
+        {"-ctvd", "--cache-type-v-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for V for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_v)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_v = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_DRAFT"));
 
     add_opt(common_arg(
         {"-mv", "--model-vocoder"}, "FNAME",
@@ -3308,8 +3498,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3324,8 +3512,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3340,8 +3526,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3357,10 +3541,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 99;
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3376,16 +3557,119 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 99;
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-30b-default"},
+        string_format("use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF";
+            params.model.hf_file = "qwen3-coder-30b-a3b-instruct-q8_0.gguf";
+            params.port = 8012;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        { "--diffusion-steps" }, "N",
+        string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
+        [](common_params & params, int value) { params.diffusion.steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-visual" },
+        string_format("enable visual diffusion mode (show progressive generation) (default: %s)",
+                      params.diffusion.visual_mode ? "true" : "false"),
+        [](common_params & params) { params.diffusion.visual_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
+    add_opt(common_arg(
+        { "--diffusion-eps" }, "F",
+        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
+        [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-algorithm" }, "N",
+        string_format("diffusion algorithm: 0=ORIGIN, 1=ENTROPY_BASED, 2=MARGIN_BASED, 3=RANDOM, 4=LOW_CONFIDENCE (default: %d)",
+                      params.diffusion.algorithm),
+        [](common_params & params, int value) { params.diffusion.algorithm = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-alg-temp" }, "F",
+        string_format("dream algorithm temperature (default: %.3f)", (double) params.diffusion.alg_temp),
+        [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
+    add_opt(common_arg(
+        { "--diffusion-block-length" }, "N",
+        string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
+        [](common_params & params, int value) { params.diffusion.block_length = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-cfg-scale" }, "F",
+        string_format("llada classifier-free guidance scale (default: %.3f)", (double) params.diffusion.cfg_scale),
+        [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-add-gumbel-noise" }, "F",
+        string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
+        [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
+
+    add_opt(
+        common_arg({ "-lr", "--learning-rate" }, "ALPHA",
+                   string_format(
+                       "adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)",
+                       (double) params.lr.lr0),
+                   [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(
+        common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
+                   string_format(
+                       "(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
+                       (double) params.lr.lr_min),
+                   [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(
+        common_arg({ "-decay-epochs", "--learning-rate-decay-epochs" }, "ALPHA",
+                   string_format(
+                       "(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)",
+                       (double) params.lr.decay_epochs),
+                   [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+                { "-wd", "--weight-decay" }, "WD",
+                string_format(
+                    "adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).",
+                    (double) params.lr.wd),
+                [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-val-split", "--val-split" }, "FRACTION",
+                       string_format("fraction of data to use as validation set for training (default: %.2g).",
+                                     (double) params.val_split),
+                       [](common_params & params, const std::string & value) { params.val_split = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-epochs", "--epochs" }, "N",
+                       string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
+                       [](common_params & params, int epochs) { params.lr.epochs = epochs; })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-opt", "--optimizer" }, "sgd|adamw", "adamw or sgd",
+                       [](common_params & params, const std::string & name) {
+                           params.optimizer = common_opt_get_optimizer(name.c_str());
+                           if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
+                               throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+                           }
+                       })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
 
     return ctx_arg;
 }

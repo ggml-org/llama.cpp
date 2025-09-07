@@ -11,7 +11,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
   - Functionary v3.1 / v3.2
   - Hermes 2/3, Qwen 2.5
-  - Qwen 2.5 Coder (WIP: https://github.com/ggml-org/llama.cpp/pull/12034)
+  - Qwen 2.5 Coder
   - Mistral Nemo
   - Firefunction v2
   - Command R7B
@@ -20,6 +20,8 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
 - Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
   - Generic support may consume more tokens and be less efficient than a model's native format.
+
+- Multiple/parallel tool calling is supported on some models but disabled by default, enable it by passing `"parallel_tool_calls": true` in the completion endpoint payload.
 
 <details>
 <summary>Show some common templates and which format handler they use</summary>

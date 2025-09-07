@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <numeric>
 #include <iostream>
 #include "ggml-backend.h"
 

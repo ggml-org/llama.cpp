@@ -5,7 +5,13 @@ from utils import *
 server = ServerPreset.tinyllama2()
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="session", autouse=True)
+def do_something():
+    # this will be run once per test session, before any tests
+    ServerPreset.load_all()
+
+
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()

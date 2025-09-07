@@ -86,17 +86,39 @@ enum error_type {
     ERROR_TYPE_PERMISSION,
     ERROR_TYPE_UNAVAILABLE, // custom error
     ERROR_TYPE_NOT_SUPPORTED, // custom error
+    ERROR_TYPE_EXCEED_CONTEXT_SIZE, // custom error
 };
 
+static bool server_task_type_need_embd(server_task_type task_type) {
+    switch (task_type) {
+        case SERVER_TASK_TYPE_EMBEDDING:
+        case SERVER_TASK_TYPE_RERANK:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool server_task_type_need_logits(server_task_type task_type) {
+    switch (task_type) {
+        case SERVER_TASK_TYPE_COMPLETION:
+        case SERVER_TASK_TYPE_INFILL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 struct slot_params {
-    bool stream        = true;
-    bool cache_prompt  = true; // remember the prompt to avoid reprocessing all prompt
-    bool return_tokens = false;
+    bool stream          = true;
+    bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
+    bool return_tokens   = false;
+    bool return_progress = false;
 
     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
     int32_t n_predict = -1; // new tokens to predict
-    int32_t n_indent  =  0; // mininum line indentation for the generated text in number of whitespace characters
+    int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -107,7 +129,6 @@ struct slot_params {
     std::vector<std::string> response_fields;
     bool timings_per_token = false;
     bool post_sampling_probs = false;
-    bool ignore_eos = false;
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
@@ -119,7 +140,10 @@ struct slot_params {
     std::string                  oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
 
-    json to_json() const {
+    // Embeddings
+    int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+
+    json to_json(bool only_metrics = false) const {
         std::vector<std::string> samplers;
         samplers.reserve(sampling.samplers.size());
         for (const auto & sampler : sampling.samplers) {
@@ -131,9 +155,55 @@ struct slot_params {
             lora.push_back({{"id", i}, {"scale", this->lora[i].scale}});
         }
 
+        if (only_metrics) {
+            return json {
+                {"n_predict",                 n_predict},     // Server configured n_predict
+                {"seed",                      sampling.seed},
+                {"temperature",               sampling.temp},
+                {"dynatemp_range",            sampling.dynatemp_range},
+                {"dynatemp_exponent",         sampling.dynatemp_exponent},
+                {"top_k",                     sampling.top_k},
+                {"top_p",                     sampling.top_p},
+                {"min_p",                     sampling.min_p},
+                {"top_n_sigma",               sampling.top_n_sigma},
+                {"xtc_probability",           sampling.xtc_probability},
+                {"xtc_threshold",             sampling.xtc_threshold},
+                {"typical_p",                 sampling.typ_p},
+                {"repeat_last_n",             sampling.penalty_last_n},
+                {"repeat_penalty",            sampling.penalty_repeat},
+                {"presence_penalty",          sampling.penalty_present},
+                {"frequency_penalty",         sampling.penalty_freq},
+                {"dry_multiplier",            sampling.dry_multiplier},
+                {"dry_base",                  sampling.dry_base},
+                {"dry_allowed_length",        sampling.dry_allowed_length},
+                {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
+                {"mirostat",                  sampling.mirostat},
+                {"mirostat_tau",              sampling.mirostat_tau},
+                {"mirostat_eta",              sampling.mirostat_eta},
+                {"max_tokens",                n_predict}, // User configured n_predict
+                {"n_keep",                    n_keep},
+                {"n_discard",                 n_discard},
+                {"ignore_eos",                sampling.ignore_eos},
+                {"stream",                    stream},
+                {"n_probs",                   sampling.n_probs},
+                {"min_keep",                  sampling.min_keep},
+                {"chat_format",               common_chat_format_name(oaicompat_chat_syntax.format)},
+                {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
+                {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
+                {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+                {"samplers",                  samplers},
+                {"speculative.n_max",         speculative.n_max},
+                {"speculative.n_min",         speculative.n_min},
+                {"speculative.p_min",         speculative.p_min},
+                {"timings_per_token",         timings_per_token},
+                {"post_sampling_probs",       post_sampling_probs},
+                {"lora",                      lora},
+            };
+        }
+
         auto grammar_triggers = json::array();
         for (const auto & trigger : sampling.grammar_triggers) {
-            server_grammar_trigger ct(std::move(trigger));
+            server_grammar_trigger ct(trigger);
             grammar_triggers.push_back(ct.to_json());
         }
 
@@ -233,14 +303,16 @@ struct server_task {
         slot_params defaults;
         defaults.sampling    = params_base.sampling;
         defaults.speculative = params_base.speculative;
+        defaults.n_keep      = params_base.n_keep;
+        defaults.antiprompt  = params_base.antiprompt;
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
-        params.timings_per_token = json_value(data, "timings_per_token", false);
 
         params.stream           = json_value(data, "stream",             false);
         params.cache_prompt     = json_value(data, "cache_prompt",       true);
         params.return_tokens    = json_value(data, "return_tokens",      false);
+        params.return_progress  = json_value(data, "return_progress",    false);
         params.n_predict        = json_value(data, "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
         params.n_indent         = json_value(data, "n_indent",           defaults.n_indent);
         params.n_keep           = json_value(data, "n_keep",             defaults.n_keep);
@@ -359,8 +431,12 @@ struct server_task {
             } else {
                 params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
             }
-            params.oaicompat_chat_syntax.reasoning_format = params_base.reasoning_format;
-            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params_base.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+            common_reasoning_format reasoning_format = params_base.reasoning_format;
+            if (data.contains("reasoning_format")) {
+                reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
+            }
+            params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
+            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
             params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
             params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         }
@@ -420,7 +496,6 @@ struct server_task {
 
         {
             params.sampling.logit_bias.clear();
-            params.ignore_eos = json_value(data, "ignore_eos", false);
 
             const auto & logit_bias = data.find("logit_bias");
             if (logit_bias != data.end() && logit_bias->is_array()) {
@@ -450,6 +525,40 @@ struct server_task {
                         }
                     }
                 }
+           } else if (logit_bias != data.end() && logit_bias->is_object()) {
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                for (const auto & el : logit_bias->items()) {
+                    float bias;
+                    const auto & key = el.key();
+                    const auto & value = el.value();
+                    if (value.is_number()) {
+                        bias = value.get<float>();
+                    } else if (value.is_boolean() && !value.get<bool>()) {
+                        bias = -INFINITY;
+                    } else {
+                        continue;
+                    }
+
+                    char *end;
+                    llama_token tok = strtol(key.c_str(), &end, 10);
+                    if (*end == 0) {
+                        if (tok >= 0 && tok < n_vocab) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    } else {
+                        auto toks = common_tokenize(vocab, key, false);
+                        for (auto tok : toks) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    }
+                }
+            }
+
+            params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
+            if (params.sampling.ignore_eos) {
+                params.sampling.logit_bias.insert(
+                        params.sampling.logit_bias.end(),
+                        defaults.sampling.logit_bias_eog.begin(), defaults.sampling.logit_bias_eog.end());
             }
         }
 
@@ -463,6 +572,10 @@ struct server_task {
                         params.antiprompt.push_back(word);
                     }
                 }
+            }
+            // set reverse prompt from cli args if not set in the request
+            if (params.antiprompt.empty()) {
+                params.antiprompt = defaults.antiprompt;
             }
         }
 
@@ -496,6 +609,8 @@ struct server_task {
 };
 
 struct result_timings {
+    int32_t cache_n = -1;
+
     int32_t prompt_n = -1;
     double prompt_ms;
     double prompt_per_token_ms;
@@ -512,6 +627,8 @@ struct result_timings {
 
     json to_json() const {
         json base = {
+            {"cache_n",                cache_n},
+
             {"prompt_n",               prompt_n},
             {"prompt_ms",              prompt_ms},
             {"prompt_per_token_ms",    prompt_per_token_ms},
@@ -529,6 +646,22 @@ struct result_timings {
         }
 
         return base;
+    }
+};
+
+struct result_prompt_progress {
+    int32_t total = 0;
+    int32_t cache = 0;
+    int32_t processed = 0;
+    int64_t time_ms = 0;
+
+    json to_json() const {
+        return json {
+            {"total",     total},
+            {"cache",     cache},
+            {"processed", processed},
+            {"time_ms",   time_ms},
+        };
     }
 };
 
@@ -625,6 +758,13 @@ struct completion_token_output {
         }
         return bytes;
     }
+};
+
+struct swa_checkpoint {
+    llama_pos pos_min;
+    llama_pos pos_max;
+
+    std::vector<uint8_t> data;
 };
 
 struct server_task_result_cmpl_final : server_task_result {
@@ -839,6 +979,17 @@ struct server_task_result_cmpl_final : server_task_result {
             {"model",              oaicompat_model},
             {"system_fingerprint", build_info},
             {"object",             "chat.completion.chunk"},
+        });
+
+        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
+        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+        deltas.push_back({
+            {"choices", json::array()},
+            {"created",            t},
+            {"id",                 oaicompat_cmpl_id},
+            {"model",              oaicompat_model},
+            {"system_fingerprint", build_info},
+            {"object",             "chat.completion.chunk"},
             {"usage", json {
                 {"completion_tokens", n_decoded},
                 {"prompt_tokens",     n_prompt_tokens},
@@ -869,8 +1020,10 @@ struct server_task_result_cmpl_partial : server_task_result {
     int32_t n_prompt_tokens;
 
     bool post_sampling_probs;
+    bool is_progress = false;
     completion_token_output prob_output;
     result_timings timings;
+    result_prompt_progress progress;
 
     // OAI-compat fields
     bool            verbose   = false;
@@ -915,6 +1068,9 @@ struct server_task_result_cmpl_partial : server_task_result {
         if (timings.prompt_n > 0) {
             res.push_back({"timings", timings.to_json()});
         }
+        if (is_progress) {
+            res.push_back({"prompt_progress", progress.to_json()});
+        }
         if (!prob_output.probs.empty()) {
             res["completion_probabilities"] = completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs);
         }
@@ -952,6 +1108,9 @@ struct server_task_result_cmpl_partial : server_task_result {
         if (timings.prompt_n >= 0) {
             res.push_back({"timings", timings.to_json()});
         }
+        if (is_progress) {
+            res.push_back({"prompt_progress", progress.to_json()});
+        }
 
         return res;
     }
@@ -979,7 +1138,7 @@ struct server_task_result_cmpl_partial : server_task_result {
             });
         };
         // We have to send an initial update to conform to openai behavior
-        if (first) {
+        if (first || is_progress) {
             add_delta({
                 {"role", "assistant"},
                 {"content", nullptr},
@@ -991,16 +1150,20 @@ struct server_task_result_cmpl_partial : server_task_result {
         }
 
         if (!deltas.empty()) {
-            GGML_ASSERT(deltas[deltas.size() - 1].at("choices").size() >= 1);
+            auto & last_json = deltas[deltas.size() - 1];
+            GGML_ASSERT(last_json.at("choices").size() >= 1);
 
             if (prob_output.probs.size() > 0) {
-                deltas[deltas.size() - 1].at("choices").at(0)["logprobs"] = json {
+                last_json.at("choices").at(0)["logprobs"] = json {
                     {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
                 };
             }
 
             if (timings.prompt_n >= 0) {
-                deltas[deltas.size() - 1].push_back({"timings", timings.to_json()});
+                last_json.push_back({"timings", timings.to_json()});
+            }
+            if (is_progress) {
+                last_json.push_back({"prompt_progress", progress.to_json()});
             }
         }
 
@@ -1095,6 +1258,10 @@ static json format_error_response(const std::string & message, const enum error_
             type_str = "unavailable_error";
             code = 503;
             break;
+        case ERROR_TYPE_EXCEED_CONTEXT_SIZE:
+            type_str = "exceed_context_size_error";
+            code = 400;
+            break;
     }
     return json {
         {"code", code},
@@ -1108,12 +1275,21 @@ struct server_task_result_error : server_task_result {
     error_type err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
+    // for ERROR_TYPE_EXCEED_CONTEXT_SIZE
+    int32_t n_prompt_tokens = 0;
+    int32_t n_ctx           = 0;
+
     virtual bool is_error() override {
         return true;
     }
 
     virtual json to_json() override {
-        return format_error_response(err_msg, err_type);
+        json res = format_error_response(err_msg, err_type);
+        if (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            res["n_prompt_tokens"] = n_prompt_tokens;
+            res["n_ctx"]           = n_ctx;
+        }
+        return res;
     }
 };
 
@@ -1128,6 +1304,8 @@ struct server_task_result_metrics : server_task_result {
     uint64_t t_prompt_processing_total       = 0;
     uint64_t n_tokens_predicted_total        = 0;
     uint64_t t_tokens_generation_total       = 0;
+
+    uint64_t n_past_max = 0;
 
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
@@ -1153,6 +1331,8 @@ struct server_task_result_metrics : server_task_result {
             { "t_tokens_generation_total",       t_tokens_generation_total },
             { "n_tokens_predicted_total",        n_tokens_predicted_total },
             { "t_prompt_processing_total",       t_prompt_processing_total },
+
+            { "n_past_max",                      n_past_max },
 
             { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
             { "t_prompt_processing",             t_prompt_processing },
@@ -1235,6 +1415,7 @@ struct server_slot {
     common_speculative * spec = nullptr;
 
     std::vector<common_adapter_lora_info> lora;
+    int32_t alora_invocation_start = -1;
 
     // the index relative to completion multi-task request
     size_t index = 0;
@@ -1256,6 +1437,7 @@ struct server_slot {
 
     // n_prompt_tokens may not be equal to prompt_tokens.size(), because prompt maybe truncated
     int32_t n_prompt_tokens           = 0;
+    int32_t n_prompt_tokens_cache     = 0;
     int32_t n_prompt_tokens_processed = 0;
 
     // input prompt tokens
@@ -1270,6 +1452,8 @@ struct server_slot {
     server_tokens cache_tokens;
 
     std::vector<completion_token_output> generated_token_probs;
+
+    std::vector<swa_checkpoint> swa_checkpoints;
 
     bool has_next_token = true;
     bool has_new_line   = false;
@@ -1306,7 +1490,9 @@ struct server_slot {
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
-        n_prompt_tokens    = 0;
+        n_prompt_tokens       = 0;
+        n_prompt_tokens_cache = 0;
+
         last_nl_pos        = 0;
         generated_text     = "";
         has_new_line       = false;
@@ -1327,15 +1513,29 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+
+        // clear alora start
+        alora_invocation_start = -1;
     }
 
-    bool is_non_causal() const {
-        return task_type == SERVER_TASK_TYPE_EMBEDDING || task_type == SERVER_TASK_TYPE_RERANK;
+    bool need_embd() const {
+        return server_task_type_need_embd(task_type);
+    }
+
+    bool need_logits() const {
+        return server_task_type_need_logits(task_type);
+    }
+
+    // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
+    // also we cannot split if the pooling would require any past tokens
+    bool can_split() const {
+        return
+            !need_embd() ||
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST);
     }
 
     bool can_batch_with(server_slot & other_slot) const {
-        return is_non_causal() == other_slot.is_non_causal()
-            && are_lora_equal(lora, other_slot.lora);
+        return task_type == other_slot.task_type && are_lora_equal(lora, other_slot.lora);
     }
 
     bool has_budget(const common_params & global_params) {
@@ -1383,6 +1583,8 @@ struct server_slot {
 
     result_timings get_timings() const {
         result_timings timings;
+        timings.cache_n = n_prompt_tokens_cache;
+
         timings.prompt_n = n_prompt_tokens_processed;
         timings.prompt_ms = t_prompt_processing;
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
@@ -1472,14 +1674,32 @@ struct server_slot {
         }
     }
 
-    json to_json() const {
+    json to_json(bool only_metrics = false) const {
+        if (only_metrics) {
+            return json {
+                {"id",            id},
+                {"id_task",       id_task},
+                {"n_ctx",         n_ctx},
+                {"speculative",   can_speculate()},
+                {"is_processing", is_processing()},
+                {"params",        params.to_json(true)},
+                {"next_token",
+                    {
+                        {"has_next_token", has_next_token},
+                        {"has_new_line",   has_new_line},
+                        {"n_remain",       n_remaining},
+                        {"n_decoded",      n_decoded},
+                    }
+                },
+            };
+        }
+
         return json {
             {"id",            id},
             {"id_task",       id_task},
             {"n_ctx",         n_ctx},
             {"speculative",   can_speculate()},
             {"is_processing", is_processing()},
-            {"non_causal",    is_non_causal()},
             {"params",        params.to_json()},
             {"prompt",        prompt_tokens.detokenize(ctx, true)},
             {"next_token",
@@ -1503,6 +1723,8 @@ struct server_metrics {
     uint64_t n_tokens_predicted_total        = 0;
     uint64_t t_tokens_generation_total       = 0;
 
+    uint64_t n_past_max = 0;
+
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
 
@@ -1521,6 +1743,10 @@ struct server_metrics {
         n_prompt_tokens_processed       += slot.n_prompt_tokens_processed;
         t_prompt_processing             += slot.t_prompt_processing;
         t_prompt_processing_total       += slot.t_prompt_processing;
+
+        if (slot.n_past > 0) {
+            n_past_max = std::max(n_past_max, (uint64_t) slot.n_past);
+        }
     }
 
     void on_prediction(const server_slot & slot) {
@@ -1535,6 +1761,9 @@ struct server_metrics {
         for (const auto & slot : slots) {
             if (slot.is_processing()) {
                 n_busy_slots_total++;
+            }
+            if (slot.n_past > 0) {
+                n_past_max = std::max(n_past_max, (uint64_t) slot.n_past);
             }
         }
     }
@@ -1632,7 +1861,7 @@ struct server_queue {
     void pop_deferred_task() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         if (!queue_tasks_deferred.empty()) {
-            queue_tasks.emplace_back(std::move(queue_tasks_deferred.front()));
+            queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
             queue_tasks_deferred.pop_front();
         }
         condition_tasks.notify_one();
@@ -1858,6 +2087,7 @@ struct server_context {
     mtmd_context * mctx = nullptr;
 
     const llama_vocab * vocab = nullptr;
+    bool vocab_dft_compatible = true;
 
     llama_model * model_dft = nullptr;
 
@@ -1867,7 +2097,6 @@ struct server_context {
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
-    bool has_eos_token  = false;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -1926,7 +2155,6 @@ struct server_context {
         n_ctx = llama_n_ctx(ctx);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
-        has_eos_token = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
 
         if (!params_base.speculative.model.path.empty() || !params_base.speculative.model.hf_repo.empty()) {
             SRV_INF("loading draft model '%s'\n", params_base.speculative.model.path.c_str());
@@ -1938,10 +2166,12 @@ struct server_context {
             params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_base.speculative.n_ctx;
             params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
             params_dft.n_parallel   = 1;
+            params_dft.cache_type_k = params_base.speculative.cache_type_k;
+            params_dft.cache_type_v = params_base.speculative.cache_type_v;
 
-            // force F16 KV cache for the draft model for extra performance
-            params_dft.cache_type_k = GGML_TYPE_F16;
-            params_dft.cache_type_v = GGML_TYPE_F16;
+            params_dft.cpuparams.n_threads = params_base.speculative.cpuparams.n_threads;
+            params_dft.cpuparams_batch.n_threads = params_base.speculative.cpuparams_batch.n_threads;
+            params_dft.tensor_buft_overrides = params_base.speculative.tensor_buft_overrides;
 
             llama_init_dft = common_init_from_params(params_dft);
 
@@ -1952,10 +2182,9 @@ struct server_context {
                 return false;
             }
 
-            if (!common_speculative_are_compatible(ctx, llama_init_dft.context.get())) {
-                SRV_ERR("the draft model '%s' is not compatible with the target model '%s'\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
-
-                return false;
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            if (!vocab_dft_compatible) {
+                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
@@ -1969,7 +2198,7 @@ struct server_context {
 
         chat_templates = common_chat_templates_init(model, params_base.chat_template);
         try {
-            common_chat_format_example(chat_templates.get(), params.use_jinja);
+            common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs);
         } catch (const std::exception & e) {
             SRV_WRN("%s: Chat template parsing error: %s\n", __func__, e.what());
             SRV_WRN("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
@@ -2006,7 +2235,7 @@ struct server_context {
             }
         }
 
-        if (!llama_kv_self_can_shift(ctx)) {
+        if (!llama_memory_can_shift(llama_get_memory(ctx))) {
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;
                 SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
@@ -2015,11 +2244,6 @@ struct server_context {
             if (params_base.n_cache_reuse) {
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
-            }
-
-            if (!params_base.speculative.model.path.empty()) {
-                SRV_ERR("%s\n", "err: speculative decode is not supported by this context");
-                return false;
             }
         }
 
@@ -2050,16 +2274,20 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx_dft);
+                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
+                }
+                for (auto &pair : params_base.speculative.replacements) {
+                    common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             }
 
             SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);
 
             slot.params.sampling = params_base.sampling;
+            slot.params.n_keep = params_base.n_keep;
 
             slot.callback_on_release = [this](int) {
                 queue_tasks.pop_deferred_task();
@@ -2081,14 +2309,21 @@ struct server_context {
 
         metrics.init();
 
+        // thinking is enabled if:
+        // 1. It's not explicitly disabled (reasoning_budget == 0)
+        // 2. The chat template supports it
+        const bool enable_thinking = params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        SRV_INF("Enable thinking? %d\n", enable_thinking);
+
         oai_parser_opt = {
             /* use_jinja             */ params_base.use_jinja,
             /* prefill_assistant     */ params_base.prefill_assistant,
             /* reasoning_format      */ params_base.reasoning_format,
+            /* chat_template_kwargs  */ params_base.default_template_kwargs,
             /* common_chat_templates */ chat_templates.get(),
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-            /* enable_thinking       */ params_base.reasoning_budget != 0,
+            /* enable_thinking       */ enable_thinking,
         };
     }
 
@@ -2142,7 +2377,8 @@ struct server_context {
 
         // find the slot that has been least recently used
         if (ret == nullptr) {
-            int64_t t_last = ggml_time_us();
+            int64_t t_last = -1;
+
             for (server_slot & slot : slots) {
                 // skip the slot if it is not available
                 if (slot.is_processing()) {
@@ -2150,7 +2386,7 @@ struct server_context {
                 }
 
                 // select the current slot if the criteria match
-                if (slot.t_last_used < t_last) {
+                if (!ret || slot.t_last_used <= t_last) {
                     t_last = slot.t_last_used;
                     ret = &slot;
                 }
@@ -2173,9 +2409,63 @@ struct server_context {
         slot.prompt_tokens = std::move(task.prompt_tokens);
 
         if (!are_lora_equal(slot.params.lora, slot.lora)) {
-            // if lora is changed, we cannot reuse cached tokens
-            slot.cache_tokens.clear();
+            // if lora has changed, check to see if the cache should be cleared
+            if (lora_should_clear_cache(slot.lora, slot.params.lora)) {
+                SLT_INF(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), slot.params.lora.size());
+                slot.cache_tokens.clear();
+            } else {
+                SLT_INF(slot, "keeping cache for alora. %zu target loras\n", slot.params.lora.size());
+            }
             slot.lora = slot.params.lora;
+        }
+
+        // if using alora, make sure it's only a single one requested and active
+        size_t alora_invocation_start = slot.prompt_tokens.size();
+        if (lora_all_alora(slot.lora)) {
+
+            const auto & enabled_ids = lora_get_enabled_ids(slot.lora);
+            // TODO: This will error out if a user requests two aloras, but only
+            // provides the activation string for one. We could, instead search
+            // for all requested alora activation strings and then either keep
+            // only the last one, or reject if multiple are found.
+            if (enabled_ids.size() != 1) {
+                send_error(task, "Cannot run multiple aLoRAs in a single request", ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+            const auto & lora = slot.lora[enabled_ids[0]].ptr;
+
+            // get the pointer and count for the invocation tokens
+            const uint64_t      n_invocation_tokens = llama_adapter_get_alora_n_invocation_tokens(lora);
+            const llama_token * invocation_tokens   = llama_adapter_get_alora_invocation_tokens  (lora);
+
+            // scan backwards through the prompt tokens to find the last
+            // occurrence of the invocation sequence
+            int match_idx = static_cast<int>(n_invocation_tokens) - 1;
+            for (int i = slot.prompt_tokens.size() - 1; i >= 0; --i) {
+                // the token in this position matches the next token to find in
+                // the invocation sequence
+                if (slot.prompt_tokens[i] == invocation_tokens[match_idx]) {
+                    // if it's a full match, we've found the start
+                    if (match_idx == 0) {
+                        alora_invocation_start = i;
+                        break;
+                    }
+                    // otherwise, check the next token in the sequence
+                    --match_idx;
+                } else {
+                    // no match in this position, so start looking over again
+                    match_idx = static_cast<int>(n_invocation_tokens) - 1;
+                }
+            }
+
+            // if the activation string is not found, disable the alora
+            if (alora_invocation_start == slot.prompt_tokens.size()) {
+                SLT_DBG(slot, "alora %zu requested, but not found. deactivating\n", enabled_ids[0]);
+                slot.lora[enabled_ids[0]].scale = 0.0f;
+            } else {
+                SLT_DBG(slot, "alora %zu activated starting at %zu\n", enabled_ids[0], alora_invocation_start);
+                slot.alora_invocation_start = alora_invocation_start;
+            }
         }
 
         if (!slot.prompt_tokens.validate(ctx)) {
@@ -2188,10 +2478,6 @@ struct server_context {
             // Might be better to reject the request with a 400 ?
             SLT_WRN(slot, "n_predict = %d exceeds server configuration, setting to %d\n", slot.params.n_predict, slot.n_predict);
             slot.params.n_predict = slot.n_predict;
-        }
-
-        if (slot.params.ignore_eos && has_eos_token) {
-            slot.params.sampling.logit_bias.push_back({llama_vocab_eos(vocab), -INFINITY});
         }
 
         {
@@ -2224,7 +2510,7 @@ struct server_context {
         SRV_DBG("%s", "clearing KV cache\n");
 
         // clear the entire KV cache
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
         clean_kv_cache = false;
     }
 
@@ -2272,7 +2558,7 @@ struct server_context {
 
             slot.add_token(result);
             if (slot.params.stream) {
-                send_partial_response(slot, result);
+                send_partial_response(slot, result, false);
             }
         }
 
@@ -2380,11 +2666,12 @@ struct server_context {
         return slot.has_next_token; // continue
     }
 
-    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) {
+    void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
         size_t n_probs = slot.params.sampling.n_probs;
         size_t n_vocab = llama_vocab_n_tokens(vocab);
+
         if (post_sampling) {
-            const auto * cur_p = common_sampler_get_candidates(slot.smpl);
+            const auto * cur_p = common_sampler_get_candidates(slot.smpl, true);
             const size_t max_probs = cur_p->size;
 
             // set probability for sampled token
@@ -2434,16 +2721,22 @@ struct server_context {
     }
 
     void send_error(const server_slot & slot, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER) {
-        send_error(slot.id_task, error, type);
+        send_error(slot.id_task, error, type, slot.n_prompt_tokens, slot.n_ctx);
     }
 
-    void send_error(const int id_task, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER) {
+    void send_error(const int id_task, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER, const int32_t n_prompt_tokens = 0, const int32_t n_ctx = 0) {
         SRV_ERR("task id = %d, error: %s\n", id_task, error.c_str());
 
+        if (type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            GGML_ASSERT(n_ctx > 0 && n_prompt_tokens > 0);
+        }
+
         auto res = std::make_unique<server_task_result_error>();
-        res->id       = id_task;
-        res->err_type = type;
-        res->err_msg  = error;
+        res->id              = id_task;
+        res->err_type        = type;
+        res->err_msg         = error;
+        res->n_prompt_tokens = n_prompt_tokens;
+        res->n_ctx           = n_ctx;
 
         queue_results.send(std::move(res));
     }
@@ -2457,13 +2750,24 @@ struct server_context {
         return true;
     }
 
-    void send_partial_response(server_slot & slot, const completion_token_output & tkn) {
+    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress) {
         auto res = std::make_unique<server_task_result_cmpl_partial>();
 
-        res->id      = slot.id_task;
-        res->index   = slot.index;
-        res->content = tkn.text_to_send;
-        res->tokens  = { tkn.tok };
+        res->id    = slot.id_task;
+        res->index = slot.index;
+
+        if (is_progress) {
+            res->is_progress        = true;
+            res->progress.total     = slot.n_prompt_tokens;
+            res->progress.cache     = slot.n_prompt_tokens_cache;
+            res->progress.processed = slot.cache_tokens.size();
+            res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt / 1000);
+        } else {
+            res->content = tkn.text_to_send;
+            res->tokens  = { tkn.tok };
+
+            slot.update_chat_msg(res->oaicompat_msg_diffs);
+        }
 
         res->n_decoded           = slot.n_decoded;
         res->n_prompt_tokens     = slot.n_prompt_tokens;
@@ -2473,8 +2777,6 @@ struct server_context {
         res->oaicompat             = slot.params.oaicompat;
         res->oaicompat_model       = slot.params.oaicompat_model;
         res->oaicompat_cmpl_id     = slot.params.oaicompat_cmpl_id;
-
-        slot.update_chat_msg(res->oaicompat_msg_diffs);
 
         // populate res.probs_output
         if (slot.params.sampling.n_probs > 0) {
@@ -2554,12 +2856,14 @@ struct server_context {
                 continue;
             }
 
-            const float * embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-            if (embd == NULL) {
+            const float * embd = nullptr;
+            if (llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE) {
                 embd = llama_get_embeddings_ith(ctx, i);
+            } else {
+                embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
             }
 
-            if (embd == NULL) {
+            if (embd == nullptr) {
                 SLT_ERR(slot, "failed to get embeddings, token = %d, seq_id = %d\n", batch.token[i], batch.seq_id[i][0]);
 
                 res->embedding.push_back(std::vector<float>(n_embd, 0.0f));
@@ -2567,12 +2871,12 @@ struct server_context {
             }
 
             // normalize only when there is pooling
-            // TODO: configurable
             if (llama_pooling_type(slot.ctx) != LLAMA_POOLING_TYPE_NONE) {
-                common_embd_normalize(embd, embd_res.data(), n_embd, 2);
+                common_embd_normalize(embd, embd_res.data(), n_embd, slot.params.embd_normalize);
                 res->embedding.push_back(embd_res);
+                break;
             } else {
-                res->embedding.push_back({ embd, embd + n_embd });
+                res->embedding.emplace_back(embd, embd + n_embd);
             }
         }
 
@@ -2732,6 +3036,7 @@ struct server_context {
                         queue_tasks.defer(std::move(task));
                         break;
                     }
+
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
@@ -2766,7 +3071,7 @@ struct server_context {
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
-                        json slot_data = slot.to_json();
+                        json slot_data = slot.to_json(true);
 
                         if (slot.is_processing()) {
                             n_processing_slots++;
@@ -2790,6 +3095,8 @@ struct server_context {
                     res->t_prompt_processing_total       = metrics.t_prompt_processing_total;
                     res->n_tokens_predicted_total        = metrics.n_tokens_predicted_total;
                     res->t_tokens_generation_total       = metrics.t_tokens_generation_total;
+
+                    res->n_past_max = metrics.n_past_max;
 
                     res->n_prompt_tokens_processed = metrics.n_prompt_tokens_processed;
                     res->t_prompt_processing       = metrics.t_prompt_processing;
@@ -2910,7 +3217,7 @@ struct server_context {
 
                     // Erase token cache
                     const size_t n_erased = slot->cache_tokens.size();
-                    llama_kv_self_seq_rm(ctx, slot->id, -1, -1);
+                    llama_memory_seq_rm(llama_get_memory(ctx), slot->id, -1, -1);
                     slot->cache_tokens.clear();
 
                     auto res = std::make_unique<server_task_result_slot_erase>();
@@ -2985,8 +3292,8 @@ struct server_context {
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
 
-                llama_kv_self_seq_rm (ctx, slot.id, n_keep            , n_keep + n_discard);
-                llama_kv_self_seq_add(ctx, slot.id, n_keep + n_discard, slot.n_past,        -n_discard);
+                llama_memory_seq_rm (llama_get_memory(ctx), slot.id, n_keep            , n_keep + n_discard);
+                llama_memory_seq_add(llama_get_memory(ctx), slot.id, n_keep + n_discard, slot.n_past,        -n_discard);
 
                 // add generated tokens to cache
                 {
@@ -3045,6 +3352,8 @@ struct server_context {
         int32_t n_ubatch = llama_n_ubatch(ctx);
 
         // next, batch any pending prompts without exceeding n_batch
+        float alora_scale = -1.0f;
+        size_t alora_disabled_id = 0;
         if (params_base.cont_batching || batch.n_tokens == 0) {
             for (auto & slot : slots) {
                 // check if we can batch this slot with the previous one
@@ -3094,7 +3403,14 @@ struct server_context {
                             continue;
                         }
 
-                        if (slot.is_non_causal()) {
+                        // TODO: support memory-less logits computation
+                        if (slot.need_logits() && !llama_get_memory(ctx)) {
+                            slot.release();
+                            send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
+                            continue;
+                        }
+
+                        if (!slot.can_split()) {
                             if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.release();
                                 send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
@@ -3103,7 +3419,7 @@ struct server_context {
 
                             if (slot.n_prompt_tokens > slot.n_ctx) {
                                 slot.release();
-                                send_error(slot, "input is larger than the max context size. skipping", ERROR_TYPE_SERVER);
+                                send_error(slot, "input is larger than the max context size. skipping", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 continue;
                             }
                         } else {
@@ -3113,7 +3429,7 @@ struct server_context {
                                 //       context shift should be applied only during the generation phase
                                 if (slot.n_prompt_tokens >= slot.n_ctx) {
                                     slot.release();
-                                    send_error(slot, "the request exceeds the available context size. try increasing the context size or enable context shift", ERROR_TYPE_INVALID_REQUEST);
+                                    send_error(slot, "the request exceeds the available context size. try increasing the context size or enable context shift", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                     continue;
                                 }
                             }
@@ -3158,6 +3474,12 @@ struct server_context {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 slot.n_past = slot.cache_tokens.get_common_prefix(prompt_tokens);
 
+                                // if there is an alora invoked, don't cache after the invocation start
+                                if (slot.alora_invocation_start >= 0) {
+                                    SLT_DBG(slot, "only caching to alora invocation start (n_past=%d, alora_invocation_start=%d)\n", slot.n_past, slot.alora_invocation_start);
+                                    slot.n_past = std::min(slot.n_past, slot.alora_invocation_start - 1);
+                                }
+
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                 if (params_base.n_cache_reuse > 0) {
                                     size_t head_c = slot.n_past; // cache
@@ -3189,8 +3511,8 @@ struct server_context {
 
                                             const int64_t kv_shift = (int64_t) head_p - (int64_t) head_c;
 
-                                            llama_kv_self_seq_rm (ctx, slot.id, head_p, head_c);
-                                            llama_kv_self_seq_add(ctx, slot.id, head_c, head_c + n_match, kv_shift);
+                                            llama_memory_seq_rm (llama_get_memory(ctx), slot.id, head_p, head_c);
+                                            llama_memory_seq_add(llama_get_memory(ctx), slot.id, head_c, head_c + n_match, kv_shift);
 
                                             for (size_t i = 0; i < n_match; i++) {
                                                 slot.cache_tokens.set_token(head_p + i, slot.cache_tokens[head_c + i]);
@@ -3211,35 +3533,82 @@ struct server_context {
                                 slot.n_past = 0;
                             }
 
+                            const auto n_swa = llama_model_n_swa(model);
+
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
-                                const auto pos_min = llama_kv_self_seq_pos_min(ctx, slot.id);
+                                const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min);
                                     GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
                                 }
 
-                                const auto n_swa = llama_model_n_swa(model);
-                                if (pos_min > slot.n_past - n_swa) {
+                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
+
+                                if (pos_min > pos_min_thold) {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
-                                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
-                                            "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                    slot.n_past = 0;
+
+                                    // search for a SWA checkpoint
+                                    const auto it = std::find_if(
+                                        slot.swa_checkpoints.rbegin(),
+                                        slot.swa_checkpoints.rend(),
+                                        [&](const auto & cur) {
+                                            return cur.pos_min <= pos_min_thold;
+                                        }
+                                    );
+
+                                    bool do_reset = it == slot.swa_checkpoints.rend();
+
+                                    if (!do_reset) {
+                                        // restore the checkpoint
+                                        const size_t swa_size = it->data.size();
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), swa_size, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
+
+                                        if (n != swa_size) {
+                                            SLT_ERR(slot, "failed to restore SWA checkpoint, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
+                                            do_reset = true;
+                                        } else {
+                                            slot.n_past = std::min(slot.n_past, it->pos_max);
+
+                                            SLT_WRN(slot, "SWA checkpoint restore, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
+                                        }
+                                    }
+
+                                    if (do_reset) {
+                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                                                "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+
+                                        slot.n_past = 0;
+                                        slot.swa_checkpoints.clear();
+                                    }
+                                }
+                            }
+
+                            if (n_swa > 0) {
+                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
+
+                                // erase any checkpoints with pos_min > pos_min_thold
+                                for (int i = (int) slot.swa_checkpoints.size() - 1; i >= 0; i--) {
+                                    const auto & cur = slot.swa_checkpoints[i];
+                                    if (cur.pos_min > pos_min_thold) {
+                                        slot.swa_checkpoints.erase(slot.swa_checkpoints.begin() + i);
+
+                                        SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %.3f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+                                    }
                                 }
                             }
                         }
 
                         if (slot.n_past == slot.n_prompt_tokens && slot.n_past > 0) {
-                            // we have to evaluate at least 1 token to generate logits.
-                            SLT_WRN(slot, "need to evaluate at least 1 token to generate logits, n_past = %d, n_prompt_tokens = %d\n", slot.n_past, slot.n_prompt_tokens);
+                            SLT_WRN(slot, "need to evaluate at least 1 token for each active slot, n_past = %d, n_prompt_tokens = %d\n", slot.n_past, slot.n_prompt_tokens);
 
                             slot.n_past--;
                         }
 
+                        slot.n_prompt_tokens_cache     = slot.n_past;
                         slot.n_prompt_tokens_processed = 0;
                     }
 
-                    // non-causal tasks require to fit the entire prompt in the physical batch
-                    if (slot.is_non_causal()) {
+                    if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
                         if (batch.n_tokens + slot.n_prompt_tokens > n_batch) {
                             continue;
@@ -3247,12 +3616,13 @@ struct server_context {
                     }
 
                     // keep only the common part
-                    if (!llama_kv_self_seq_rm(ctx, slot.id, slot.n_past, -1)) {
+                    if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.n_past, -1)) {
                         // could not partially delete (likely using a non-Transformer model)
-                        llama_kv_self_seq_rm(ctx, slot.id, -1, -1);
+                        llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
 
                         // there is no common part left
-                        slot.n_past = 0;
+                        slot.n_past                = 0;
+                        slot.n_prompt_tokens_cache = 0;
                     }
 
                     SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
@@ -3261,8 +3631,7 @@ struct server_context {
                     slot.cache_tokens.keep_first(slot.n_past);
 
                     // check if we should process the image
-                    if (slot.n_past < slot.n_prompt_tokens
-                            && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
+                    if (slot.n_past < slot.n_prompt_tokens && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
                         // process the image
                         int32_t new_n_past;
                         int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past);
@@ -3285,6 +3654,20 @@ struct server_context {
                         slot.n_prompt_tokens_processed += n_pos;
                     }
 
+                    // If using an alora, there may be uncached tokens that come
+                    // before the invocation sequence. When this happens, the
+                    // tokens before the invocation sequence need to be
+                    // processed without the adpter in a separate batch, then
+                    // the adapter needs to be enabled for the remaining tokens.
+                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.n_past) {
+                        SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_past = %d, alora_invocation_start = %d)\n", slot.n_past, slot.alora_invocation_start);
+                        const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
+                        GGML_ASSERT(enabled_loras.size() == 1);
+                        alora_scale = slot.lora[enabled_loras[0]].scale;
+                        slot.lora[enabled_loras[0]].scale = 0.0f;
+                        alora_disabled_id = enabled_loras[0];
+                    }
+
                     // add prompt tokens for processing in the current batch
                     while (slot.n_past < slot.n_prompt_tokens && batch.n_tokens < n_batch) {
                         // get next token to process
@@ -3293,8 +3676,16 @@ struct server_context {
                             break; // end of text chunk
                         }
 
-                        // without pooling, we want to output the embeddings for all the tokens in the batch
-                        const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING && llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE;
+                        // if this is an alora request with pre-invocation
+                        // tokens that are not cached, we need to stop filling
+                        // this batch at those pre-invocation tokens.
+                        if (alora_scale > 0 && slot.n_past == slot.alora_invocation_start - 1) {
+                            SLT_DBG(slot, "stop prompt batch filling at (n_past = %d, alora_invocation_start = %d)\n", slot.n_past, slot.alora_invocation_start);
+                            break;
+                        }
+
+                        // embedding requires all tokens in the batch to be output
+                        const bool need_embd = server_task_type_need_embd(slot.task_type);
 
                         common_batch_add(batch, cur_tok, slot.n_past, { slot.id }, need_embd);
                         slot.cache_tokens.push_back(cur_tok);
@@ -3348,41 +3739,17 @@ struct server_context {
         SRV_DBG("decoding batch, n_tokens = %d\n", batch.n_tokens);
 
         if (slot_batched) {
-            // make sure we're in the right embedding mode
-            llama_set_embeddings(ctx, slot_batched->is_non_causal());
             // apply lora, only need to do it once per batch
             common_set_adapter_lora(ctx, slot_batched->lora);
-        }
 
-        const bool do_encode = (params_base.embedding || params_base.reranking);
-
-        // pad the batch so that batch.n_tokens >= n_slots
-        // TODO: temporary workaround for https://github.com/ggml-org/llama.cpp/issues/13689
-        if (do_encode) {
-            const int n_slots = slots.size();
-
-            if (batch.n_tokens < n_slots) {
-                std::set<llama_seq_id> seq_ids;
-                for (int j = 0; j < batch.n_tokens; ++j) {
-                    seq_ids.insert(batch.seq_id[j][0]);
-                }
-
-                // find unused sequence id
-                llama_seq_id seq_id = -1;
-                for (int i = 0; i < n_slots; ++i) {
-                    if (seq_ids.find(i) == seq_ids.end()) {
-                        seq_id = i;
-                    }
-                }
-
-                const int n_add = n_slots - batch.n_tokens;
-
-                SRV_WRN("adding %d dummy tokens to the batch, seq_id = %d\n", n_add, seq_id);
-
-                for (int j = 0; j < n_add; ++j) {
-                    common_batch_add(batch, 0, j, { seq_id }, false);
-                }
+            // if the lora is temporarily disabled for an alora, re-enable it
+            // for next time
+            if (alora_scale > 0.0f) {
+                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
+                slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
+
+            llama_set_embeddings(ctx, slot_batched->need_embd());
         }
 
         int32_t i_next = 0;
@@ -3418,8 +3785,11 @@ struct server_context {
                     }
 
                     if (ret < -1) {
+                        // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
                         err = "Compute error.";
                     }
+
+                    // TODO: handle ret == 2 (abort) when we start aborting
 
                     if (!err.empty()) {
                         SRV_ERR("%s, i = %d, n_batch = %d, ret = %d\n", err.c_str(), i, n_batch, ret);
@@ -3446,6 +3816,13 @@ struct server_context {
             n_batch = llama_n_batch(ctx);
 
             for (auto & slot : slots) {
+                // optionally send prompt processing progress
+                if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
+                    if (slot.params.stream && slot.params.return_progress) {
+                        send_partial_response(slot, {}, true);
+                    }
+                }
+
                 if (slot.i_batch < (int) i || slot.i_batch >= (int) (i + n_tokens)) {
                     continue; // continue loop of slots
                 }
@@ -3468,6 +3845,39 @@ struct server_context {
 
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
+
+                    // make a checkpoint with the SWA memory
+                    // checkpoints are needed only if we are not using "--swa-full"
+                    if (llama_model_n_swa(model) > 0 && !params_base.swa_full && params_base.n_swa_checkpoints > 0) {
+                        if (slot.swa_checkpoints.size() >= (size_t) params_base.n_swa_checkpoints) {
+                            {
+                                const auto & cur = slot.swa_checkpoints.back();
+
+                                SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %.3f MiB\n",
+                                        cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+                            }
+
+                            slot.swa_checkpoints.erase(slot.swa_checkpoints.begin());
+                        }
+
+                        const size_t swa_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
+
+                        auto & cur = slot.swa_checkpoints.emplace_back(swa_checkpoint{
+                            /*.pos_min = */ llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id),
+                            /*.pos_max = */ llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id),
+                            /*.data    = */ std::vector<uint8_t>(swa_size),
+                        });
+
+                        llama_state_seq_get_data_ext(ctx, cur.data.data(), swa_size, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
+
+                        float size_total = 0.0f;
+                        for (const auto & checkpoint : slot.swa_checkpoints) {
+                            size_total += (float) checkpoint.data.size() / 1024 / 1024;
+                        }
+
+                        SLT_WRN(slot, "SWA checkpoint create, pos_min = %d, pos_max = %d, size = %.3f MiB, total = %d/%d (%.3f MiB)\n",
+                                cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024, (int) slot.swa_checkpoints.size(), params_base.n_swa_checkpoints, size_total);
+                    }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
                 }
@@ -3555,15 +3965,15 @@ struct server_context {
                 const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
 
-                // keep track of total number of tokens generated in the draft
-                slot.n_draft_total += draft.size();
-
                 // ignore small drafts
                 if (slot.params.speculative.n_min > (int) draft.size()) {
                     SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.params.speculative.n_min);
 
                     continue;
                 }
+
+                // keep track of total number of drafted tokens tested
+                slot.n_draft_total += draft.size();
 
                 // construct the speculation batch
                 common_batch_clear(slot.batch_spec);
@@ -3583,13 +3993,13 @@ struct server_context {
                 slot.n_past    += ids.size();
                 slot.n_decoded += ids.size();
 
-                // update how many tokens out of draft was accepted
+                // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
 
                 slot.cache_tokens.push_back(id);
                 slot.cache_tokens.insert({ids.begin(), ids.end() - 1});
 
-                llama_kv_self_seq_rm(ctx, slot.id, slot.n_past, -1);
+                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.n_past, -1);
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;
@@ -3937,6 +4347,10 @@ int main(int argc, char ** argv) {
                     {"help",  "Total number of llama_decode() calls"},
                     {"value",  res_metrics->n_decode_total}
             }, {
+                    {"name",  "n_past_max"},
+                    {"help",  "Largest observed n_past."},
+                    {"value",  res_metrics->n_past_max}
+            }, {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_metrics->n_busy_slots_total / std::max((float) res_metrics->n_decode_total, 1.f)}
@@ -4100,16 +4514,20 @@ int main(int argc, char ** argv) {
         }
     };
 
-    const auto handle_props = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_props = [&params, &ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
         // this endpoint is publicly available, please only return what is safe to be exposed
         json data = {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
             { "model_path",                  ctx_server.params_base.model.path },
-            { "modalities",                  json{
+            { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
                 {"audio",  ctx_server.oai_parser_opt.allow_audio},
             } },
+            { "endpoint_slots",              params.endpoint_slots },
+            { "endpoint_props",              params.endpoint_props },
+            { "endpoint_metrics",            params.endpoint_metrics },
+            { "webui",                       params.webui },
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},
@@ -4138,6 +4556,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_api_show = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+        bool has_mtmd = ctx_server.mctx != nullptr;
         json data = {
             {
                 "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -4159,7 +4578,7 @@ int main(int argc, char ** argv) {
                 {"quantization_level", ""}
             }},
             {"model_info", ""},
-            {"capabilities", {"completion"}}
+            {"capabilities", has_mtmd ? json({"completion","multimodal"}) : json({"completion"})}
         };
 
         res_ok(res, data);
@@ -4176,11 +4595,6 @@ int main(int argc, char ** argv) {
             oaicompat_type oaicompat) -> void {
         GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
-        if (ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
-            return;
-        }
-
         auto completion_id = gen_chatcmplid();
         std::unordered_set<int> task_ids;
         try {
@@ -4190,59 +4604,15 @@ int main(int argc, char ** argv) {
             // TODO: this log can become very long, put it behind a flag or think about a more compact format
             //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
-            // process files
-            mtmd::bitmaps bitmaps;
-            const bool has_mtmd = ctx_server.mctx != nullptr;
-            {
-                if (!has_mtmd && !files.empty()) {
-                    throw std::runtime_error("This server does not support multimodal");
-                }
-                for (auto & file : files) {
-                    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, file.data(), file.size()));
-                    if (!bmp.ptr) {
-                        throw std::runtime_error("Failed to load image or audio file");
-                    }
-                    // calculate bitmap hash (for KV caching)
-                    std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-                    bmp.set_id(hash.c_str());
-                    bitmaps.entries.push_back(std::move(bmp));
-                }
-            }
-
             // process prompt
             std::vector<server_tokens> inputs;
-            if (oaicompat && !prompt.is_string()) {
-                throw std::runtime_error("prompt must be a string");
-            }
 
-            if (oaicompat && has_mtmd) {
-                // multimodal
-                std::string prompt_str = prompt.get<std::string>();
-                mtmd_input_text inp_txt = {
-                    prompt_str.c_str(),
-                    /* add_special */   true,
-                    /* parse_special */ true,
-                };
-                mtmd::input_chunks chunks(mtmd_input_chunks_init());
-                auto bitmaps_c_ptr = bitmaps.c_ptr();
-                int32_t tokenized = mtmd_tokenize(ctx_server.mctx,
-                                                    chunks.ptr.get(),
-                                                    &inp_txt,
-                                                    bitmaps_c_ptr.data(),
-                                                    bitmaps_c_ptr.size());
-                if (tokenized != 0) {
-                    throw std::runtime_error("Failed to tokenize prompt");
-                }
-
-                server_tokens tmp(chunks, true);
-                inputs.push_back(std::move(tmp));
+            if (oaicompat && ctx_server.mctx != nullptr) {
+                // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
+                inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
             } else {
-                // non-multimodal version
-                auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
-                for (auto & p : tokenized_prompts) {
-                    auto tmp = server_tokens(p, ctx_server.mctx != nullptr);
-                    inputs.push_back(std::move(tmp));
-                }
+                // Everything else, including multimodal completions.
+                inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
             }
 
             tasks.reserve(inputs.size());
@@ -4411,7 +4781,7 @@ int main(int argc, char ** argv) {
         data["input_extra"] = input_extra; // default to empty array if it's not exist
 
         std::string prompt = json_value(data, "prompt", std::string());
-        std::vector<llama_tokens> tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, false, true);
+        std::vector<server_tokens> tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, false, true);
         SRV_DBG("creating infill tasks, n_prompts = %d\n", (int) tokenized_prompts.size());
         data["prompt"] = format_infill(
             ctx_server.vocab,
@@ -4422,7 +4792,7 @@ int main(int argc, char ** argv) {
             ctx_server.params_base.n_predict,
             ctx_server.slots[0].n_ctx, // TODO: there should be a better way
             ctx_server.params_base.spm_infill,
-            tokenized_prompts[0]
+            tokenized_prompts[0].get_text_tokens() // TODO: this could maybe be multimodal.
         );
 
         std::vector<raw_buffer> files; // dummy
@@ -4435,12 +4805,8 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_chat_completions = [&ctx_server, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_chat_completions = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         LOG_DBG("request: %s\n", req.body.c_str());
-        if (ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
-            return;
-        }
 
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
@@ -4475,7 +4841,7 @@ int main(int argc, char ** argv) {
         if (current_state == SERVER_STATE_READY) {
             model_meta = ctx_server.model_meta();
         }
-
+        bool has_mtmd = ctx_server.mctx != nullptr;
         json models = {
             {"models", {
                 {
@@ -4487,7 +4853,7 @@ int main(int argc, char ** argv) {
                     {"type", "model"},
                     {"description", ""},
                     {"tags", {""}},
-                    {"capabilities", {"completion"}},
+                    {"capabilities", has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
                     {"parameters", ""},
                     {"details", {
                         {"parent_model", ""},
@@ -4520,9 +4886,10 @@ int main(int argc, char ** argv) {
         json tokens_response = json::array();
         if (body.count("content") != 0) {
             const bool add_special = json_value(body, "add_special", false);
+            const bool parse_special = json_value(body, "parse_special", true);
             const bool with_pieces = json_value(body, "with_pieces", false);
 
-            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, true);
+            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, parse_special);
 
             if (with_pieces) {
                 for (const auto& token : tokens) {
@@ -4568,12 +4935,17 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res, oaicompat_type oaicompat) {
-        const json body = json::parse(req.body);
+        if (!ctx_server.params_base.embedding) {
+            res_error(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+            return;
+        }
 
         if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
             res_error(res, format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
+
+        const json body = json::parse(req.body);
 
         // for the shape of input/content, see tokenize_input_prompts()
         json prompt;
@@ -4598,12 +4970,20 @@ int main(int argc, char ** argv) {
             }
         }
 
-        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
+        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
         for (const auto & tokens : tokenized_prompts) {
             // this check is necessary for models that do not add BOS token to the input
             if (tokens.empty()) {
                 res_error(res, format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
                 return;
+            }
+        }
+
+        int embd_normalize = 2; // default to Euclidean/L2 norm
+        if (body.count("embd_normalize") != 0) {
+            embd_normalize = body.at("embd_normalize");
+            if (llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
+                SRV_DBG("embd_normalize is not supported by pooling type %d, ignoring it\n", llama_pooling_type(ctx_server.ctx));
             }
         }
 
@@ -4618,10 +4998,11 @@ int main(int argc, char ** argv) {
 
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
-                task.prompt_tokens = server_tokens(tokenized_prompts[i], ctx_server.mctx != nullptr);
+                task.prompt_tokens = std::move(tokenized_prompts[i]);
 
                 // OAI-compat
                 task.params.oaicompat = oaicompat;
+                task.params.embd_normalize = embd_normalize;
 
                 tasks.push_back(std::move(task));
             }
@@ -4664,8 +5045,8 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_rerank = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {
-        if (!ctx_server.params_base.reranking || ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking` and without `--embedding`", ERROR_TYPE_NOT_SUPPORTED));
+        if (!ctx_server.params_base.embedding || ctx_server.params_base.pooling_type != LLAMA_POOLING_TYPE_RANK) {
+            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -4704,7 +5085,10 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        llama_tokens tokenized_query = tokenize_input_prompts(ctx_server.vocab, query, /* add_special */ false, true)[0];
+        std::vector<server_tokens> tokenized_queries = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, query, /* add_special */ false, true);
+        if (tokenized_queries.size() != 1) {
+            res_error(res, format_error_response("\"query\" must contain only a single prompt", ERROR_TYPE_INVALID_REQUEST));
+        }
 
         // create and queue the task
         json responses = json::array();
@@ -4712,14 +5096,14 @@ int main(int argc, char ** argv) {
         std::unordered_set<int> task_ids;
         {
             std::vector<server_task> tasks;
-            auto tokenized_docs = tokenize_input_prompts(ctx_server.vocab, documents, /* add_special */ false, true);
+            auto tokenized_docs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, documents, /* add_special */ false, true);
             tasks.reserve(tokenized_docs.size());
             for (size_t i = 0; i < tokenized_docs.size(); i++) {
-                auto tmp = format_rerank(ctx_server.vocab, tokenized_query, tokenized_docs[i]);
+                auto tmp = format_rerank(ctx_server.vocab, tokenized_queries[0], tokenized_docs[i]);
                 server_task task   = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
-                task.prompt_tokens = server_tokens(tmp, ctx_server.mctx != nullptr);
+                task.prompt_tokens = std::move(tmp);
                 tasks.push_back(std::move(task));
             }
 
@@ -4757,11 +5141,26 @@ int main(int argc, char ** argv) {
         const auto & loras = ctx_server.params_base.lora_adapters;
         for (size_t i = 0; i < loras.size(); ++i) {
             auto & lora = loras[i];
-            result.push_back({
+            json entry = {
                 {"id", i},
                 {"path", lora.path},
                 {"scale", lora.scale},
-            });
+                {"task_name", lora.task_name},
+                {"prompt_prefix", lora.prompt_prefix},
+            };
+            std::string alora_invocation_string = "";
+            const uint64_t n_alora_tokens = llama_adapter_get_alora_n_invocation_tokens(lora.ptr);
+            std::vector<llama_token> alora_invocation_tokens;
+            if (n_alora_tokens) {
+                const llama_token * alora_tokens = llama_adapter_get_alora_invocation_tokens(lora.ptr);
+                for (uint64_t i = 0; i < n_alora_tokens; ++i) {
+                    alora_invocation_string += common_token_to_piece(ctx_server.ctx, alora_tokens[i]);
+                    alora_invocation_tokens.push_back(alora_tokens[i]);
+                }
+                entry["alora_invocation_string"] = alora_invocation_string;
+                entry["alora_invocation_tokens"] = alora_invocation_tokens;
+            }
+            result.push_back(std::move(entry));
         }
         res_ok(res, result);
         res.status = 200; // HTTP OK
@@ -4806,14 +5205,14 @@ int main(int argc, char ** argv) {
         // register static assets routes
         if (!params.public_path.empty()) {
             // Set the base directory for serving static files
-            bool is_found = svr->set_mount_point("/", params.public_path);
+            bool is_found = svr->set_mount_point(params.api_prefix + "/", params.public_path);
             if (!is_found) {
                 LOG_ERR("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
                 return 1;
             }
         } else {
             // using embedded static index.html
-            svr->Get("/", [](const httplib::Request & req, httplib::Response & res) {
+            svr->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
                 if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
                     res.set_content("Error: gzip is not supported by this browser", "text/plain");
                 } else {
@@ -4829,37 +5228,37 @@ int main(int argc, char ** argv) {
     }
 
     // register API routes
-    svr->Get ("/health",              handle_health); // public endpoint (no API key check)
-    svr->Get ("/metrics",             handle_metrics);
-    svr->Get ("/props",               handle_props);
-    svr->Post("/props",               handle_props_change);
-    svr->Post("/api/show",            handle_api_show);
-    svr->Get ("/models",              handle_models); // public endpoint (no API key check)
-    svr->Get ("/v1/models",           handle_models); // public endpoint (no API key check)
-    svr->Get ("/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
-    svr->Post("/completion",          handle_completions); // legacy
-    svr->Post("/completions",         handle_completions);
-    svr->Post("/v1/completions",      handle_completions_oai);
-    svr->Post("/chat/completions",    handle_chat_completions);
-    svr->Post("/v1/chat/completions", handle_chat_completions);
-    svr->Post("/api/chat",            handle_chat_completions); // ollama specific endpoint
-    svr->Post("/infill",              handle_infill);
-    svr->Post("/embedding",           handle_embeddings); // legacy
-    svr->Post("/embeddings",          handle_embeddings);
-    svr->Post("/v1/embeddings",       handle_embeddings_oai);
-    svr->Post("/rerank",              handle_rerank);
-    svr->Post("/reranking",           handle_rerank);
-    svr->Post("/v1/rerank",           handle_rerank);
-    svr->Post("/v1/reranking",        handle_rerank);
-    svr->Post("/tokenize",            handle_tokenize);
-    svr->Post("/detokenize",          handle_detokenize);
-    svr->Post("/apply-template",      handle_apply_template);
+    svr->Get (params.api_prefix + "/health",              handle_health); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/metrics",             handle_metrics);
+    svr->Get (params.api_prefix + "/props",               handle_props);
+    svr->Post(params.api_prefix + "/props",               handle_props_change);
+    svr->Post(params.api_prefix + "/api/show",            handle_api_show);
+    svr->Get (params.api_prefix + "/models",              handle_models); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/v1/models",           handle_models); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
+    svr->Post(params.api_prefix + "/completion",          handle_completions); // legacy
+    svr->Post(params.api_prefix + "/completions",         handle_completions);
+    svr->Post(params.api_prefix + "/v1/completions",      handle_completions_oai);
+    svr->Post(params.api_prefix + "/chat/completions",    handle_chat_completions);
+    svr->Post(params.api_prefix + "/v1/chat/completions", handle_chat_completions);
+    svr->Post(params.api_prefix + "/api/chat",            handle_chat_completions); // ollama specific endpoint
+    svr->Post(params.api_prefix + "/infill",              handle_infill);
+    svr->Post(params.api_prefix + "/embedding",           handle_embeddings); // legacy
+    svr->Post(params.api_prefix + "/embeddings",          handle_embeddings);
+    svr->Post(params.api_prefix + "/v1/embeddings",       handle_embeddings_oai);
+    svr->Post(params.api_prefix + "/rerank",              handle_rerank);
+    svr->Post(params.api_prefix + "/reranking",           handle_rerank);
+    svr->Post(params.api_prefix + "/v1/rerank",           handle_rerank);
+    svr->Post(params.api_prefix + "/v1/reranking",        handle_rerank);
+    svr->Post(params.api_prefix + "/tokenize",            handle_tokenize);
+    svr->Post(params.api_prefix + "/detokenize",          handle_detokenize);
+    svr->Post(params.api_prefix + "/apply-template",      handle_apply_template);
     // LoRA adapters hotswap
-    svr->Get ("/lora-adapters",       handle_lora_adapters_list);
-    svr->Post("/lora-adapters",       handle_lora_adapters_apply);
+    svr->Get (params.api_prefix + "/lora-adapters",       handle_lora_adapters_list);
+    svr->Post(params.api_prefix + "/lora-adapters",       handle_lora_adapters_apply);
     // Save & load slots
-    svr->Get ("/slots",               handle_slots);
-    svr->Post("/slots/:id_slot",      handle_slots_action);
+    svr->Get (params.api_prefix + "/slots",               handle_slots);
+    svr->Post(params.api_prefix + "/slots/:id_slot",      handle_slots_action);
 
     //
     // Start the server
@@ -4880,7 +5279,9 @@ int main(int argc, char ** argv) {
     };
 
     bool was_bound = false;
+    bool is_sock = false;
     if (string_ends_with(std::string(params.hostname), ".sock")) {
+        is_sock = true;
         LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
         svr->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
@@ -4929,7 +5330,7 @@ int main(int argc, char ** argv) {
     // print sample chat example to make it clear which template is used
     LOG_INF("%s: chat template, chat_template: %s, example_format: '%s'\n", __func__,
         common_chat_templates_source(ctx_server.chat_templates.get()),
-        common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja).c_str());
+        common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja, ctx_server.params_base.default_template_kwargs).c_str());
 
     ctx_server.queue_tasks.on_new_task([&ctx_server](server_task && task) {
         ctx_server.process_single_task(std::move(task));
@@ -4958,7 +5359,9 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    LOG_INF("%s: server is listening on http://%s:%d - starting the main loop\n", __func__, params.hostname.c_str(), params.port);
+    LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
+            is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
+                      string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
 
     // this call blocks the main thread until queue_tasks.terminate() is called
     ctx_server.queue_tasks.start_loop();

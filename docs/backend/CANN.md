@@ -8,6 +8,7 @@
  - [DataType Supports](#datatype-supports)
  - [Docker](#docker)
  - [Linux](#linux)
+ - [Environment variable setup](#environment-variable-setup)
  - [TODO](#todo)
 
 
@@ -290,5 +291,26 @@ Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang
 
 We would like to thank Tuo Dai, Shanni Li, and all of the project maintainers from Huawei Technologies Co., Ltd for their help during the code development and pull request.
 
-## TODO
-- Support more models and data types.
+## Environment variable setup
+
+### GGML_CANN_MEM_POOL
+
+Specifies the memory pool management strategy, Default is vmm.
+
+- vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
+
+- prio: Employs a priority queue-based memory pool management.
+
+- leg: Uses a fixed-size buffer pool.
+
+### GGML_CANN_DISABLE_BUF_POOL_CLEAN
+
+Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
+
+### GGML_CANN_WEIGHT_NZ
+
+Converting the matmul weight format from ND to NZ to improve performance. Enabled by default.
+
+### GGML_CANN_ACL_GRAPH
+
+Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default.

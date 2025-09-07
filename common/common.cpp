@@ -41,6 +41,7 @@
 #endif
 #include <locale>
 #include <windows.h>
+#include <string.h>
 #include <fcntl.h>
 #include <io.h>
 #else
@@ -448,6 +449,15 @@ void string_replace_all(std::string & s, const std::string & search, const std::
 bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
     return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
 }
+
+bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
+    bool has_suffix = string_ends_with(str, suffix);
+    if (has_suffix) {
+        str = str.substr(0, str.size() - suffix.size());
+    }
+    return has_suffix;
+}
+
 size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
     if (!str.empty() && !stop.empty()) {
         const char text_last_char = str.back();
@@ -466,7 +476,7 @@ size_t string_find_partial_stop(const std::string_view & str, const std::string_
 
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
-    return std::regex_replace(s, special_chars, "\\$0");
+    return std::regex_replace(s, special_chars, "\\$&");
 }
 
 std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
@@ -548,13 +558,6 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
 
         auto detokenized = common_token_to_piece(ctx, token);
 
-        detokenized.erase(
-            std::remove_if(
-                detokenized.begin(),
-                detokenized.end(),
-                [](const unsigned char c) { return !std::isprint(c); }),
-            detokenized.end());
-
         buf << "'" << detokenized << "'"
             << ":" << std::to_string(token);
     }
@@ -578,13 +581,6 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
         }
 
         auto detokenized = common_token_to_piece(ctx, batch.token[i]);
-
-        detokenized.erase(
-                std::remove_if(
-                    detokenized.begin(),
-                    detokenized.end(),
-                    [](const unsigned char c) { return !std::isprint(c); }),
-                detokenized.end());
 
         buf << "\n"          << std::to_string(i)
             << ", token '"   << detokenized << "'"
@@ -706,11 +702,17 @@ bool fs_validate_filename(const std::string & filename) {
         // disable C++17 deprecation warning for std::codecvt_utf8
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
+
         std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
 
 #if defined(__clang__)
 #    pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#    pragma GCC diagnostic pop
 #endif
 
         filename_utf32 = converter.from_bytes(filename);
@@ -767,6 +769,9 @@ bool fs_validate_filename(const std::string & filename) {
     return true;
 }
 
+#include <iostream>
+
+
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
 #ifdef _WIN32
@@ -784,9 +789,16 @@ bool fs_create_directory_with_parents(const std::string & path) {
     // process path from front to back, procedurally creating directories
     while ((pos_slash = path.find('\\', pos_slash)) != std::string::npos) {
         const std::wstring subpath = wpath.substr(0, pos_slash);
-        const wchar_t * test = subpath.c_str();
 
-        const bool success = CreateDirectoryW(test, NULL);
+        pos_slash += 1;
+
+        // skip the drive letter, in some systems it can return an access denied error
+        if (subpath.length() == 2 && subpath[1] == ':') {
+            continue;
+        }
+
+        const bool success = CreateDirectoryW(subpath.c_str(), NULL);
+
         if (!success) {
             const DWORD error = GetLastError();
 
@@ -800,8 +812,6 @@ bool fs_create_directory_with_parents(const std::string & path) {
                 return false;
             }
         }
-
-        pos_slash += 1;
     }
 
     return true;
@@ -891,50 +901,24 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+            __func__, params.model.path.c_str());
         return iparams;
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    if (params.reranking) {
-        bool ok = true;
-
-        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
-            ok = false;
-        }
-
-        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
-        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
-
-        if (!has_eos && !has_sep) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
-            ok = false;
-        } else if (!has_eos) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
-        } else if (!has_sep) {
-            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
-            ok = false;
-        }
-
-        if (!ok) {
-            llama_model_free(model);
-
-            return iparams;
-        }
-    }
-
     auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+            __func__, params.model.path.c_str());
         llama_model_free(model);
         return iparams;
     }
 
-    if (params.ctx_shift && !llama_kv_self_can_shift(lctx)) {
+    if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
         LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
         params.ctx_shift = false;
     }
@@ -966,6 +950,35 @@ struct common_init_result common_init_from_params(common_params & params) {
         }
     }
 
+    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
+        bool ok = true;
+
+        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
+            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
+            ok = false;
+        }
+
+        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
+        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+
+        if (!has_eos && !has_sep) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
+            ok = false;
+        } else if (!has_eos) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
+        } else if (!has_sep) {
+            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
+            ok = false;
+        }
+
+        if (!ok) {
+            llama_free(lctx);
+            llama_model_free(model);
+
+            return iparams;
+        }
+    }
+
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
         llama_adapter_lora_ptr lora;
@@ -977,7 +990,12 @@ struct common_init_result common_init_from_params(common_params & params) {
             return iparams;
         }
 
+        char buf[1024];
         la.ptr = lora.get();
+        llama_adapter_meta_val_str(la.ptr, "adapter.lora.task_name", buf, sizeof(buf));
+        la.task_name = buf;
+        llama_adapter_meta_val_str(la.ptr, "adapter.lora.prompt_prefix", buf, sizeof(buf));
+        la.prompt_prefix = buf;
         iparams.lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
     }
 
@@ -990,13 +1008,19 @@ struct common_init_result common_init_from_params(common_params & params) {
         params.sampling.ignore_eos = false;
     }
 
-    if (params.sampling.ignore_eos) {
-        for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
-            if (llama_vocab_is_eog(vocab, i)) {
-                LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
-                params.sampling.logit_bias.push_back({i, -INFINITY});
-            }
+    // initialize once
+    for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
+        if (llama_vocab_is_eog(vocab, i)) {
+            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
+            params.sampling.logit_bias_eog.push_back({i, -INFINITY});
         }
+    }
+
+    if (params.sampling.ignore_eos) {
+        // add EOG biases to the active set of logit biases
+        params.sampling.logit_bias.insert(
+                params.sampling.logit_bias.end(),
+                params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
 
     if (params.sampling.penalty_last_n == -1) {
@@ -1041,7 +1065,7 @@ struct common_init_result common_init_from_params(common_params & params) {
         if (llama_model_has_decoder(model)) {
             llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch)));
         }
-        llama_kv_self_clear(lctx);
+        llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);
@@ -1092,6 +1116,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
+    mparams.use_extra_bufts = !params.no_extra_bufts;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -1134,19 +1159,14 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.yarn_orig_ctx     = params.yarn_orig_ctx;
     cparams.pooling_type      = params.pooling_type;
     cparams.attention_type    = params.attention_type;
-    cparams.defrag_thold      = params.defrag_thold;
+    cparams.flash_attn_type   = params.flash_attn_type;
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
-    cparams.flash_attn        = params.flash_attn;
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;
-
-    if (params.reranking) {
-        cparams.embeddings    = true;
-        cparams.pooling_type  = LLAMA_POOLING_TYPE_RANK;
-    }
+    cparams.kv_unified        = params.kv_unified;
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
@@ -1280,6 +1300,9 @@ std::vector<llama_token> common_tokenize(
     int n_tokens = text.length() + 2 * add_special;
     std::vector<llama_token> result(n_tokens);
     n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
+    }
     if (n_tokens < 0) {
         result.resize(-n_tokens);
         int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
@@ -1534,4 +1557,57 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
     }
 
     return result;
+}
+
+ggml_opt_optimizer_params common_opt_lr_pars(void * userdata) {
+    ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(nullptr);
+    const lr_opt &            d      = *(lr_opt *) userdata;
+    result.adamw.alpha = result.sgd.alpha = d.get_lr(d.epoch);
+    result.sgd.wd = result.adamw.wd = d.wd;
+    return result;
+}
+
+// TODO make all command line args case-insensitive
+static inline bool eq_case_insensitive(char const* a, char const* b) {
+    return !
+#if defined(_MSC_VER)
+        _stricmp
+#else
+        strcasecmp
+#endif // defined(_MSC_VER)
+        (a, b);
+}
+
+enum ggml_opt_optimizer_type common_opt_get_optimizer(const char * n) {
+    if (eq_case_insensitive("adamw", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    }
+    if (eq_case_insensitive("sgd", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_SGD;
+    }
+    return GGML_OPT_OPTIMIZER_TYPE_COUNT;
+}
+
+// TODO simplify to use just log and exp
+static float const k_log_2 = std::log(2.f);
+
+void lr_opt::init() {
+    if (lr_min > 0 && lr_min < lr0) {
+        float nhalf = std::log(lr0 / lr_min) / k_log_2;
+        float e     = epochs;
+        if (decay_epochs > 0 && decay_epochs < e) {
+            e = decay_epochs;
+        } else {
+            decay_epochs = e;
+        }
+        scale_epoch = nhalf / e;
+    }
+}
+
+float lr_opt::get_lr(float epoch) const {
+    float r = lr_min <= 0 ? lr0 :
+        epoch >= decay_epochs ? lr_min :
+        lr0 * std::pow(0.5f, epoch * scale_epoch);
+    LOG_INF("epoch %.2g lr=%.2g\n", epoch, r);
+    return r;
 }
