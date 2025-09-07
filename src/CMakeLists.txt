@@ -35,6 +35,8 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            profiler/llama_perfetto.cpp
+            llama_vulkan_prof.cpp
             )
 
 target_include_directories(llama PRIVATE .)
@@ -48,3 +50,17 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
     target_compile_definitions(llama PUBLIC  LLAMA_SHARED)
 endif()
+
+#
+# Perfetto SDK (amalgamated) integration
+#
+# The SDK is vendored under `src/profiler` as `perfetto.cc/.h`.
+# Build it into a static lib and link it so tracepoints are available across platforms
+# (macOS, Linux, Android; incl. Vulkan/Mali).
+add_library(perfetto_sdk STATIC profiler/perfetto.cc)
+
+target_include_directories(perfetto_sdk PUBLIC ${CMAKE_SOURCE_DIR}/src/profiler)
+target_compile_features(perfetto_sdk PRIVATE cxx_std_17)
+
+# Link Perfetto into the core library for all builds
+target_link_libraries(llama PRIVATE perfetto_sdk)

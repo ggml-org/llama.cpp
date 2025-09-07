@@ -1,0 +1,50 @@
+name: Vulkan Build (No Run)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-vulkan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Vulkan build dependencies
+        run: |
+          sudo apt-get update
+          # Vulkan SDK headers/libs + tools needed by GGML's Vulkan backend
+          sudo apt-get install -y \
+            libvulkan-dev \
+            vulkan-validationlayers-dev \
+            spirv-tools \
+            libglslang-dev \
+            glslang-tools
+
+      - name: Configure (CMake, Vulkan enabled)
+        run: |
+          cmake -S . -B build-vk -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGGML_VULKAN=ON
+
+      - name: Build
+        run: |
+          cmake --build build-vk -j8
+
+      - name: Verify build outputs
+        run: |
+          ls -la build-vk/bin || true
+          test -e build-vk/bin/llama-cli
+
+      - name: Show test command (not executed)
+        run: |
+          echo "To run (requires Vulkan-capable GPU):"
+          echo "GGML_VK_PERF_SILENT=1 GGML_VK_PERF_LOGGER=1 LLAMA_PERFETTO_TRACE=./<out>.pftrace build-vk/bin/llama-cli -m <model>.gguf"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-vk-bin
+          path: build-vk/bin/

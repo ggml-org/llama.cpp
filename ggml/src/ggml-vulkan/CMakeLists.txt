@@ -46,6 +46,7 @@ if (Vulkan_FOUND)
 
     ggml_add_backend_library(ggml-vulkan
                              ggml-vulkan.cpp
+                             llama_perfetto_stubs.c
                              ../../include/ggml-vulkan.h
                             )
 

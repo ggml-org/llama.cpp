@@ -11,6 +11,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <fstream>
 #include <tuple>
 #include <vector>
 #include <sstream>
@@ -23,6 +24,19 @@
 #include <mutex>
 #include <future>
 #include <thread>
+
+// Placeholder GPU counter integration (no-op for now)
+#include "../../include/llama_vulkan_prof.h"
+// Perfetto CPU-side ML op spans
+#include "../../include/llama_perfetto.h"
+
+// Provide weak no-op GPU counter definitions so ggml (Vulkan) builds without optional counters.
+extern "C" {
+__attribute__((weak)) void llama_vk_counters_begin(void * command_buffer, const char * label) {
+    (void)command_buffer; (void)label;
+}
+__attribute__((weak)) void llama_vk_counters_end(void * command_buffer) { (void)command_buffer; }
+}
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -575,6 +589,20 @@ struct vk_device_struct {
     std::unique_ptr<vk_perf_logger> perf_logger;
     vk::QueryPool query_pool;
     int32_t num_queries;
+
+    // Latest per-node GPU timeline
+    // - start_rel_ns/end_rel_ns: relative to first GPU timestamp (ns)
+    // - start_abs_mono_ns/end_abs_mono_ns: absolute CPU monotonic-aligned ns via VK_EXT_calibrated_timestamps (0 if unavailable)
+    struct timeline_entry { uint64_t start_rel_ns, end_rel_ns; uint64_t start_abs_mono_ns, end_abs_mono_ns; int op; };
+    std::vector<timeline_entry> last_timeline;
+
+    // CPU CLOCK_MONOTONIC timestamp captured immediately after the fence wait
+    // that produced the timeline above. Used to anchor relative timelines to
+    // the actual CPU time when the GPU completed, avoiding post-fence drift.
+    uint64_t last_timeline_anchor_mono_ns { 0 };
+
+    // Whether VK_EXT_calibrated_timestamps was enabled on this device
+    bool calibrated_ts_enabled { false };
 
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
@@ -1138,6 +1166,28 @@ private:
 #define VK_LOG_MEMORY(msg) ((void) 0)
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
+// Optional performance logging: can write to stderr, a file, or be silenced.
+// Controlled via env:
+// - GGML_VK_PERF_LOGGER=1        enable perf logger collection (required)
+// - GGML_VK_PERF_TIMELINE=1      print per-node GPU timeline (optional)
+// - GGML_VK_PERF_LOG_FILE=path   redirect perf logger output to file
+// - GGML_VK_PERF_SILENT=1        suppress printing while still collecting data
+
+static bool vk_perf_silent = false;
+class vk_nullbuf : public std::streambuf { public: int overflow(int c) override { return c; } };
+static vk_nullbuf vk_perf_nullbuf;
+static std::unique_ptr<std::ofstream> vk_perf_log_file;
+static std::ostream & vk_perf_stream() {
+    if (vk_perf_silent) {
+        static std::ostream null_stream(&vk_perf_nullbuf);
+        return null_stream;
+    }
+    if (vk_perf_log_file && vk_perf_log_file->is_open()) {
+        return *vk_perf_log_file;
+    }
+    return std::cerr;
+}
+
 class vk_perf_logger {
   public:
     void print_timings() {
@@ -1145,14 +1195,14 @@ class vk_perf_logger {
             return;
         }
         uint64_t total_all_op_times = 0;
-        std::cerr << "----------------\nVulkan Timings:" << std::endl;
+        vk_perf_stream() << "----------------\nVulkan Timings:" << std::endl;
         for (const auto & t : timings) {
             uint64_t total_op_times = 0;
             for (const auto & time : t.second) {
                 total_op_times += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
-                      << " us";
+            vk_perf_stream() << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
+                             << " us";
 
             // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
             auto it = flops.find(t.first);
@@ -1161,19 +1211,19 @@ class vk_perf_logger {
                 for (const auto & elem : it->second) {
                     total_op_flops += elem;
                 }
-                std::cerr << " ("
-                          << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
-                                 (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
-                          << " GFLOPS/s)";
+                vk_perf_stream() << " ("
+                                 << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
+                                        (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
+                                 << " GFLOPS/s)";
             }
 
             total_all_op_times += total_op_times;
 
-            std::cerr << std::endl;
+            vk_perf_stream() << std::endl;
         }
 
         if (timings.size() > 0) {
-            std::cerr << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
+            vk_perf_stream() << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
         }
 
         timings.clear();
@@ -1355,6 +1405,10 @@ struct vk_instance_t {
     PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT = {};
     PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
+    // Optional: calibrated timestamps (VK_EXT_calibrated_timestamps)
+    PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT pfn_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT = {};
+    PFN_vkGetCalibratedTimestampsEXT pfn_vkGetCalibratedTimestampsEXT = {};
+
     std::vector<size_t> device_indices;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
@@ -1363,6 +1417,7 @@ static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
 
 static bool vk_perf_logger_enabled = false;
+static bool vk_perf_timeline_enabled = false; // print raw timestamp spans per op
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -1382,7 +1437,9 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
     // Use waitForFences while most of the graph executes. Hopefully the CPU can sleep
     // during this wait.
     if (ctx->almost_ready_fence_pending) {
+        llama_perfetto_trace_begin("vkWaitForFences(almost_ready)");
         VK_CHECK(ctx->device->device.waitForFences({ ctx->almost_ready_fence }, true, UINT64_MAX), "almost_ready_fence");
+        llama_perfetto_trace_end();
         ctx->device->device.resetFences({ ctx->almost_ready_fence });
         ctx->almost_ready_fence_pending = false;
     }
@@ -1594,7 +1651,10 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
             std::lock_guard<std::mutex> guard(queue_mutex);
+            // Trace the lightweight submit with fence
+            llama_perfetto_trace_begin("vkQueueSubmit(empty)");
             ctx->p->q->queue.submit({}, fence);
+            llama_perfetto_trace_end();
         }
         return;
     }
@@ -1664,7 +1724,10 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     }
 
     std::lock_guard<std::mutex> guard(queue_mutex);
+    // Submitting a batch of command buffers to the GPU queue
+    llama_perfetto_trace_begin("vkQueueSubmit(batch)");
     ctx->p->q->queue.submit(submit_infos, fence);
+    llama_perfetto_trace_end();
 
     ctx->seqs.clear();
 }
@@ -3707,6 +3770,21 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
+        // Prefer enabling calibrated timestamps if supported; used to correlate GPU ticks to CPU clock
+        bool calibrated_ts_support = false;
+        {
+            auto dev_exts = device->physical_device.enumerateDeviceExtensionProperties();
+            for (const auto & properties : dev_exts) {
+                if (strcmp("VK_EXT_calibrated_timestamps", properties.extensionName) == 0) {
+                    calibrated_ts_support = true;
+                    break;
+                }
+            }
+        }
+        if (calibrated_ts_support) {
+            device_extensions.push_back("VK_EXT_calibrated_timestamps");
+        }
+
         device->fp16 = device->fp16 && vk12_features.shaderFloat16;
 
 #if defined(VK_KHR_shader_bfloat16)
@@ -3716,6 +3794,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
+
+        // Remember whether we enabled calibrated timestamps
+        // (If not enabled, timeline absolute CPU times will remain 0.)
+        // We assume device_extensions is applied below when creating the device.
+        device->calibrated_ts_enabled = calibrated_ts_support;
 
         device->multi_add = vk12_props.shaderRoundingModeRTEFloat16 &&
                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&
@@ -3957,6 +4040,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
         };
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
+
+        // Resolve calibrated timestamp function pointers if available
+        if (calibrated_ts_support) {
+            vk_instance.pfn_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT =
+                (PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT");
+            vk_instance.pfn_vkGetCalibratedTimestampsEXT =
+                (PFN_vkGetCalibratedTimestampsEXT) vkGetDeviceProcAddr(device->device, "vkGetCalibratedTimestampsEXT");
+        }
 
         // Queues
         ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
@@ -4281,7 +4372,19 @@ static void ggml_vk_instance_init() {
 
     }
 
-    vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+    vk_perf_logger_enabled    = getenv("GGML_VK_PERF_LOGGER")    != nullptr;
+    vk_perf_timeline_enabled  = getenv("GGML_VK_PERF_TIMELINE")  != nullptr;
+    // Optional redirection/silencing of perf logger output
+    const char * perf_silent_env = getenv("GGML_VK_PERF_SILENT");
+    vk_perf_silent = perf_silent_env != nullptr;
+    const char * perf_log_path = getenv("GGML_VK_PERF_LOG_FILE");
+    if (!vk_perf_silent && perf_log_path && *perf_log_path) {
+        vk_perf_log_file = std::make_unique<std::ofstream>(perf_log_path, std::ios::out | std::ios::trunc);
+        if (!vk_perf_log_file->good()) {
+            // Fall back to stderr if opening failed
+            vk_perf_log_file.reset();
+        }
+    }
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
@@ -4896,7 +4999,19 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
                                 0,
                                 { descriptor_set },
                                 {});
+    // Begin CPU-side span for this ML dispatch
+    llama_perfetto_trace_begin(pipeline->name.c_str());
+    // Begin GPU region (Perfetto span + placeholder counters)
+    llama_perfetto_gpu_begin(pipeline->name.c_str());
+    llama_vk_counters_begin((void*)subctx->s->buffer, pipeline->name.c_str());
+
     subctx->s->buffer.dispatch(wg0, wg1, wg2);
+
+    // End GPU region (Perfetto span + placeholder counters)
+    llama_vk_counters_end((void*)subctx->s->buffer);
+    llama_perfetto_gpu_end();
+    // End CPU-side span for this ML dispatch
+    llama_perfetto_trace_end();
 }
 
 static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> wait_semaphores, std::vector<vk_semaphore> signal_semaphores) {
@@ -5135,7 +5250,9 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
         }
 
         ggml_vk_submit(subctx, dst->device->fence);
+        llama_perfetto_trace_begin("vkWaitForFences(write_2d)");
         VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
+        llama_perfetto_trace_end();
         dst->device->device.resetFences({ dst->device->fence });
         ggml_vk_queue_command_pools_cleanup(dst->device);
     }
@@ -5222,7 +5339,9 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
         ggml_vk_ctx_end(subctx);
 
         ggml_vk_submit(subctx, src->device->fence);
+        llama_perfetto_trace_begin("vkWaitForFences(read)");
         VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
+        llama_perfetto_trace_end();
         src->device->device.resetFences({ src->device->fence });
         ggml_vk_queue_command_pools_cleanup(src->device);
 
@@ -5252,7 +5371,9 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, src->device->fence);
+        llama_perfetto_trace_begin("vkWaitForFences(copy)");
         VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_copy waitForFences");
+        llama_perfetto_trace_end();
         src->device->device.resetFences({ src->device->fence });
         ggml_vk_queue_command_pools_cleanup(src->device);
     } else {
@@ -5286,7 +5407,9 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     ggml_vk_ctx_end(subctx);
 
     ggml_vk_submit(subctx, dst->device->fence);
+    llama_perfetto_trace_begin("vkWaitForFences(memset)");
     VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_memset waitForFences");
+    llama_perfetto_trace_end();
     dst->device->device.resetFences({ dst->device->fence });
     ggml_vk_queue_command_pools_cleanup(dst->device);
 }
@@ -9251,7 +9374,9 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
 
     auto begin = std::chrono::high_resolution_clock::now();
     ggml_vk_submit(subctx, ctx->fence);
+    llama_perfetto_trace_begin("vkWaitForFences(test_matmul)");
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_matmul waitForFences");
+    llama_perfetto_trace_end();
     ctx->device->device.resetFences({ ctx->fence });
     ggml_vk_queue_command_pools_cleanup(ctx->device);
 
@@ -9458,7 +9583,9 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     auto begin = std::chrono::high_resolution_clock::now();
 
     ggml_vk_submit(subctx, ctx->fence);
+    llama_perfetto_trace_begin("vkWaitForFences(test_dequant)");
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_dequant waitForFences");
+    llama_perfetto_trace_end();
     ctx->device->device.resetFences({ ctx->fence });
     ggml_vk_queue_command_pools_cleanup(ctx->device);
 
@@ -9752,7 +9879,9 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     auto begin = std::chrono::high_resolution_clock::now();
 
     ggml_vk_submit(subctx, ctx->fence);
+    llama_perfetto_trace_begin("vkWaitForFences(test_dequant)");
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_dequant waitForFences");
+    llama_perfetto_trace_end();
     ctx->device->device.resetFences({ ctx->fence });
     ggml_vk_queue_command_pools_cleanup(ctx->device);
 
@@ -10257,6 +10386,17 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         }
     }
 
+    // Begin CPU-side ML span for this high-level op (non-dryrun only)
+    if (!dryrun) {
+        const char * ml_name = ggml_op_name(node->op);
+        if (node->op == GGML_OP_UNARY) {
+            ml_name = ggml_unary_op_name(ggml_get_unary_op(node));
+        } else if (node->op == GGML_OP_GLU) {
+            ml_name = ggml_glu_op_name(ggml_get_glu_op(node));
+        }
+        llama_perfetto_trace_begin(ml_name);
+    }
+
     switch (node->op) {
     case GGML_OP_REPEAT:
         ggml_vk_repeat(ctx, compute_ctx, src0, node, dryrun);
@@ -10553,6 +10693,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         }
 
     }
+    // End CPU-side ML span
+    llama_perfetto_trace_end();
     return true;
 }
 
@@ -10685,10 +10827,14 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         }
 
         if (almost_ready && !ctx->almost_ready_fence_pending && !use_fence) {
+            llama_perfetto_trace_begin("vkQueueSubmit(almost_ready)");
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
+            llama_perfetto_trace_end();
             ctx->almost_ready_fence_pending = true;
         } else {
+            llama_perfetto_trace_begin("vkQueueSubmit(compute)");
             ggml_vk_submit(subctx, use_fence ? ctx->fence : vk::Fence{});
+            llama_perfetto_trace_end();
         }
 
         if (use_fence) {
@@ -11407,15 +11553,96 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_ctx_end(compute_ctx);
 
         ggml_vk_submit(compute_ctx, ctx->device->fence);
+        llama_perfetto_trace_begin("vkWaitForFences(perf)");
         VK_CHECK(ctx->device->device.waitForFences({ ctx->device->fence }, true, UINT64_MAX), "GGML_VULKAN_PERF waitForFences");
+        // Capture a CPU monotonic anchor at the moment the GPU work is known complete
+#if !defined(_WIN32)
+        timespec ts_anchor{}; clock_gettime(CLOCK_MONOTONIC, &ts_anchor);
+        ctx->device->last_timeline_anchor_mono_ns = uint64_t(ts_anchor.tv_sec) * 1000000000ull + uint64_t(ts_anchor.tv_nsec);
+#else
+        ctx->device->last_timeline_anchor_mono_ns = 0; // TODO: add QPC-based anchor on Windows
+#endif
+        llama_perfetto_trace_end();
         ctx->device->device.resetFences({ ctx->device->fence });
 
         // Get the results and pass them to the logger
         std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
         VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
+        // Save a simple timeline snapshot for external consumers (relative time domain)
+        ctx->device->last_timeline.clear();
+        const uint64_t t0 = timestamps[0];
+        // Optionally compute an absolute CPU-monotonic aligned timeline via calibrated timestamps
+        bool abs_timeline_ok = false;
+        uint64_t cpu_mono_now_ns = 0;
+        uint64_t gpu_now_ticks = 0;
+        if (ctx->device->calibrated_ts_enabled &&
+            vk_instance.pfn_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT &&
+            vk_instance.pfn_vkGetCalibratedTimestampsEXT) {
+            // Query calibrateable time domains
+            uint32_t count = 0;
+            VkResult r = vk_instance.pfn_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT(ctx->device->physical_device, &count, nullptr);
+            if (r == VK_SUCCESS && count > 0) {
+                std::vector<VkTimeDomainEXT> domains(count);
+                r = vk_instance.pfn_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT(ctx->device->physical_device, &count, domains.data());
+                if (r == VK_SUCCESS) {
+                    bool have_mono = false;
+                    for (auto d : domains) { if (d == VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT) { have_mono = true; break; } }
+                    if (have_mono) {
+                        VkCalibratedTimestampInfoEXT infos[2] = {};
+                        infos[0].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT;
+                        infos[0].timeDomain = VK_TIME_DOMAIN_DEVICE_EXT;
+                        infos[1].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT;
+                        infos[1].timeDomain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT;
+                        uint64_t ts_out[2] = {0,0};
+                        uint64_t max_dev = 0;
+                        r = vk_instance.pfn_vkGetCalibratedTimestampsEXT(ctx->device->device, 2, infos, ts_out, &max_dev);
+                        if (r == VK_SUCCESS) {
+                            gpu_now_ticks = ts_out[0];
+                            cpu_mono_now_ns = ts_out[1];
+                            abs_timeline_ok = true;
+                        }
+                    }
+                }
+            }
+        }
         for (int i = 0; i < cgraph->n_nodes; i++) {
             if (!ggml_vk_is_empty(cgraph->nodes[i])) {
                 ctx->device->perf_logger->log_timing(cgraph->nodes[i], uint64_t((timestamps[i+1] - timestamps[i]) * ctx->device->properties.limits.timestampPeriod));
+                vk_device_struct::timeline_entry e;
+                e.start_rel_ns = uint64_t((timestamps[i]   - t0) * ctx->device->properties.limits.timestampPeriod);
+                e.end_rel_ns   = uint64_t((timestamps[i+1] - t0) * ctx->device->properties.limits.timestampPeriod);
+                if (abs_timeline_ok) {
+                    const double period_ns = ctx->device->properties.limits.timestampPeriod;
+                    // Map each GPU tick to CPU monotonic ns using the calibrated pair (gpu_now_ticks -> cpu_mono_now_ns)
+                    const double start_ns = double(cpu_mono_now_ns) - period_ns * double(gpu_now_ticks - timestamps[i]);
+                    const double end_ns   = double(cpu_mono_now_ns) - period_ns * double(gpu_now_ticks - timestamps[i+1]);
+                    e.start_abs_mono_ns = (start_ns <= 0.0) ? 0ULL : (uint64_t) start_ns;
+                    e.end_abs_mono_ns   = (end_ns   <= 0.0) ? 0ULL : (uint64_t) end_ns;
+                } else {
+                    e.start_abs_mono_ns = 0;
+                    e.end_abs_mono_ns   = 0;
+                }
+                e.op = cgraph->nodes[i]->op;
+                ctx->device->last_timeline.push_back(e);
+            }
+        }
+
+        // Optionally print a timestamp timeline for span reconstruction
+        if (vk_perf_timeline_enabled) {
+            const double period_ns = ctx->device->properties.limits.timestampPeriod;
+            const double base_ns   = double(timestamps[0]) * period_ns;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                if (!ggml_vk_is_empty(cgraph->nodes[i])) {
+                    const double start_ns = double(timestamps[i])   * period_ns - base_ns;
+                    const double end_ns   = double(timestamps[i+1]) * period_ns - base_ns;
+                    const double start_us = start_ns / 1000.0;
+                    const double end_us   = end_ns   / 1000.0;
+                    const char * op_name  = ggml_op_name(cgraph->nodes[i]->op);
+                    vk_perf_stream() << "[GPU-TL] #" << i << " " << op_name
+                                     << " start_us=" << std::fixed << std::setprecision(3) << start_us
+                                     << " end_us="   << std::fixed << std::setprecision(3) << end_us
+                                     << std::endl;
+                }
             }
         }
 
@@ -11494,6 +11721,120 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
             *free = heap.size;
             break;
         }
+    }
+}
+
+// Collect basic GPU counters using Vulkan pipeline statistics and dump to a file.
+// This records the number of compute shader invocations in an empty pass, which
+// is generally 0 unless wrapped around work. It is intended as a minimal example
+// to be expanded to surround real workloads.
+extern "C" bool ggml_backend_vk_dump_pipeline_stats(int device, const char * path) {
+    if (path == nullptr) return false;
+    if (device < 0 || device >= (int) vk_instance.device_indices.size()) return false;
+
+    try {
+        // Resolve device and queue
+        int idx = vk_instance.device_indices[device];
+        vk_device dev = ggml_vk_get_device(idx);
+        vk::PhysicalDevice phys = vk_instance.instance.enumeratePhysicalDevices()[idx];
+
+        // Check support for pipeline statistics queries; MoltenVK typically does not support this.
+        vk::PhysicalDeviceFeatures feats = phys.getFeatures();
+        if (!feats.pipelineStatisticsQuery) {
+            return false;
+        }
+
+        // Create a pipeline statistics query pool for compute shader invocations
+        vk::QueryPipelineStatisticFlags stats = vk::QueryPipelineStatisticFlagBits::eComputeShaderInvocations;
+        vk::QueryPoolCreateInfo qp_info({}, vk::QueryType::ePipelineStatistics, 1 /* queries */, stats);
+        vk::QueryPool qp = dev->device.createQueryPool(qp_info);
+
+        // Reset query on host (promoted in Vulkan 1.2 or via EXT_host_query_reset)
+        dev->device.resetQueryPool(qp, 0, 1);
+
+        // Allocate one-time command buffer on compute queue's pool
+        vk::CommandBufferAllocateInfo alloc_info(dev->compute_queue.cmd_pool.pool, vk::CommandBufferLevel::ePrimary, 1);
+        auto cbs = dev->device.allocateCommandBuffers(alloc_info);
+        vk::CommandBuffer cb = cbs[0];
+
+        vk::CommandBufferBeginInfo begin_info(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        cb.begin(begin_info);
+        cb.beginQuery(qp, 0, {});
+        // Intentionally no work here; extend by inserting dispatches around begin/endQuery.
+        cb.endQuery(qp, 0);
+        cb.end();
+
+        // Submit and wait
+        vk::SubmitInfo si({}, {}, cb, {});
+        dev->compute_queue.queue.submit(si, {});
+        dev->compute_queue.queue.waitIdle();
+
+        // Read back results (single 64-bit value)
+        uint64_t value = 0;
+        vk::Result res = dev->device.getQueryPoolResults(qp, 0, 1, sizeof(uint64_t), &value, sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+
+        // Destroy resources
+        dev->device.freeCommandBuffers(dev->compute_queue.cmd_pool.pool, cb);
+        dev->device.destroyQueryPool(qp);
+
+        if (res != vk::Result::eSuccess) {
+            return false;
+        }
+
+        // Dump to file
+        std::ofstream ofs(path);
+        if (!ofs.good()) return false;
+        ofs << "compute_shader_invocations: " << value << "\n";
+        ofs.close();
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// Dump the latest timestamp-derived timeline to CSV for external tools.
+// Format: start_rel_ns,end_rel_ns,op_name
+extern "C" bool ggml_backend_vk_dump_timeline(int device, const char * path) {
+    if (!path) return false;
+    if (device < 0 || device >= (int) vk_instance.device_indices.size()) return false;
+    try {
+        int idx = vk_instance.device_indices[device];
+        vk_device dev = ggml_vk_get_device(idx);
+        if (dev->last_timeline.empty()) return false;
+        std::ofstream ofs(path);
+        if (!ofs.good()) return false;
+        for (const auto & e : dev->last_timeline) {
+            ofs << e.start_rel_ns << "," << e.end_rel_ns << "," << ggml_op_name((ggml_op)e.op) << "\n";
+        }
+        ofs.close();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Dump the latest CPU-monotonic aligned timeline to CSV for external tools.
+// Format: start_abs_ns,end_abs_ns,op_name
+extern "C" bool ggml_backend_vk_dump_timeline_abs(int device, const char * path) {
+    if (!path) return false;
+    if (device < 0 || device >= (int) vk_instance.device_indices.size()) return false;
+    try {
+        int idx = vk_instance.device_indices[device];
+        vk_device dev = ggml_vk_get_device(idx);
+        if (dev->last_timeline.empty()) return false;
+        // Ensure we have absolute times populated
+        bool any_abs = false;
+        for (const auto & e : dev->last_timeline) { if (e.start_abs_mono_ns || e.end_abs_mono_ns) { any_abs = true; break; } }
+        if (!any_abs) return false;
+        std::ofstream ofs(path);
+        if (!ofs.good()) return false;
+        for (const auto & e : dev->last_timeline) {
+            ofs << e.start_abs_mono_ns << "," << e.end_abs_mono_ns << "," << ggml_op_name((ggml_op)e.op) << "\n";
+        }
+        ofs.close();
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -12708,3 +13049,10 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
 #endif
 
 GGML_BACKEND_DL_IMPL(ggml_backend_vk_reg)
+// Return the CPU CLOCK_MONOTONIC anchor in ns captured right after the fence wait
+extern "C" uint64_t ggml_backend_vk_get_timeline_anchor_mono_ns(int device) {
+    if (device < 0 || device >= (int) vk_instance.device_indices.size()) return 0ULL;
+    int idx = vk_instance.device_indices[device];
+    vk_device dev = ggml_vk_get_device(idx);
+    return dev ? dev->last_timeline_anchor_mono_ns : 0ULL;
+}

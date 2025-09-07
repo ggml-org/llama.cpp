@@ -38,6 +38,11 @@
 #include <syscall.h>
 #endif
 
+// Weak no-op perfetto shims to avoid link errors when ggml is linked as a shared library
+// and the C++ perfetto glue is not part of the ggml target.
+__attribute__((weak)) void llama_perfetto_trace_begin(const char * name) { (void)name; }
+__attribute__((weak)) void llama_perfetto_trace_end(void) { }
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -1754,23 +1759,43 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_SILU_BACK:
             {
+                // Perfetto: SiLU Backward
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("silu_back");
                 ggml_compute_forward_silu_back(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_NORM:
             {
+                // Perfetto: Norm
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("norm");
                 ggml_compute_forward_norm(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_RMS_NORM:
             {
+                // Perfetto: RMSNorm
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("rms_norm");
                 ggml_compute_forward_rms_norm(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_RMS_NORM_BACK:
             {
+                // Perfetto: RMSNorm Backward
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("rms_norm_back");
                 ggml_compute_forward_rms_norm_back(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_GROUP_NORM:
             {
+                // Perfetto: GroupNorm
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("group_norm");
                 ggml_compute_forward_group_norm(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_L2_NORM:
             {
@@ -1778,11 +1803,19 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
+                // Perfetto: MatMul
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("matmul");
                 ggml_compute_forward_mul_mat(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
+                // Perfetto: MatMul (ID)
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("matmul_id");
                 ggml_compute_forward_mul_mat_id(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_OUT_PROD:
             {
@@ -1846,19 +1879,35 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_SOFT_MAX:
             {
+                // Perfetto: Softmax
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("softmax");
                 ggml_compute_forward_soft_max(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_SOFT_MAX_BACK:
             {
+                // Perfetto: Softmax Backward
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("softmax_back");
                 ggml_compute_forward_soft_max_ext_back(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_ROPE:
             {
+                // Perfetto: RoPE
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("rope");
                 ggml_compute_forward_rope(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_ROPE_BACK:
             {
+                // Perfetto: RoPE Backward
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("rope_back");
                 ggml_compute_forward_rope_back(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_CLAMP:
             {
@@ -1934,18 +1983,30 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_LEAKY_RELU:
             {
+                // Perfetto: LeakyReLU
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("leaky_relu");
                 ggml_compute_forward_leaky_relu(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                // Perfetto: FlashAttention (fwd)
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("flash_attn");
                 ggml_compute_forward_flash_attn_ext(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
+                // Perfetto: FlashAttention (back)
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("flash_attn_back");
                 int32_t t = ggml_get_op_params_i32(tensor, 0);
                 GGML_ASSERT(t == 0 || t == 1);
                 bool masked = t != 0;
                 ggml_compute_forward_flash_attn_back(params, masked, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_SSM_CONV:
             {
@@ -1965,11 +2026,21 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_UNARY:
             {
+                // Perfetto: Unary (may include relu/gelu/silu/etc.)
+                #include "../../include/llama_perfetto.h"
+                enum ggml_unary_op uop = ggml_get_unary_op(tensor);
+                const char * uname = ggml_unary_op_name(uop);
+                llama_perfetto_trace_begin(uname);
                 ggml_compute_forward_unary(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_GLU:
             {
+                // Perfetto: GLU
+                #include "../../include/llama_perfetto.h"
+                llama_perfetto_trace_begin("glu");
                 ggml_compute_forward_glu(params, tensor);
+                llama_perfetto_trace_end();
             } break;
         case GGML_OP_GET_REL_POS:
             {

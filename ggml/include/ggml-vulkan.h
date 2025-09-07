@@ -24,6 +24,11 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type(voi
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_vk_reg(void);
 
+// Utility: collect basic GPU counters via Vulkan pipeline statistics
+// and dump them to a text file at `path`. Returns true on success.
+// Currently records `VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT`.
+GGML_BACKEND_API bool ggml_backend_vk_dump_pipeline_stats(int device, const char * path);
+
 #ifdef  __cplusplus
 }
 #endif

@@ -62,6 +62,8 @@ static bool file_is_empty(const std::string & path) {
     return f.tellg() == 0;
 }
 
+#include "../../include/llama_perfetto.h"
+
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void sigint_handler(int signo) {
     if (signo == SIGINT) {
@@ -76,7 +78,8 @@ static void sigint_handler(int signo) {
             // make sure all logs are flushed
             LOG("Interrupted by user\n");
             common_log_pause(common_log_main());
-
+            // Ensure Perfetto trace is finalized even on Ctrl-C
+            llama_perfetto_stop_flush();
             _exit(130);
         }
     }
@@ -84,6 +87,9 @@ static void sigint_handler(int signo) {
 #endif
 
 int main(int argc, char ** argv) {
+    // Idempotent: starts tracing if LLAMA_PERFETTO* env is set
+    llama_perfetto_try_start_from_env();
+    atexit([](){ llama_perfetto_stop_flush(); });
     common_params params;
     g_params = &params;
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
@@ -666,14 +672,27 @@ int main(int argc, char ** argv) {
                     n_eval = params.n_batch;
                 }
 
-                LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
+                const std::string embd_str = string_from(ctx, embd);
+                LOG_DBG("eval: %s\n", embd_str.c_str());
 
+                llama_perfetto_trace_begin_with_text("decode", embd_str.c_str());
                 if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
+                    llama_perfetto_trace_end();
                     LOG_ERR("%s : failed to eval\n", __func__);
                     return 1;
                 }
+                llama_perfetto_trace_end();
 
                 n_past += n_eval;
+
+                // Update Perfetto counters: tokens per second (cumulative average)
+                {
+                    auto perf = llama_perf_context(ctx);
+                    if (perf.t_eval_ms > 0 && perf.n_eval > 0) {
+                        double toks_per_s = (1000.0 * perf.n_eval) / perf.t_eval_ms;
+                        llama_perfetto_counter_tokens_per_s(toks_per_s);
+                    }
+                }
 
                 LOG_DBG("n_past = %d\n", n_past);
                 // Display total tokens alongside total time
@@ -838,6 +857,17 @@ int main(int argc, char ** argv) {
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
+                // Opportunistically flush trace and print GPU counters at idle.
+                llama_perfetto_flush_dump_stats();
+                llama_perfetto_print_gpu_stats();
+                // If tracing is active, emit GPU timeline slices into Perfetto.
+                llama_perfetto_emit_gpu_timeline();
+
+                // Reset live Perfetto counters while idle so graphs reflect 0 load.
+                // Otherwise, Perfetto holds the last value until the next sample.
+                llama_perfetto_counter_gpu_busy(0.0);
+                llama_perfetto_counter_tokens_per_s(0.0);
+
                 if (params.conversation_mode) {
                     LOG("\n> ");
                 }
@@ -989,4 +1019,5 @@ int main(int argc, char ** argv) {
     ggml_threadpool_free_fn(threadpool_batch);
 
     return 0;
+#include "../../include/llama_perfetto.h"
 }
