@@ -1457,7 +1457,7 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
 
         NSString * base_func = [NSString stringWithUTF8String:base];
 
-        GGML_LOG_WARN("%s: compiling kernel: base = '%s', name = '%s'\n", __func__, base, name);
+        GGML_LOG_DEBUG("%s: compiling kernel: base = '%s', name = '%s'\n", __func__, base, name);
 
         // TODO: make sure it is thread-safe to compile kernels in parallel
         id<MTLFunction> metal_function = [ctx_dev->mtl_library newFunctionWithName:base_func constantValues:cv error:&error];
@@ -1510,7 +1510,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(ggml_b
                 (int) op->src[1]->ne[0],
                 (int) op->src[2]->ne[0]);
 
-        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask%d_sink%d_bias%d_softcap%d_ns10%d_ns20%d_nsg%d",
+        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d",
                 "flash_attn_ext",
                 ggml_type_name(op->src[1]->type),
                 (int) op->src[1]->ne[0],
@@ -1588,7 +1588,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(gg
                 (int) op->src[1]->ne[0],
                 (int) op->src[2]->ne[0]);
 
-        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask%d_sink%d_bias%d_softcap%d_ns10%d_ns20%d_nsg%d_nwg%d",
+        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
                 "flash_attn_ext_vec",
                 ggml_type_name(op->src[1]->type),
                 (int) op->src[1]->ne[0],
@@ -1659,7 +1659,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_re
         const int32_t fc_nwg = 32;
 
         snprintf(base, 256, "kernel_flash_attn_ext_vec_reduce");
-        snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv%d_nwg%d", fc_dv, fc_nwg);
+        snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv=%d_nwg=%d", fc_dv, fc_nwg);
 
         id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
         if (res) {
