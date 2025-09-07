@@ -844,6 +844,8 @@ static void * ggml_metal_host_malloc(size_t n) {
 // - if not found, load the source and compile it
 // - if that fails, return NULL
 static id<MTLLibrary> ggml_metal_load_library(id<MTLDevice> device, bool use_bfloat) {
+    const int64_t t_start = ggml_time_us();
+
     id<MTLLibrary> metal_library = nil;
     NSError * error = nil;
     NSString * src = nil;
@@ -966,6 +968,8 @@ static id<MTLLibrary> ggml_metal_load_library(id<MTLDevice> device, bool use_bfl
 #if GGML_METAL_EMBED_LIBRARY
     [src release];
 #endif // GGML_METAL_EMBED_LIBRARY
+
+    GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
 
     return metal_library;
 }
