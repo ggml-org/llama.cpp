@@ -2092,16 +2092,17 @@ static bool ggml_backend_cann_cpy_tensor_async(
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
-
         // record event on src stream after the copy
-        if (!cann_ctx_src->copy_event) {
-            ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
-        }
-        ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
+        // TODO: this event is not effective with acl graph mode, change to use aclrtSynchronizeStream
+        // if (!cann_ctx_src->copy_event) {
+        //     ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
+        // }
+        // ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
 
-        // wait on dst stream for the copy to complete
-        ggml_cann_set_device(cann_ctx_dst->device);
-        ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
+        // // wait on dst stream for the copy to complete
+        // ggml_cann_set_device(cann_ctx_dst->device);
+        // ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
+        ACL_CHECK(aclrtSynchronizeStream(cann_ctx_src->stream()));
     } else {
         // src and dst are on the same backend
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
