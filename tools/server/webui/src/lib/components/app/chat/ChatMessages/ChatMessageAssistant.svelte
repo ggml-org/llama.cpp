@@ -4,6 +4,10 @@
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
 	import { fade } from 'svelte/transition';
+	import { Check, X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { inputClasses } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
@@ -14,32 +18,52 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
+		editedContent?: string;
+		isEditing?: boolean;
 		message: DatabaseMessage;
 		messageContent: string | undefined;
+		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onDelete: () => void;
+		onEdit?: () => void;
+		onEditKeydown?: (event: KeyboardEvent) => void;
+		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: () => void;
+		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		onShouldBranchAfterEditChange?: (value: boolean) => void;
 		showDeleteDialog: boolean;
+		shouldBranchAfterEdit?: boolean;
 		siblingInfo?: MessageSiblingInfo | null;
+		textareaElement?: HTMLTextAreaElement;
 		thinkingContent: string | null;
 	}
 
 	let {
 		class: className = '',
 		deletionInfo,
+		editedContent = '',
+		isEditing = false,
 		message,
 		messageContent,
+		onCancelEdit,
 		onConfirmDelete,
 		onCopy,
 		onDelete,
+		onEdit,
+		onEditKeydown,
+		onEditedContentChange,
 		onNavigateToSibling,
 		onRegenerate,
+		onSaveEdit,
 		onShowDeleteDialogChange,
+		onShouldBranchAfterEditChange,
 		showDeleteDialog,
+		shouldBranchAfterEdit = false,
 		siblingInfo = null,
+		textareaElement = $bindable(),
 		thinkingContent
 	}: Props = $props();
 
@@ -69,7 +93,42 @@
 		</div>
 	{/if}
 
-	{#if message.role === 'assistant'}
+	{#if isEditing}
+		<div class="w-full">
+			<textarea
+				bind:this={textareaElement}
+				bind:value={editedContent}
+				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {inputClasses}"
+				onkeydown={onEditKeydown}
+				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
+				placeholder="Edit assistant message..."
+			></textarea>
+
+			<div class="mt-2 flex items-center justify-between">
+				<div class="flex items-center space-x-2">
+					<Checkbox
+						id="branch-after-edit"
+						bind:checked={shouldBranchAfterEdit}
+						onCheckedChange={(checked) => onShouldBranchAfterEditChange?.(checked === true)}
+					/>
+					<label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
+						Branch conversation after edit
+					</label>
+				</div>
+				<div class="flex gap-2">
+					<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+						<X class="mr-1 h-3 w-3" />
+						Cancel
+					</Button>
+
+					<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent?.trim()} size="sm">
+						<Check class="mr-1 h-3 w-3" />
+						Save
+					</Button>
+				</div>
+			</div>
+		</div>
+	{:else if message.role === 'assistant'}
 		<MarkdownContent content={messageContent || ''} />
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
@@ -77,7 +136,7 @@
 		</div>
 	{/if}
 
-	{#if message.timestamp}
+	{#if message.timestamp && !isEditing}
 		<ChatMessageActions
 			{message}
 			role="assistant"
@@ -87,6 +146,7 @@
 			{showDeleteDialog}
 			{deletionInfo}
 			{onCopy}
+			{onEdit}
 			{onRegenerate}
 			{onDelete}
 			{onConfirmDelete}

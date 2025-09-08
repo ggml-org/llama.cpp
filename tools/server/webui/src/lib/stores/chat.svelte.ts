@@ -1074,6 +1074,69 @@ class ChatStore {
 	}
 
 	/**
+	 * Edits an assistant message with optional branching
+	 * @param messageId - The ID of the assistant message to edit
+	 * @param newContent - The new content for the message
+	 * @param shouldBranch - Whether to create a branch or replace in-place
+	 */
+	async editAssistantMessage(
+		messageId: string,
+		newContent: string,
+		shouldBranch: boolean
+	): Promise<void> {
+		if (!this.activeConversation || this.isLoading) return;
+
+		try {
+			const messageIndex = this.findMessageIndex(messageId);
+
+			if (messageIndex === -1) {
+				console.error('Message not found for editing');
+				return;
+			}
+
+			const messageToEdit = this.activeMessages[messageIndex];
+
+			if (messageToEdit.role !== 'assistant') {
+				console.error('Only assistant messages can be edited with this method');
+				return;
+			}
+
+			if (shouldBranch) {
+				const newMessage = await DatabaseStore.createMessageBranch(
+					{
+						convId: messageToEdit.convId,
+						type: messageToEdit.type,
+						timestamp: Date.now(),
+						role: messageToEdit.role,
+						content: newContent,
+						thinking: messageToEdit.thinking || '',
+						children: []
+					},
+					messageToEdit.parent!
+				);
+
+				await DatabaseStore.updateCurrentNode(this.activeConversation.id, newMessage.id);
+				this.activeConversation.currNode = newMessage.id;
+			} else {
+				await DatabaseStore.updateMessage(messageToEdit.id, {
+					content: newContent,
+					timestamp: Date.now()
+				});
+
+				this.updateMessageAtIndex(messageIndex, {
+					content: newContent,
+					timestamp: Date.now()
+				});
+			}
+
+			this.updateConversationTimestamp();
+			await this.refreshActiveMessages();
+		} catch (error) {
+			console.error('Failed to edit assistant message:', error);
+		}
+	}
+
+	/**
 	 * Edits a message by creating a new branch with the edited content
 	 * @param messageId - The ID of the message to edit
 	 * @param newContent - The new content for the message
@@ -1282,6 +1345,7 @@ export const setMaxContextError = chatStore.setMaxContextError.bind(chatStore);
 // Branching operations
 export const refreshActiveMessages = chatStore.refreshActiveMessages.bind(chatStore);
 export const navigateToSibling = chatStore.navigateToSibling.bind(chatStore);
+export const editAssistantMessage = chatStore.editAssistantMessage.bind(chatStore);
 export const editMessageWithBranching = chatStore.editMessageWithBranching.bind(chatStore);
 export const regenerateMessageWithBranching =
 	chatStore.regenerateMessageWithBranching.bind(chatStore);

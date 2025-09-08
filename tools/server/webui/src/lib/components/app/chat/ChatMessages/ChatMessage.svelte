@@ -11,6 +11,11 @@
 		onCopy?: (message: DatabaseMessage) => void;
 		onDelete?: (message: DatabaseMessage) => void;
 		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
+		onEditWithReplacement?: (
+			message: DatabaseMessage,
+			newContent: string,
+			shouldBranch: boolean
+		) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
 		siblingInfo?: MessageSiblingInfo | null;
@@ -22,6 +27,7 @@
 		onCopy,
 		onDelete,
 		onEditWithBranching,
+		onEditWithReplacement,
 		onNavigateToSibling,
 		onRegenerateWithBranching,
 		siblingInfo = null
@@ -36,6 +42,7 @@
 	let editedContent = $state(message.content);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
+	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	let thinkingContent = $derived.by(() => {
@@ -114,9 +121,14 @@
 	}
 
 	function handleSaveEdit() {
-		onEditWithBranching?.(message, editedContent.trim());
+		if (message.role === 'user') {
+			onEditWithBranching?.(message, editedContent.trim());
+		} else {
+			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
+		}
 
 		isEditing = false;
+		shouldBranchAfterEdit = false;
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {
@@ -147,18 +159,28 @@
 	/>
 {:else}
 	<ChatMessageAssistant
+		bind:textareaElement
 		class={className}
 		{deletionInfo}
+		{editedContent}
+		{isEditing}
 		{message}
 		{messageContent}
-		onDelete={handleDelete}
+		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onEditKeydown={handleEditKeydown}
+		onEditedContentChange={handleEditedContentChange}
 		{onNavigateToSibling}
 		onRegenerate={handleRegenerate}
+		onSaveEdit={handleSaveEdit}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{siblingInfo}
+		{shouldBranchAfterEdit}
+		onShouldBranchAfterEditChange={(value) => (shouldBranchAfterEdit = value)}
 		{showDeleteDialog}
+		{siblingInfo}
 		{thinkingContent}
 	/>
 {/if}

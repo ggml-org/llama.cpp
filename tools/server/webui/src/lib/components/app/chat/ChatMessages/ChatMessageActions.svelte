@@ -76,9 +76,11 @@
 		>
 			{@render actionButton({ icon: Copy, tooltip: 'Copy', onclick: onCopy })}
 
-			{#if role === 'user' && onEdit}
+			{#if onEdit}
 				{@render actionButton({ icon: Edit, tooltip: 'Edit', onclick: onEdit })}
-			{:else if role === 'assistant' && onRegenerate}
+			{/if}
+
+			{#if role === 'assistant' && onRegenerate}
 				{@render actionButton({ icon: RefreshCw, tooltip: 'Regenerate', onclick: onRegenerate })}
 			{/if}
 

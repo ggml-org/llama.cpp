@@ -6,6 +6,7 @@
 		deleteMessage,
 		navigateToSibling,
 		editMessageWithBranching,
+		editAssistantMessage,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
 	import { getMessageSiblings } from '$lib/utils/branching';
@@ -48,6 +49,7 @@
 
 		return messages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
+
 			return {
 				message,
 				siblingInfo: siblingInfo || {
@@ -63,23 +65,37 @@
 	async function handleNavigateToSibling(siblingId: string) {
 		await navigateToSibling(siblingId);
 	}
+
 	async function handleEditWithBranching(message: DatabaseMessage, newContent: string) {
-		// Enable autoscroll for user-initiated edit action
 		onUserAction?.();
+
 		await editMessageWithBranching(message.id, newContent);
-		// Refresh after editing to update sibling counts
+
 		refreshAllMessages();
 	}
-	async function handleRegenerateWithBranching(message: DatabaseMessage) {
-		// Enable autoscroll for user-initiated regenerate action
+
+	async function handleEditWithReplacement(
+		message: DatabaseMessage,
+		newContent: string,
+		shouldBranch: boolean
+	) {
 		onUserAction?.();
+
+		await editAssistantMessage(message.id, newContent, shouldBranch);
+
+		refreshAllMessages();
+	}
+
+	async function handleRegenerateWithBranching(message: DatabaseMessage) {
+		onUserAction?.();
+
 		await regenerateMessageWithBranching(message.id);
-		// Refresh after regenerating to update sibling counts
+
 		refreshAllMessages();
 	}
 	async function handleDeleteMessage(message: DatabaseMessage) {
 		await deleteMessage(message.id);
-		// Refresh after deleting to update sibling counts
+
 		refreshAllMessages();
 	}
 </script>
@@ -93,6 +109,7 @@
 			onDelete={handleDeleteMessage}
 			onNavigateToSibling={handleNavigateToSibling}
 			onEditWithBranching={handleEditWithBranching}
+			onEditWithReplacement={handleEditWithReplacement}
 			onRegenerateWithBranching={handleRegenerateWithBranching}
 		/>
 	{/each}
