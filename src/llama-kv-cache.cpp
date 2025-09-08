@@ -1022,7 +1022,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
-    const int64_t n_token     = k_cur->ne[2];
+    const int64_t n_tokens    = k_cur->ne[2];
 
     const int64_t n_embd_gqa = n_embd_head*n_head;
 
@@ -1030,7 +1030,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     // TODO: add ggml helper function for this?
     assert(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
 
-    k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_token , k_cur->nb[2], 0);
+    k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
     const int64_t n_stream = k->ne[2];
 
@@ -1057,7 +1057,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
-    const int64_t n_token     = v_cur->ne[2];
+    const int64_t n_tokens    = v_cur->ne[2];
 
     const int64_t n_embd_gqa = n_embd_head*n_head;
 
@@ -1068,7 +1068,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     // take this branch when FA is enabled (the V cache is not transposed)
     if (!v_trans) {
-        v_cur = ggml_view_2d(ctx, v_cur, n_embd_gqa, n_token, v_cur->nb[2], 0);
+        v_cur = ggml_view_2d(ctx, v_cur, n_embd_gqa, n_tokens, v_cur->nb[2], 0);
 
         if (n_stream > 1) {
             const uint64_t kv_size = get_size();
@@ -1085,10 +1085,10 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     if (ggml_row_size(v_cur->type, n_embd_gqa) == v_cur->nb[2]) {
         // we can merge dims 0, 1 and 2
-        v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_gqa, n_token);
+        v_cur = ggml_reshape_2d(ctx, v_cur, n_embd_gqa, n_tokens);
     } else {
         // otherwise -> make a copy to get contiguous data
-        v_cur = ggml_cont_2d   (ctx, v_cur, n_embd_gqa, n_token);
+        v_cur = ggml_cont_2d   (ctx, v_cur, n_embd_gqa, n_tokens);
     }
 
     // [TAG_V_CACHE_VARIABLE]
