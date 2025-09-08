@@ -1502,10 +1502,7 @@ static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & bui
         /* function_regex_start_only= */ std::nullopt,
         function_regex,
         close_regex,
-        tool_calls_end,
-        false,
-        nullptr,
-        /* update_cursor */ true);
+        tool_calls_end);
 }
 
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
