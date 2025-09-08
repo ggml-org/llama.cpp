@@ -106,8 +106,13 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
         }                                                           \
     } while (0)
 
-#ifdef GGML_VULKAN_DEBUG
-#define VK_LOG_DEBUG(msg) std::cerr << msg << std::endl
+#if defined(GGML_VULKAN_DEBUG)
+#define VK_LOG_DEBUG(msg)                       \
+    do {                                        \
+        std::stringstream ss;                   \
+        ss << msg;                              \
+        GGML_LOG_DEBUG("%s", ss.str().c_str()); \
+    } while (0)
 #else
 #define VK_LOG_DEBUG(msg) ((void) 0)
 #endif // GGML_VULKAN_DEBUG
