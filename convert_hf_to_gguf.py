@@ -8569,6 +8569,7 @@ class SmallThinkerModel(TextModel):
 @ModelBase.register("ApertusForCausalLM")
 class ApertusModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.APERTUS
+    undo_permute = False
 
     def modify_tensors(self, data_torch, name, bid):
         # Handle xIELU activation parameters
@@ -8576,6 +8577,7 @@ class ApertusModel(LlamaModel):
             return [(self.map_tensor_name(name), data_torch)]
                     
         return super().modify_tensors(data_torch, name, bid)
+
 
 class MistralModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA

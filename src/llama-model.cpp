@@ -18690,78 +18690,6 @@ static float get_scalar_f32_val(const ggml_tensor *t) {
     return onef;
 }
 
-static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
-    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-    float v;
-    if (type == GGML_TYPE_F16) {
-        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
-    } else if (type == GGML_TYPE_F32) {
-        v = *(float *) &data[i];
-    } else if (type == GGML_TYPE_I64) {
-        v = (float) *(int64_t *) &data[i];
-    } else if (type == GGML_TYPE_I32) {
-        v = (float) *(int32_t *) &data[i];
-    } else if (type == GGML_TYPE_I16) {
-        v = (float) *(int16_t *) &data[i];
-    } else if (type == GGML_TYPE_I8) {
-        v = (float) *(int8_t *) &data[i];
-    } else {
-        GGML_ABORT("fatal error");
-    }
-    return v;
-}
-
-static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
-    GGML_ASSERT(n > 0);
-    float sum = 0;
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    sum += v;
-                }
-            }
-        }
-    }
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LLAMA_LOG_DEBUG("                                     [\n");
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n && ne[2] > 2*n) {
-                LLAMA_LOG_DEBUG("                                      ..., \n");
-                i2 = ne[2] - n;
-            }
-            LLAMA_LOG_DEBUG("                                      [\n");
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n && ne[1] > 2*n) {
-                    LLAMA_LOG_DEBUG("                                       ..., \n");
-                    i1 = ne[1] - n;
-                }
-                LLAMA_LOG_DEBUG("                                       [");
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n && ne[0] > 2*n) {
-                        LLAMA_LOG_DEBUG("..., ");
-                        i0 = ne[0] - n;
-                    }
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    LLAMA_LOG_DEBUG("%12.4f", v);
-                    if (i0 < ne[0] - 1) LLAMA_LOG_DEBUG(", ");
-                }
-                LLAMA_LOG_DEBUG("],\n");
-            }
-            LLAMA_LOG_DEBUG("                                      ],\n");
-        }
-        LLAMA_LOG_DEBUG("                                     ]\n");
-        LLAMA_LOG_DEBUG("                                     sum = %f\n", sum);
-    }
-
-    // TODO: make this abort configurable/optional?
-    if (std::isnan(sum)) {
-        LLAMA_LOG_ERROR("encountered NaN - aborting\n");
-        exit(0);
-    }
-}
-
 // Apertus model graph builder with xIELU activation
 struct llm_build_apertus : public llm_graph_context {
     llm_build_apertus(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -18785,9 +18713,8 @@ struct llm_build_apertus : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
-            // norm
             cur = build_norm(inpL,
-                    model.layers[il].attn_norm, NULL,
+                    model.layers[il].attn_norm, nullptr,
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
@@ -18806,42 +18733,14 @@ struct llm_build_apertus : public llm_graph_context {
                 cb(Vcur, "Vcur", il);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-                ggml_tensor * Q2d = ggml_reshape_2d(ctx0, Qcur, n_embd_head, n_head * n_tokens);
-                ggml_tensor * K2d = ggml_reshape_2d(ctx0, Kcur, n_embd_head, n_head_kv * n_tokens);
-
-                cb(Q2d, "Q2D", il);
-                cb(K2d, "K2D", il);
-
-                // apply existing rms-norm which was originally written for 2D
-                Q2d = build_norm(Q2d, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
-                K2d = build_norm(K2d, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
-
-                cb(Q2d, "Q2D_normed", il);
-                cb(K2d, "K2D_normed", il);
-
-                // reshape back to 3D
-                Qcur = ggml_reshape_3d(ctx0, Q2d, n_embd_head, n_head, n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, K2d, n_embd_head, n_head_kv, n_tokens);
-
+                Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
                 cb(Qcur, "Qcur_normed", il);
+
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
                 cb(Kcur, "Kcur_normed", il);
-                
-                // // copy the data from the GPU memory if needed
-                // const bool is_host = ggml_backend_buffer_is_host(rope_factors->buffer);
 
-                // auto n_bytes = ggml_nbytes(rope_factors);
-                // uint8_t loaded_data[n_bytes];
-                // if (!is_host) {    
-                //     ggml_backend_tensor_get(rope_factors, &loaded_data, 0, n_bytes);
-                // }
-
-                // if (!ggml_is_quantized(rope_factors->type)) {
-                //     uint8_t * data = is_host ? (uint8_t *) rope_factors->data : &loaded_data[0];
-                //     ggml_print_tensor(data, rope_factors->type, rope_factors->ne, rope_factors->nb, 64);
-                // }
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens); 
 
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, rope_factors,
@@ -18876,7 +18775,7 @@ struct llm_build_apertus : public llm_graph_context {
             // feed-forward network with xIELU activation
             {
                 cur = build_norm(ffn_inp,
-                        model.layers[il].ffn_norm, NULL,
+                        model.layers[il].ffn_norm, nullptr,
                         LLM_NORM_RMS, il);
                 cb(cur, "ffn_norm", il);
 
@@ -18918,7 +18817,7 @@ struct llm_build_apertus : public llm_graph_context {
         cur = inpL;
 
         cur = build_norm(cur,
-                model.output_norm, NULL,
+                model.output_norm, nullptr,
                 LLM_NORM_RMS, -1);
 
         cb(cur, "result_norm", -1);
