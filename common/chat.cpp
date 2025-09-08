@@ -741,7 +741,7 @@ static void parse_json_tool_calls(
                 }
                 throw common_chat_msg_partial_exception("incomplete tool call");
             } else {
-              builder.move_to(start_pos);
+                builder.move_to(start_pos);
             }
             break;
         }
