@@ -3393,7 +3393,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GET_ROWS:
             {
                 // FIXME: https://github.com/ggml-org/llama.cpp/pull/15868
-                if (op->src[1]->ne[2] > 1) {
+                if (op->src[1]->ne[1]*op->src[1]->ne[2] > 65535) {
                     return false;
                 }
                 switch (op->src[0]->type) {
