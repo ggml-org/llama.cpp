@@ -7654,10 +7654,6 @@ struct llm_build_modern_bert : public llm_graph_context {
                 idx_2d = ggml_cont(ctx0, idx_2d);
                 if (idx_2d->type != GGML_TYPE_I32) idx_2d = ggml_cast(ctx0, idx_2d, GGML_TYPE_I32);
 
-                            Kcur->ne[0], Kcur->ne[1], Kcur->ne[2],
-                            idx_2d->ne[0], idx_2d->ne[1], idx_2d->ne[2], idx_2d->ne[3],
-                            idx_2d->type);
-
                 K_work = ggml_get_rows(ctx0, Kcur, idx_2d);
                 V_work = ggml_get_rows(ctx0, Vcur, idx_2d);
             
@@ -7679,7 +7675,7 @@ struct llm_build_modern_bert : public llm_graph_context {
 
                 // final pos_k to pass to rope
                 pos_k = pos_rows;
-                LLAMA_LOG_INFO("pos_k final: ne[0]=%lld, type=%d\n", pos_k->ne[0], pos_k->type);
+                LLAMA_LOG_INFO("pos_k final: ne[0]=%lld, ne[1]=%lld type=%d\n", pos_k->ne[0], pos_k->ne[1], pos_k->type);
                 }
 
             if( !ggml_is_vector(pos_q) ) {
@@ -7707,7 +7703,9 @@ struct llm_build_modern_bert : public llm_graph_context {
                                 ext_factor, attn_factor, beta_fast, beta_slow);
 
             // choseing mask, global vs swa
-            ggml_tensor * kq_b_layer = is_global ? inp_attn->self_kq_mask : inp_attn->self_kq_mask_swa;
+            ggml_tensor * kq_mask = is_global ? inp_attn->self_kq_mask : inp_attn->self_kq_mask_swa;
+
+
 
             ggml_tensor * attn_out = build_attn(
                 inp_attn,
@@ -7716,14 +7714,14 @@ struct llm_build_modern_bert : public llm_graph_context {
                 Qcur,
                 K_work,
                 V_work,
-                kq_b_layer,
+                kq_mask,
                 nullptr,
                 1.0f / sqrtf(float(n_embd_head)),
                 il
             );
 
-            //  residual addition 
-            ggml_tensor * cur_attn = ggml_add(ctx0, attn_out, x);
+            
+            ggml_tensor * cur_attn = ggml_add(ctx0, x, attn_out);
 
             // optional output select
             if (il == n_layer - 1 && inp_out_ids) {

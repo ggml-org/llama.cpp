@@ -1547,7 +1547,7 @@ ggml_tensor * llm_graph_context::build_attn_with_sinks(
     // optionally store to KV cache
     if (k_cur) {
         const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
-
+        LLAMA_LOG_INFO("k_cur.shape = {%lld, %lld, %lld, %lld}\n", k_cur->ne[0], k_cur->ne[1], k_cur->ne[2], k_cur->ne[3]);
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
