@@ -92,6 +92,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 			case 'initializing':
 				return 'Initializing...';
 			case 'preparing':
+				if (processingState.progressPercent !== undefined) {
+					return `Processing (${processingState.progressPercent}%)`;
+				}
 				return 'Preparing response...';
 			case 'generating':
 				if (processingState.tokensDecoded > 0) {

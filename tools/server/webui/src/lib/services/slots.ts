@@ -85,6 +85,13 @@ export class SlotsService {
 		prompt_n: number;
 		predicted_n: number;
 		predicted_per_second: number;
+		cache_n: number;
+		prompt_progress?: {
+			total: number;
+			cache: number;
+			processed: number;
+			time_ms: number;
+		};
 	}): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
 
@@ -141,6 +148,15 @@ export class SlotsService {
 		const promptTokens = (timingData.prompt_n as number) || 0;
 		const predictedTokens = (timingData.predicted_n as number) || 0;
 		const tokensPerSecond = (timingData.predicted_per_second as number) || 0;
+		const cacheTokens = (timingData.cache_n as number) || 0;
+		const promptProgress = timingData.prompt_progress as
+			| {
+					total: number;
+					cache: number;
+					processed: number;
+					time_ms: number;
+			  }
+			| undefined;
 
 		// Get context total from server or cache
 		const contextTotal = await this.getContextTotal();
@@ -155,12 +171,17 @@ export class SlotsService {
 		// Default to -1 (infinite) if max_tokens is not set, matching ChatService behavior
 		const outputTokensMax = currentConfig.max_tokens || -1;
 
-		// Calculate context and output based on team requirements
-		const contextUsed = promptTokens + predictedTokens; // tokens_used_in_conversation
+		// Calculate context based on new formula: prompt_n + cache_n + predicted_n
+		const contextUsed = promptTokens + cacheTokens + predictedTokens;
 		const outputTokensUsed = predictedTokens; // tokens_generated_in_current_response
 
+		// Calculate progress percentage if prompt_progress is available
+		const progressPercent = promptProgress
+			? Math.round((promptProgress.processed / promptProgress.total) * 100)
+			: undefined;
+
 		return {
-			status: predictedTokens > 0 ? 'generating' : 'idle',
+			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
 			tokensDecoded: predictedTokens,
 			tokensRemaining: outputTokensMax - predictedTokens,
 			contextUsed,
@@ -172,7 +193,11 @@ export class SlotsService {
 			// Use actual config values or reasonable defaults
 			temperature: currentConfig.temperature ?? 0.8,
 			topP: currentConfig.top_p ?? 0.95,
-			speculative: false
+			speculative: false,
+			// New progress fields
+			progressPercent,
+			promptTokens,
+			cacheTokens
 		};
 	}
 

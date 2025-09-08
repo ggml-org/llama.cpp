@@ -159,6 +159,13 @@ export interface ApiChatCompletionStreamChunk {
 		prompt_ms?: number;
 		predicted_n?: number;
 		predicted_ms?: number;
+		cache_n?: number;
+	};
+	prompt_progress?: {
+		total: number;
+		cache: number;
+		processed: number;
+		time_ms: number;
 	};
 }
 
@@ -241,4 +248,8 @@ export interface ApiProcessingState {
 	speculative: boolean;
 	hasNextToken: boolean;
 	tokensPerSecond?: number;
+	// Progress information from prompt_progress
+	progressPercent?: number;
+	promptTokens?: number;
+	cacheTokens?: number;
 }

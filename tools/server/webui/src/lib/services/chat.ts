@@ -275,9 +275,10 @@ export class ChatService {
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const timings = parsed.timings;
+							const promptProgress = parsed.prompt_progress;
 
-							if (timings) {
-								this.updateProcessingState(timings);
+							if (timings || promptProgress) {
+								this.updateProcessingState(timings, promptProgress);
 							}
 
 							if (content) {
@@ -651,25 +652,37 @@ export class ChatService {
 	/**
 	 * Updates the processing state with timing information from the server response
 	 * @param timings - Timing data from the API response
+	 * @param promptProgress - Progress data from the API response
 	 */
-	private updateProcessingState(timings: {
-		prompt_n?: number;
-		prompt_ms?: number;
-		predicted_n?: number;
-		predicted_ms?: number;
-	}): void {
+	private updateProcessingState(
+		timings?: {
+			prompt_n?: number;
+			prompt_ms?: number;
+			predicted_n?: number;
+			predicted_ms?: number;
+			cache_n?: number;
+		},
+		promptProgress?: {
+			total: number;
+			cache: number;
+			processed: number;
+			time_ms: number;
+		}
+	): void {
 		// Calculate tokens per second from timing data
 		const tokensPerSecond =
-			timings.predicted_ms && timings.predicted_n
+			timings?.predicted_ms && timings?.predicted_n
 				? (timings.predicted_n / timings.predicted_ms) * 1000
 				: 0;
 
 		// Update slots service with timing data (async but don't wait)
 		slotsService
 			.updateFromTimingData({
-				prompt_n: timings.prompt_n || 0,
-				predicted_n: timings.predicted_n || 0,
-				predicted_per_second: tokensPerSecond
+				prompt_n: timings?.prompt_n || 0,
+				predicted_n: timings?.predicted_n || 0,
+				predicted_per_second: tokensPerSecond,
+				cache_n: timings?.cache_n || 0,
+				prompt_progress: promptProgress
 			})
 			.catch((error) => {
 				console.warn('Failed to update processing state:', error);
