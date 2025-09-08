@@ -281,10 +281,13 @@
 			}}
 		/>
 
-		<div class="sticky right-0 bottom-0 left-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
+		<div
+			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
+			in:slide={{ duration: 150, axis: 'y' }}
+		>
 			<ChatProcessingInfo />
 
-			<div class="conversation-chat-form rounded-t-3xl pb-4">
+			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
 					onFileRemove={handleFileRemove}

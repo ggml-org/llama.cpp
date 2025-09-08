@@ -43,6 +43,7 @@
 		padding: 1.5rem 1rem;
 		opacity: 0;
 		transform: translateY(50%);
+		pointer-events: none;
 		transition:
 			opacity 300ms ease-out,
 			transform 300ms ease-out;
@@ -50,6 +51,7 @@
 
 	.chat-processing-info-container.visible {
 		opacity: 1;
+		pointer-events: auto;
 		transform: translateY(0);
 	}
 

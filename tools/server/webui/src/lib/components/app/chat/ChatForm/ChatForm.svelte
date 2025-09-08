@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { afterNavigate } from '$app/navigation';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
@@ -201,14 +202,18 @@
 	}
 
 	onMount(() => {
-		textareaRef?.focus();
+		setTimeout(() => textareaRef?.focus(), 10);
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
 
+	afterNavigate(() => {
+		setTimeout(() => textareaRef?.focus(), 10);
+	});
+
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			textareaRef?.focus();
+			setTimeout(() => textareaRef?.focus(), 10);
 		}
 
 		previousIsLoading = isLoading;
