@@ -1,3 +1,3 @@
-export const AUTO_SCROLL_THRESHOLD = 400;
 export const AUTO_SCROLL_INTERVAL = 100;
 export const INITIAL_SCROLL_DELAY = 10;
+export const AUTO_SCROLL_AT_BOTTOM_THRESHOLD = 10;

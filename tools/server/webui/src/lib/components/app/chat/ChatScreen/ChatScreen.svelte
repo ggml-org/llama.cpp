@@ -31,8 +31,8 @@
 	import { contextService } from '$lib/services';
 	import { fade, fly, slide } from 'svelte/transition';
 	import {
+		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
 		AUTO_SCROLL_INTERVAL,
-		AUTO_SCROLL_THRESHOLD,
 		INITIAL_SCROLL_DELAY
 	} from '$lib/constants/auto-scroll';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
@@ -45,6 +45,9 @@
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let scrollInterval: ReturnType<typeof setInterval> | undefined;
 	let autoScrollEnabled = $state(true);
+	let lastScrollTop = $state(0);
+	let userScrolledUp = $state(false);
+	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isDragOver = $state(false);
 	let dragCounter = $state(0);
@@ -143,12 +146,28 @@
 
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
 
-		if (distanceFromBottom > AUTO_SCROLL_THRESHOLD) {
+		if (scrollTop < lastScrollTop && !isAtBottom) {
+			userScrolledUp = true;
 			autoScrollEnabled = false;
-		} else if (distanceFromBottom <= AUTO_SCROLL_THRESHOLD) {
+		} else if (isAtBottom && userScrolledUp) {
+			userScrolledUp = false;
 			autoScrollEnabled = true;
 		}
+
+		if (scrollTimeout) {
+			clearTimeout(scrollTimeout);
+		}
+
+		scrollTimeout = setTimeout(() => {
+			if (isAtBottom) {
+				userScrolledUp = false;
+				autoScrollEnabled = true;
+			}
+		}, AUTO_SCROLL_INTERVAL);
+
+		lastScrollTop = scrollTop;
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
@@ -183,6 +202,7 @@
 		}
 
 		// Enable autoscroll for user-initiated message sending
+		userScrolledUp = false;
 		autoScrollEnabled = true;
 		await sendMessage(message, extras);
 		scrollChatToBottom();
@@ -277,7 +297,9 @@
 			class="mb-16 md:mb-24"
 			messages={activeMessages()}
 			onUserAction={() => {
+				userScrolledUp = false;
 				autoScrollEnabled = true;
+				scrollChatToBottom();
 			}}
 		/>
 
