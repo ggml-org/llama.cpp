@@ -402,3 +402,51 @@ def test_context_size_exceeded():
     assert server.n_ctx is not None
     assert server.n_slots is not None
     assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
+
+
+@pytest.mark.parametrize(
+    "n_batch,batch_count,reuse_cache",
+    [
+        (64, 15, False),
+        (64, 1, True),
+    ]
+)
+def test_return_progresssss(n_batch, batch_count, reuse_cache):
+    global server
+    server.n_batch = n_batch
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.start()
+    def make_cmpl_request():
+        return server.make_stream_request("POST", "/chat/completions", data={
+            "max_tokens": 10,
+            "messages": [
+                {"role": "user", "content": "This is a test" * 100},
+            ],
+            "stream": True,
+            "return_progress": True,
+        })
+    if reuse_cache:
+        # make a first request to populate the cache
+        res0 = make_cmpl_request()
+        for _ in res0:
+            pass # discard the output
+
+    res = make_cmpl_request()
+    last_progress = None
+    total_batch_count = 0
+    for data in res:
+        cur_progress = data.get("prompt_progress", None)
+        if cur_progress is None:
+            continue
+        if last_progress is not None:
+            assert cur_progress["total"] == last_progress["total"]
+            assert cur_progress["cache"] == last_progress["cache"]
+            assert cur_progress["processed"] > last_progress["processed"]
+        total_batch_count += 1
+        last_progress = cur_progress
+
+    assert last_progress is not None
+    assert last_progress["total"] > 0
+    assert last_progress["processed"] == last_progress["total"]
+    assert total_batch_count == batch_count

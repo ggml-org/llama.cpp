@@ -12,7 +12,7 @@ import json
 from math import prod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Sequence, SupportsIndex, cast
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 import torch
 
@@ -25,6 +25,8 @@ import gguf
 
 # reuse model definitions from convert_hf_to_gguf.py
 from convert_hf_to_gguf import LazyTorchTensor, ModelBase
+
+from gguf.constants import GGUFValueType
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -369,7 +371,31 @@ if __name__ == '__main__':
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
+                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                alora_invocation_tokens = lparams.get("alora_invocation_tokens")
+                invocation_string = lparams.get("invocation_string")
+                if invocation_string and not alora_invocation_tokens:
+                    logger.debug("Tokenizing invocation_string -> alora_invocation_tokens")
+                    base_model_path_or_id = hparams.get("_name_or_path")
+                    try:
+                        tokenizer = AutoTokenizer.from_pretrained(base_model_path_or_id)
+                    except ValueError:
+                        logger.error("Unable to load tokenizer from %s", base_model_path_or_id)
+                        raise
+                    # NOTE: There's an off-by-one with the older aLoRAs where
+                    # the invocation string includes the "<|start_of_turn|>"
+                    # token, but the adapters themselves were trained to
+                    # activate _after_ that first token, so we drop it here.
+                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]
+                if alora_invocation_tokens:
+                    logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS, alora_invocation_tokens)
+                    self.gguf_writer.add_key_value(
+                        gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS,
+                        alora_invocation_tokens,
+                        GGUFValueType.ARRAY,
+                        GGUFValueType.UINT32,
+                    )
 
             def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
                 # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
