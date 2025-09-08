@@ -2648,6 +2648,11 @@ struct ggml_tensor * ggml_silu(
 }
 
 // ggml_xielu
+static float softplus(float input) {
+    if (input > 20.0f) return input;
+    return logf(1 + expf(input));
+}
+
 struct ggml_tensor * ggml_xielu(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -2658,7 +2663,7 @@ struct ggml_tensor * ggml_xielu(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     // Store the parameters as operation parameters
-    float params[] = { alpha_n, alpha_p, beta, eps };
+    float params[] = { beta + softplus(alpha_n), softplus(alpha_p), beta, eps };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_XIELU;
