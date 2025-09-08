@@ -368,11 +368,20 @@ struct ggml_cann_graph {
  * move existing graphs to the front (most recently used), and clear the cache.
  */
 struct ggml_cann_graph_lru_cache {
-    size_t capacity = 12;  /**< Maximum number of graphs in the cache. */
+    size_t capacity;  /**< Maximum number of graphs in the cache. */
 
     std::list<std::shared_ptr<ggml_cann_graph>> cache_list; /**< List storing cached graphs. */
 
     std::shared_ptr<ggml_cann_graph> matched_graph = nullptr; /**< Pointer to a recently matched graph. */
+
+    ggml_cann_graph_lru_cache() {
+        std::string env_val = get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12");
+        try {
+            capacity = std::stoul(env_val);
+        } catch (...) {
+            capacity = 12; // fallback to default if invalid
+        }
+    }
 
     /**
      * @brief Push a new graph to the front of the cache.
