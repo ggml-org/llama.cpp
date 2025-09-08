@@ -3477,7 +3477,6 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         cl_image_format img_format_q = {CL_RG, CL_UNSIGNED_INT32};
         cl_image_desc img_desc_q = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(tensor->ne[0] * tensor->ne[1] * tensor->ne[2] / 32 * 2), 0,0,0,0,0,0,0, extra->q};
         extra->q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_q, &img_desc_q, NULL, &err);
-        CL_CHECK(clReleaseMemObject(extra->q));
 
         tensor->extra = extra;
 
@@ -7172,14 +7171,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
-
-#ifdef GGML_OPENCL_SOA_Q
+            
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_0->d));
-#else
-            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
-            CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
-#endif
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
             CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
             CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra2->data_device));

@@ -13,9 +13,8 @@ if (GGML_OPENCL_PROFILING)
     message(STATUS "OpenCL profiling enabled (increases CPU overhead)")
     add_compile_definitions(GGML_OPENCL_PROFILING)
 endif ()
-if (GGML_OPENCL_SOA_Q)
-    add_compile_definitions(GGML_OPENCL_SOA_Q)
-endif()
+
+add_compile_definitions(GGML_OPENCL_SOA_Q)
 
 add_compile_definitions(GGML_OPENCL_TARGET_VERSION=${GGML_OPENCL_TARGET_VERSION})
 
