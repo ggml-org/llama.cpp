@@ -3797,9 +3797,7 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 dev_ctx->description = prop.name;
 
                 char pci_bus_id[16] = {};
-#if CUDART_VERSION >= 11000 || defined(GGML_USE_HIP)
-                cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), i);
-#endif
+                snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.0", prop.pciDomainID, prop.pciBusID, prop.pciDeviceID);
                 dev_ctx->pci_bus_id = pci_bus_id;
 
                 ggml_backend_dev_t dev = new ggml_backend_device {
