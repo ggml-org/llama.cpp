@@ -304,12 +304,7 @@ static __global__ void flash_attn_tile(
                 for (int i_KQ_0 = 0; i_KQ_0 < kq_stride; i_KQ_0 += warp_size) {
 #pragma unroll
                     for (int j_KQ_0 = 0; j_KQ_0 < ncols; j_KQ_0 += nwarps) {
-#ifdef FAST_FP16_AVAILABLE
-                        const float2 tmp = __half22float2(K_k[i_KQ_0/warp_size] * Q_k[j_KQ_0/nwarps]);
-                        sum[i_KQ_0/warp_size][j_KQ_0/nwarps] += tmp.x + tmp.y;
-#else
-                        sum[i_KQ_0/warp_size][j_KQ_0/nwarps] += K_k[i_KQ_0/warp_size] * Q_k[j_KQ_0/nwarps];
-#endif // FAST_FP16_AVAILABLE
+                        ggml_cuda_mad(sum[i_KQ_0/warp_size][j_KQ_0/nwarps], K_k[i_KQ_0/warp_size], Q_k[j_KQ_0/nwarps]);
                     }
                 }
             }
