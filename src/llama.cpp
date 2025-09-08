@@ -216,7 +216,11 @@ static struct llama_model * llama_model_load_from_file_impl(
                         });
 
                         if (it != gpus.end()) {
-                            LLAMA_LOG_INFO("%s: skipping duplicate GPU %s (%s)\n", __func__, ggml_backend_dev_name(dev), props.device_id ? props.device_id : "unknown id");
+                            LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
+                                    __func__,
+                                    ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                                    props.device_id ? props.device_id : "unknown id",
+                                    ggml_backend_dev_name(*it), ggml_backend_dev_description(*it));
                         } else {
                             gpus.push_back(dev);
                         }
