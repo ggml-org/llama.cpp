@@ -68,6 +68,11 @@
 #define N_R0_IQ4_XS 2
 #define N_SG_IQ4_XS 2
 
+// function constants offsets
+#define FC_FLASH_ATTN_EXT              100
+#define FC_FLASH_ATTN_EXT_VEC          200
+#define FC_FLASH_ATTN_EXT_VEC_REDUCE   300
+
 // kernel argument structs
 //
 // - element counters (e.g. ne00) typically use int32_t to reduce register usage

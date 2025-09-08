@@ -1537,14 +1537,14 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:100];
-        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:101];
-        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:102];
-        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:103];
+        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 0];
+        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 1];
+        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 2];
+        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 3];
 
-        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:120];
-        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:121];
-        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:122];
+        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 20];
+        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 21];
+        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 22];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
@@ -1599,15 +1599,15 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:200];
-        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:201];
-        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:202];
-        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:203];
+        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 0];
+        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 1];
+        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 2];
+        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 3];
 
-        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:220];
-        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:221];
-        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:222];
-        [cv setConstantValue:&nwg  type:MTLDataTypeInt atIndex:223];
+        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 20];
+        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 21];
+        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 22];
+        [cv setConstantValue:&nwg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 23];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
@@ -1636,8 +1636,8 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_re
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        [cv setConstantValue:&dv  type:MTLDataTypeInt atIndex:300];
-        [cv setConstantValue:&nwg type:MTLDataTypeInt atIndex:301];
+        [cv setConstantValue:&dv  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 0];
+        [cv setConstantValue:&nwg type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 1];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
