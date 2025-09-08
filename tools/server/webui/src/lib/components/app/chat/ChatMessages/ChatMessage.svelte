@@ -114,9 +114,7 @@
 	}
 
 	function handleSaveEdit() {
-		if (editedContent.trim() !== message.content) {
-			onEditWithBranching?.(message, editedContent.trim());
-		}
+		onEditWithBranching?.(message, editedContent.trim());
 
 		isEditing = false;
 	}
