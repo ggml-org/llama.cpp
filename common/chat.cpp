@@ -700,6 +700,7 @@ static void parse_json_tool_calls(
         size_t from = std::string::npos;
         auto first = true;
         while (true) {
+            auto start_pos = builder.pos();
             auto res = function_regex_start_only && first
                 ? builder.try_consume_regex(*function_regex_start_only)
                 : function_regex
@@ -720,12 +721,7 @@ static void parse_json_tool_calls(
                     from = res->groups[0].begin + 1;
                     continue;
                 }
-                if (update_cursor) {
-                    builder.move_to(res->groups[0].end);
-                    from = builder.pos();
-                } else {
-                    from = std::string::npos;
-                }
+                from = std::string::npos;
 
                 auto maybe_raw_python = name == "python" && allow_raw_python;
                 if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
@@ -734,16 +730,8 @@ static void parse_json_tool_calls(
                             throw common_chat_msg_partial_exception("incomplete tool call");
                         }
                         builder.consume_regex(close_regex);
-                        if (update_cursor) {
-                            from = builder.pos(); // continue after this call
-                            continue;
-                        }
                     }
-                    if (update_cursor) {
-                        throw common_chat_msg_partial_exception("incomplete tool call");
-                    } else {
-                        continue;
-                    }
+                    continue;
                 }
                 if (maybe_raw_python) {
                     auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
@@ -753,14 +741,14 @@ static void parse_json_tool_calls(
                     return;
                 }
                 throw common_chat_msg_partial_exception("incomplete tool call");
+            } else {
+              if (update_cursor) {
+                  builder.move_to(start_pos);
+              }
             }
             break;
         }
         if (block_close) {
-            if (update_cursor) {
-                // ensure we’re right after the last call header/close
-                if (from != std::string::npos) builder.move_to(from);
-            }
             builder.consume_regex(*block_close);
         }
         builder.consume_spaces();
@@ -768,7 +756,6 @@ static void parse_json_tool_calls(
     };
     if (block_open) {
         if (auto res = builder.try_find_regex(*block_open)) {
-            if (update_cursor) builder.move_to(res->groups[0].end); // consume opener
             parse_tool_calls();
         } else {
             builder.add_content(builder.consume_rest());
@@ -1519,7 +1506,7 @@ static void common_chat_parse_deepseek_v3_1_content(common_chat_msg_parser & bui
         tool_calls_end,
         false,
         nullptr,
-        true);
+        /* update_cursor */ true);
 }
 
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
