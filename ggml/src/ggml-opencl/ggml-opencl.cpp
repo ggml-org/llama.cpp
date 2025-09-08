@@ -2838,6 +2838,7 @@ static ggml_backend_i ggml_backend_opencl_i = {
     /* .graph_compute           = */ ggml_backend_opencl_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .optimize_graph          = */ NULL,
 };
 
 ggml_backend_t ggml_backend_opencl_init(void) {
