@@ -6501,8 +6501,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v));
     }
 
-    for (int hsk : { 40, 64, 80, 128, 192, 256, 576 }) {
-        for (int hsv : { 40, 64, 80, 128, 192, 256, 512 }) {
+    for (int hsk : { 40, 64, 80, 96, 128, 192, 256, 576 }) {
+        for (int hsv : { 40, 64, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 576 && hsk != hsv) continue;
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
