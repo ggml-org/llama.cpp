@@ -775,8 +775,10 @@ struct ggml_backend_metal_context {
 
     dispatch_queue_t d_queue;
 
+    // the set of pre-compiled kernels for this context
     struct ggml_metal_kernel kernels[GGML_METAL_KERNEL_TYPE_COUNT];
 
+    // additional, inference-time compiled kernels
     NSMutableDictionary * kernels_ext;
 
     // capture state
@@ -1487,7 +1489,13 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
     return res;
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(ggml_backend_t backend, struct ggml_tensor * op, int32_t nsg) {
+static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(
+        ggml_backend_t backend, struct ggml_tensor * op,
+        bool    has_mask,
+        bool    has_sinks,
+        bool    has_bias,
+        bool    has_scap,
+        int32_t nsg) {
     struct ggml_backend_metal_context * ctx = backend->context;
 
     char base[256];
@@ -1496,31 +1504,29 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(ggml_b
     @autoreleasepool {
         MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
 
-        float scale;
-        float max_bias;
-        float logit_softcap;
+        const int32_t hk = (int32_t) op->src[1]->ne[0];
+        const int32_t hv = (int32_t) op->src[2]->ne[0];
 
-        memcpy(&scale,         ((const int32_t *) op->op_params) + 0, sizeof(scale));
-        memcpy(&max_bias,      ((const int32_t *) op->op_params) + 1, sizeof(max_bias));
-        memcpy(&logit_softcap, ((const int32_t *) op->op_params) + 2, sizeof(logit_softcap));
+        const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
+        const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
         snprintf(base, 256, "kernel_%s_%s_hk%d_hv%d",
                 "flash_attn_ext",
                 ggml_type_name(op->src[1]->type),
-                (int) op->src[1]->ne[0],
-                (int) op->src[2]->ne[0]);
+                hk,
+                hv);
 
-        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d",
+        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sinks=%d_bias=%d_scap=%d_ns10=%d_ns20=%d_nsg=%d",
                 "flash_attn_ext",
                 ggml_type_name(op->src[1]->type),
-                (int) op->src[1]->ne[0],
-                (int) op->src[2]->ne[0],
-                op->src[3] != NULL,
-                op->src[4] != NULL,
-                max_bias != 0.0f,
-                logit_softcap != 0.0f,
-                (int) (op->src[1]->nb[1]/op->src[1]->nb[0]),
-                (int) (op->src[2]->nb[1]/op->src[2]->nb[0]),
+                hk,
+                hv,
+                has_mask,
+                has_sinks,
+                has_bias,
+                has_scap,
+                ns10,
+                ns20,
                 nsg);
 
         id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
@@ -1531,41 +1537,27 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(ggml_b
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        const bool has_mask = op->src[3] != NULL;
-        [cv setConstantValue:&has_mask type:MTLDataTypeBool atIndex:100];
-
-        const bool has_sinks = op->src[4] != NULL;
+        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:100];
         [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:101];
+        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:102];
+        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:103];
 
-        const bool has_bias = max_bias != 0.0f;
-        [cv setConstantValue:&has_bias type:MTLDataTypeBool atIndex:102];
-
-        const bool has_scap = logit_softcap != 0.0f;
-        [cv setConstantValue:&has_scap type:MTLDataTypeBool atIndex:103];
-
-        //const float fc_scale = has_scap ? scale / logit_softcap : scale;
-        //[cv setConstantValue:&fc_scale type:MTLDataTypeFloat atIndex:110];
-
-        //const float fc_max_bias = max_bias;
-        //[cv setConstantValue:&fc_max_bias type:MTLDataTypeFloat atIndex:111];
-
-        //const float fc_logit_softcap = logit_softcap;
-        //[cv setConstantValue:&fc_logit_softcap type:MTLDataTypeFloat atIndex:112];
-
-        const int32_t fc_ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-        [cv setConstantValue:&fc_ns10 type:MTLDataTypeInt atIndex:120];
-
-        const int32_t fc_ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
-        [cv setConstantValue:&fc_ns20 type:MTLDataTypeInt atIndex:121];
-
-        const int32_t fc_nsg = nsg;
-        [cv setConstantValue:&fc_nsg type:MTLDataTypeInt atIndex:122];
+        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:120];
+        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:121];
+        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:122];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(ggml_backend_t backend, struct ggml_tensor * op, int32_t nsg, int32_t nwg) {
+static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(
+        ggml_backend_t backend, struct ggml_tensor * op,
+        bool    has_mask,
+        bool    has_sinks,
+        bool    has_bias,
+        bool    has_scap,
+        int32_t nsg,
+        int32_t nwg) {
     struct ggml_backend_metal_context * ctx = backend->context;
 
     char base[256];
@@ -1574,31 +1566,29 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(gg
     @autoreleasepool {
         MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
 
-        float scale;
-        float max_bias;
-        float logit_softcap;
+        const int32_t hk = (int32_t) op->src[1]->ne[0];
+        const int32_t hv = (int32_t) op->src[2]->ne[0];
 
-        memcpy(&scale,         ((const int32_t *) op->op_params) + 0, sizeof(scale));
-        memcpy(&max_bias,      ((const int32_t *) op->op_params) + 1, sizeof(max_bias));
-        memcpy(&logit_softcap, ((const int32_t *) op->op_params) + 2, sizeof(logit_softcap));
+        const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
+        const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
         snprintf(base, 256, "kernel_%s_%s_hk%d_hv%d",
                 "flash_attn_ext_vec",
                 ggml_type_name(op->src[1]->type),
-                (int) op->src[1]->ne[0],
-                (int) op->src[2]->ne[0]);
+                hk,
+                hv);
 
         snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
                 "flash_attn_ext_vec",
                 ggml_type_name(op->src[1]->type),
-                (int) op->src[1]->ne[0],
-                (int) op->src[2]->ne[0],
-                op->src[3] != NULL,
-                op->src[4] != NULL,
-                max_bias != 0.0f,
-                logit_softcap != 0.0f,
-                (int) (op->src[1]->nb[1]/op->src[1]->nb[0]),
-                (int) (op->src[2]->nb[1]/op->src[2]->nb[0]),
+                hk,
+                hv,
+                has_mask,
+                has_sinks,
+                has_bias,
+                has_scap,
+                ns10,
+                ns20,
                 nsg, nwg);
 
         id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
@@ -1609,38 +1599,15 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(gg
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        const bool has_mask = op->src[3] != NULL;
-        [cv setConstantValue:&has_mask type:MTLDataTypeBool atIndex:200];
-
-        const bool has_sinks = op->src[4] != NULL;
+        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:200];
         [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:201];
+        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:202];
+        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:203];
 
-        const bool has_bias = max_bias != 0.0f;
-        [cv setConstantValue:&has_bias type:MTLDataTypeBool atIndex:202];
-
-        const bool has_scap = logit_softcap != 0.0f;
-        [cv setConstantValue:&has_scap type:MTLDataTypeBool atIndex:203];
-
-        //const float fc_scale = has_scap ? scale / logit_softcap : scale;
-        //[cv setConstantValue:&fc_scale type:MTLDataTypeFloat atIndex:210];
-
-        //const float fc_max_bias = max_bias;
-        //[cv setConstantValue:&fc_max_bias type:MTLDataTypeFloat atIndex:211];
-
-        //const float fc_logit_softcap = logit_softcap;
-        //[cv setConstantValue:&fc_logit_softcap type:MTLDataTypeFloat atIndex:212];
-
-        const int32_t fc_ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-        [cv setConstantValue:&fc_ns10 type:MTLDataTypeInt atIndex:220];
-
-        const int32_t fc_ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
-        [cv setConstantValue:&fc_ns20 type:MTLDataTypeInt atIndex:221];
-
-        const int32_t fc_nsg = nsg;
-        [cv setConstantValue:&fc_nsg type:MTLDataTypeInt atIndex:222];
-
-        const int32_t fc_nwg = nwg;
-        [cv setConstantValue:&fc_nwg type:MTLDataTypeInt atIndex:223];
+        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:220];
+        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:221];
+        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:222];
+        [cv setConstantValue:&nwg  type:MTLDataTypeInt atIndex:223];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
@@ -5166,6 +5133,11 @@ static int ggml_metal_encode_node(
                     scale /= logit_softcap;
                 }
 
+                const bool has_mask  = src3 != NULL;
+                const bool has_sinks = src4 != NULL;
+                const bool has_bias  = max_bias != 0.0f;
+                const bool has_scap  = logit_softcap != 0.0f;
+
                 const uint32_t n_head      = src0->ne[2];
                 const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
 
@@ -5249,7 +5221,7 @@ static int ggml_metal_encode_node(
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext(backend, node, nsg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext(backend, node, has_mask, has_sinks, has_bias, has_scap, nsg);
 
                     [encoder setComputePipelineState:pipeline];
                     [encoder setBytes:&args length:sizeof(args)     atIndex:0];
@@ -5362,7 +5334,7 @@ static int ggml_metal_encode_node(
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext_vec(backend, node, nsg, nwg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext_vec(backend, node, has_mask, has_sinks, has_bias, has_scap, nsg, nwg);
 
                     GGML_ASSERT(nsg*32 <= (int) pipeline.maxTotalThreadsPerThreadgroup);
 
