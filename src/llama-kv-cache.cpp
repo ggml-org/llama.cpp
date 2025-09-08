@@ -1035,7 +1035,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     const int64_t n_stream = k->ne[2];
 
     if (n_stream > 1) {
-        const uint64_t kv_size = get_size();
+        const int64_t kv_size = get_size();
 
         assert(n_embd_gqa == k->ne[0]);
         assert(kv_size    == k->ne[1]);
@@ -1071,7 +1071,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
         v_cur = ggml_view_2d(ctx, v_cur, n_embd_gqa, n_tokens, v_cur->nb[2], 0);
 
         if (n_stream > 1) {
-            const uint64_t kv_size = get_size();
+            const int64_t kv_size = get_size();
 
             assert(n_embd_gqa == v->ne[0]);
             assert(kv_size    == v->ne[1]);
