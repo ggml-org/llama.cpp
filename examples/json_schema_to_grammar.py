@@ -586,9 +586,10 @@ class SchemaConverter:
             properties = list(schema.get('properties', {}).items())
             return self._add_rule(rule_name, self._build_object_rule(properties, required, name, schema.get('additionalProperties')))
 
-        elif schema_type in (None, 'object') and 'allOf' in schema:
+        elif schema_type in (None, 'object', 'string') and 'allOf' in schema:
             required = set()
             properties = []
+            enum_sets = []
             hybrid_name = name
             def add_component(comp_schema, is_required):
                 if (ref := comp_schema.get('$ref')) is not None:
@@ -600,12 +601,24 @@ class SchemaConverter:
                         if is_required:
                             required.add(prop_name)
 
+                if 'enum' in comp_schema:
+                    enum_sets.append(set(comp_schema['enum']))
+
             for t in schema['allOf']:
                 if 'anyOf' in t:
                     for tt in t['anyOf']:
                         add_component(tt, is_required=False)
                 else:
                     add_component(t, is_required=True)
+
+            if enum_sets:
+                enum_intersection = enum_sets[0]
+                for s in enum_sets[1:]:
+                    enum_intersection &= s
+
+                if enum_intersection:
+                    rule = '(' + ' | '.join((self._generate_constant_rule(v) for v in sorted(enum_intersection))) + ') space'
+                    return self._add_rule(rule_name, rule)
 
             return self._add_rule(rule_name, self._build_object_rule(properties, required, hybrid_name, additional_properties=None))
 
