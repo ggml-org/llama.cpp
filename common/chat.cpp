@@ -693,8 +693,7 @@ static void parse_json_tool_calls(
     const common_regex & close_regex,
     const std::optional<common_regex> & block_close,
     bool allow_raw_python = false,
-    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr,
-    bool update_cursor = false) {
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
 
     auto parse_tool_calls = [&]() {
         size_t from = std::string::npos;
