@@ -1096,7 +1096,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
         v_cur = ggml_pad(ctx, v_cur, v->ne[0] - n_embd_gqa, 0, 0, 0);
     }
 
-    // in this branch the v_idxs are constructed in such a way that each row becomes a single element
+    // in this branch the v_idxs are constructed in such a way that each row is a single head element
     ggml_tensor * v_view = ggml_reshape_2d(ctx, v, 1, ggml_nelements(v));
 
     v_cur = ggml_reshape_2d(ctx, v_cur, 1, ggml_nelements(v_cur));
