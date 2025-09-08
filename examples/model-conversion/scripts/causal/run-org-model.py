@@ -38,15 +38,16 @@ import numpy as np
 # apertus_mod.apply_rotary_pos_emb = debug_rope
 ### == END ROPE DEBUG ===
 
+
 def summarize(tensor: torch.Tensor, name: str, max_seq: int = 3, max_vals: int = 3):
     """
     Print a tensor in llama.cpp debug style.
-    
+
     Supports:
     - 2D tensors (seq, hidden)
     - 3D tensors (batch, seq, hidden)
     - 4D tensors (batch, seq, heads, dim_per_head) via flattening heads × dim_per_head
-    
+
     Shows first and last max_vals of each vector per sequence position.
     """
     t = tensor.detach().to(torch.float32).cpu()
@@ -85,24 +86,24 @@ def summarize(tensor: torch.Tensor, name: str, max_seq: int = 3, max_vals: int =
         # If no overlap, we'll add a separator between first and last sequences
         indices = first_indices + last_indices
         separator_index = len(first_indices)
-    
+
     for i, si in enumerate(indices):
         # Add separator if needed
         if separator_index is not None and i == separator_index:
             print("                                       ...")
-        
+
         # Extract appropriate slice
         vec = t[0, si]
         if vec.ndim == 2:  # 4D case: flatten heads × dim_per_head
             flat = vec.flatten().tolist()
-        else:              # 2D or 3D case
+        else:  # 2D or 3D case
             flat = vec.tolist()
 
         # First and last slices
         first = flat[:max_vals]
         last = flat[-max_vals:] if len(flat) >= max_vals else flat
         first_str = ", ".join(f"{v:12.4f}" for v in first)
-        last_str  = ", ".join(f"{v:12.4f}" for v in last)
+        last_str = ", ".join(f"{v:12.4f}" for v in last)
 
         print(f"                                       [{first_str}, ..., {last_str}]")
 
@@ -125,15 +126,17 @@ def debug_hook(name):
     return fn
 
 
-unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
+unreleased_model_name = os.getenv("UNRELEASED_MODEL_NAME")
 
-parser = argparse.ArgumentParser(description='Process model with specified path')
-parser.add_argument('--model-path', '-m', help='Path to the model')
+parser = argparse.ArgumentParser(description="Process model with specified path")
+parser.add_argument("--model-path", "-m", help="Path to the model")
 args = parser.parse_args()
 
-model_path = os.environ.get('MODEL_PATH', args.model_path)
+model_path = os.environ.get("MODEL_PATH", args.model_path)
 if model_path is None:
-    parser.error("Model path must be specified either via --model-path argument or MODEL_PATH environment variable")
+    parser.error(
+        "Model path must be specified either via --model-path argument or MODEL_PATH environment variable"
+    )
 
 config = AutoConfig.from_pretrained(model_path)
 
@@ -150,18 +153,26 @@ config = AutoConfig.from_pretrained(model_path)
 
 if unreleased_model_name:
     model_name_lower = unreleased_model_name.lower()
-    unreleased_module_path = f"transformers.models.{model_name_lower}.modular_{model_name_lower}"
+    unreleased_module_path = (
+        f"transformers.models.{model_name_lower}.modular_{model_name_lower}"
+    )
     class_name = f"{unreleased_model_name}ForCausalLM"
     print(f"Importing unreleased model module: {unreleased_module_path}")
 
     try:
-        model_class = getattr(importlib.import_module(unreleased_module_path), class_name)
-        model = model_class.from_pretrained(model_path)  # Note: from_pretrained, not fromPretrained
+        model_class = getattr(
+            importlib.import_module(unreleased_module_path), class_name
+        )
+        model = model_class.from_pretrained(
+            model_path
+        )  # Note: from_pretrained, not fromPretrained
     except (ImportError, AttributeError) as e:
         print(f"Failed to import or load model: {e}")
         exit(1)
 else:
-    model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", offload_folder="offload")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, device_map="auto", offload_folder="offload"
+    )
 
 for name, module in model.named_modules():
     if len(list(module.children())) == 0:  # only leaf modules
