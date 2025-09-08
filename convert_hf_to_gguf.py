@@ -5138,8 +5138,7 @@ class EmbeddingGemma(Gemma3Model):
                 raise ValueError("sliding_window not found in model config - this is required for the model")
 
             logger.info(f"Using original sliding_window from config: {orig_sliding_window} "
-                        f"instead of {self.hparams['sliding_window']}"
-            )
+                        f"instead of {self.hparams['sliding_window']}")
             self.gguf_writer.add_sliding_window(orig_sliding_window)
 
         self._try_set_pooling_type()
