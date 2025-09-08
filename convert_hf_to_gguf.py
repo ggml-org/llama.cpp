@@ -5131,6 +5131,7 @@ class EmbeddingGemma(Gemma3Model):
 
         # Override the sliding window size as it gets adjusted by the Gemma3TextConfig
         # constructor. We want to use the value from the original model's config.json.
+        # ref: https://github.com/huggingface/transformers/pull/40700
         with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
             config = json.load(f)
             orig_sliding_window = config.get("sliding_window")
