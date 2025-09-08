@@ -4315,6 +4315,8 @@ void kernel_flash_attn_ext_impl(
 
     // note: I had some concerns that using this instead of the ugly macros above was affecting performance
     //       need to re-check carefully and if no regressions are observerd - remove the macros
+    //       the concerns is that maybe using const variables requires extra registers? but not sure if the compiler
+    //         is clever enough to avoid this. unfortunately, using constexpr is not possible with FC
     //const short NS10 = FC_flash_attn_ext_ns10;
     //const short NS20 = FC_flash_attn_ext_ns20;
 
@@ -4344,7 +4346,7 @@ void kernel_flash_attn_ext_impl(
     threadgroup o_t  * so  = (threadgroup o_t  *) (shmem_f16 + 0*T + Q*DK); // the result for all queries in 8x8 matrices (the O matrix from the paper)
     threadgroup o4_t * so4 = (threadgroup o4_t *) (shmem_f16 + 0*T + Q*DK);
     threadgroup s_t  * ss  = (threadgroup s_t  *) (shmem_f16 + Q*T); // scratch buffer for attention, mask and diagonal matrix
-    threadgroup s2_t * ss2 = (threadgroup s2_t *) (shmem_f16 + Q*T); // scratch buffer for attention, mask and diagonal matrix
+    threadgroup s2_t * ss2 = (threadgroup s2_t *) (shmem_f16 + Q*T); // same as above but in s2_t
 
     threadgroup k_t    * sk    = (threadgroup k_t    *) (shmem_f16 + sgitg*(4*16*KV) + Q*T + Q*TS); // scratch buffer to load K in shared memory
     threadgroup k4x4_t * sk4x4 = (threadgroup k4x4_t *) (shmem_f16 + sgitg*(4*16*KV) + Q*T + Q*TS); // same as above but in k4x4_t
@@ -4355,6 +4357,7 @@ void kernel_flash_attn_ext_impl(
     // mask storage in shared mem
     threadgroup half2 * sm2 = (threadgroup half2 *) (shmem_f16 + Q*T + 2*C);
 
+    // per-query mask pointers
     device const half2 * pm2[NQ];
 
     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
@@ -4629,6 +4632,7 @@ void kernel_flash_attn_ext_impl(
 
             // O = O + (Q*K^T)*V
             {
+                // we can read directly from global memory
                 if (is_same<vd4x4_t, v4x4_t>::value) {
                     static_assert(PV8 % NSG == 0, "");
 
@@ -4657,7 +4661,6 @@ void kernel_flash_attn_ext_impl(
                             s8x8_t vs;
                             simdgroup_load(vs, sst, SH, 0, false);
 
-                            // we can read directly from global memory
                             FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                                 v8x8_t mv;
 
@@ -4844,6 +4847,7 @@ kernel void kernel_flash_attn_ext(
 #define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
 #define FWD_ARGS args, q, k, v, mask, sinks, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
+      // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
         case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4>(FWD_ARGS); break;
@@ -5066,7 +5070,7 @@ void kernel_flash_attn_ext_vec_impl(
         }
     }
 
-    // zero out lo
+    // zero out so
     for (short i = 0; i < DV4/NL; ++i) {
         so4[i*NL] = (o4_t) 0.0f;
     }
@@ -5426,6 +5430,7 @@ kernel void kernel_flash_attn_ext_vec(
 #define FWD_TMPL q4_t, k4_t, v4_t, qk_t, s_t, s4_t, o4_t, kd4_t, nl_k, deq_k_t4, vd4_t, nl_v, deq_v_t4, DK, DV, NE, Q, C
 #define FWD_ARGS args, q, k, v, mask, sinks, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_vec_nsg) {
+      // note: disabled cases to reduce library load time
         case 1:  kernel_flash_attn_ext_vec_impl<FWD_TMPL,  1>(FWD_ARGS); break;
         case 2:  kernel_flash_attn_ext_vec_impl<FWD_TMPL,  2>(FWD_ARGS); break;
         case 4:  kernel_flash_attn_ext_vec_impl<FWD_TMPL,  4>(FWD_ARGS); break;
