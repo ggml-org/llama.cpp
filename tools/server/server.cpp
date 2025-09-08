@@ -308,6 +308,7 @@ struct server_task {
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
+        params.timings_per_token = json_value(data, "timings_per_token", false);
 
         params.stream           = json_value(data, "stream",             false);
         params.cache_prompt     = json_value(data, "cache_prompt",       true);
