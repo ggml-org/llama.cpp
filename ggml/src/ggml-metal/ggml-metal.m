@@ -1504,23 +1504,23 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(
     @autoreleasepool {
         MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
 
-        const int32_t hk = (int32_t) op->src[1]->ne[0];
-        const int32_t hv = (int32_t) op->src[2]->ne[0];
+        const int32_t dk = (int32_t) op->src[1]->ne[0];
+        const int32_t dv = (int32_t) op->src[2]->ne[0];
 
         const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
         const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
-        snprintf(base, 256, "kernel_%s_%s_hk%d_hv%d",
+        snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
                 "flash_attn_ext",
                 ggml_type_name(op->src[1]->type),
-                hk,
-                hv);
+                dk,
+                dv);
 
-        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sinks=%d_bias=%d_scap=%d_ns10=%d_ns20=%d_nsg=%d",
+        snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sinks=%d_bias=%d_scap=%d_ns10=%d_ns20=%d_nsg=%d",
                 "flash_attn_ext",
                 ggml_type_name(op->src[1]->type),
-                hk,
-                hv,
+                dk,
+                dv,
                 has_mask,
                 has_sinks,
                 has_bias,
@@ -1566,23 +1566,23 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(
     @autoreleasepool {
         MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
 
-        const int32_t hk = (int32_t) op->src[1]->ne[0];
-        const int32_t hv = (int32_t) op->src[2]->ne[0];
+        const int32_t dk = (int32_t) op->src[1]->ne[0];
+        const int32_t dv = (int32_t) op->src[2]->ne[0];
 
         const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
         const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
-        snprintf(base, 256, "kernel_%s_%s_hk%d_hv%d",
+        snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
                 "flash_attn_ext_vec",
                 ggml_type_name(op->src[1]->type),
-                hk,
-                hv);
+                dk,
+                dv);
 
-        snprintf(name, 256, "kernel_%s_%s_hk%d_hv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
+        snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
                 "flash_attn_ext_vec",
                 ggml_type_name(op->src[1]->type),
-                hk,
-                hv,
+                dk,
+                dv,
                 has_mask,
                 has_sinks,
                 has_bias,
@@ -1613,7 +1613,10 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(
     }
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(ggml_backend_t backend, struct ggml_tensor * op) {
+static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(
+        ggml_backend_t backend, struct ggml_tensor * op,
+        int32_t dv,
+        int32_t nwg) {
     struct ggml_backend_metal_context * ctx = backend->context;
 
     char base[256];
@@ -1622,11 +1625,8 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_re
     @autoreleasepool {
         MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
 
-        const int32_t fc_dv  = op->src[2]->ne[0];
-        const int32_t fc_nwg = 32;
-
         snprintf(base, 256, "kernel_flash_attn_ext_vec_reduce");
-        snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv=%d_nwg=%d", fc_dv, fc_nwg);
+        snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv=%d_nwg=%d", dv, nwg);
 
         id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
         if (res) {
@@ -1636,11 +1636,13 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_re
 
         cv = [[MTLFunctionConstantValues alloc] init];
 
-        [cv setConstantValue:&fc_dv  type:MTLDataTypeInt atIndex:300];
-        [cv setConstantValue:&fc_nwg type:MTLDataTypeInt atIndex:301];
+        [cv setConstantValue:&dv  type:MTLDataTypeInt atIndex:300];
+        [cv setConstantValue:&nwg type:MTLDataTypeInt atIndex:301];
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
+
+    GGML_UNUSED(op);
 }
 
 static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
@@ -5290,6 +5292,8 @@ static int ggml_metal_encode_node(
                     // each workgroup handles nsg*nkpsg cache values
                     int32_t nwg = 1;
                     if (false) {
+                        // for small KV caches, we could launch a single workgroup and write the results directly to dst/
+                        // however, this does not lead to significant improvement, so disabled
                         nwg = 1;
                         nsg = 4;
                     } else {
@@ -5396,7 +5400,7 @@ static int ggml_metal_encode_node(
                                 nrows,
                             };
 
-                            id<MTLComputePipelineState> pipeline0 = ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(backend, node);
+                            id<MTLComputePipelineState> pipeline0 = ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(backend, node, ne20, nwg);
 
                             [encoder setComputePipelineState:pipeline0];
                             [encoder setBytes:&args0   length:sizeof(args0) atIndex:0];
