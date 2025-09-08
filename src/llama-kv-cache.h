@@ -318,9 +318,9 @@ public:
 
     // store k_cur and v_cur in the cache based on the provided head location
     //   - k_cur  [n_embd_head_k, n_head_k, n_tokens]
-    //   - k_idxs [n_batch]
+    //   - k_idxs [n_tokens]
     //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
-    //   - v_idxs [n_batch] or [n_batch*n_embd_v_gqa] depending if V cache is transposed
+    //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
