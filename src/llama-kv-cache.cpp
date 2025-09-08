@@ -1028,7 +1028,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     // we can merge dims 0 and 1
     // TODO: add ggml helper function for this?
-    assert(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
+    GGML_ASSERT(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
 
     k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
@@ -1062,7 +1062,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     const int64_t n_embd_gqa = n_embd_head*n_head;
 
     // we can merge dims 0 and 1
-    assert(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
+    GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
 
     const int64_t n_stream = v->ne[2];
 
