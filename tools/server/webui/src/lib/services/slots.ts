@@ -223,12 +223,13 @@ export class SlotsService {
 					const restoredState = await this.parseCompletionTimingData({
 						prompt_n: message.timings.prompt_n || 0,
 						predicted_n: message.timings.predicted_n || 0,
-						predicted_per_second: message.timings.predicted_n && message.timings.predicted_ms
-							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-							: 0,
+						predicted_per_second:
+							message.timings.predicted_n && message.timings.predicted_ms
+								? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+								: 0,
 						cache_n: message.timings.cache_n || 0
 					});
-					
+
 					if (restoredState) {
 						this.lastKnownState = restoredState;
 						return restoredState;

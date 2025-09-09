@@ -335,7 +335,11 @@ class ChatStore {
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 			},
 
-			onComplete: async (finalContent?: string, reasoningContent?: string, timings?: MessageTimings) => {
+			onComplete: async (
+				finalContent?: string,
+				reasoningContent?: string,
+				timings?: MessageTimings
+			) => {
 				slotsService.stopStreaming();
 
 				await DatabaseStore.updateMessage(assistantMessage.id, {
@@ -642,10 +646,10 @@ class ChatStore {
 			try {
 				const partialThinking = extractPartialThinking(this.currentResponse);
 
-				const updateData: { 
-					content: string; 
-					thinking?: string; 
-					timings?: MessageTimings
+				const updateData: {
+					content: string;
+					thinking?: string;
+					timings?: MessageTimings;
 				} = {
 					content: partialThinking.remainingContent || this.currentResponse
 				};
@@ -662,9 +666,10 @@ class ChatStore {
 						predicted_n: lastKnownState.tokensDecoded || 0,
 						cache_n: lastKnownState.cacheTokens || 0,
 						// We don't have ms data from the state, but we can estimate
-						predicted_ms: lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-							: undefined
+						predicted_ms:
+							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+								: undefined
 					};
 				}
 
@@ -861,7 +866,7 @@ class ChatStore {
 	}
 
 	/**
-	 * Updates conversation title with confirmation dialog
+	 * Updates conversation title with optional confirmation dialog based on settings
 	 * @param convId - The conversation ID to update
 	 * @param newTitle - The new title content
 	 * @param onConfirmationNeeded - Callback when user confirmation is needed
@@ -873,7 +878,10 @@ class ChatStore {
 		onConfirmationNeeded?: (currentTitle: string, newTitle: string) => Promise<boolean>
 	): Promise<boolean> {
 		try {
-			if (onConfirmationNeeded) {
+			const currentConfig = config();
+
+			// Only ask for confirmation if the setting is enabled and callback is provided
+			if (currentConfig.askForTitleConfirmation && onConfirmationNeeded) {
 				const conversation = await DatabaseStore.getConversation(convId);
 				if (!conversation) return false;
 

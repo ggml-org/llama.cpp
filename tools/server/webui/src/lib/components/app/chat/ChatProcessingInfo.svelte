@@ -8,17 +8,15 @@
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	let showSlotsInfo = $derived(
-		isLoading() || config().keepStatsVisible
-	);
+	let showSlotsInfo = $derived(isLoading() || config().keepStatsVisible);
 
 	$effect(() => {
 		const keepStatsVisible = config().keepStatsVisible;
-		
+
 		if (keepStatsVisible || isLoading()) {
 			processingState.startMonitoring();
 		}
-		
+
 		if (!isLoading() && !keepStatsVisible) {
 			setTimeout(() => {
 				if (!config().keepStatsVisible) {
@@ -33,13 +31,13 @@
 
 		const messages = activeMessages() as DatabaseMessage[];
 		const keepStatsVisible = config().keepStatsVisible;
-		
+
 		if (keepStatsVisible) {
 			if (messages.length === 0) {
 				slotsService.clearState();
 				return;
 			}
-			
+
 			let foundTimingData = false;
 
 			for (let i = messages.length - 1; i >= 0; i--) {
@@ -47,20 +45,23 @@
 				if (message.role === 'assistant' && message.timings) {
 					foundTimingData = true;
 
-					slotsService.updateFromTimingData({
-						prompt_n: message.timings.prompt_n || 0,
-						predicted_n: message.timings.predicted_n || 0,
-						predicted_per_second: message.timings.predicted_n && message.timings.predicted_ms
-							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-							: 0,
-						cache_n: message.timings.cache_n || 0
-					}).catch(error => {
-						console.warn('Failed to update processing state from stored timings:', error);
-					});
+					slotsService
+						.updateFromTimingData({
+							prompt_n: message.timings.prompt_n || 0,
+							predicted_n: message.timings.predicted_n || 0,
+							predicted_per_second:
+								message.timings.predicted_n && message.timings.predicted_ms
+									? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+									: 0,
+							cache_n: message.timings.cache_n || 0
+						})
+						.catch((error) => {
+							console.warn('Failed to update processing state from stored timings:', error);
+						});
 					break;
 				}
 			}
-			
+
 			if (!foundTimingData) {
 				slotsService.clearState();
 			}

@@ -4,9 +4,10 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	apiKey: '',
 	systemMessage: '',
 	theme: 'system',
-	showTokensPerSecond: true,
-	showThoughtInProgress: true,
-	keepStatsVisible: true,
+	showTokensPerSecond: false,
+	showThoughtInProgress: false,
+	keepStatsVisible: false,
+	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	// make sure these default values are in sync with `common.h`
@@ -75,6 +76,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showTokensPerSecond: 'Display generation speed in tokens per second during streaming.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
+	askForTitleConfirmation:
+		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'

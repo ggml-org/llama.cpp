@@ -56,6 +56,11 @@
 					type: 'checkbox'
 				},
 				{
+					key: 'askForTitleConfirmation',
+					label: 'Ask for confirmation before changing conversation title',
+					type: 'checkbox'
+				},
+				{
 					key: 'pasteLongTextToFileLen',
 					label: 'Paste long text to file length',
 					type: 'input'
