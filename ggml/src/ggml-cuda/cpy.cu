@@ -224,7 +224,7 @@ static void ggml_cpy_f32_q4_0_cuda(
         cpy_f32_q<cpy_blck_f32_q4_0, QK4_0><<<chunk_blocks, 1, 0, stream>>>
             (cx + offset * sizeof(float), cdst + (offset / QK4_0) * sizeof(block_q4_0), chunk,
              ne00, ne01, ne02, nb00, nb01, nb02, nb03,
-             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13,
              cdst_indirect, graph_cpynode_index++);
     }
     #else
@@ -249,7 +249,7 @@ static void ggml_cpy_q4_0_f32_cuda(
         cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0><<<chunk_blocks, 1, 0, stream>>>(
             cx + (offset / QK4_0) * sizeof(block_q4_0), cdst + offset * sizeof(float), chunk,
             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
-            ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            ne10, ne11, ne12, nb10, nb11, nb12, nb13,
             cdst_indirect, graph_cpynode_index++);
     }
     #else
