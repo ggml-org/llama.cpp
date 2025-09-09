@@ -1,5 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch~=2.6.0
-torchvision~=0.21.0
-transformers~=4.55.0
-huggingface-hub~=0.34.0
+torch
+torchvision
+transformers
+huggingface-hub
+accelerate
