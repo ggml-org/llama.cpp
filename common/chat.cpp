@@ -217,7 +217,10 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         msg_part.text = part.at("text");
                         msg.content_parts.push_back(msg_part);
                     }
-                } else if (!content.is_null()) {
+                } else if (content.is_null()) {
+                    // Handle null content by setting it to empty string
+                    msg.content = "";
+                } else {
                     throw std::runtime_error("Invalid 'content' type: expected string or array, got " + content.dump() + " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
                 }
             }
@@ -306,7 +309,7 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
                 }
             }
         } else {
-            jmsg["content"] = json(); // null
+            jmsg["content"] = ""; // empty string instead of null
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;
@@ -638,6 +641,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
         case COMMON_CHAT_FORMAT_SEED_OSS: return "Seed-OSS";
         case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
+        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1738,6 +1742,386 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     }
 }
 
+static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    // Build Minja inputs
+    minja::chat_template_inputs ti;
+    ti.messages = inputs.messages;
+    ti.tools = inputs.tools.empty() ? json() : inputs.tools;
+    ti.add_generation_prompt = inputs.add_generation_prompt;
+    ti.extra_context = inputs.extra_context;
+
+    // Disable every Minja polyfill
+    minja::chat_template_options topts;
+    topts.apply_polyfills = true;
+    topts.polyfill_tools = false;
+    topts.polyfill_tool_call_examples = false;
+    topts.polyfill_tool_calls = false;
+    topts.polyfill_tool_responses = false;
+    topts.polyfill_system_role = false;
+    topts.polyfill_object_arguments = true;
+    topts.polyfill_typed_content = false;
+    topts.use_bos_token = true;
+    topts.use_eos_token = true;
+
+    std::string prompt = tmpl.apply(ti, topts);
+
+    // match the existing trimming behavior
+    if (inputs.add_bos && string_starts_with(prompt, tmpl.bos_token())) {
+        prompt.erase(0, tmpl.bos_token().size());
+    }
+    if (inputs.add_eos && string_ends_with(prompt, tmpl.eos_token())) {
+        prompt.erase(prompt.size() - tmpl.eos_token().size());
+    }
+
+    // add GLM preserved tokens
+    data.preserved_tokens = {
+        "<|endoftext|>",
+        "[MASK]",
+        "[gMASK]",
+        "[sMASK]",
+        "<sop>",
+        "<eop>",
+        "<|system|>",
+        "<|user|>",
+        "<|assistant|>",
+        "<|observation|>",
+        "<|begin_of_image|>",
+        "<|end_of_image|>",
+        "<|begin_of_video|>",
+        "<|end_of_video|>",
+        "<|begin_of_audio|>",
+        "<|end_of_audio|>",
+        "<|begin_of_transcription|>",
+        "<|end_of_transcription|>",
+        "<|code_prefix|>",
+        "<|code_middle|>",
+        "<|code_suffix|>",
+        "/nothink",
+        "<think>",
+        "</think>",
+        "<tool_call>",
+        "</tool_call>",
+        "<arg_key>",
+        "</arg_key>",
+        "<arg_value>",
+        "</arg_value>"
+    };
+
+    // extra GLM 4.5 stop word
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<|user|>",
+        "<|observation|>"
+    });
+
+    // build grammar for tool call
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
+        data.grammar = build_grammar([&](const common_grammar_builder &builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                std::string param_rules;
+                if (parameters.contains("properties")) {
+                    for (const auto & [key, value] : parameters.at("properties").items()) {
+                        if (value.contains("type") && value["type"].is_string() && value["type"] == "string") {
+                            param_rules += "\"<arg_key>" + key + "</arg_key>\\n<arg_value>\" ( string-arg-val | " + builder.add_schema(name + "-arg-" + key, value) + " ) \"</arg_value>\\n\" ";
+                        } else {
+                            param_rules += "\"<arg_key>" + key + "</arg_key>\\n<arg_value>\" " + builder.add_schema(name + "-arg-" + key, value) + " \"</arg_value>\\n\" ";
+                        }
+                    }
+                }
+
+                tool_rules.push_back(builder.add_rule(name + "-call", "\"\\n\" \"<tool_call>" + name + "\\n\" " + param_rules + " \"</tool_call>\""));
+            });
+            builder.add_rule("string-arg-val", "( [^<] | \"<\" ( [^/] | \"/\" ( [^a] | \"a\" ( [^r] | \"r\" ( [^g] | \"g\" ( [^_] | \"_\" ( [^v] | \"v\" ( [^a] | \"a\" ( [^l] | \"l\" ( [^u] | \"u\" ( [^e] | \"e\" ( [^>] ) ) ) ) ) ) ) ) ) ) ) )*");
+            builder.add_rule("root", string_join(tool_rules, " | "));
+        });
+
+        // grammar trigger for tool call
+        data.grammar_lazy = true;
+        data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "\n<tool_call>" });
+    }
+
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_GLM_4_5;
+    return data;
+}
+
+static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
+    if (!builder.syntax().parse_tool_calls) {
+        builder.consume_spaces();
+        builder.try_parse_reasoning("<think>", "</think>");
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    constexpr auto rstrip = [](std::string &s){
+        s.resize(std::distance(s.begin(), std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base()));
+    };
+    // Erase substring from l to r, along with additional spaces nearby
+    constexpr auto erase_spaces = [](auto &str, auto l, auto r){
+        for (--l; /* l > -1 && */ l < str.size() && std::isspace(static_cast<unsigned char>(str[l--])););
+        ++l;
+        while (++r < str.size() && std::isspace(static_cast<unsigned char>(str[r])));
+        str[l] = '\n';
+        str[l + 1] = '\n';
+        if (l != 0) l += 2;
+        str.erase(l, r - l);
+        return l;
+    };
+    // Handle unclosed </think> from content
+    constexpr auto filter_unclosed_think = [erase_spaces](auto &content , auto &&builder){
+        auto &syntax = std::forward<decltype(builder)>(builder).syntax();
+        if (syntax.reasoning_format == COMMON_REASONING_FORMAT_NONE || syntax.reasoning_in_content) return;
+        if (auto pos = content.rfind("</think>"); pos != std::string::npos) {
+            //if (std::forward<decltype(builder)>(builder).is_partial()) {
+                // Streaming: delete all </think> token
+                while (pos != std::string::npos) {
+                    pos = erase_spaces(content, pos, pos + 7);
+                    pos = content.rfind("</think>", pos);
+                }
+            //} else {
+            //    // Non-streaming: Put all messages before </think> in reasoning content
+            //    std::forward<decltype(builder)>(builder).add_reasoning_content(string_strip(content.substr(0, pos)));
+            //    content.erase(0, pos + 8);
+            //}
+        }
+    };
+    // Drop substring from needle to end from a JSON
+    constexpr auto partial_json = [](std::string &json_str, std::string_view needle = "GLM_4_5_PARTIAL_FLAG"){
+        auto pos = json_str.rfind(needle);
+        if (pos == std::string::npos) {
+            return false;
+        }
+        for (auto i = pos + needle.size(); i < json_str.size(); ++i) {
+            unsigned char ch = static_cast<unsigned char>(json_str[i]);
+            if (ch != '\'' && ch != '"' && ch != '}' && ch != ':' && !std::isspace(ch)) {
+                return false;
+            }
+        }
+        if (pos != 0 && json_str[pos - 1] == '"') {
+            --pos;
+        }
+        json_str.resize(pos);
+        return true;
+    };
+    // Helper to generate a partial argument JSON
+    constexpr auto gen_partial_json = [partial_json](auto &&set_partial_arg, auto &&arguments, auto &&builder, auto &&function_name){
+        std::forward<decltype(set_partial_arg)>(set_partial_arg)(std::forward<decltype(builder)>(builder).consume_rest(), "GLM_4_5_PARTIAL_FLAG");
+        auto tool_str = std::forward<decltype(arguments)>(arguments).dump();
+        if (partial_json(tool_str)) {
+            if (std::forward<decltype(builder)>(builder).add_tool_call(std::forward<decltype(function_name)>(function_name), "", tool_str)) {
+                return;
+            }
+        }
+        LOG_DBG("Failed to parse partial GLM 4.5 tool call, fallback to non-partial: %s\n", tool_str.c_str());
+    };
+
+    // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
+    std::string half_reasoning("");
+    while (auto tc = builder.try_find_literal("\n<tool_call>")) {
+        auto &content = tc->prelude;
+
+        if (half_reasoning.size() != 0) {
+            if (auto pos = content.find("</think>"); pos == std::string::npos) {
+                half_reasoning += content + "\n<tool_call>";
+                continue;
+            } else {
+                auto reasoning_content = content.substr(0, pos);
+                rstrip(reasoning_content);
+                if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
+                    if (builder.result().content.size() != 0) {
+                        builder.add_content("\n\n");
+                    }
+                    builder.add_content("<think>");
+                    builder.add_content(half_reasoning);
+                    builder.add_content(reasoning_content);
+                    builder.add_content("</think>");
+                } else {
+                    builder.add_reasoning_content(half_reasoning);
+                    builder.add_reasoning_content(reasoning_content);
+                }
+                content.erase(0, pos + 8);
+                half_reasoning.clear();
+            }
+        }
+
+        // Handle multiple think block
+        bool toolcall_in_think = false;
+        for (auto think_start = content.rfind("<think>"); think_start != std::string::npos; think_start = content.rfind("<think>", think_start - 1)) {
+            if (auto think_end = content.find("</think>", think_start + 7); think_end != std::string::npos) {
+                if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
+                    auto reasoning_content = string_strip(content.substr(think_start + 7, think_end - think_start - 7));
+                    builder.add_reasoning_content(reasoning_content);
+                    think_start = erase_spaces(content, think_start, think_end + 7);
+                }
+            } else {
+                // This <tool_call> start is in thinking block, skip this tool call
+                auto pos = think_start + 7;
+                while (pos < content.size() && std::isspace(static_cast<unsigned char>(content[pos++])));
+                half_reasoning = content.substr(pos) + "\n<tool_call>";
+                content.resize(think_start);
+                toolcall_in_think = true;
+            }
+        }
+        rstrip(content);
+
+        // Handle unclosed </think> token
+        filter_unclosed_think(content, builder);
+
+        // Strip if needed
+        if (content.size() > 0 && std::isspace(static_cast<unsigned char>(content[0]))) {
+            content = string_strip(content);
+        }
+
+        // Add content
+        if (content.size() != 0) {
+            // If there are multiple content blocks
+            if (builder.result().content.size() != 0) {
+                builder.add_content("\n\n");
+            }
+            builder.add_content(content);
+        }
+
+        // This <tool_call> start is in thinking block, skip this tool call
+        if (toolcall_in_think) {
+            continue;
+        }
+
+        builder.consume_spaces();
+        auto func_name = builder.try_find_literal("<arg_key>");
+        if (!func_name) {
+            func_name = builder.try_find_literal("</tool_call>");
+        }
+        if (!func_name) {
+            // Partial tool name not supported
+            throw common_chat_msg_partial_exception("incomplete tool_call");
+        }
+
+        // If GLM generate multiple tool call and the first tool call has no argument
+        if (func_name->prelude.find("</tool_call>") != std::string::npos){
+            builder.move_back(func_name->prelude.size() + 12);
+            func_name = builder.try_find_literal("</tool_call>");
+        }
+
+        // Parse tool name
+        builder.move_to(func_name->groups[0].begin);
+        std::string function_name = func_name->prelude;
+        rstrip(function_name);
+
+        // Argument JSON
+        json arguments = json::object();
+
+        // Helper to generate a partial argument JSON
+        const auto gen_partial_args = [&](auto &&set_partial_arg){
+            gen_partial_json(std::forward<decltype(set_partial_arg)>(set_partial_arg), arguments, builder, function_name);
+        };
+
+        // Parse all arg_key/arg_value pairs
+        while (builder.try_consume_literal("<arg_key>")) {
+            // Parse arg_key
+            auto key_res = builder.try_find_literal("</arg_key>");
+            if (!key_res) {
+                gen_partial_args([&](auto &&rest, auto &&needle){arguments[rest + needle] = "";});
+                throw common_chat_msg_partial_exception("Expected </arg_key> after <arg_key>");
+            }
+            auto &key = key_res->prelude;
+            builder.consume_spaces();
+
+            // Parse arg_value
+            if (!builder.try_consume_literal("<arg_value>")) {
+                gen_partial_args([&](auto &&, auto &&needle){arguments[key] = needle;});
+                throw common_chat_msg_partial_exception("Expected <arg_value> after </arg_key>");
+            }
+            auto val_start = builder.pos();
+
+            // Test if arg_val is a partial JSON
+            std::optional<common_json> value_json = std::nullopt;
+            try { value_json = builder.try_consume_json(); }
+            catch (const common_chat_msg_partial_exception &partial) {
+                gen_partial_args([&](auto &&, auto &&needle){arguments[key] = needle;});
+                throw;
+            }
+            catch (const json::exception&) { builder.move_to(val_start); }
+            catch (const std::runtime_error&) { builder.move_to(val_start); }
+
+            // If it is a JSON and followed by </arg_value>, parse as json
+            // cannot support streaming because it may change to plain text
+            if (value_json) {
+                builder.consume_spaces();
+                if (builder.pos() == builder.input().size()) {
+                    gen_partial_args([&](auto &&, auto &&needle){arguments[key] = needle;});
+                    LOG_DBG("GLM 4.5 partial JSON arg_value: %s\n", value_json->json.dump().c_str());
+                    throw common_chat_msg_partial_exception("JSON arg_value detected. Waiting for more tokens for validations.");
+                }
+                if (builder.try_consume_literal("</arg_value>") && value_json->healing_marker.marker.empty()) {
+                    arguments[key] = value_json->json;
+                } else {
+                    builder.move_to(val_start);
+                }
+            }
+
+            // If not, parse as plain text
+            if (val_start == builder.pos()) {
+                if (auto value_plain = builder.try_find_literal("</arg_value>")) {
+                    arguments[key] = value_plain->prelude;
+                } else {
+                    gen_partial_args([&](auto &&rest, auto &&needle){arguments[key] = rest + needle;});
+                    throw common_chat_msg_partial_exception("Expected </arg_value> after <arg_value>");
+                }
+            }
+            builder.consume_spaces();
+        }
+
+        // Consume closing tag
+        if (!builder.try_consume_literal("</tool_call>")) {
+            auto tool_call_arg = arguments.dump();
+            rstrip(tool_call_arg);
+            if (tool_call_arg.size() != 0 && tool_call_arg[tool_call_arg.size() - 1] == '}') {
+                tool_call_arg.resize(tool_call_arg.size() - 1);
+            }
+            rstrip(tool_call_arg);
+            builder.add_tool_call(function_name, "", tool_call_arg);
+            throw common_chat_msg_partial_exception("Expected </tool_call> after </arg_value>");
+        }
+
+        // Add the parsed tool call
+        if (!builder.add_tool_call(function_name, "", arguments.dump())) {
+            throw common_chat_msg_partial_exception("Failed to add GLM tool call");
+        }
+    }
+    while (builder.pos() != builder.input().size()) {
+        builder.consume_spaces();
+        builder.try_parse_reasoning("<think>", "</think>");
+        builder.consume_spaces();
+        std::string content;
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
+            content = builder.consume_rest();
+        } else {
+            if (auto rsn = builder.try_find_literal("<think>")) {
+                builder.move_to(rsn->groups[0].begin);
+                content = std::move(rsn->prelude);
+            } else {
+                content = builder.consume_rest();
+            }
+            filter_unclosed_think(content, builder);
+        }
+        rstrip(content);
+        if (content.size() != 0) {
+            if (builder.result().content.size() != 0) {
+                builder.add_content("\n\n");
+            }
+            builder.add_content(content);
+        }
+    }
+}
+
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
@@ -2516,6 +2900,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_granite(tmpl, params);
     }
 
+    // GLM 4.5: detect by <arg_key> and <arg_value> tags (check before Hermes since both use <tool_call>)
+    if (src.find("[gMASK]<sop>") != std::string::npos && src.find("<arg_key>") != std::string::npos && src.find("<arg_value>") != std::string::npos && params.json_schema.is_null()) {
+        return common_chat_params_init_glm_4_5(tmpl, params);
+    }
+
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
     if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_hermes_2_pro(tmpl, params);
@@ -2702,6 +3091,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_NEMOTRON_V2:
             common_chat_parse_nemotron_v2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GLM_4_5:
+            common_chat_parse_glm_4_5(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
