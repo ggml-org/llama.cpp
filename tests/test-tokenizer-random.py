@@ -421,10 +421,10 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
         if text1 == text2:  # equal to TokenizerGroundtruth?
             return True
         # equal to source text?
-        if tokenizer1.add_bos_token:  # remove BOS
+        if tokenizer1.add_bos_token and tokenizer1.bos_token and isinstance(tokenizer1.bos_token, str):  # remove BOS
             if text2.startswith(tokenizer1.bos_token):
                 text2 = text2[len(tokenizer1.bos_token):]
-        if tokenizer1.add_eos_token:  # remove EOS
+        if tokenizer1.add_eos_token and tokenizer1.eos_token and isinstance(tokenizer1.eos_token, str):  # remove EOS
             if text2.endswith(tokenizer1.eos_token):
                 text2 = text2[:-len(tokenizer1.eos_token)]
         return text == text2

@@ -23,7 +23,6 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn.init import _calculate_fan_in_and_fan_out
 
@@ -413,7 +412,8 @@ import re
 
 import numpy as np
 from gguf import *
-from transformers.models.idefics2.modeling_idefics2 import Idefics2VisionTransformer, Idefics2VisionConfig
+from transformers.models.idefics2.modeling_idefics2 import Idefics2VisionTransformer
+from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 TEXT = "clip.text"
 VISION = "clip.vision"
