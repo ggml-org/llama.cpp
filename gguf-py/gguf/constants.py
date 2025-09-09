@@ -286,6 +286,13 @@ class Keys:
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
 
+    class xIELU:
+        XIELU_ALPHA_P       = "xielu.alpha_p"
+        XIELU_ALPHA_N       = "xielu.alpha_n"
+        XIELU_BETA          = "xielu.beta"
+        XIELU_EPS           = "xielu.eps"
+
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -780,20 +787,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_SHEXP:            "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:            "blk.{bid}.ffn_down_shexp",
     MODEL_TENSOR.FFN_UP_SHEXP:              "blk.{bid}.ffn_up_shexp",
-    MODEL_TENSOR.FFN_ACT_ALPHA_N:           "blk.{bid}.ffn_act_alpha_n",
-    MODEL_TENSOR.FFN_ACT_ALPHA_P:           "blk.{bid}.ffn_act_alpha_p",
-    MODEL_TENSOR.FFN_ACT_BETA:              "blk.{bid}.ffn_act_beta",
-    MODEL_TENSOR.FFN_ACT_EPS:               "blk.{bid}.ffn_act_eps",
     MODEL_TENSOR.FFN_ACT:                   "blk.{bid}.ffn",
     MODEL_TENSOR.FFN_NORM_EXP:              "blk.{bid}.ffn_norm_exps",
     MODEL_TENSOR.FFN_GATE_EXP:              "blk.{bid}.ffn_gate_exps",
     MODEL_TENSOR.FFN_DOWN_EXP:              "blk.{bid}.ffn_down_exps",
     MODEL_TENSOR.FFN_UP_EXP:                "blk.{bid}.ffn_up_exps",
     MODEL_TENSOR.FFN_EXP_PROBS_B:           "blk.{bid}.exp_probs_b",
-    MODEL_TENSOR.FFN_ACT_ALPHA_N:           "blk.{bid}.ffn_act_alpha_n",
-    MODEL_TENSOR.FFN_ACT_ALPHA_P:           "blk.{bid}.ffn_act_alpha_p",
-    MODEL_TENSOR.FFN_ACT_BETA:              "blk.{bid}.ffn_act_beta",
-    MODEL_TENSOR.FFN_ACT_EPS:               "blk.{bid}.ffn_act_eps",
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
     MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
@@ -2715,10 +2714,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.FFN_ACT_ALPHA_N,
-        MODEL_TENSOR.FFN_ACT_ALPHA_P,
-        MODEL_TENSOR.FFN_ACT_BETA,
-        MODEL_TENSOR.FFN_ACT_EPS,
     ],
     # TODO
 }

@@ -508,8 +508,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         llm_arch_is_recurrent(ml.get_arch()));
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
-
     std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), 0);
+
+    std::fill(hparams.xielu_alpha_n.begin(), hparams.xielu_alpha_n.end(), 0);
+    std::fill(hparams.xielu_alpha_p.begin(), hparams.xielu_alpha_p.end(), 0);
+    std::fill(hparams.xielu_beta.begin(), hparams.xielu_beta.end(), 0);
+    std::fill(hparams.xielu_eps.begin(), hparams.xielu_eps.end(), 0);
 
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
@@ -1948,7 +1952,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_APERTUS:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                hparams.n_ctx_orig_yarn = 8192;
+                ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_N,  hparams.xielu_alpha_n, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_P, hparams.xielu_alpha_p, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_XIELU_BETA, hparams.xielu_beta, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_XIELU_EPS, hparams.xielu_eps, hparams.n_layer);
+
                 switch (hparams.n_layer) {
                     case 32: type = LLM_TYPE_8B; break;
                     default: type = LLM_TYPE_UNKNOWN;
@@ -5769,12 +5777,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_q_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "bias",   i), { n_embd_head_k }, TENSOR_NOT_REQUIRED);
                         layer.attn_k_norm   = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
                         layer.attn_k_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "bias",   i), { n_embd_head_k }, TENSOR_NOT_REQUIRED);
-
-                        // xIELU parameters for Apertus
-                        layer.ffn_act_alpha_n = create_tensor(tn(LLM_TENSOR_FFN_ACT_ALPHA_N, i), { 1 }, 0);
-                        layer.ffn_act_alpha_p = create_tensor(tn(LLM_TENSOR_FFN_ACT_ALPHA_P, i), { 1 }, 0);
-                        layer.ffn_act_beta    = create_tensor(tn(LLM_TENSOR_FFN_ACT_BETA, i), { 1 }, 0);
-                        layer.ffn_act_eps     = create_tensor(tn(LLM_TENSOR_FFN_ACT_EPS, i), { 1 }, 0);
                     }
                 } break;
             default:
@@ -18727,17 +18729,10 @@ struct llm_build_apertus : public llm_graph_context {
                 ggml_tensor * up = build_lora_mm(model.layers[il].ffn_up, cur);
                 cb(up, "ffn_up", il);
 
-                // xIELU activation
-                // Get the xIELU parameters from the model layers
-                ggml_tensor * alpha_n = model.layers[il].ffn_act_alpha_n;
-                ggml_tensor * alpha_p = model.layers[il].ffn_act_alpha_p;
-                ggml_tensor * beta = model.layers[il].ffn_act_beta;
-                ggml_tensor * eps = model.layers[il].ffn_act_eps;
-
-                float alpha_n_val = get_scalar_f32_val(alpha_n);
-                float alpha_p_val = get_scalar_f32_val(alpha_p);
-                float beta_val = get_scalar_f32_val(beta);
-                float eps_val = get_scalar_f32_val(eps);
+                float alpha_n_val = hparams.xielu_alpha_n[il];
+                float alpha_p_val = hparams.xielu_alpha_p[il];
+                float beta_val = hparams.xielu_beta[il];
+                float eps_val = hparams.xielu_eps[il];
 
                 // Apply xIELU activation
                 ggml_tensor * activated = ggml_xielu(ctx0, up, alpha_n_val, alpha_p_val, beta_val, eps_val);
