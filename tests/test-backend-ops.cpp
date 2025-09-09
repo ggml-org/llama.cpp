@@ -6807,7 +6807,17 @@ static void list_all_ops() {
 static void show_test_coverage() {
     std::set<std::string> all_ops;
     for (int i = 1; i < GGML_OP_COUNT; i++) {
-        all_ops.insert(ggml_op_name((enum ggml_op)i));
+        auto op_name = ggml_op_name((enum ggml_op)i);
+        if (strcmp(op_name, "VIEW") == 0 ||
+            strcmp(op_name, "RESHAPE") == 0 ||
+            strcmp(op_name, "PERMUTE") == 0 ||
+            strcmp(op_name, "TRANSPOSE") == 0 ||
+            strcmp(op_name, "CONT") == 0  ||
+            strcmp(op_name, "GLU") == 0 ||
+            strcmp(op_name, "UNARY") == 0 ) {
+            continue;
+        }
+        all_ops.insert(op_name);
     }
     for (int i = 0; i < GGML_UNARY_OP_COUNT; i++) {
         all_ops.insert(ggml_unary_op_name((enum ggml_unary_op)i));
