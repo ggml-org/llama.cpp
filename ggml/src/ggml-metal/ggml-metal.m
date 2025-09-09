@@ -5942,10 +5942,11 @@ static void ggml_backend_metal_buffer_set_tensor(ggml_backend_buffer_t buffer, s
             id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            // TODO: is this an extra copy? can we avoid it?
-            id<MTLBuffer> buf_src = [ctx->device newBufferWithBytes:data
-                                                             length:size
-                                                            options:MTLResourceStorageModeShared];
+            void * data_ptr = (void *)(uintptr_t) data;
+            id<MTLBuffer> buf_src = [ctx->device newBufferWithBytesNoCopy:data_ptr
+                                                                   length:size
+                                                                  options:MTLResourceStorageModeShared
+                                                              deallocator:nil];
 
             size_t buf_dst_offset = 0;
             id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
