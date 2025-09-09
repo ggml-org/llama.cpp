@@ -16,7 +16,7 @@
 - Use the following format for the squashed commit title: `<module> : <commit title> (#<issue_number>)`. For example: `utils : fix typo in utils.py (#1234)`
 - Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS)
-- Let authours, who are also collaborators, merge their own PRs
+- Let authors, who are also collaborators, merge their own PRs
 - When merging a PR by a contributor, make sure you are well familiar with the changes and can take responsibility for maintaining them
 
 # Coding guidelines
