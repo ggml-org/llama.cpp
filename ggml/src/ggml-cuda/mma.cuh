@@ -1,3 +1,4 @@
+#pragma once
 // This file contains primitives that expose the tensor core PTX instructions for CUDA code.
 // The primitives can be used in a similar way as the nvcuda::wmma interface but with a well-defined memory layout.
 // The documentation for the PTX instructions can be found under:
