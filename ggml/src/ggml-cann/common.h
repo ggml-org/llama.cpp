@@ -107,6 +107,7 @@ int32_t ggml_cann_get_device();
 
 std::optional<std::string> get_env(const std::string& name);
 bool parse_bool(const std::string& value);
+int parse_integer(const std::string& value);
 
 /**
  * @brief Abstract base class for memory pools used by CANN.
@@ -351,7 +352,7 @@ struct ggml_graph_node_properties {
 struct ggml_cann_graph {
     ~ggml_cann_graph() {
         if (graph != nullptr) {
-            aclmdlRIDestroy(graph);
+            ACL_CHECK(aclmdlRIDestroy(graph));
         }
     }
 
@@ -370,50 +371,48 @@ struct ggml_cann_graph {
 struct ggml_cann_graph_lru_cache {
     size_t capacity;  /**< Maximum number of graphs in the cache. */
 
-    std::list<std::shared_ptr<ggml_cann_graph>> cache_list; /**< List storing cached graphs. */
-
-    std::shared_ptr<ggml_cann_graph> matched_graph = nullptr; /**< Pointer to a recently matched graph. */
+    std::list<ggml_cann_graph*> cache_list; /**< List storing cached graphs as raw pointers. */
 
     ggml_cann_graph_lru_cache() {
-        std::string env_val = get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12");
-        try {
-            capacity = std::stoul(env_val);
-        } catch (...) {
-            capacity = 12; // fallback to default if invalid
-        }
+        capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12"));
     }
 
     /**
      * @brief Push a new graph to the front of the cache.
-     * If the cache exceeds capacity, the least recently used graph is removed.
-     * @param new_node Shared pointer to the new ggml_cann_graph to cache.
+     * If the cache exceeds capacity, the least recently used graph is deleted.
+     * @param new_node Pointer to the new ggml_cann_graph to cache.
+     *        Ownership is transferred to the cache (cache will delete it).
      */
-    void push(std::shared_ptr<ggml_cann_graph> new_node) {
+    void push(ggml_cann_graph* new_node) {
         if (cache_list.size() >= capacity) {
+            ggml_cann_graph* old = cache_list.back();
             cache_list.pop_back();
+            delete old; // free the old graph
         }
-
         cache_list.push_front(new_node);
     }
 
     /**
      * @brief Move an existing graph to the front of the cache.
-     * @param node Shared pointer to the ggml_cann_graph to move.
+     * @param node Pointer to the ggml_cann_graph to move.
      */
-    void move_to_front(std::shared_ptr<ggml_cann_graph> node) {
+    void move_to_front(ggml_cann_graph* node) {
         cache_list.remove(node);
         cache_list.push_front(node);
     }
 
     /**
-     * @brief Clear all graphs from the cache.
+     * @brief Clear all graphs from the cache (also frees memory).
      */
     void clear() {
+        for (auto ptr : cache_list) {
+            delete ptr;
+        }
         cache_list.clear();
     }
 
     /**
-     * @brief Destructor that clears the cache upon object destruction.
+     * @brief Destructor that clears the cache and frees all cached graphs.
      */
     ~ggml_cann_graph_lru_cache() {
         clear();
