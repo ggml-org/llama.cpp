@@ -148,3 +148,4 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 .ccache/
+docs/--csv-dir
