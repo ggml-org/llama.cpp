@@ -59,12 +59,10 @@ declare global {
 		ApiErrorResponse,
 		ApiLlamaCppServerProps,
 		ApiProcessingState,
-
 		ChatMessageData,
 		ChatMessageType,
 		ChatRole,
 		ChatUploadedFile,
-
 		DatabaseConversation,
 		DatabaseMessage,
 		DatabaseMessageExtra,
@@ -72,11 +70,9 @@ declare global {
 		DatabaseMessageExtraImageFile,
 		DatabaseMessageExtraTextFile,
 		DatabaseMessageExtraPdfFile,
-
 		MessageSiblingInfo,
 		MessagePromptProgress,
 		MessageTimings,
-
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,

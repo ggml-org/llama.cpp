@@ -1,4 +1,4 @@
-import type { MessagePromptProgress } from "./chat";
+import type { MessagePromptProgress } from './chat';
 
 export interface ApiChatMessageContentPart {
 	type: 'text' | 'image_url' | 'input_audio';

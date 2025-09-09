@@ -1,28 +1,69 @@
 <script lang="ts">
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
+	import { isLoading, activeMessages, activeConversation } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { slotsService } from '$lib/services/slots';
 
 	const processingState = useProcessingState();
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
 	let showSlotsInfo = $derived(
-		isLoading() || (config().keepStatsVisible && processingDetails.length > 0)
+		isLoading() || config().keepStatsVisible
 	);
 
-	// Monitor during loading and handle keepStatsVisible setting
 	$effect(() => {
-		if (isLoading()) {
+		const keepStatsVisible = config().keepStatsVisible;
+		
+		if (keepStatsVisible || isLoading()) {
 			processingState.startMonitoring();
-		} else {
-			// Always delay stopping to capture final context updates after streaming
+		}
+		
+		if (!isLoading() && !keepStatsVisible) {
 			setTimeout(() => {
-				// Only stop monitoring if keepStatsVisible is disabled
 				if (!config().keepStatsVisible) {
 					processingState.stopMonitoring();
 				}
 			}, 2000); // 2 second delay to ensure we get final updates
+		}
+	});
+
+	$effect(() => {
+		activeConversation();
+
+		const messages = activeMessages() as DatabaseMessage[];
+		const keepStatsVisible = config().keepStatsVisible;
+		
+		if (keepStatsVisible) {
+			if (messages.length === 0) {
+				slotsService.clearState();
+				return;
+			}
+			
+			let foundTimingData = false;
+
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const message = messages[i];
+				if (message.role === 'assistant' && message.timings) {
+					foundTimingData = true;
+
+					slotsService.updateFromTimingData({
+						prompt_n: message.timings.prompt_n || 0,
+						predicted_n: message.timings.predicted_n || 0,
+						predicted_per_second: message.timings.predicted_n && message.timings.predicted_ms
+							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+							: 0,
+						cache_n: message.timings.cache_n || 0
+					}).catch(error => {
+						console.warn('Failed to update processing state from stored timings:', error);
+					});
+					break;
+				}
+			}
+			
+			if (!foundTimingData) {
+				slotsService.clearState();
+			}
 		}
 	});
 </script>

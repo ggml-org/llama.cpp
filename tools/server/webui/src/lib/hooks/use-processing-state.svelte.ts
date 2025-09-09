@@ -41,6 +41,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 			processingState = state;
 			if (state) {
 				lastKnownState = state;
+			} else {
+				lastKnownState = null;
 			}
 		});
 

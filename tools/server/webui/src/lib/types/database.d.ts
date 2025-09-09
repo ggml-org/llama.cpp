@@ -1,4 +1,4 @@
-import type { MessageTimings } from "./chat";
+import type { MessageTimings } from './chat';
 
 export interface DatabaseConversation {
 	currNode: string | null;

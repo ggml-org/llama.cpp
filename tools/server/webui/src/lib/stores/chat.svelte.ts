@@ -335,12 +335,19 @@ class ChatStore {
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 			},
 
-			onComplete: async (finalContent?: string, reasoningContent?: string) => {
+			onComplete: async (finalContent?: string, reasoningContent?: string, timings?: MessageTimings) => {
 				slotsService.stopStreaming();
 
 				await DatabaseStore.updateMessage(assistantMessage.id, {
 					content: finalContent || streamedContent,
-					thinking: reasoningContent || streamedReasoningContent
+					thinking: reasoningContent || streamedReasoningContent,
+					timings: timings
+				});
+
+				const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+				this.updateMessageAtIndex(messageIndex, {
+					timings: timings
 				});
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
@@ -622,7 +629,7 @@ class ChatStore {
 
 	/**
 	 * Saves partial response if generation was interrupted
-	 * Preserves user's partial content when generation is stopped early
+	 * Preserves user's partial content and timing data when generation is stopped early
 	 */
 	private async savePartialResponseIfNeeded(): Promise<void> {
 		if (!this.currentResponse.trim() || !this.activeMessages.length) {
@@ -635,7 +642,11 @@ class ChatStore {
 			try {
 				const partialThinking = extractPartialThinking(this.currentResponse);
 
-				const updateData: { content: string; thinking?: string } = {
+				const updateData: { 
+					content: string; 
+					thinking?: string; 
+					timings?: MessageTimings
+				} = {
 					content: partialThinking.remainingContent || this.currentResponse
 				};
 
@@ -643,9 +654,26 @@ class ChatStore {
 					updateData.thinking = partialThinking.thinking;
 				}
 
+				const lastKnownState = await slotsService.getCurrentState();
+
+				if (lastKnownState) {
+					updateData.timings = {
+						prompt_n: lastKnownState.promptTokens || 0,
+						predicted_n: lastKnownState.tokensDecoded || 0,
+						cache_n: lastKnownState.cacheTokens || 0,
+						// We don't have ms data from the state, but we can estimate
+						predicted_ms: lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+							: undefined
+					};
+				}
+
 				await DatabaseStore.updateMessage(lastMessage.id, updateData);
 
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
+				if (updateData.timings) {
+					lastMessage.timings = updateData.timings;
+				}
 			} catch (error) {
 				lastMessage.content = this.currentResponse;
 				console.error('Failed to save partial response:', error);

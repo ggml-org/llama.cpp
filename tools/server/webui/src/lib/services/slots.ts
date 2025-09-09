@@ -34,7 +34,7 @@ import { config } from '$lib/stores/settings.svelte';
  * real-time token generation rate measurement.
  */
 export class SlotsService {
-	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
+	private callbacks: Set<(state: ApiProcessingState | null) => void> = new Set();
 	private isStreamingActive: boolean = false;
 	private lastKnownState: ApiProcessingState | null = null;
 
@@ -46,11 +46,26 @@ export class SlotsService {
 	}
 
 	/**
-	 * Stop streaming session tracking and clear state
+	 * Stop streaming session tracking
 	 */
 	stopStreaming(): void {
 		this.isStreamingActive = false;
+	}
+
+	/**
+	 * Clear the current processing state
+	 * Used when switching to a conversation without timing data
+	 */
+	clearState(): void {
 		this.lastKnownState = null;
+
+		for (const callback of this.callbacks) {
+			try {
+				callback(null);
+			} catch (error) {
+				console.error('Error in clearState callback:', error);
+			}
+		}
 	}
 
 	/**
@@ -70,8 +85,13 @@ export class SlotsService {
 		);
 	}
 
-	subscribe(callback: (state: ApiProcessingState) => void): () => void {
+	subscribe(callback: (state: ApiProcessingState | null) => void): () => void {
 		this.callbacks.add(callback);
+
+		if (this.lastKnownState) {
+			callback(this.lastKnownState);
+		}
+
 		return () => {
 			this.callbacks.delete(callback);
 		};
@@ -85,12 +105,7 @@ export class SlotsService {
 		predicted_n: number;
 		predicted_per_second: number;
 		cache_n: number;
-		prompt_progress?: {
-			total: number;
-			cache: number;
-			processed: number;
-			time_ms: number;
-		};
+		prompt_progress?: MessagePromptProgress;
 	}): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
 
@@ -115,12 +130,10 @@ export class SlotsService {
 	 * Gets context total from last known slots data or fetches from server
 	 */
 	private async getContextTotal(): Promise<number | null> {
-		// Return cached value if available
 		if (this.lastKnownState && this.lastKnownState.contextTotal > 0) {
 			return this.lastKnownState.contextTotal;
 		}
 
-		// Try to fetch context total from /slots endpoint
 		try {
 			const response = await fetch('/slots');
 			if (response.ok) {
@@ -136,14 +149,12 @@ export class SlotsService {
 			console.warn('Failed to fetch context total from /slots:', error);
 		}
 
-		// Fallback to reasonable default if no context data available
 		return 4096;
 	}
 
 	private async parseCompletionTimingData(
 		timingData: Record<string, unknown>
 	): Promise<ApiProcessingState | null> {
-		// Extract timing information from /chat/completions response
 		const promptTokens = (timingData.prompt_n as number) || 0;
 		const predictedTokens = (timingData.predicted_n as number) || 0;
 		const tokensPerSecond = (timingData.predicted_per_second as number) || 0;
@@ -157,7 +168,6 @@ export class SlotsService {
 			  }
 			| undefined;
 
-		// Get context total from server or cache
 		const contextTotal = await this.getContextTotal();
 
 		if (contextTotal === null) {
@@ -165,16 +175,12 @@ export class SlotsService {
 			return null;
 		}
 
-		// Get output max tokens from user settings
 		const currentConfig = config();
-		// Default to -1 (infinite) if max_tokens is not set, matching ChatService behavior
 		const outputTokensMax = currentConfig.max_tokens || -1;
 
-		// Calculate context based on new formula: prompt_n + cache_n + predicted_n
 		const contextUsed = promptTokens + cacheTokens + predictedTokens;
-		const outputTokensUsed = predictedTokens; // tokens_generated_in_current_response
+		const outputTokensUsed = predictedTokens;
 
-		// Calculate progress percentage if prompt_progress is available
 		const progressPercent = promptProgress
 			? Math.round((promptProgress.processed / promptProgress.total) * 100)
 			: undefined;
@@ -189,11 +195,9 @@ export class SlotsService {
 			outputTokensMax,
 			hasNextToken: predictedTokens > 0,
 			tokensPerSecond,
-			// Use actual config values or reasonable defaults
 			temperature: currentConfig.temperature ?? 0.8,
 			topP: currentConfig.top_p ?? 0.95,
 			speculative: false,
-			// New progress fields
 			progressPercent,
 			promptTokens,
 			cacheTokens
@@ -205,7 +209,37 @@ export class SlotsService {
 	 * Returns the last known state from timing data, or null if no data available
 	 */
 	async getCurrentState(): Promise<ApiProcessingState | null> {
-		return this.lastKnownState;
+		if (this.lastKnownState) {
+			return this.lastKnownState;
+		}
+		try {
+			// Import dynamically to avoid circular dependency
+			const { chatStore } = await import('$lib/stores/chat.svelte');
+			const messages = chatStore.activeMessages;
+
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const message = messages[i];
+				if (message.role === 'assistant' && message.timings) {
+					const restoredState = await this.parseCompletionTimingData({
+						prompt_n: message.timings.prompt_n || 0,
+						predicted_n: message.timings.predicted_n || 0,
+						predicted_per_second: message.timings.predicted_n && message.timings.predicted_ms
+							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+							: 0,
+						cache_n: message.timings.cache_n || 0
+					});
+					
+					if (restoredState) {
+						this.lastKnownState = restoredState;
+						return restoredState;
+					}
+				}
+			}
+		} catch (error) {
+			console.warn('Failed to restore timing data from messages:', error);
+		}
+
+		return null;
 	}
 }
 

@@ -226,7 +226,7 @@ export class ChatService {
 	private async handleStreamResponse(
 		response: Response,
 		onChunk?: (chunk: string) => void,
-		onComplete?: (response: string, reasoningContent?: string) => void,
+		onComplete?: (response: string, reasoningContent?: string, timings?: MessageTimings) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void
 	): Promise<void> {
@@ -242,6 +242,7 @@ export class ChatService {
 		let regularContent = '';
 		let insideThinkTag = false;
 		let hasReceivedData = false;
+		let lastTimings: MessageTimings | undefined;
 
 		try {
 			while (true) {
@@ -263,7 +264,9 @@ export class ChatService {
 								onError?.(contextError);
 								return;
 							}
-							onComplete?.(regularContent, fullReasoningContent || undefined);
+
+							onComplete?.(regularContent, fullReasoningContent || undefined, lastTimings);
+
 							return;
 						}
 
@@ -277,6 +280,11 @@ export class ChatService {
 
 							if (timings || promptProgress) {
 								this.updateProcessingState(timings, promptProgress);
+
+								// Store the latest timing data
+								if (timings) {
+									lastTimings = timings;
+								}
 							}
 
 							if (content) {
@@ -347,7 +355,7 @@ export class ChatService {
 	 */
 	private async handleNonStreamResponse(
 		response: Response,
-		onComplete?: (response: string, reasoningContent?: string) => void,
+		onComplete?: (response: string, reasoningContent?: string, timings?: MessageTimings) => void,
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
@@ -653,19 +661,8 @@ export class ChatService {
 	 * @param promptProgress - Progress data from the API response
 	 */
 	private updateProcessingState(
-		timings?: {
-			prompt_n?: number;
-			prompt_ms?: number;
-			predicted_n?: number;
-			predicted_ms?: number;
-			cache_n?: number;
-		},
-		promptProgress?: {
-			total: number;
-			cache: number;
-			processed: number;
-			time_ms: number;
-		}
+		timings?: MessageTimings,
+		promptProgress?: MessagePromptProgress
 	): void {
 		// Calculate tokens per second from timing data
 		const tokensPerSecond =
