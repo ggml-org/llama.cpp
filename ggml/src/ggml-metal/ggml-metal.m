@@ -6172,8 +6172,8 @@ static size_t ggml_backend_metal_buffer_type_get_max_size(ggml_backend_buffer_ty
     return max_size;
 }
 
-static bool ggml_backend_metal_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return true;
+static bool ggml_backend_metal_buffer_from_ptr_type_is_host(ggml_backend_buffer_type_t buft) {
+    return false;
 
     GGML_UNUSED(buft);
 }
@@ -6211,7 +6211,7 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_from_ptr_type(void) 
             /* .get_alignment    = */ ggml_backend_metal_buffer_type_get_alignment,
             /* .get_max_size     = */ ggml_backend_metal_buffer_type_get_max_size,
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-            /* .is_host          = */ ggml_backend_metal_buffer_type_is_host,
+            /* .is_host          = */ ggml_backend_metal_buffer_from_ptr_type_is_host,
         },
         /* .device  = */ &g_ggml_backend_metal_device,
         /* .context = */ NULL,
@@ -6570,7 +6570,7 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, struct g
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = (struct ggml_backend_dev_caps) {
         /* .async                 = */ true,
-        /* .host_buffer           = */ true,
+        /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
     };
