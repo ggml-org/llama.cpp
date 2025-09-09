@@ -108,7 +108,9 @@ kernel void kernel_mul_mv_mxfp4_f32_flat(
     uint i12 = im % ne12;
     uint i13 = im / ne12;
 
-    ulong offset_src0 = first_row * nb;
+    uint offset_src0 = first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03;
+    // 17 = sizeof(block_mxfp4)
+    offset_src0 /= 17;
 #ifdef SRC0Q_IMG
     ulong offset_q = offset_src0;
 #else
