@@ -3,6 +3,7 @@ package com.example.llama.ui.components
 import android.llama.cpp.ArmFeature
 import android.llama.cpp.ArmFeaturesMapper.DisplayItem
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButton
@@ -19,6 +20,7 @@ import kotlin.math.sqrt
 @Composable
 fun ArmFeaturesVisualizer(
     supportedFeatures: List<DisplayItem>,
+    autoSizeMinScaling: Float = 0.5f,
     onFeatureClick: ((ArmFeature) -> Unit)? = null
 ) {
     // Segmented Button Row for Features
@@ -40,7 +42,12 @@ fun ArmFeaturesVisualizer(
             ) {
                 Text(
                     text = item.feature.displayName,
+                    autoSize = TextAutoSize.StepBased(
+                        minFontSize = MaterialTheme.typography.labelSmall.fontSize * autoSizeMinScaling,
+                        maxFontSize = MaterialTheme.typography.labelSmall.fontSize
+                    ),
                     style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
                     fontWeight = if (item.isSupported) {
                         FontWeight.Medium
                     } else {
