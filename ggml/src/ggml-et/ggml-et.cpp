@@ -1,6 +1,7 @@
 #include "ggml-et.h"
 #include "ggml-et-common.h"
 #include "ggml-et-kernels.h"
+#include "ggml-et-ops.h"
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -254,34 +255,76 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
 }
 
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    GGML_UNUSED(backend);
-    GGML_UNUSED(cgraph);
-    // Return success but perform no computation - fallback to other backends
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
+
+    GGML_LOG_DEBUG("ET: Computing graph with %d nodes\n", cgraph->n_nodes);
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+
+        if (node->op == GGML_OP_NONE) {
+            continue;
+        }
+
+        GGML_LOG_DEBUG("ET: Processing node %d: %s (%s)\n", i, node->name, ggml_op_name(node->op));
+
+        switch (node->op) {
+            case GGML_OP_MUL:
+                ggml_et_op_mul(dev_ctx, node);
+                break;
+
+            default:
+                GGML_LOG_ERROR("ET: Unsupported operation in graph: %s\n", ggml_op_name(node->op));
+                return GGML_STATUS_FAILED;
+        }
+    }
+
+    GGML_LOG_DEBUG("ET: Graph computation completed successfully\n");
     return GGML_STATUS_SUCCESS;
-}
-
-static bool ggml_backend_et_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
-    GGML_UNUSED(backend);
-    GGML_UNUSED(op);
-    return false;
-}
-
-static bool ggml_backend_et_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(backend);
-    // Only support host (CPU) buffer types to avoid allocation issues
-    return ggml_backend_buft_is_host(buft);
-}
-
-static bool ggml_backend_et_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
-    GGML_UNUSED(backend);
-    GGML_UNUSED(op);
-    return false;
 }
 
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
-    GGML_UNUSED(op);
-    return false;
+
+    // Log what operations are being queried for support (device level)
+    const char * op_name = ggml_op_name(op->op);
+    const char * type_name = ggml_type_name(op->type);
+
+    // Get tensor dimensions and sizes
+    char shape_str[256];
+    snprintf(shape_str, sizeof(shape_str), "[%lld,%lld,%lld,%lld]",
+             (long long)op->ne[0], (long long)op->ne[1], (long long)op->ne[2], (long long)op->ne[3]);
+
+    // Get source tensor types if available
+    char src_info[512] = "";
+    if (op->src[0]) {
+        char src_str[128];
+        snprintf(src_str, sizeof(src_str), " src0=%s", ggml_type_name(op->src[0]->type));
+        strcat(src_info, src_str);
+    }
+    if (op->src[1]) {
+        char src_str[128];
+        snprintf(src_str, sizeof(src_str), " src1=%s", ggml_type_name(op->src[1]->type));
+        strcat(src_info, src_str);
+    }
+
+    bool supported = false;
+    switch (op->op) {
+        case GGML_OP_MUL:
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       op->src[1] && op->src[1]->type == GGML_TYPE_F32;
+            break;
+        default:
+            supported = false;
+            break;
+    }
+
+    GGML_LOG_DEBUG("ET: Device query support for %s (type=%s, shape=%s, bytes=%zu%s) -> %s\n",
+                   op_name, type_name, shape_str, ggml_nbytes(op), src_info,
+                   supported ? "SUPPORTED" : "unsupported");
+
+    return supported;
 }
 
 static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -291,8 +334,18 @@ static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_ba
 
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
-    GGML_UNUSED(op);
-    return false;
+
+    switch (op->op) {
+        case GGML_OP_MUL:
+            // This should only include ops that are worth offloading
+            // (i.e. large tensors)
+            // We are offloading all MULs for testing.
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1] && op->src[1]->type == GGML_TYPE_F32;
+        default:
+            return false;
+    }
 }
 
 static const struct ggml_backend_i ggml_backend_et_i = {
