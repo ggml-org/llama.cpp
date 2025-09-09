@@ -3736,6 +3736,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
+#ifdef __APPLE__
+        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
+        if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            device->subgroup_arithmetic = false;
+        }
+#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
