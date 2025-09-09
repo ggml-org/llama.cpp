@@ -17,7 +17,8 @@
 - Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS)
 - Let authors, who are also collaborators, merge their own PRs
-- When merging a PR by a contributor, make sure you are well familiar with the changes and can take responsibility for maintaining them
+- When merging a PR by a contributor, make sure you have a good understanding of the changes
+- Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 
 # Coding guidelines
 
