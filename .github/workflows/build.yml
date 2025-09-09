@@ -1120,15 +1120,6 @@ jobs:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
-
-          # Create symlink for amdhip64.dll (fix for amdgpu-arch.exe DLL naming issue)
-          $hipBinPath = "$env:HIP_PATH\bin"
-          $versionedDll = Get-ChildItem "$hipBinPath\amdhip64_*.dll" | Select-Object -First 1
-          if ($versionedDll -and -not (Test-Path "$hipBinPath\amdhip64.dll")) {
-              Write-Host "Creating symlink: amdhip64.dll -> $($versionedDll.Name)"
-              New-Item -ItemType SymbolicLink -Path "$hipBinPath\amdhip64.dll" -Target $versionedDll.FullName -Force
-          }
-
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
