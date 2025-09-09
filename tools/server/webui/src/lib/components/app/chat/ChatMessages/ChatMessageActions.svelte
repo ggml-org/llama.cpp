@@ -3,7 +3,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { DatabaseMessage } from '$lib/types/database';
 	import type { Component } from 'svelte';
 	import ChatMessageBranchingControls from './ChatMessageBranchingControls.svelte';
 

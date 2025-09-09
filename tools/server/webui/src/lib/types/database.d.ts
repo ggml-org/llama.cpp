@@ -1,3 +1,5 @@
+import type { MessageTimings } from "./chat";
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
@@ -49,4 +51,5 @@ export interface DatabaseMessage {
 	thinking: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
+	timings?: MessageTimings;
 }

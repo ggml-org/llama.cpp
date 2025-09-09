@@ -17,3 +17,18 @@ export interface MessageSiblingInfo {
 	currentIndex: number;
 	totalSiblings: number;
 }
+
+export interface MessagePromptProgress {
+	cache: number;
+	processed: number;
+	time_ms: number;
+	total: number;
+}
+
+export interface MessageTimings {
+	cache_n?: number;
+	predicted_ms?: number;
+	predicted_n?: number;
+	prompt_ms?: number;
+	prompt_n?: number;
+}

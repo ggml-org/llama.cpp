@@ -2,7 +2,6 @@
 	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import type { DatabaseMessage } from '$lib/types/database';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';

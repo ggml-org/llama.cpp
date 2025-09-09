@@ -1,4 +1,3 @@
-import type { ApiProcessingState } from '$lib/types/api';
 import { config } from '$lib/stores/settings.svelte';
 
 /**

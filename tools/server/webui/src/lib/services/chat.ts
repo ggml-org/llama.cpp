@@ -1,7 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
 import { slotsService } from './slots';
-import type { ApiErrorResponse, ApiContextSizeError } from '$lib/types/api';
-
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
  *

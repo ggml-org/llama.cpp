@@ -1,5 +1,3 @@
-import type { DatabaseMessage } from '$lib/types/database';
-
 /**
  * Message branching utilities for conversation tree navigation.
  *
@@ -187,7 +185,7 @@ export function getMessageSiblings(
 
 	// Convert sibling message IDs to their corresponding leaf node IDs
 	// This allows navigation between different conversation branches
-	const siblingLeafIds = siblingIds.map((siblingId) => findLeafNode(messages, siblingId));
+	const siblingLeafIds = siblingIds.map((siblingId: string) => findLeafNode(messages, siblingId));
 
 	// Find current message's position among siblings
 	const currentIndex = siblingIds.indexOf(messageId);

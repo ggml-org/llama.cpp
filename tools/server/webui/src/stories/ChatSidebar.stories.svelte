@@ -1,7 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatSidebar from '$lib/components/app/chat/ChatSidebar/ChatSidebar.svelte';
-	import type { DatabaseConversation } from '$lib/types/database.d.ts';
 	import { waitFor } from 'storybook/internal/test';
 	import { screen } from 'storybook/test';
 

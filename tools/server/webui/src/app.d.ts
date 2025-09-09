@@ -9,14 +9,19 @@ import type {
 	ApiChatCompletionStreamChunk,
 	ApiChatMessageData,
 	ApiChatMessageContentPart,
-	ApiLlamaCppServerProps
+	ApiContextSizeError,
+	ApiErrorResponse,
+	ApiLlamaCppServerProps,
+	ApiProcessingState
 } from '$lib/types/api';
 
 import type {
 	ChatMessageType,
 	ChatRole,
 	ChatUploadedFile,
-	MessageSiblingInfo
+	MessageSiblingInfo,
+	MessagePromptProgress,
+	MessageTimings
 } from '$lib/types/chat';
 
 import type {
@@ -50,11 +55,16 @@ declare global {
 		ApiChatCompletionStreamChunk,
 		ApiChatMessageData,
 		ApiChatMessageContentPart,
+		ApiContextSizeError,
+		ApiErrorResponse,
 		ApiLlamaCppServerProps,
+		ApiProcessingState,
+
 		ChatMessageData,
 		ChatMessageType,
 		ChatRole,
 		ChatUploadedFile,
+
 		DatabaseConversation,
 		DatabaseMessage,
 		DatabaseMessageExtra,
@@ -62,7 +72,11 @@ declare global {
 		DatabaseMessageExtraImageFile,
 		DatabaseMessageExtraTextFile,
 		DatabaseMessageExtraPdfFile,
+
 		MessageSiblingInfo,
+		MessagePromptProgress,
+		MessageTimings,
+
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,

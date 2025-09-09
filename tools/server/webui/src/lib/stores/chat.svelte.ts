@@ -1,11 +1,6 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
-import type {
-	DatabaseConversation,
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types/database';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';

@@ -1,3 +1,5 @@
+import type { MessagePromptProgress } from "./chat";
+
 export interface ApiChatMessageContentPart {
 	type: 'text' | 'image_url' | 'input_audio';
 	text?: string;
@@ -161,12 +163,7 @@ export interface ApiChatCompletionStreamChunk {
 		predicted_ms?: number;
 		cache_n?: number;
 	};
-	prompt_progress?: {
-		total: number;
-		cache: number;
-		processed: number;
-		time_ms: number;
-	};
+	prompt_progress?: MessagePromptProgress;
 }
 
 export interface ApiChatCompletionResponse {

@@ -1,4 +1,3 @@
-import type { ApiLlamaCppServerProps } from '$lib/types/api.d.ts';
 import { serverStore } from '$lib/stores/server.svelte';
 
 /**
