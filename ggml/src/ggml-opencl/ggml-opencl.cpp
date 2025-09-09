@@ -3470,7 +3470,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         tensor->extra = extra;
 
         return;
-    } 
+    }
 #endif // GGML_OPENCL_SOA_Q
 
     ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
