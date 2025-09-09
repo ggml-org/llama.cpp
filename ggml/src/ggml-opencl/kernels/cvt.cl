@@ -155,7 +155,7 @@ kernel void kernel_restore_block_mxfp4(
 ) {
     global struct block_mxfp4 * b = (global struct block_mxfp4 *) dst + get_global_id(0);
     global uchar * q = (global uchar *) src_q + QK_MXFP4 / 2 * get_global_id(0);
-    global half  * e = (global uchar *) src_e + get_global_id(0);
+    global uchar * e = (global uchar *) src_e + get_global_id(0);
 
     b->e = *e;
     for (int i = 0; i < QK_MXFP4 / 2; ++i) {
