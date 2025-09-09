@@ -1937,7 +1937,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
 
-    for (auto &req_flags : req_flags_list) {
+    for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
+        const auto & req_flags = *it;
+
         uint32_t memory_type_index = find_properties(&mem_props, &mem_req, req_flags);
 
         if (memory_type_index == UINT32_MAX) {
@@ -1950,6 +1952,11 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             break;
         } catch (const vk::SystemError& e) {
             // loop and retry
+            // during last attempt throw the exception
+            if (it + 1 == req_flags_list.end()) {
+                device->device.destroyBuffer(buf->buffer);
+                throw e;
+            }
         }
     }
 
