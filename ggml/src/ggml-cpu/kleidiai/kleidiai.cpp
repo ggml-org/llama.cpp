@@ -87,15 +87,6 @@ static inline int64_t ggml_ne(const ggml_tensor * tensor, int dim) {
     return tensor->ne[dim];
 }
 
-static inline bool is_whisper_model(const struct ggml_tensor* op) {
-    const int64_t n_dims = op->src[0]->ne[0];
-    if (n_dims == 384 || n_dims == 512 || n_dims == 768 ||
-        n_dims == 1024 || n_dims == 1280) {
-        return true;
-    }
-    return false;
-}
-
 template<typename Ret, typename Variant, typename... Args>
 static Ret variant_call(const Variant & var, Args&&... args) {
     return std::visit([&](auto&& func) -> Ret {
@@ -521,9 +512,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type() && ctx.kernels) {
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
-            }
-            if (op->op == GGML_OP_GET_ROWS) {
-                return is_whisper_model(op);
             }
             if ((op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_I32) &&
                 ggml_ne(op->src[1], 2) == 1 && ggml_ne(op->src[1], 3) == 1) {
