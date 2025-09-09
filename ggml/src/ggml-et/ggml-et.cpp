@@ -1,11 +1,10 @@
 #include "ggml-et.h"
+#include "ggml-et-common.h"
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
-#include <device-layer/IDeviceLayer.h>
-#include <runtime/IRuntime.h>
 #include <cstring>
 
 /*
@@ -44,38 +43,20 @@ static std::shared_ptr<dev::IDeviceLayer> ggml_et_devicelayer() {
     return _drv.device_layer;
 }
 
-static std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
+std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
     return _drv.runtime;
 }
 
-struct ggml_backend_et_buffer_type_context {
-    int devidx;
-    std::string name;
-};
-
-struct ggml_backend_et_buffer_context {
-    int devidx;
-    void * data;
-    size_t size;
-};
-
-struct ggml_backend_et_context {
-    int devidx;
-};
-
-struct ggml_backend_et_device_context {
-    int devidx;
-    rt::DeviceId rtid;
-    std::string name;
-    std::string desc;
-    size_t total_mem;
-    ggml_backend_buffer_type_t buftype;
-};
+static ggml_backend_dev_t ggml_backend_et_reg_get_device(ggml_backend_reg_t reg, size_t devidx);
 
 static void ggml_backend_et_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
     if (ctx->data != nullptr) {
-        free(ctx->data);
+        std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+        if (runtime) {
+            GGML_LOG_DEBUG("ET: Freeing %zu bytes on device %d (ptr=%p)\n", ctx->size, ctx->devidx, ctx->data);
+            runtime->freeDevice(ctx->rtid, static_cast<std::byte*>(ctx->data));
+        }
     }
     delete ctx;
 }
@@ -92,19 +73,42 @@ static enum ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t
 }
 
 static void ggml_backend_et_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(data);
-    GGML_UNUSED(offset);
-    GGML_UNUSED(size);
+    ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
+
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        return;
+    }
+
+    // Create short-lived stream for this transfer
+    rt::StreamId stream = runtime->createStream(ctx->rtid);
+
+    std::byte * dst_ptr = static_cast<std::byte*>(tensor->data) + offset;
+    const std::byte * src_ptr = static_cast<const std::byte*>(data);
+
+    GGML_LOG_DEBUG("ET: Host->Device transfer %zu bytes (offset=%zu, tensor=%p, device=%d)\n", size, offset, (void*)tensor, ctx->devidx);
+    rt::EventId event = runtime->memcpyHostToDevice(stream, src_ptr, dst_ptr, size, true /*barrier*/);
+
+    runtime->waitForEvent(event);
 }
 
 static void ggml_backend_et_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(data);
-    GGML_UNUSED(offset);
-    GGML_UNUSED(size);
+    ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
+
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        return;
+    }
+
+    rt::StreamId stream = runtime->createStream(ctx->rtid);
+
+    const std::byte * src_ptr = static_cast<const std::byte*>(tensor->data) + offset;
+    std::byte * dst_ptr = static_cast<std::byte*>(data);
+
+    GGML_LOG_DEBUG("ET: Device->Host transfer %zu bytes (offset=%zu, tensor=%p, device=%d)\n", size, offset, static_cast<const void*>(tensor), ctx->devidx);
+    rt::EventId event = runtime->memcpyDeviceToHost(stream, src_ptr, dst_ptr, size, true /*barrier*/);
+
+    runtime->waitForEvent(event);
 }
 
 static bool ggml_backend_et_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -141,14 +145,28 @@ static ggml_backend_buffer_t ggml_backend_et_buffer_type_alloc_buffer(ggml_backe
 
     ggml_backend_et_buffer_context * ctx = new ggml_backend_et_buffer_context;
     ctx->devidx = btctx->devidx;
-    ctx->data = malloc(size);
     ctx->size = size;
 
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (!runtime) {
+        delete ctx;
+        return nullptr;
+    }
+
+    std::vector<rt::DeviceId> rtids = runtime->getDevices();
+    if (static_cast<size_t>(btctx->devidx) >= rtids.size()) {
+        delete ctx;
+        return nullptr;
+    }
+    ctx->rtid = rtids[btctx->devidx];
+
+    ctx->data = runtime->mallocDevice(ctx->rtid, size);
     if (ctx->data == nullptr) {
         delete ctx;
         return nullptr;
     }
 
+    GGML_LOG_DEBUG("ET: Allocated %zu bytes on device %d (ptr=%p)\n", size, btctx->devidx, ctx->data);
     return ggml_backend_buffer_init(buft, ggml_backend_et_buffer_i, ctx, size);
 }
 
@@ -169,7 +187,7 @@ static size_t ggml_backend_et_buffer_type_get_alloc_size(ggml_backend_buffer_typ
 
 static bool ggml_backend_et_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
-    return true;
+    return false;
 }
 
 static const struct ggml_backend_buffer_type_i ggml_backend_et_buffer_type_i = {
@@ -193,9 +211,9 @@ static void ggml_backend_et_free(ggml_backend_t backend) {
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_get_default_buffer_type(ggml_backend_t backend) {
-    GGML_UNUSED(backend);
-    // Return CPU buffer type to ensure all tensors allocated on CPU-accessible memory
-    return ggml_backend_cpu_buffer_type();
+    ggml_backend_et_context * et_ctx = (ggml_backend_et_context *)backend->context;
+
+    return ggml_backend_et_buffer_type(et_ctx->devidx);
 }
 
 static void ggml_backend_et_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -259,8 +277,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
 
 static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(dev);
-    // Only support host (CPU) buffer types
-    return ggml_backend_buft_is_host(buft);
+    return buft->iface.get_name == ggml_backend_et_buffer_type_get_name;
 }
 
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
@@ -329,14 +346,12 @@ static ggml_backend_t ggml_backend_et_device_init_backend(ggml_backend_dev_t dev
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_device_get_buffer_type(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
-    // Return CPU buffer type to ensure all tensors allocated on CPU-accessible memory
-    return ggml_backend_cpu_buffer_type();
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+    return dev_ctx->buftype;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    // Return CPU buffer type for host buffer type
     return ggml_backend_cpu_buffer_type();
 }
 
@@ -362,10 +377,6 @@ static const struct ggml_backend_device_i ggml_backend_et_device_i = {
 /*
   Backend Registry.
 */
-
-struct ggml_backend_et_reg_ctx {
-    std::vector<ggml_backend_dev_t> devices;
-};
 
 static const char * ggml_backend_et_reg_get_name(ggml_backend_reg_t reg) {
     GGML_UNUSED(reg);
