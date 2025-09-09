@@ -151,9 +151,9 @@ static void ggml_cpy_flt_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int num_blocks = (chunk + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
         cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
-            (cx + offset * sizeof(src_t), cdst + offset * sizeof(dst_t), chunk, 
-             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
-             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            (cx + offset * sizeof(src_t), cdst + offset * sizeof(dst_t), chunk,
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13,
              cdst_indirect, graph_cpynode_index++);
     }
     #else
@@ -175,9 +175,9 @@ static void ggml_cpy_f32_q8_0_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int64_t chunk_blocks = chunk / QK8_0;
         cpy_f32_q<cpy_blck_f32_q8_0, QK8_0><<<chunk_blocks, 1, 0, stream>>>
-            (cx + offset * sizeof(float), cdst + (offset / QK8_0) * sizeof(block_q8_0), chunk, 
-             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
-             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            (cx + offset * sizeof(float), cdst + (offset / QK8_0) * sizeof(block_q8_0), chunk,
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13,
              cdst_indirect, graph_cpynode_index++);
     }
     #else
@@ -198,9 +198,9 @@ static void ggml_cpy_q8_0_f32_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int64_t chunk_blocks = chunk;
         cpy_q_f32<cpy_blck_q8_0_f32, QK8_0><<<chunk_blocks, 1, 0, stream>>>
-            (cx + (offset / QK8_0) * sizeof(block_q8_0), cdst + offset * sizeof(float), chunk, 
-             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
-             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            (cx + (offset / QK8_0) * sizeof(block_q8_0), cdst + offset * sizeof(float), chunk,
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13,
              cdst_indirect, graph_cpynode_index++);
     }
     #else
@@ -222,8 +222,8 @@ static void ggml_cpy_f32_q4_0_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int64_t chunk_blocks = chunk / QK4_0;
         cpy_f32_q<cpy_blck_f32_q4_0, QK4_0><<<chunk_blocks, 1, 0, stream>>>
-            (cx + offset * sizeof(float), cdst + (offset / QK4_0) * sizeof(block_q4_0), chunk, 
-             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+            (cx + offset * sizeof(float), cdst + (offset / QK4_0) * sizeof(block_q4_0), chunk,
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
              ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
              cdst_indirect, graph_cpynode_index++);
     }
@@ -247,8 +247,8 @@ static void ggml_cpy_q4_0_f32_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int64_t chunk_blocks = chunk;
         cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0><<<chunk_blocks, 1, 0, stream>>>(
-            cx + (offset / QK4_0) * sizeof(block_q4_0), cdst + offset * sizeof(float), chunk, 
-            ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+            cx + (offset / QK4_0) * sizeof(block_q4_0), cdst + offset * sizeof(float), chunk,
+            ne00, ne01, ne02, nb00, nb01, nb02, nb03,
             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
             cdst_indirect, graph_cpynode_index++);
     }
@@ -272,9 +272,9 @@ static void ggml_cpy_f32_q4_1_cuda(
         const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
         const int64_t chunk_blocks = chunk / QK4_1;
         cpy_f32_q<cpy_blck_f32_q4_1, QK4_1><<<chunk_blocks, 1, 0, stream>>>
-            (cx + offset * sizeof(float), cdst + (offset / QK4_1) * sizeof(block_q4_1), chunk, 
-             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
-             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            (cx + offset * sizeof(float), cdst + (offset / QK4_1) * sizeof(block_q4_1), chunk,
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13,
              cdst_indirect, graph_cpynode_index++);
     }
     #else
