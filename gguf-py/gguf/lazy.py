@@ -360,7 +360,13 @@ def copy_tensor_ranges(t: LazyNumpyTensor, fout: BufferedWriter):
                 dst_offset += r.size - extra_size
             else:
                 # not trying to use reflinks, but still using os.copy_file_range for speed
-                os.copy_file_range(src.fileno(), fout.fileno(), r.size, r.offset, dst_offset)
+                try:
+                    os.copy_file_range(src.fileno(), fout.fileno(), r.size, r.offset, dst_offset)
+                except OSError:
+                    # fallback when there's a problem (e.g. cross-filesystem copies)
+                    src.seek(r.offset)
+                    fout.seek(dst_offset)
+                    shutil.copyfileobj(src, fout, r.size)
                 dst_offset += r.size
         else:
             # not using reflinks, fallback when os.copy_file_range is not supported
