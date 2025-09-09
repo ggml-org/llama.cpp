@@ -79,8 +79,9 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
     global uchar * dst,
     ulong         offsetd,
     int           ne00,
-    int           ne01,
-    int           ne02,
+    ulong         nb01,
+    ulong         nb02,
+    ulong         nb03,
     int           ne11,
     int           ne12,
     ulong         nb11,
@@ -105,7 +106,10 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
 
     int nb = ne00 / QK_MXFP4;
 
-    src0_e = src0_e + i02 * nb * ne01;
+    uint src0_off = i02*nb02;
+    src0_off /= 17; // 17 = sizeof(block_mxfp4)
+
+    src0_e = src0_e + src0_off;
 
     dst = dst + (idx * ne0 + iid1 * ne1 * ne0) * sizeof(float);
 
@@ -114,11 +118,12 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
 
     int first_row = (r0 * N_SG_MXFP4 + get_sub_group_id()) * N_R0_MXFP4;
 
-    ulong offset_src0 = first_row * nb;
+    uint offset_src0 = first_row*nb01;
+    offset_src0 /= 17; // 17 = sizeof(block_mxfp4)
 #ifdef SRC0Q_IMG
-    ulong offset_q = i02 * nb * ne01 + offset_src0;
+    ulong offset_q = src0_off + offset_src0;
 #else
-    src0_q = src0_q + i02 * nb * 16 * ne01;
+    src0_q = src0_q + src0_off*16;
     global uchar16 * x_q = (global uchar16 *)(src0_q) + offset_src0;
 #endif
     global uchar * x_e = src0_e + offset_src0;

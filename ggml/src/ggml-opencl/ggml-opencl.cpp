@@ -7228,20 +7228,21 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
             CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
             CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-            CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-            CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-            CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-            CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb11));
-            CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb12));
-            CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb13));
-            CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &ne20));
-            CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &ne21));
-            CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb21));
-            CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &ne0));
-            CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &ne1));
-            CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &r2));
-            CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &r3));
+            CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb01));
+            CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb02));
+            CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb03));
+            CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne11));
+            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne12));
+            CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb11));
+            CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb12));
+            CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb13));
+            CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &ne20));
+            CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &ne21));
+            CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb21));
+            CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &ne0));
+            CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &ne1));
+            CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &r2));
+            CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
 #else // GGML_OPENCL_SOA_Q
             kernel = backend_ctx->kernel_mul_mv_id_mxfp4_f32;
 
