@@ -1,5 +1,6 @@
 #include "ggml-et.h"
 #include "ggml-et-common.h"
+#include "ggml-et-kernels.h"
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -206,6 +207,14 @@ static const char * ggml_backend_et_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_et_free(ggml_backend_t backend) {
     ggml_backend_et_context * et_ctx = (ggml_backend_et_context *)backend->context;
+
+    // Clean up kernels on this device before freeing backend
+    ggml_backend_dev_t dev = ggml_backend_et_reg_get_device(ggml_backend_et_reg(), et_ctx->devidx);
+    if (dev && dev->context) {
+        ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+        ggml_et_unload_all_kernels(dev_ctx);
+    }
+
     delete et_ctx;
     delete backend;
 }
@@ -450,6 +459,11 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 		/* .device  = */ dev,
 		/* .context = */ bufty_ctx
 	    };
+
+	    // Create default stream for ordered execution on this device
+	    dev_ctx->default_stream = ggml_et_runtime()->createStream(rtid);
+	    GGML_LOG_DEBUG("ET: Created default stream for device %d\n", i);
+
 	    dev->context = dev_ctx;
 
 	    ctx->devices.push_back(dev);
