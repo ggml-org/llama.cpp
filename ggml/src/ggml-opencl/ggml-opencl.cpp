@@ -765,11 +765,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #endif
         backend_ctx->program_cvt =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
-        // q4_0
+
         CL_CHECK((backend_ctx->kernel_convert_block_q4_0_noshuffle = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q4_0_noshuffle", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_q4_0  = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q4_0", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_q4_0  = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q4_0", &err), err));
-        // mxfp4
         CL_CHECK((backend_ctx->kernel_convert_block_mxfp4  = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_mxfp4", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_mxfp4  = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_mxfp4", &err), err));
         GGML_LOG_CONT(".");
@@ -2430,7 +2429,6 @@ struct ggml_tensor_extra_cl_q4_0 {
     }
 };
 
-// Additional tensor extra structs for mxfp4 tensors.
 struct ggml_tensor_extra_cl_mxfp4 {
     // Quantized values.
     cl_mem q = nullptr;
@@ -3403,7 +3401,8 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         return;
 
-    } else if (tensor->type == GGML_TYPE_MXFP4) {
+    }
+    if (tensor->type == GGML_TYPE_MXFP4) {
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
         GGML_ASSERT(extra_orig && "Tesnors in OpenCL backend should have been allocated and initialized");
 
@@ -3423,27 +3422,12 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             queue, data_device, CL_TRUE, 0,
             ggml_nbytes(tensor), data, 0, NULL, NULL));
 
-        // We consider the specified offset arg as always, although For weights
-        // the offset arg should be 0 (we do not assert this).
-        //GGML_ASSERT(offset == 0);
-
-        // We create subbuffers from the original tensor buffer for scales and
-        // quants - i.e., scales and quants are aliases into the buffer obejct
-        // that backs the original tensor. This is a cleaner way to adapt to the
-        // new memory management.
-        // In the old code, we allocate new buffers for scales and quants
-        // respectively, which could still be done but would result in double
-        // allocation; properly deallocating the preallocated buffer that backs
-        // the tensors is tricky and would leak the backend specific information
-        // into the general backend code.
-        // Does this create misaligned subbuffers (alignment is 1024) in certain
-        // cases ?
-        cl_buffer_region region;
-
         // The original tensor memory is divided into scales and quants, i.e.,
         // we first store scales, then quants.
+        cl_buffer_region region;
+
         // Create subbuffer for scales.
-        region.origin = extra_orig->offset + tensor->view_offs + offset; //align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
         region.size = size_e;
         extra->e = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
@@ -3452,7 +3436,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         auto previous_origin = region.origin;
 
         // Create subbuffer for quants.
-        region.origin = previous_origin + size_e; //align_to(previous_origin + size_e, backend_ctx->alignment);
+        region.origin = align_to(previous_origin + size_e, backend_ctx->alignment);
         region.size = size_q;
         extra->q = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
@@ -3475,7 +3459,12 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         // Create image for Q
         cl_image_format img_format_q = {CL_RG, CL_UNSIGNED_INT32};
-        cl_image_desc img_desc_q = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(tensor->ne[0] * tensor->ne[1] * tensor->ne[2] / 32 * 2), 0,0,0,0,0,0,0, extra->q};
+        cl_image_desc img_desc_q = {
+            CL_MEM_OBJECT_IMAGE1D_BUFFER,
+            static_cast<size_t>(tensor->ne[0] * tensor->ne[1] * tensor->ne[2] / 32 * 2),
+            0, 0, 0, 0, 0, 0, 0,
+            { extra->q }
+        };
         extra->q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_q, &img_desc_q, NULL, &err);
 
         tensor->extra = extra;
@@ -6275,8 +6264,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
+#ifdef GGML_OPENCL_SOA_Q
     ggml_tensor_extra_cl_q4_0 * extra0_q4_0 = (ggml_tensor_extra_cl_q4_0 *)src0->extra;
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)src0->extra;
+#endif
 
     const int  ne00 = src0 ? src0->ne[0] : 0;
     const int  ne01 = src0 ? src0->ne[1] : 0;
@@ -7112,8 +7103,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     cl_ulong offset2 = extra2->offset + src2->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
+#ifdef GGML_OPENCL_SOA_Q
     ggml_tensor_extra_cl_q4_0 * extra0_q4_0 = (ggml_tensor_extra_cl_q4_0 *)src0->extra;
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)src0->extra;
+#endif
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
@@ -7171,7 +7164,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
-            
+
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_0->d));
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
