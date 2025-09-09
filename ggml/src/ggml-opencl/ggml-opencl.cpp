@@ -3046,7 +3046,7 @@ struct ggml_backend_opencl_buffer_context {
             extra = new ggml_tensor_extra_cl_q8_0();
         } else {
             extra = temp_tensor_extras_q8_0.back();
-            temp_tensor_extras_q4_0.pop_back();
+            temp_tensor_extras_q8_0.pop_back();
         }
 
         temp_tensor_extras_q8_0_in_use.push_back(extra);
