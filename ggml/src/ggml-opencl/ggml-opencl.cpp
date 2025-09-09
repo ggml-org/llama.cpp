@@ -7042,6 +7042,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne1));
             CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r3));
+            CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float)*nth0,nullptr));
 #endif
             break;
         }
@@ -7282,6 +7283,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &ne1));
             CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
+            CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float)*sgs,nullptr));
 #endif // GGML_OPENCL_SOA_Q
             break;
         }

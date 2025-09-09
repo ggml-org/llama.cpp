@@ -24,37 +24,19 @@ typedef struct {
     uchar qs[QK_MXFP4/2];
 } block_mxfp4;
 
-static inline half4 mxfp4_to_fp16_packed(ushort fp4x4) {
-    ushort2 fp16_packed_a, fp16_packed_b, bias_a, bias_b, sign_a, sign_b;
-    fp16_packed_a.lo = (fp4x4 << 9) & 0x0E00;
-    fp16_packed_a.hi = (fp4x4 << 5) & 0x0E00;
-    fp16_packed_b.lo = (fp4x4 << 1) & 0x0E00;
-    fp16_packed_b.hi = (fp4x4 >> 3) & 0x0E00;
-
-    bias_a.lo = (fp16_packed_a.lo == 0) ? 0x0 : 0x3800;
-    bias_a.hi = (fp16_packed_a.hi == 0) ? 0x0 : 0x3800;
-    bias_b.lo = (fp16_packed_b.lo == 0) ? 0x0 : 0x3800;
-    bias_b.hi = (fp16_packed_b.hi == 0) ? 0x0 : 0x3800;
-
-    fp16_packed_a.lo = (fp16_packed_a.lo == 0x0200) ? 0x0 : fp16_packed_a.lo;
-    fp16_packed_a.hi = (fp16_packed_a.hi == 0x0200) ? 0x0 : fp16_packed_a.hi;
-    fp16_packed_b.lo = (fp16_packed_b.lo == 0x0200) ? 0x0 : fp16_packed_b.lo;
-    fp16_packed_b.hi = (fp16_packed_b.hi == 0x0200) ? 0x0 : fp16_packed_b.hi;
-
-    sign_a.lo = (fp4x4 << 12) & 0x8000;
-    sign_a.hi = (fp4x4 << 8) & 0x8000;
-    sign_b.lo = (fp4x4 << 4) & 0x8000;
-    sign_b.hi = fp4x4 & 0x8000;
-
-    fp16_packed_a = sign_a + bias_a + fp16_packed_a;
-    fp16_packed_b = sign_b + bias_b + fp16_packed_b;
-
-    return as_half4((ushort4)(fp16_packed_a, fp16_packed_b));
-}
+constant static float kvalues_mxfp4_f[16] = {
+    0, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f
+};
 
 static inline float e8m0_to_fp32(uchar x) {
     int bits;
-    bits = (x == 0) ? 0x00400000 : ((uint) x << 23);
+
+    if (x == 0) {
+        bits = 0x00400000;
+    } else {
+        bits = (uint) x << 23;
+    }
+
     return as_float(bits);
 }
 
@@ -91,13 +73,15 @@ kernel void kernel_mul_mv_mxfp4_f32(
     int ne0,
     int ne1,
     int r2,
-    int r3
+    int r3,
+    local  char * shmem
 ) {
     src0 = (global char*)((global char*)src0 + offset0);
     src1 = (global char*)((global char*)src1 + offset1);
     dst  = (global char*)((global char*)dst  + offsetd);
 
-    int nb = ne00 / QK_MXFP4;
+    local float * shmem_f32 = (local float *) shmem;
+    int nb = ne00/QK_MXFP4;
 
     int r0 = get_group_id(0);
     int r1 = get_group_id(1);
@@ -105,8 +89,8 @@ kernel void kernel_mul_mv_mxfp4_f32(
 
     int first_row = (r0 * N_SG_MXFP4 + get_sub_group_id()) * N_R0_MXFP4;
 
-    uint i12 = im % ne12;
-    uint i13 = im / ne12;
+    uint i12 = im%ne12;
+    uint i13 = im/ne12;
 
     ulong offset_src0 = first_row*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03;
     ulong offset_src1 =        r1*nb11 + (i12   )*nb12 + (i13   )*nb13;
@@ -114,30 +98,34 @@ kernel void kernel_mul_mv_mxfp4_f32(
     global block_mxfp4 * x = (global block_mxfp4 *) (src0 + offset_src0);
     global float       * y = (global float       *) (src1 + offset_src1);
 
-    const short ix = get_sub_group_local_id() >> 1;  // 0...15
-    const short it = get_sub_group_local_id() & 1;  // 0 or 1
+    const short ix = get_sub_group_local_id()/2;  // 0...15
+    const short it = get_sub_group_local_id()%2;  // 0 or 1
 
+    shmem_f32[get_sub_group_local_id()] = kvalues_mxfp4_f[get_sub_group_local_id()%16];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    float4 yl[4];
     float sumf[N_R0_MXFP4] = {0.f};
 
     global float * yb = y + ix * QK_MXFP4 + it * 8;
 
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/2) {
         global float4 * y4 = (global float4 *)yb;
+        yl[0] = y4[0];
+        yl[1] = y4[4];
+        yl[2] = y4[1];
+        yl[3] = y4[5];
 
         for (short row = 0; row < N_R0_MXFP4; row++) {
             global block_mxfp4 * xb = x + row*nb + ib;
             global uchar       * q2 = (global uchar *)(xb->qs + 8*it);
-            ushort4 xb_q = ((global ushort4 *)(q2))[0];
 
-            half4 fp16x4_0 = mxfp4_to_fp16_packed(xb_q.s0);
-            half4 fp16x4_1 = mxfp4_to_fp16_packed(xb_q.s1);
-            float4 acc1 = y4[0] * (float4)(fp16x4_0.s0, fp16x4_0.s2, fp16x4_1.s0, fp16x4_1.s2);
-            acc1 += y4[4] * (float4)(fp16x4_0.s1, fp16x4_0.s3, fp16x4_1.s1, fp16x4_1.s3);
-            
-            fp16x4_0 = mxfp4_to_fp16_packed(xb_q.s2);
-            fp16x4_1 = mxfp4_to_fp16_packed(xb_q.s3);
-            acc1 += y4[1] * (float4)(fp16x4_0.s0, fp16x4_0.s2, fp16x4_1.s0, fp16x4_1.s2);
-            acc1 += y4[5] * (float4)(fp16x4_0.s1, fp16x4_0.s3, fp16x4_1.s1, fp16x4_1.s3);
+            float4 acc1 = yl[0]*(float4)(shmem_f32[q2[0] &  0x0F], shmem_f32[q2[1] &  0x0F], shmem_f32[q2[2] &  0x0F], shmem_f32[q2[3] &  0x0F]);
+            float4 acc2 = yl[1]*(float4)(shmem_f32[q2[0] >> 4   ], shmem_f32[q2[1] >> 4   ], shmem_f32[q2[2] >> 4   ], shmem_f32[q2[3] >> 4   ]);
+            float4 acc3 = yl[2]*(float4)(shmem_f32[q2[4] &  0x0F], shmem_f32[q2[5] &  0x0F], shmem_f32[q2[6] &  0x0F], shmem_f32[q2[7] &  0x0F]);
+            float4 acc4 = yl[3]*(float4)(shmem_f32[q2[4] >> 4   ], shmem_f32[q2[5] >> 4   ], shmem_f32[q2[6] >> 4   ], shmem_f32[q2[7] >> 4   ]);
+
+            acc1 = (acc1 + acc3) + (acc2 + acc4);
 
             sumf[row] += e8m0_to_fp32(xb->e) * ((acc1.s0 + acc1.s1) + (acc1.s2 + acc1.s3));
         }
