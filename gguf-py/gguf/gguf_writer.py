@@ -201,7 +201,7 @@ class GGUFWriter:
         assert len(filenames) == len(self.tensors)
         for name, tensors in zip(filenames, self.tensors):
             total_size = sum(ti.nbytes for ti in tensors.values())
-            reflinkable_size = count_reflinkable_size(ti.tensor for ti in tensors.values()) if self.use_reflinks else 0
+            reflinkable_size = count_reflinkable_size((name, ti.tensor) for name, ti in tensors.items()) if self.use_reflinks else 0
             logger.info(f"{name}: n_tensors = {len(tensors)}, total_size = {GGUFWriter.format_n_bytes_to_str(total_size)}{', reflinked = ' + GGUFWriter.format_n_bytes_to_str(total_size - reflinkable_size) if self.use_reflinks else ''}")
 
         if self.dry_run:

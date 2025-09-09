@@ -278,17 +278,22 @@ def best_extra_offset(t: np.ndarray | LazyNumpyTensor | None, current_offset: in
     return best_offset
 
 
-def count_reflinkable_size(tensors: Iterable[np.ndarray | LazyNumpyTensor | None]) -> int:
+def count_reflinkable_size(tensors: Iterable[tuple[str, np.ndarray | LazyNumpyTensor | None]]) -> int:
     if not hasattr(os, "copy_file_range"):
         return 0
-
     size = 0
-    for t in tensors:
+    for name, t in tensors:
         if isinstance(t, LazyNumpyTensor) and len(t._ranges) > 0:
             align_offset = best_extra_offset(t, 0)
+            misaligned = 0
             for range in t._ranges:
-                if range.block_size > 0 and range.offset % range.block_size == align_offset:
-                    size += range.size
+                if range.block_size > 0:
+                    if range.offset % range.block_size == align_offset:
+                        size += range.size
+                    else:
+                        misaligned += 1
+            if misaligned > 0:
+                logger.debug(f"{name} misaligned for reflinking, fallback to copy for {misaligned} of {len(t._ranges)} parts")
     return size
 
 
@@ -317,7 +322,7 @@ def copy_tensor_ranges(t: LazyNumpyTensor, fout: BufferedWriter):
 
     has_copy_file_range = hasattr(os, "copy_file_range")
 
-    for i, r in enumerate(ranges):
+    for r in ranges:
         src = src_files[r.filename]
         if has_copy_file_range:
             if r.block_size > 0 and (r.offset % r.block_size) == (start_offset % r.block_size):
@@ -354,8 +359,6 @@ def copy_tensor_ranges(t: LazyNumpyTensor, fout: BufferedWriter):
                 os.copy_file_range(src.fileno(), fout.fileno(), size, offset_src, dst_offset)
                 dst_offset += r.size - extra_size
             else:
-                if r.block_size > 0:
-                    logger.debug(f"misaligned for reflinking, falling back to copy ({i}/{len(ranges)})")
                 # not trying to use reflinks, but still using os.copy_file_range for speed
                 os.copy_file_range(src.fileno(), fout.fileno(), r.size, r.offset, dst_offset)
                 dst_offset += r.size
