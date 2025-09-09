@@ -56,6 +56,7 @@ static struct ggml_backend_metal_device_context {
     bool has_bfloat;
     bool use_bfloat;
     bool use_fusion;
+    bool use_private_buffers;
 
     int debug_fusion;
 
@@ -76,6 +77,7 @@ static struct ggml_backend_metal_device_context {
     /*.has_bfloat              =*/ false,
     /*.use_bfloat              =*/ false,
     /*.use_fusion              =*/ true,
+    /*.use_private_buffers     =*/ true,
     /*.debug_fusion            =*/ 0,
     /*.fuse_cnt                =*/ { 0 },
     /*.max_size                =*/ 0,
@@ -116,6 +118,14 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
             {
                 const char * val = getenv("GGML_METAL_FUSION_DEBUG");
                 ctx->debug_fusion = val ? atoi(val) : 0;
+            }
+
+            // old Macs with discrete GPUs will fallback to using slower private memory buffers
+            ctx->use_private_buffers = !ctx->mtl_device.hasUnifiedMemory;
+
+            // for testing purposes, we can enable private buffers even for new Apple Silicon GPUs with shared memory
+            if (getenv("GGML_METAL_PRIVATE_BUFFERS")) {
+                ctx->use_private_buffers = true;
             }
 
             memset(ctx->fuse_cnt, 0, sizeof(ctx->fuse_cnt));
@@ -1062,6 +1072,8 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     GGML_LOG_INFO("%s: has residency sets    = %s\n", __func__, ctx_dev->has_residency_sets          ? "true" : "false");
     GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, ctx_dev->has_bfloat                  ? "true" : "false");
     GGML_LOG_INFO("%s: use bfloat            = %s\n", __func__, ctx_dev->use_bfloat                  ? "true" : "false");
+    GGML_LOG_INFO("%s: use fusion            = %s\n", __func__, ctx_dev->use_fusion                  ? "true" : "false");
+    GGML_LOG_INFO("%s: use private buffers   = %s\n", __func__, ctx_dev->use_private_buffers         ? "true" : "false");
     GGML_LOG_INFO("%s: hasUnifiedMemory      = %s\n", __func__, ctx_dev->mtl_device.hasUnifiedMemory ? "true" : "false");
 
     ctx->capture_next_compute = false;
@@ -1700,6 +1712,9 @@ struct ggml_backend_metal_buffer {
 struct ggml_backend_metal_buffer_context {
     void * all_data;
     size_t all_size;
+
+    // if true, then the buffer data is allocated in private GPU memory and is not shared with the host
+    bool is_private;
 
     // multiple buffers are used only to avoid the maximum buffer size limitation when using mmap
     int n_buffers;
@@ -5776,6 +5791,8 @@ static enum ggml_status ggml_metal_graph_compute(
 
         dispatch_apply(n_cb, ctx->d_queue, ctx->encode_async);
 
+        [ctx->cmd_buf_last waitUntilScheduled];
+
         // for debugging: block until graph is computed
         //[ctx->cmd_buf_last waitUntilCompleted];
 
@@ -5857,6 +5874,14 @@ static void ggml_backend_metal_buffer_free_buffer(ggml_backend_buffer_t buffer) 
 
     ggml_backend_metal_buffer_rset_free(ctx);
 
+    if (!ctx->is_private) {
+#if TARGET_OS_OSX
+        vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ctx->all_data, ctx->all_size);
+#else
+        free(ctx->all_data);
+#endif
+    }
+
     free(ctx);
 }
 
@@ -5867,155 +5892,159 @@ static void * ggml_backend_metal_buffer_get_base(ggml_backend_buffer_t buffer) {
 }
 
 static void ggml_backend_metal_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-#if 1
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    @autoreleasepool {
-        id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
-        id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-        [cmd_buf enqueue];
+    if (!ctx->is_private) {
+        memset((char *)tensor->data + offset, value, size);
+    } else {
+        @autoreleasepool {
+            id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
+            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        size_t buf_dst_offset = 0;
-        id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
+            size_t buf_dst_offset = 0;
+            id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
 
-        buf_dst_offset += offset;
+            buf_dst_offset += offset;
 
-        [encoder fillBuffer:buf_dst
-                      range:NSMakeRange(buf_dst_offset, buf_dst_offset + size)
-                      value:value];
+            [encoder fillBuffer:buf_dst
+                          range:NSMakeRange(buf_dst_offset, buf_dst_offset + size)
+                          value:value];
 
-        [encoder endEncoding];
+            [encoder endEncoding];
 
-        [cmd_buf commit];
-        [cmd_buf waitUntilCompleted];
+            [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
 
-        // note: not sure why this release is necessary as we are inside an autoreleasepool block
-        //       but without it, we get "Context leak detected" warnings
-        [queue release];
+            // note: not sure why this release is necessary as we are inside an autoreleasepool block
+            //       but without it, we get "Context leak detected" warnings
+            [queue release];
+        }
     }
-#else
-    memset((char *)tensor->data + offset, value, size);
-#endif
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-#if 1
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    @autoreleasepool {
-        id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
-        id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-        [cmd_buf enqueue];
+    if (!ctx->is_private) {
+        memcpy((char *)tensor->data + offset, data, size);
+    } else {
+        @autoreleasepool {
+            id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
+            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        // TODO: is this an extra copy? can we avoid it?
-        id<MTLBuffer> buf_src = [ctx->device newBufferWithBytes:data
-                                                         length:size
-                                                        options:MTLResourceStorageModeShared];
+            // TODO: is this an extra copy? can we avoid it?
+            id<MTLBuffer> buf_src = [ctx->device newBufferWithBytes:data
+                                                             length:size
+                                                            options:MTLResourceStorageModeShared];
 
-        size_t buf_dst_offset = 0;
-        id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
+            size_t buf_dst_offset = 0;
+            id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
 
-        buf_dst_offset += offset;
+            buf_dst_offset += offset;
 
-        [encoder copyFromBuffer:buf_src
-                   sourceOffset:0
-                       toBuffer:buf_dst
-              destinationOffset:buf_dst_offset
-                           size:size];
+            [encoder copyFromBuffer:buf_src
+                       sourceOffset:0
+                           toBuffer:buf_dst
+                  destinationOffset:buf_dst_offset
+                               size:size];
 
-        [encoder endEncoding];
+            [encoder endEncoding];
 
-        [cmd_buf commit];
-        [cmd_buf waitUntilCompleted];
+            [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
 
-        [queue release];
+            [queue release];
+        }
     }
-#else
-    memcpy((char *)tensor->data + offset, data, size);
-#endif
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-#if 1
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    @autoreleasepool {
-        id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
-        id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-        [cmd_buf enqueue];
+    if (!ctx->is_private) {
+        memcpy(data, (const char *)tensor->data + offset, size);
+    } else {
+        @autoreleasepool {
+            id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
+            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        size_t buf_src_offset = 0;
-        id<MTLBuffer> buf_src = ggml_metal_get_buffer(tensor, &buf_src_offset);
+            size_t buf_src_offset = 0;
+            id<MTLBuffer> buf_src = ggml_metal_get_buffer(tensor, &buf_src_offset);
 
-        buf_src_offset += offset;
+            buf_src_offset += offset;
 
-        id<MTLBuffer> buf_dst = [ctx->device newBufferWithBytesNoCopy:data
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+            id<MTLBuffer> buf_dst = [ctx->device newBufferWithBytesNoCopy:data
+                                                                   length:size
+                                                                  options:MTLResourceStorageModeShared
+                                                              deallocator:nil];
 
-        [encoder copyFromBuffer:buf_src
-                   sourceOffset:buf_src_offset
-                       toBuffer:buf_dst
-              destinationOffset:0
-                           size:size];
+            [encoder copyFromBuffer:buf_src
+                       sourceOffset:buf_src_offset
+                           toBuffer:buf_dst
+                  destinationOffset:0
+                               size:size];
 
-        [encoder endEncoding];
+            [encoder endEncoding];
 
-        [cmd_buf commit];
-        [cmd_buf waitUntilCompleted];
+            [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
 
-        [queue release];
+            [queue release];
+        }
     }
-#else
-    memcpy(data, (const char *)tensor->data + offset, size);
-#endif
 
     GGML_UNUSED(buffer);
 }
 
 static bool ggml_backend_metal_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     if (ggml_backend_buffer_is_host(src->buffer)) {
-        GGML_ASSERT(false && "TODO");
-        memcpy(dst->data, src->data, ggml_nbytes(src));
+        struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
+
+        if (!ctx->is_private) {
+            memcpy(dst->data, src->data, ggml_nbytes(src));
+        } else {
+            // TODO: implement
+            return false;
+        }
+
         return true;
     }
+
     return false;
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-#if 1
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    @autoreleasepool {
-        id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
-        id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-        [cmd_buf enqueue];
+    if (!ctx->is_private) {
+        memset(ctx->all_data, value, ctx->all_size);
+    } else {
+        @autoreleasepool {
+            id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
+            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        [encoder fillBuffer:ctx->buffers[0].metal
+            [encoder fillBuffer:ctx->buffers[0].metal
                           range:NSMakeRange(0, ctx->buffers[0].size)
                           value:value];
 
-        [encoder endEncoding];
+            [encoder endEncoding];
 
-        [cmd_buf commit];
-        [cmd_buf waitUntilCompleted];
+            [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
 
-        [queue release];
+            [queue release];
+        }
     }
-#else
-    memset(ctx->all_data, value, ctx->all_size);
-#endif
 }
 
 static struct ggml_backend_buffer_i ggml_backend_metal_buffer_i = {
@@ -6079,12 +6108,14 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
 
     id<MTLDevice> device = ctx_dev->mtl_device;
 
-#if 1
-    // we'll populate this after creating the Metal buffer below
-    ctx->all_data = (void *) 0x000000400ULL;
-#else
-    ctx->all_data = ggml_metal_host_malloc(size_aligned);
-#endif
+    if (ctx_dev->use_private_buffers) {
+        // we'll populate this after creating the Metal buffer below
+        ctx->all_data = (void *) 0x000000400ULL;
+        ctx->is_private = true;
+    } else {
+        ctx->all_data = ggml_metal_host_malloc(size_aligned);
+        ctx->is_private = false;
+    }
     ctx->all_size = size_aligned;
 
     ctx->device = device;
@@ -6096,16 +6127,16 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         ctx->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-#if 1
-            ctx->buffers[0].metal = [device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
+            if (ctx_dev->use_private_buffers) {
+                ctx->buffers[0].metal = [device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
 
-            ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
-#else
-            ctx->buffers[0].metal = [device newBufferWithBytesNoCopy:ctx->all_data
-                                            length:size_aligned
-                                            options:MTLResourceStorageModeShared
-                                            deallocator:nil];
-#endif
+                ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
+            } else {
+                ctx->buffers[0].metal = [device newBufferWithBytesNoCopy:ctx->all_data
+                                                                  length:size_aligned
+                                                                 options:MTLResourceStorageModeShared
+                                                             deallocator:nil];
+            }
         }
 
         ctx->buffers[0].data = ctx->all_data;
@@ -6264,8 +6295,6 @@ static void ggml_backend_metal_set_tensor_async(ggml_backend_t backend,       st
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
-        [cmd_buf enqueue];
-
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
@@ -6312,8 +6341,6 @@ static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const st
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
-        [cmd_buf enqueue];
-
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
@@ -6582,6 +6609,8 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_from_ptr(ggml_back
 
     ctx->all_data = ptr;
     ctx->all_size = size;
+
+    ctx->is_private = false;
 
     ctx->n_buffers = 0;
 
