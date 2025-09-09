@@ -1275,6 +1275,8 @@ class ChatStore {
 
 			await this.streamChatCompletion(conversationPath, newAssistantMessage);
 		} catch (error) {
+			if (this.isAbortError(error)) return;
+
 			console.error('Failed to regenerate message with branching:', error);
 			this.isLoading = false;
 		}
