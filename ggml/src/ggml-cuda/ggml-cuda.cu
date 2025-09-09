@@ -2109,6 +2109,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
         }
+
+        if (ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src1->ne[2])) {
+            ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
+            return;
+        }
     }
 
     cudaStream_t stream = ctx.stream();
@@ -3135,6 +3140,7 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
     /* .graph_compute           = */ ggml_backend_cuda_graph_compute,
     /* .event_record            = */ ggml_backend_cuda_event_record,
     /* .event_wait              = */ ggml_backend_cuda_event_wait,
+    /* .optimize_graph          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_cuda_guid() {
@@ -3461,6 +3467,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_IQ4_NL) {
                     return true;
                 }
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
                 if (src0_type == src1_type && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1])) {
                     return true;
                 }
@@ -3574,9 +3586,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
         case GGML_OP_GROUP_NORM:
+        case GGML_OP_PAD:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_UPSCALE:
-        case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
