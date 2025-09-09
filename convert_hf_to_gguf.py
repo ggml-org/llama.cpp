@@ -229,7 +229,7 @@ class ModelBase:
                     if is_safetensors:
                         data: gguf.utility.LocalTensor = model_part[name]
                         if self.lazy:
-                            data_gen = lambda data=data: LazyTorchTensor.from_safetensors_meta(data)  # noqa: E731
+                            data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)  # noqa: E731
                         else:
                             dtype = LazyTorchTensor._dtype_str_map[data.dtype]
                             data_gen = lambda data=data: torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape)  # noqa: E731
@@ -10002,7 +10002,7 @@ class LazyTorchTensor(gguf.LazyBase):
         return cast(torch.Tensor, lazy)
 
     @classmethod
-    def from_safetensors_meta(cls, t: gguf.utility.LocalTensor) -> Tensor:
+    def from_local_tensor(cls, t: gguf.utility.LocalTensor) -> Tensor:
         def load_tensor(tensor: gguf.utility.LocalTensor) -> Tensor:
             dtype = cls._dtype_str_map[tensor.dtype]
             return torch.from_numpy(tensor.mmap_bytes()).view(dtype).reshape(tensor.shape)

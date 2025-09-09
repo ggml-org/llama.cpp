@@ -179,6 +179,10 @@ class SafetensorRemote:
             except KeyError as e:
                 raise ValueError(f"Missing key in metadata for tensor '{name}': {e}, meta = {meta}")
 
+        # order by name (same as default safetensors behavior)
+        # ref: https://github.com/huggingface/safetensors/blob/0816a1ae1d6b731cefd67f061d80d1cadd0dd7bb/bindings/python/src/lib.rs#L606
+        res = dict(sorted(res.items(), key=lambda t: t[0]))
+
         return res
 
     @classmethod
@@ -332,8 +336,9 @@ class SafetensorsLocal:
                     ),
                 )
 
-            # order by offset
-            self.tensors = dict(sorted(tensors.items(), key=lambda t: t[1].data_range.offset))
+            # order by name (same as default safetensors behavior)
+            # ref: https://github.com/huggingface/safetensors/blob/0816a1ae1d6b731cefd67f061d80d1cadd0dd7bb/bindings/python/src/lib.rs#L606
+            self.tensors = dict(sorted(tensors.items(), key=lambda t: t[0]))
 
     def __enter__(self, *args, **kwargs):
         del args, kwargs  # unused
