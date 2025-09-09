@@ -1063,7 +1063,17 @@ jobs:
         run: |
           git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
 
-      - name: Install
+      - name: Cache ROCm Installation
+        id: cache-rocm
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: rocm-6.1-${{ runner.os }}-v1
+          restore-keys: |
+            rocm-6.1-${{ runner.os }}-
+
+      - name: Install ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
         id: depends
         run: |
           $ErrorActionPreference = "Stop"
@@ -1077,7 +1087,13 @@ jobs:
       - name: Verify ROCm
         id: verify
         run: |
-          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+          # Find and test ROCm installation
+          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
+          if (-not $clangPath) {
+            Write-Error "ROCm installation not found"
+            exit 1
+          }
+          & $clangPath.FullName --version
 
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1096,7 +1112,7 @@ jobs:
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
 
-          # Create symlink for amdhip64.dll (fix for amdgpu-arch.exe)
+          # Create symlink for amdhip64.dll (fix for amdgpu-arch.exe DLL naming issue)
           $hipBinPath = "$env:HIP_PATH\bin"
           $versionedDll = Get-ChildItem "$hipBinPath\amdhip64_*.dll" | Select-Object -First 1
           if ($versionedDll -and -not (Test-Path "$hipBinPath\amdhip64.dll")) {
