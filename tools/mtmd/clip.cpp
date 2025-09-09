@@ -1645,16 +1645,12 @@ struct clip_graph {
 
             cur = ggml_add(ctx0, cur, layer.qkv_b);
 
-            ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
-                cur->nb[1], 0));
-            ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
-                cur->nb[1], n_embd * sizeof(float)));
-            ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
-                cur->nb[1], 2 * n_embd * sizeof(float)));
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+            ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
+                cur->nb[1], 0);
+            ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
+                cur->nb[1], n_embd * sizeof(float));
+            ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
+                cur->nb[1], 2 * n_embd * sizeof(float));
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -3968,7 +3964,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_COGVLM:
             {
-                n_patches_sq += 2;
+                n_patches += 2;
             } break;
         default:
             GGML_ABORT("unsupported projector type");

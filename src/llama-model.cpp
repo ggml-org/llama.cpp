@@ -18620,7 +18620,7 @@ struct llm_build_cogvlm : public llm_graph_context {
 
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv_unified();
+        auto * inp_attn = build_attn_inp_kv();
 
         // check ubatch to see if we have input tokens (text)
         // or an input embedding vector (image)
@@ -18662,15 +18662,13 @@ struct llm_build_cogvlm : public llm_graph_context {
                     qkv->nb[1], 0);
                 ggml_tensor * Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
                     qkv->nb[1], n_embd * ggml_element_size(qkv));
-                ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd, n_tokens,
-                    qkv->nb[1], 2 * n_embd * ggml_element_size(qkv)));
-
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                ggml_tensor * Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
+                    qkv->nb[1], 2 * n_embd * ggml_element_size(qkv));
 
                 Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, rope_type);
                 Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
-                cur = build_attn(inp_attn, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                cur = build_attn(inp_attn, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
             }
 
