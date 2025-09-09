@@ -399,11 +399,13 @@ class ModelBase:
                         weight_name = name.removesuffix("_scale_inv")
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
+                        # TODO: change to FP8 once natively supported
+                        auto_qtype = s.auto_qtype if s.auto_qtype is not gguf.GGMLQuantizationType.F32 else gguf.GGMLQuantizationType.BF16
                         self.model_tensors[weight_name] = ModelTensorInfo(
                             load=lambda w=w, s=s: dequant_simple(w.load(), s.load()),
                             size=w.size,
                             src_type=w.src_type,
-                            auto_qtype=gguf.GGMLQuantizationType.BF16, # TODO: change to FP8 once natively supported
+                            auto_qtype=auto_qtype,
                         )
                         tensors_to_remove.append(name)
             elif quant_method == "gptq":
