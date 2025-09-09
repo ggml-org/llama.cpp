@@ -6974,19 +6974,24 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 #ifdef GGML_OPENCL_SOA_Q
             kernel = backend_ctx->kernel_mul_mv_mxfp4_f32_flat;
 
+            cl_mem q;
             if (backend_ctx->gpu_family == INTEL) {
                 nth0 = 16;
                 nth1 = 2;
                 ndst = nth1*2;
+
+                q = extra0_mxfp4->q;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 2;
                 ndst = nth1;
+
+                q = extra0_mxfp4->q_img;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
 
-            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_mxfp4->q_img));
+            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_mxfp4->e));
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
             CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
@@ -7197,19 +7202,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 #ifdef GGML_OPENCL_SOA_Q
             kernel = backend_ctx->kernel_mul_mv_id_mxfp4_f32_flat;
 
+            cl_mem q;
             if (backend_ctx->gpu_family == INTEL) {
                 sgs  = 16;
                 nsg  = 2;
                 ndst = 2;
+
+                q = extra0_mxfp4->q;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 sgs  = 64;
                 nsg  = 1;
                 ndst = 4;
+
+                q = extra0_mxfp4->q_img;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
 
-            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_mxfp4->q_img));
+            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_mxfp4->e));
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
             CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
