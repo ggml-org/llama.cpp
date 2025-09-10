@@ -2071,12 +2071,71 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
     }
 }
 
-static int ggml_metal_encode_node(
-                        ggml_backend_t   backend,
-                                   int   idx,
-                                   int   idx_end,
-          id<MTLComputeCommandEncoder>   encoder,
-            struct ggml_metal_mem_pool * mem_pool) {
+#define MEM_RANGE_MAX 128
+
+struct ggml_metal_encode_context {
+    ggml_backend_t backend;
+
+    id<MTLComputeCommandEncoder> encoder;
+
+    struct ggml_metal_mem_pool * mem_pool;
+
+    int n_ranges;
+
+    struct mem_range {
+        uint64_t p0; // being
+        uint64_t p1; // end
+        int      pt; // type: 0 - src, 1 - dst
+    } ranges[MEM_RANGE_MAX];
+
+};
+
+static bool ggml_metal_encode_reset_mem_ranges(struct ggml_metal_encode_context * ctx_enc) {
+    ctx_enc->n_ranges = 0;
+
+    return true;
+}
+
+static bool ggml_metal_encode_add_mem_range(struct ggml_metal_encode_context * ctx_enc, struct mem_range r) {
+    if (ctx_enc->n_ranges == MEM_RANGE_MAX) {
+        return false;
+    }
+
+    ctx_enc->ranges[ctx_enc->n_ranges] = r;
+
+    ctx_enc->n_ranges++;
+
+    return true;
+}
+
+// check and return true:
+//  - if new range overlaps with any existing range of a different type
+//  - if we are close to running out of range cells
+static bool ggml_metal_encode_check_mem_range(struct ggml_metal_encode_context * ctx_enc, struct mem_range r) {
+    if (ctx_enc->n_ranges + 2*GGML_MAX_SRC >= MEM_RANGE_MAX) {
+        return true;
+    }
+
+    for (int i = 0; i < ctx_enc->n_ranges; i++) {
+        if (ctx_enc->ranges[i].pt == r.pt) {
+            continue;
+        }
+
+        if (r.p0 < ctx_enc->ranges[i].p1 && r.p1 > ctx_enc->ranges[i].p0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, int idx, int idx_end) {
+    ggml_backend_t backend = ctx_enc->backend;
+
+    id<MTLComputeCommandEncoder> encoder = ctx_enc->encoder;
+
+    struct ggml_metal_mem_pool * mem_pool = ctx_enc->mem_pool;
+
     struct ggml_backend_metal_context        * ctx     = backend->context;
     struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
@@ -2159,22 +2218,113 @@ static int ggml_metal_encode_node(
     const uint64_t nb2  =  dst ?  dst->nb[2] : 0;
     const uint64_t nb3  =  dst ?  dst->nb[3] : 0;
 
+    size_t offs_src[GGML_MAX_SRC];
+
+    id<MTLBuffer> id_src[GGML_MAX_SRC];
+
+    enum ggml_type srct[GGML_MAX_SRC];
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        offs_src[i] = 0;
+        id_src[i] = node->src[i] ? ggml_metal_get_buffer(node->src[i], &offs_src[i]) : nil;
+        srct[i]   = node->src[i] ? node->src[i]->type : GGML_TYPE_COUNT;
+    }
+
+    size_t offs_dst = 0;
+
+    id<MTLBuffer> id_dst = dst ? ggml_metal_get_buffer(dst, &offs_dst) : nil;
+
+    int n_fuse = 1;
+
+    // check if the current node can run concurrently with other nodes before it
+    // the condition is that:
+    //  - the current node cannot write to any previous src ranges
+    //  - the current node cannot read from any previous dst ranges
+    //
+    // if the condition is not satisfied, we put a memory barrier and clear all ranges
+    // otherwise, we add the new ranges to the encoding context and add the node for concurrent execution
+    //
+    {
+        bool is_concurrent = true;
+
+        // do not read from any previous dst ranges
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (id_src[i] == nil) {
+                continue;
+            }
+
+            struct mem_range r = {
+                /*.p0 =*/ id_src[i].gpuAddress + offs_src[i],
+                /*.p1 =*/ id_src[i].gpuAddress + offs_src[i] + ggml_nbytes(node->src[i]),
+                /*.pt =*/ 0,
+            };
+
+            if (ggml_metal_encode_check_mem_range(ctx_enc, r)) {
+                is_concurrent = false;
+
+                break;
+            }
+        }
+
+        // do not write to any previous src ranges
+        if (is_concurrent) {
+            struct mem_range r = {
+                /*.p0 =*/ id_dst.gpuAddress + offs_dst,
+                /*.p1 =*/ id_dst.gpuAddress + offs_dst + ggml_nbytes(dst),
+                /*.pt =*/ 1,
+            };
+
+            if (ggml_metal_encode_check_mem_range(ctx_enc, r)) {
+                is_concurrent = false;
+            }
+        }
+
+        if (!is_concurrent) {
+            ggml_metal_encode_reset_mem_ranges(ctx_enc);
+
+            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+        }
+
+        // add new ranges
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (id_src[i] == nil) {
+                continue;
+            }
+
+            struct mem_range r = {
+                /*.p0 =*/ id_src[i].gpuAddress + offs_src[i],
+                /*.p1 =*/ id_src[i].gpuAddress + offs_src[i] + ggml_nbytes(node->src[i]),
+                /*.pt =*/ 0,
+            };
+
+            ggml_metal_encode_add_mem_range(ctx_enc, r);
+        }
+
+        {
+            struct mem_range r = {
+                /*.p0 =*/ id_dst.gpuAddress + offs_dst,
+                /*.p1 =*/ id_dst.gpuAddress + offs_dst + ggml_nbytes(dst),
+                /*.pt =*/ 1,
+            };
+
+            ggml_metal_encode_add_mem_range(ctx_enc, r);
+        }
+    }
+
+    // TODO: tmp shorthands - remove
+    size_t offs_src0 = offs_src[0];
+    size_t offs_src1 = offs_src[1];
+    size_t offs_src2 = offs_src[2];
+
+    id<MTLBuffer> id_src0 = id_src[0];
+    id<MTLBuffer> id_src1 = id_src[1];
+    id<MTLBuffer> id_src2 = id_src[2];
+
     const enum ggml_type src0t = src0 ? src0->type : GGML_TYPE_COUNT;
     const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
     const enum ggml_type src2t = src2 ? src2->type : GGML_TYPE_COUNT;
     const enum ggml_type dstt  = dst  ? dst->type  : GGML_TYPE_COUNT;
 
-    size_t offs_src0 = 0;
-    size_t offs_src1 = 0;
-    size_t offs_src2 = 0;
-    size_t offs_dst  = 0;
-
-    id<MTLBuffer> id_src0 = src0 ? ggml_metal_get_buffer(src0, &offs_src0) : nil;
-    id<MTLBuffer> id_src1 = src1 ? ggml_metal_get_buffer(src1, &offs_src1) : nil;
-    id<MTLBuffer> id_src2 = src2 ? ggml_metal_get_buffer(src2, &offs_src2) : nil;
-    id<MTLBuffer> id_dst  = dst  ? ggml_metal_get_buffer(dst,  &offs_dst)  : nil;
-
-    int n_fuse = 1;
 
 #if 0
     GGML_LOG_INFO("%s: op - %s\n", __func__, ggml_op_name(dst->op));
@@ -2533,6 +2683,8 @@ static int ggml_metal_encode_node(
                     const int nth = MIN((int) pipeline.maxTotalThreadsPerThreadgroup, ne00);
 
                     [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+
+                    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
                 }
 
                 const id<MTLComputePipelineState> pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD].pipeline;
@@ -4057,6 +4209,8 @@ static int ggml_metal_encode_node(
                         [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(ne02, 1, 1)];
                     }
 
+                    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+
                     {
                         id<MTLComputePipelineState> pipeline = nil;
 
@@ -4668,7 +4822,6 @@ static int ggml_metal_encode_node(
             } break;
         case GGML_OP_ROPE:
             {
-
                 // make sure we have one or more position id(ne10) per token(ne02)
                 GGML_ASSERT(ne10 % ne02 == 0);
                 GGML_ASSERT(ne10 >= ne02);
@@ -5447,6 +5600,8 @@ static int ggml_metal_encode_node(
                         [encoder setThreadgroupMemoryLength:smem atIndex:0];
                         [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
 
+                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+
                         // reduce the results from the workgroups
                         {
                             ggml_metal_kargs_flash_attn_ext_vec_reduce args0 = {
@@ -5677,7 +5832,7 @@ static int ggml_metal_encode_node(
 
                 [encoder dispatchThreadgroups:MTLSizeMake(n_tg, 1, 1) threadsPerThreadgroup:MTLSizeMake(n_threads, 1, 1)];
             } break;
-            case GGML_OP_ARGMAX:
+        case GGML_OP_ARGMAX:
             {
                 GGML_ASSERT(src0->type == GGML_TYPE_F32);
                 GGML_ASSERT(ggml_is_contiguous_1(src0));
@@ -5707,6 +5862,27 @@ static int ggml_metal_encode_node(
                 GGML_LOG_ERROR("%s: error: node %3d, op = %8s not implemented\n", __func__, idx, ggml_op_name(dst->op));
                 GGML_ABORT("fatal error");
             }
+    }
+
+    // after fusing, we have to add the new destination range to the encoding context
+    if (n_fuse > 1) {
+        struct ggml_tensor * dstf = nodes[n_fuse - 1];
+
+        size_t offs_dstf = 0;
+
+        id<MTLBuffer> id_dstf = dstf ? ggml_metal_get_buffer(dstf, &offs_dstf) : nil;
+
+        struct mem_range r = {
+            /*.p0 =*/ id_dstf.gpuAddress + offs_dstf,
+            /*.p1 =*/ id_dstf.gpuAddress + offs_dstf + ggml_nbytes(dstf),
+            /*.pt =*/ 1,
+        };
+
+        if (!ggml_metal_encode_add_mem_range(ctx_enc, r)) {
+            ggml_metal_encode_reset_mem_ranges(ctx_enc);
+
+            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+        }
     }
 
     return n_fuse;
@@ -6578,7 +6754,7 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 
         ggml_metal_mem_pool_reset(mem_pool);
 
-        id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
+        id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
 
         int node_start = 0;
         int node_end   = n_nodes_0;
@@ -6590,12 +6766,20 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 
         const bool should_capture = ctx->capture_next_compute;
 
+        struct ggml_metal_encode_context ctx_enc = {
+            /*.backend  =*/ backend,
+            /*.encoder  =*/ encoder,
+            /*.mem_pool =*/ mem_pool,
+            /*.n_ranges =*/ 0,
+            /*.ranges   =*/ { 0 },
+        };
+
         for (int idx = node_start; idx < node_end;) {
             if (should_capture) {
                 [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
             }
 
-            const int res = ggml_metal_encode_node(backend, idx, node_end, encoder, mem_pool);
+            const int res = ggml_metal_encode_node(&ctx_enc, idx, node_end);
             if (idx + res > node_end) {
                 GGML_ABORT("fusion error: nodes spanning multiple encoders have been fused. this indicates a bug in the fusion logic %s",
                         "https://github.com/ggml-org/llama.cpp/pull/14849");
