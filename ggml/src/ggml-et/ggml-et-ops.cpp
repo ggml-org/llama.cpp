@@ -12,6 +12,14 @@ static ggml_et_cpu_compare_config rope_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config rms_norm_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for MUL operation\n");
@@ -196,6 +204,73 @@ bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for ROPE operation\n");
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &rope_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for ROPE operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for RMS_NORM operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: RMS_NORM operation missing required input\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_F32) {
+
+        kernel_name = "rms_norm_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: RMS_NORM operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, node->op_params, sizeof(float));
+
+    ggml_et_rms_norm_params params;
+    params.src0 = *node->src[0];  // F32 input tensor
+    params.dst = *node;           // F32 output tensor
+    params.eps = eps;             // Epsilon parameter for numerical stability
+
+    GGML_LOG_DEBUG("ET: Launching RMS_NORM kernel %s (F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld], eps=%.6f)\n",
+                   kernel_name,
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3],
+                   eps);
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (rms_norm_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for RMS_NORM operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_RMS_NORM)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for RMS_NORM operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for RMS_NORM operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &rms_norm_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for RMS_NORM operation\n");
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
