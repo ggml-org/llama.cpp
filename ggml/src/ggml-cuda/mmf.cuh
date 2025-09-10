@@ -57,30 +57,36 @@ static __global__ void mul_mat_f(
     T * tile_xy = (T *) compute_base + threadIdx.y*(tile_A::I * tile_k_padded);
 
     if constexpr (has_ids) {
-        __shared__ int has_any;
-        if (threadIdx.y == 0) {
-            int local_has_any = 0;
-            for (int j = threadIdx.x; j < cols_per_block; j += warp_size) {
-                int slot = -1;
-                for (int k = 0; k < nchannels_dst; ++k) {
-                    const int idv = ids[j*stride_row_id + k*stride_col_id];
-                    if (idv == expert_idx) {
-                        slot = k;
-                        break;
+        int found = 0;
+
+        for (int j = threadIdx.y; j < cols_per_block; j += nwarps) {
+            const int32_t * __restrict__ id_row = ids + j*stride_row_id;
+
+            if (threadIdx.x == 0) {
+                slot_map[j] = -1;
+            }
+
+            for (int k_base = 0; k_base < nchannels_dst; k_base += warp_size) {
+                int k = k_base + threadIdx.x;
+                int match = (k < nchannels_dst) && (id_row[k*stride_col_id] == expert_idx);
+
+                unsigned mask = __ballot_sync(0xffffffff, match);
+                if (mask) {
+                    int leader = __ffs(mask) - 1;
+                    if (threadIdx.x == leader) {
+                        slot_map[j] = k_base + leader;
                     }
-                }
-                if (j < cols_per_block) {
-                    local_has_any |= (slot >= 0);
-                    slot_map[j] = slot;
+                    found = 1;
+                    break;
                 }
             }
-            has_any = warp_reduce_any(local_has_any);
         }
-        __syncthreads();
-        if (has_any == 0) {
+
+        if (!__syncthreads_or(found)) {
             return;
         }
     }
+
 
     for (int col = threadIdx.y*warp_size + threadIdx.x; col < ncols; col += nwarps*warp_size) {
         tile_A A[ntA][warp_size / tile_A::J];
@@ -106,14 +112,7 @@ static __global__ void mul_mat_f(
                     if constexpr (!has_ids) {
                         tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[j*stride_col_y + col] : 0.0f;
                     } else {
-                        float val = 0.0f;
-                        if (j < cols_per_block) {
-                            const int slot = slot_map[j];
-                            if (slot >= 0) {
-                                val = y[slot*stride_channel_y + j*stride_col_y + col];
-                            }
-                        }
-                        tile_xy[j0*tile_k_padded + threadIdx.x] = val;
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[slot_map[j]*stride_channel_y + j*stride_col_y + col] : 0.0f;
                     }
                 }
             } else if constexpr (std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) {
@@ -125,14 +124,7 @@ static __global__ void mul_mat_f(
                         const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                     } else {
-                        float2 tmp = make_float2(0.0f, 0.0f);
-                        if (j < cols_per_block) {
-                            const int slot = slot_map[j];
-                            if (slot >= 0) {
-                                const float2 * y2_slot = (const float2 *)(y + slot*stride_channel_y);
-                                tmp = y2_slot[j*stride_col_y + col];
-                            }
-                        }
+                        float2 tmp = j < cols_per_block && slot_map[j] >= 0 ? *(const float2*) &y[slot_map[j]*stride_channel_y + 2*(j*stride_col_y + col)] : make_float2(0.0f, 0.0f);
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                     }
                 }
