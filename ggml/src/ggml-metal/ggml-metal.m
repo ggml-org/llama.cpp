@@ -1738,7 +1738,8 @@ struct ggml_backend_metal_buffer_context {
     struct ggml_backend_metal_buffer buffers[GGML_METAL_MAX_BUFFERS];
 
     // optional MTLResidencySet
-    id<MTLResidencySet> rset;
+    // note: cannot use explicity "id<MTLResidencySet>" here because it is not available on certain OSes
+    id rset;
 
     // pointers to global device objects
     id<MTLDevice> device;
