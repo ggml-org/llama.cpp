@@ -4420,7 +4420,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // n_layer:     number of encoder_layers
                     // n_dec_layer: number of decoder_layers
                     const int n_dec_layer = hparams.n_dec_layer;
-                    layers.resize(n_layer + n_dec_layer);
+                    if (n_dec_layer > n_layer) {
+                        layers.resize(n_dec_layer);
+                    }
 
                     // load encoder layers
                     for (int i = 0; i < n_layer; ++i) {
