@@ -28,6 +28,14 @@ static ggml_et_cpu_compare_config elmap_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config glu_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -95,6 +103,89 @@ bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for %s operation\n", op_name);
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &elmap_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for %s operation\n", op_name);
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    // Validate inputs
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for GLU operation\n");
+        return false;
+    }
+
+    // Validate split tensor mode (only mode we support)
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: GLU operation missing required inputs (split mode only)\n");
+        return false;
+    }
+
+    // Only support F32 (as validated by supports_op)
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: GLU operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    // Extract GLU operation parameters from op_params
+    int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant (REGLU, GEGLU, SWIGLU, etc.)
+    int32_t swapped = ggml_get_op_params_i32(node, 1);      // Whether gate/value are swapped
+
+    // Only support SWIGLU for now
+    if (glu_op_type != GGML_GLU_OP_SWIGLU) {
+        GGML_LOG_ERROR("ET: GLU operation with unsupported variant: %s (only SWIGLU supported)\n",
+                       ggml_glu_op_name((ggml_glu_op)glu_op_type));
+        return false;
+    }
+
+    // Get GLU operation name for logging
+    const char* glu_op_name = ggml_glu_op_name((ggml_glu_op)glu_op_type);
+
+    // Pack parameters - copy full tensor structures and GLU parameters (split mode)
+    ggml_et_glu_params params;
+    params.src0 = *node->src[0];              // F32 input tensor A
+    params.src1 = *node->src[1];              // F32 input tensor B (split mode)
+    params.dst = *node;                       // F32 output tensor
+    params.glu_op_type = glu_op_type;         // GLU variant type
+    params.swapped = swapped;                 // Swapped flag (unused in split mode)
+
+    GGML_LOG_DEBUG("ET: Launching glu_f32 kernel for %s (split mode) "
+                   "(F32[%lld,%lld,%lld,%lld] x F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld])\n",
+                   glu_op_name,
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
+                   (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3]);
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (glu_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for %s operation\n", glu_op_name);
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_GLU)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for %s operation\n", glu_op_name);
+        }
+    }
+
+    // Launch ET kernel
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "glu_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for %s operation\n", glu_op_name);
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &glu_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for %s operation\n", glu_op_name);
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }

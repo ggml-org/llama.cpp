@@ -192,6 +192,20 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
                 ctx->cpu_dst = ggml_rms_norm(ctx->ggml_ctx, ctx->cpu_src0, eps);
             }
             break;
+        case GGML_OP_GLU:
+            // Extract GLU parameters from op_params (split mode only)
+            {
+                int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant
+                ggml_glu_op glu_op = (ggml_glu_op)glu_op_type;
+                
+                // Only support split tensor mode
+                if (!ctx->cpu_src1) {
+                    GGML_LOG_ERROR("ET: GLU CPU comparison requires split tensor mode\n");
+                    return false;
+                }
+                ctx->cpu_dst = ggml_glu_split(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, glu_op);
+            }
+            break;
         default:
             GGML_LOG_ERROR("ET: Unsupported operation %s for CPU comparison\n", ggml_op_name(op));
             return false;
@@ -258,6 +272,11 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         size_t num_elements = ggml_nelements(node);
         size_t max_log = std::min(num_elements, config->max_log_elements);
 
+        // Check if this is an elementwise operation that can show src inputs
+        bool is_elementwise = (op == GGML_OP_MUL || op == GGML_OP_ADD || op == GGML_OP_GLU);
+        float* cpu_src0_float = is_elementwise ? (float*)ctx->cpu_src0_data : nullptr;
+        float* cpu_src1_float = is_elementwise ? (float*)ctx->cpu_src1_data : nullptr;
+
         // Show first few elements from each buffer for debugging
         GGML_LOG_DEBUG("ET: First %zu elements comparison:\n", max_log);
         bool matches = true;
@@ -267,8 +286,16 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
             float diff = fabsf(cpu_float[i] - et_float[i]);
             float rel_diff = diff / (fabsf(cpu_float[i]) + 1e-8f);
 
-            GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f, rel=%.6f\n",
-                          i, cpu_float[i], et_float[i], diff, rel_diff);
+            if (is_elementwise && cpu_src0_float && cpu_src1_float) {
+                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f, src1=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
+                              i, cpu_src0_float[i], cpu_src1_float[i], cpu_float[i], et_float[i], diff);
+            } else if (is_elementwise && cpu_src0_float) {
+                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
+                              i, cpu_src0_float[i], cpu_float[i], et_float[i], diff);
+            } else {
+                GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f\n",
+                              i, cpu_float[i], et_float[i], diff);
+            }
 
             if (rel_diff > config->tolerance) {
                 matches = false;

@@ -285,6 +285,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_rms_norm(dev_ctx, node);
                 break;
 
+            case GGML_OP_GLU:
+                ggml_et_op_glu(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -384,6 +388,21 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op) &&
                        ggml_is_contiguous(op->src[0]);
             break;
+        case GGML_OP_GLU:
+            // Support F32 GLU operations (split tensor mode only, SWIGLU only for now)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 && // Require split mode
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Check GLU variant - only support SWIGLU for now
+                ggml_glu_op glu_type = ggml_get_glu_op(op);
+                supported = (glu_type == GGML_GLU_OP_SWIGLU);
+            } else {
+                supported = false;
+            }
+            break;
         default:
             supported = false;
             break;
@@ -439,6 +458,18 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                    op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                    ggml_is_contiguous(op) &&
                    ggml_is_contiguous(op->src[0]);
+        case GGML_OP_GLU:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 && // Require split mode
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Check GLU variant - only support SWIGLU for now
+                ggml_glu_op glu_type = ggml_get_glu_op(op);
+                return (glu_type == GGML_GLU_OP_SWIGLU);
+            }
+            return false;
         default:
             return false;
     }
