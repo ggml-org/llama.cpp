@@ -13551,7 +13551,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                ggml_tensor * attn_rel_b = model.layers[il_dec].attn_rel_b ? model.layers[il_dec].attn_rel_b : model.layers[n_layer].attn_rel_b;
+                ggml_tensor * attn_rel_b = model.layers[il].attn_rel_b ? model.layers[il].attn_rel_b : model.layers[0].attn_rel_b;
                 ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
                 cur = build_attn(inp_attn_self,
