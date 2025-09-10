@@ -144,7 +144,7 @@ kernel void kernel_mul_mv_mxfp4_f32_flat(
             half4 fp16x4_1 = mxfp4_to_fp16_packed(xb_q.s1);
             float4 acc1 = y4[0] * (float4)(fp16x4_0.s0, fp16x4_0.s2, fp16x4_1.s0, fp16x4_1.s2);
             acc1 += y4[4] * (float4)(fp16x4_0.s1, fp16x4_0.s3, fp16x4_1.s1, fp16x4_1.s3);
-            
+
             fp16x4_0 = mxfp4_to_fp16_packed(xb_q.s2);
             fp16x4_1 = mxfp4_to_fp16_packed(xb_q.s3);
             acc1 += y4[1] * (float4)(fp16x4_0.s0, fp16x4_0.s2, fp16x4_1.s0, fp16x4_1.s2);
