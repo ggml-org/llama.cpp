@@ -154,22 +154,22 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
 
     // Add model outputs, if called for the whole graph
     if (naive) {
-        m_model_output_names.push_back(node->name);
+        m_model_output_names.push_back(node_name);
     } else if (!m_node) {
+        // Model outputs are tensors with GGML_TENSOR_FLAG_OUTPUT flag and kv_caches
         static std::set<std::string> debug_output_names = {};
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
-        if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
-            std::string(node->name).find("result") == 0 || debug_output_names.count(node->name)) {
-            auto name = node->view_src ? std::string(node->view_src->name) : std::string(node->name);
-            if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
-                assert(name.find("cache_k") == 0 || name.find("cache_v") == 0);
+        if (node->op == GGML_OP_SET_ROWS || node->flags & GGML_TENSOR_FLAG_OUTPUT || node_name.find("result") == 0 ||
+            debug_output_names.count(node_name)) {
+            if (node->op == GGML_OP_SET_ROWS) {
+                assert(node_name.find("cache_k") == 0 || node_name.find("cache_v") == 0);
+                if (auto it = std::find(m_kv_names.begin(), m_kv_names.end(), node_name); it == m_kv_names.end()) {
+                    m_kv_names.push_back(node_name);
+                }
             }
-            if (auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), name);
+            if (auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), node_name);
                 it == m_model_output_names.end()) {
-                m_model_output_names.push_back(name);
-            }
-            if (auto it = std::find(m_kv_names.begin(), m_kv_names.end(), name); it == m_kv_names.end()) {
-                m_kv_names.push_back(name);
+                m_model_output_names.push_back(node_name);
             }
         }
     }
@@ -177,7 +177,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
     if (m_node) {
         switch (node->op) {
         case GGML_OP_RESHAPE: {
-            if (node->ne[0] * node->ne[1] == node->src[0]->ne[0]) {
+            if (node->src[0]->op == GGML_OP_RESHAPE && node->src[0]->src[0]->ne[0] == node->ne[0] &&
+                node->src[0]->src[0]->ne[1] == node->ne[1]) {
+                m_op_case = 4;
+            } else if (node->ne[0] * node->ne[1] == node->src[0]->ne[0]) {
                 m_op_case = 1;
             } else if (node->src[0]->ne[0] * node->src[0]->ne[1] == node->ne[0]) {
                 m_op_case = 2;
