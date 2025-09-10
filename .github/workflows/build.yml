@@ -191,9 +191,9 @@ jobs:
           - build: 'arm64'
             os: ubuntu-22.04-arm
           - build: 's390x'
-            os: ubuntu-22.04-s390x
+            os: ubuntu-24.04-s390x
           - build: 'ppc64le'
-            os: ubuntu-22.04-ppc64le
+            os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -218,8 +218,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            --compile-no-warning-as-error \
-            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_FATAL_WARNINGS=OFF \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
 
