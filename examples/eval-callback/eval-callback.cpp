@@ -28,6 +28,15 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
     return str;
 }
 
+static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.i = (uint32_t)h.bits << 16;
+    return u.f;
+}
+
 static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
     size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
     float v;
@@ -43,6 +52,8 @@ static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t *
         v = (float) *(int16_t *) &data[i];
     } else if (type == GGML_TYPE_I8) {
         v = (float) *(int8_t *) &data[i];
+    } else if (type == GGML_TYPE_BF16) {
+        v = ggml_compute_bf16_to_fp32(*(ggml_bf16_t *) &data[i]);
     } else {
         GGML_ABORT("fatal error");
     }

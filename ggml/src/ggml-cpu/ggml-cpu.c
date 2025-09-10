@@ -373,6 +373,9 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
     },
+    [GGML_TYPE_I32] = {
+        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
+    },
 };
 
 const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
@@ -2696,7 +2699,10 @@ struct ggml_cplan ggml_graph_plan(
                         if (ggml_is_quantized(node->type) ||
                             // F16 -> BF16 and BF16 -> F16 copies go through intermediate F32
                             (node->src[0]->type == GGML_TYPE_F16  && node->src[1] && node->src[1]->type == GGML_TYPE_BF16) ||
-                            (node->src[0]->type == GGML_TYPE_BF16 && node->src[1] && node->src[1]->type == GGML_TYPE_F16)) {
+                            (node->src[0]->type == GGML_TYPE_BF16 && node->src[1] && node->src[1]->type == GGML_TYPE_F16) ||
+                            // conversion between F32 and I32
+                            (node->src[0]->type == GGML_TYPE_F32 && node->src[1] && node->src[1]->type == GGML_TYPE_I32) ||
+                            (node->src[0]->type == GGML_TYPE_I32 && node->src[1] && node->src[1]->type == GGML_TYPE_F32)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                         }
                     } break;
@@ -3255,6 +3261,13 @@ void ggml_cpu_fp32_to_bf16(const float * x, ggml_bf16_t * y, int64_t n) {
     int64_t i = 0;
     for (; i < n; ++i) {
         y[i] = GGML_FP32_TO_BF16(x[i]);
+    }
+}
+
+void ggml_cpu_fp32_to_i32(const float * x, int32_t * y, int64_t n) {
+    int64_t i = 0;
+    for (; i < n; ++i) {
+        y[i] = x[i];
     }
 }
 

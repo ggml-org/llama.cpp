@@ -5128,6 +5128,20 @@ class EmbeddingGemma(Gemma3Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+
+        # Override the sliding window size as it gets adjusted by the Gemma3TextConfig
+        # constructor. We want to use the value from the original model's config.json.
+        # ref: https://github.com/huggingface/transformers/pull/40700
+        with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+            config = json.load(f)
+            orig_sliding_window = config.get("sliding_window")
+            if orig_sliding_window is None:
+                raise ValueError("sliding_window not found in model config - this is required for the model")
+
+            logger.info(f"Using original sliding_window from config: {orig_sliding_window} "
+                        f"instead of {self.hparams['sliding_window']}")
+            self.gguf_writer.add_sliding_window(orig_sliding_window)
+
         self._try_set_pooling_type()
 
 
@@ -6687,6 +6701,8 @@ class T5Model(TextModel):
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
         self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
         self.gguf_writer.add_block_count(self.hparams["num_layers"])
+        if (dec_n_layer := self.hparams.get("num_decoder_layers")) is not None:
+            self.gguf_writer.add_decoder_block_count(dec_n_layer)
         self.gguf_writer.add_head_count(self.hparams["num_heads"])
         self.gguf_writer.add_key_length(self.hparams["d_kv"])
         self.gguf_writer.add_value_length(self.hparams["d_kv"])
