@@ -1542,8 +1542,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.dec_start_token_id = dec_start_token_id;
                 }
 
-                hparams.n_dec_layer = hparams.n_layer;
-                ml.get_key(LLM_KV_DECODER_BLOCK_COUNT, hparams.n_dec_layer, false);
+                hparams.dec_n_layer = hparams.n_layer;
+                ml.get_key(LLM_KV_DECODER_BLOCK_COUNT, hparams.dec_n_layer, false);
 
                 switch (hparams.n_layer) {
                     case 6:  type = LLM_TYPE_60M;  break; // t5-small
@@ -4418,10 +4418,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     // n_layer:     number of encoder_layers
-                    // n_dec_layer: number of decoder_layers
-                    const int n_dec_layer = hparams.n_dec_layer;
-                    if (n_dec_layer > n_layer) {
-                        layers.resize(n_dec_layer);
+                    // dec_n_layer: number of decoder_layers
+                    const int dec_n_layer = hparams.dec_n_layer;
+                    if (dec_n_layer > n_layer) {
+                        layers.resize(dec_n_layer);
                     }
 
                     // load encoder layers
@@ -4443,7 +4443,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     // load decoder layers
-                    for (int i = 0; i < n_dec_layer; ++i) {
+                    for (int i = 0; i < dec_n_layer; ++i) {
                         auto & layer = layers[i];
 
                         layer.attn_norm  = create_tensor(tn(LLM_TENSOR_DEC_ATTN_NORM,  "weight", i), {n_embd}, 0);
@@ -13525,9 +13525,9 @@ struct llm_build_t5_dec : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        const int64_t n_dec_layer = hparams.n_dec_layer;
+        const int64_t dec_n_layer = hparams.dec_n_layer;
 
-        for (int il = 0; il < n_dec_layer; ++il) {
+        for (int il = 0; il < dec_n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
             // norm
@@ -13618,7 +13618,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 //cb(cur, "kqv_out", il);
             }
 
-            if (il == n_dec_layer - 1 && inp_out_ids) {
+            if (il == dec_n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpCA = ggml_get_rows(ctx0, inpCA, inp_out_ids);
             }
