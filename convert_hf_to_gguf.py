@@ -6701,6 +6701,7 @@ class T5Model(TextModel):
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
         self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
         self.gguf_writer.add_block_count(self.hparams["num_layers"])
+        self.gguf_writer.add_num_decoder_layers(self.hparams["num_decoder_layers"])
         self.gguf_writer.add_head_count(self.hparams["num_heads"])
         self.gguf_writer.add_key_length(self.hparams["d_kv"])
         self.gguf_writer.add_value_length(self.hparams["d_kv"])

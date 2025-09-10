@@ -1542,6 +1542,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.dec_start_token_id = dec_start_token_id;
                 }
 
+                uint32_t num_decoder_layers;
+                if (ml.get_key(LLM_KV_NUM_DECODER_LAYERS, num_decoder_layers, false)) {
+                    hparams.n_dec_layer = num_decoder_layers;
+                    GGML_ASSERT(hparams.n_dec_layer > 0 && "T5 requires num_decoder_layers > 0");
+                }
+
                 switch (hparams.n_layer) {
                     case 6:  type = LLM_TYPE_60M;  break; // t5-small
                     case 8:  type = LLM_TYPE_80M;  break; // flan-t5-small
@@ -4414,6 +4420,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
 
+                    // n_layer:     number of encoder_layers
+                    // n_dec_layer: number of decoder_layers
+                    const int n_dec_layer = hparams.n_dec_layer;
+                    layers.resize(n_layer + n_dec_layer);
+
+                    // load encoder layers
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
@@ -4429,6 +4441,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_enc = create_tensor(tn(LLM_TENSOR_ENC_FFN_GATE, "weight", i), {n_embd,   n_ff}, TENSOR_NOT_REQUIRED);
                         layer.ffn_down_enc = create_tensor(tn(LLM_TENSOR_ENC_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up_enc   = create_tensor(tn(LLM_TENSOR_ENC_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+
+                    // load decoder layers
+                    for (int i = 0; i < n_dec_layer; ++i) {
+                        auto & layer = layers[i + n_layer];
 
                         layer.attn_norm  = create_tensor(tn(LLM_TENSOR_DEC_ATTN_NORM,  "weight", i), {n_embd}, 0);
                         layer.attn_rel_b = create_tensor(tn(LLM_TENSOR_DEC_ATTN_REL_B, "weight", i), {n_head, n_rel_attn_bkts}, TENSOR_NOT_REQUIRED);
@@ -13509,35 +13526,38 @@ struct llm_build_t5_dec : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        for (int il = 0; il < n_layer; ++il) {
+        const int64_t n_dec_layer = hparams.n_dec_layer;
+
+        for (int il = 0; il < n_dec_layer; ++il) {
             ggml_tensor * inpSA = inpL;
+            int il_dec = n_layer + il;
 
             // norm
             cur = build_norm(inpL,
-                    model.layers[il].attn_norm, NULL,
+                    model.layers[il_dec].attn_norm, NULL,
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
             // self-attention
             {
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il_dec].wq, cur);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il_dec].wk, cur);
                 cb(Kcur, "Kcur", il);
 
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il_dec].wv, cur);
                 cb(Vcur, "Vcur", il);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                ggml_tensor * attn_rel_b = model.layers[il].attn_rel_b ? model.layers[il].attn_rel_b : model.layers[0].attn_rel_b;
+                ggml_tensor * attn_rel_b = model.layers[il_dec].attn_rel_b ? model.layers[il_dec].attn_rel_b : model.layers[n_layer].attn_rel_b;
                 ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
                 cur = build_attn(inp_attn_self,
-                        model.layers[il].wo, model.layers[il].bo,
+                        model.layers[il_dec].wo, model.layers[il_dec].bo,
                         Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
             }
@@ -13549,19 +13569,19 @@ struct llm_build_t5_dec : public llm_graph_context {
 
             // norm
             cur = build_norm(cur,
-                    model.layers[il].attn_norm_cross, NULL,
+                    model.layers[il_dec].attn_norm_cross, NULL,
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm_cross", il);
 
             // cross-attention
             {
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq_cross, cur);
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il_dec].wq_cross, cur);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk_cross, embd_enc);
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il_dec].wk_cross, embd_enc);
                 cb(Kcur, "Kcur", il);
 
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv_cross, embd_enc);
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il_dec].wv_cross, embd_enc);
                 cb(Vcur, "Vcur", il);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
@@ -13569,7 +13589,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_outputs_enc);
 
                 cur = build_attn(inp_attn_cross,
-                        model.layers[il].wo_cross, nullptr,
+                        model.layers[il_dec].wo_cross, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
 
@@ -13600,7 +13620,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 //cb(cur, "kqv_out", il);
             }
 
-            if (il == n_layer - 1 && inp_out_ids) {
+            if (il == n_dec_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpCA = ggml_get_rows(ctx0, inpCA, inp_out_ids);
             }
@@ -13611,18 +13631,18 @@ struct llm_build_t5_dec : public llm_graph_context {
             // feed-forward network
             {
                 cur = build_norm(ffn_inp,
-                        model.layers[il].ffn_norm, NULL,
+                        model.layers[il_dec].ffn_norm, NULL,
                         LLM_NORM_RMS, il);
                 cb(cur, "ffn_norm", il);
 
                 // T5 uses relu, flan-T5 uses gelu-gated
                 cur = build_ffn(cur,
-                        model.layers[il].ffn_up,   NULL, NULL,
-                        model.layers[il].ffn_gate, NULL, NULL,
-                        model.layers[il].ffn_down, NULL, NULL,
+                        model.layers[il_dec].ffn_up,   NULL, NULL,
+                        model.layers[il_dec].ffn_gate, NULL, NULL,
+                        model.layers[il_dec].ffn_down, NULL, NULL,
                         NULL,
-                        model.layers[il].ffn_gate_enc ? LLM_FFN_GELU : LLM_FFN_RELU,
-                        model.layers[il].ffn_gate_enc ? LLM_FFN_PAR : LLM_FFN_SEQ,
+                        model.layers[il_dec].ffn_gate ? LLM_FFN_GELU : LLM_FFN_RELU,
+                        model.layers[il_dec].ffn_gate ? LLM_FFN_PAR : LLM_FFN_SEQ,
                         il);
                 cb(cur, "ffn_out", il);
             }
