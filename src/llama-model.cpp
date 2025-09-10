@@ -1542,11 +1542,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.dec_start_token_id = dec_start_token_id;
                 }
 
-                uint32_t num_decoder_layers;
-                if (ml.get_key(LLM_KV_NUM_DECODER_LAYERS, num_decoder_layers, false)) {
-                    hparams.n_dec_layer = num_decoder_layers;
-                    GGML_ASSERT(hparams.n_dec_layer > 0 && "T5 requires num_decoder_layers > 0");
-                }
+                hparams.n_dec_layer = hparams.n_layer;
+                ml.get_key(LLM_KV_DECODER_BLOCK_COUNT, hparams.n_dec_layer, false);
 
                 switch (hparams.n_layer) {
                     case 6:  type = LLM_TYPE_60M;  break; // t5-small
