@@ -13555,7 +13555,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
                 cur = build_attn(inp_attn_self,
-                        model.layers[il_dec].wo, model.layers[il_dec].bo,
+                        model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
             }
