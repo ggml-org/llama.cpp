@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <openvino/core/any.hpp>
@@ -418,17 +420,50 @@ void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
                               std::map<std::string, void*>& output_dst) {
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape()
               << ", Address: " << output_dst[name] << std::endl;
+
+    auto print_float_stats = [](const std::string& type_name, size_t size, auto get_value) {
+        if (size == 0) {
+            return;
+        }
+
+        float first = get_value(0);
+        float min = first;
+        float max = first;
+        double sum = first;
+
+        for (size_t i = 1; i < size; ++i) {
+            float v = get_value(i);
+            if (v < min) {
+                min = v;
+            }
+            if (v > max) {
+                max = v;
+            }
+            sum += v;
+        }
+        double mean = sum / size;
+
+        std::cout << std::right << std::setw(6) << type_name << std::right << std::setw(12) << "First" << std::setw(12)
+                  << "Min" << std::setw(12) << "Max" << std::setw(12) << "Mean" << std::endl;
+        std::cout << std::right << std::setw(6) << "" << std::right << std::setw(12) << first << std::setw(12) << min
+                  << std::setw(12) << max << std::setw(12) << mean << std::endl;
+    };
+
     switch (tensor.get_element_type()) {
-        case ov::element::f32:
-            std::cout << *(tensor.data<float>()) << std::endl;
-            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-            break;
-        case ov::element::f16:
-            std::cout << *(tensor.data<ov::float16>()) << std::endl;
-            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-            break;
-        default:
-            break;
+    case ov::element::f32: {
+        const float* data = tensor.data<float>();
+        size_t size = tensor.get_size();
+        print_float_stats("[f32]", size, [data](size_t i) { return data[i]; });
+        break;
+    }
+    case ov::element::f16: {
+        const ov::float16* data = tensor.data<ov::float16>();
+        size_t size = tensor.get_size();
+        print_float_stats("[f16]", size, [data](size_t i) { return static_cast<float>(data[i]); });
+        break;
+    }
+    default:
+        break;
     }
 }
 
