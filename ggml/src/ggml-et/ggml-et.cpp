@@ -269,6 +269,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_mul(dev_ctx, node);
                 break;
 
+            case GGML_OP_ADD:
+                ggml_et_op_add(dev_ctx, node);
+                break;
+
             case GGML_OP_MUL_MAT:
                 ggml_et_op_mul_mat(dev_ctx, node);
                 break;
@@ -343,6 +347,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
     bool supported = false;
     switch (op->op) {
         case GGML_OP_MUL:
+        case GGML_OP_ADD:
             supported = op->type == GGML_TYPE_F32 &&
                        op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                        op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
@@ -404,6 +409,7 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
     // We are offloading all ops for testing.
     switch (op->op) {
         case GGML_OP_MUL:
+        case GGML_OP_ADD:
             return op->type == GGML_TYPE_F32 &&
                    op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&

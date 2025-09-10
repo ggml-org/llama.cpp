@@ -20,39 +20,86 @@ static ggml_et_cpu_compare_config rms_norm_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config elmap_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    // Delegate to generic element map operation
+    return ggml_et_op_elmap(dev_ctx, node);
+}
+
+bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    // Delegate to generic element map operation
+    return ggml_et_op_elmap(dev_ctx, node);
+}
+
+bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     if (!dev_ctx || !node) {
-        GGML_LOG_ERROR("ET: Invalid parameters for MUL operation\n");
+        GGML_LOG_ERROR("ET: Invalid parameters for element map operation\n");
         return false;
     }
 
     if (!node->src[0] || !node->src[1]) {
-        GGML_LOG_ERROR("ET: MUL operation missing required inputs\n");
+        GGML_LOG_ERROR("ET: Element map operation missing required inputs\n");
         return false;
     }
 
-    const char* kernel_name;
-
-    if (node->type == GGML_TYPE_F32 &&
-        node->src[0]->type == GGML_TYPE_F32 &&
-        node->src[1]->type == GGML_TYPE_F32) {
-
-        kernel_name = "mul_f32";
-
-    } else {
-        GGML_LOG_ERROR("ET: MUL operation with unsupported types\n");
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: Element map operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
         return false;
     }
 
-    // Pack parameters - copy full tensor structures
-    ggml_et_binary_params params;
+    const char* op_name = ggml_op_name(node->op);
+
+    ggml_et_elmap_params params;
     params.src0 = *node->src[0];
     params.src1 = *node->src[1];
-    params.dst = *node;
+    params.dst = *node;           // F32 output tensor (op type stored in dst.op)
 
-    GGML_LOG_DEBUG("ET: Launching MUL kernel %s\n", kernel_name);
+    GGML_LOG_DEBUG("ET: Launching el_map_f32 kernel for %s (F32[%lld,%lld,%lld,%lld] %s F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld])\n",
+                   op_name,
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   op_name,
+                   (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
+                   (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3]);
 
-    return ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (elmap_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for %s operation\n", op_name);
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, node->op)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for %s operation\n", op_name);
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "el_map_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for %s operation\n", op_name);
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &elmap_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for %s operation\n", op_name);
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
 }
 
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
