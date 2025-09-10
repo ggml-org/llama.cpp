@@ -218,7 +218,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
+            --compile-no-warning-as-error \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
