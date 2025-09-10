@@ -370,6 +370,13 @@ struct llama_layer {
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 
+    // cogvlm
+    struct ggml_tensor * visexp_attn_wqkv = nullptr;
+    struct ggml_tensor * visexp_attn_wo = nullptr;
+    struct ggml_tensor * visexp_ffn_gate = nullptr;
+    struct ggml_tensor * visexp_ffn_down = nullptr;
+    struct ggml_tensor * visexp_ffn_up = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
