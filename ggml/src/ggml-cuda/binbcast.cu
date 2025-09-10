@@ -95,8 +95,8 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
                                            const uint3            ne1,
                                            const uint3            ne2,
                                            const uint32_t         ne3,
-                                           const uint3            prod012,
-                                           const uint3            prod01,
+                                           const uint3            prod_012,
+                                           const uint3            prod_01,
                                            const uint3            ne10,
                                            const uint3            ne11,
                                            const uint3            ne12,
@@ -113,10 +113,10 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
                                            src1_ptrs... src1s) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
-    const uint32_t i3 = fastdiv(i, prod012);
-    const uint32_t i2 = fastdiv(i - i3 * prod012.z, prod01);
-    const uint32_t i1 = fastdiv(i - i3 * prod012.z - i2 * prod01.z, ne0);
-    const uint32_t i0 = i - i3 * prod012.z - i2 * prod01.z - i1 * ne0.z;
+    const uint32_t i3 = fastdiv(i, prod_012);
+    const uint32_t i2 = fastdiv(i - i3 * prod_012.z, prod_01);
+    const uint32_t i1 = fastdiv(i - i3 * prod_012.z - i2 * prod_01.z, ne0);
+    const uint32_t i0 = i - i3 * prod_012.z - i2 * prod_01.z - i1 * ne0.z;
 
     if (i0 >= ne0.z || i1 >= ne1.z || i2 >= ne2.z || i3 >= ne3) {
         return;
@@ -274,15 +274,15 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
 
         if (block_nums.z > 65535) {
             int         block_num  = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
-            const uint3 prod012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
-            const uint3 prod01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
+            const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
+            const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
             const uint3 ne0_fastdiv = init_fastdiv_values((uint32_t) ne0);
             const uint3 ne1_fastdiv = init_fastdiv_values((uint32_t) ne1);
             const uint3 ne2_fastdiv = init_fastdiv_values((uint32_t) ne2);
 
             if constexpr (sizeof...(I) > 0) {
                 k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t><<<block_num, block_size, 0, stream>>>(
-                    src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod012, prod01, ne10, ne11,
+                    src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11,
                     ne12, ne13,
                     /* s0, */ s1, s2, s3,
                     /* s00,*/ s01, s02, s03,
@@ -290,7 +290,7 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
             } else {
                 k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
                     <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv,
-                                                           ne2_fastdiv, ne3, prod012, prod01, ne10, ne11, ne12, ne13,
+                                                           ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11, ne12, ne13,
                                                            /* s0, */ s1, s2, s3,
                                                            /* s00,*/ s01, s02, s03,
                                                            /* s10,*/ s11, s12, s13);
