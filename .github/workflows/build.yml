@@ -192,8 +192,9 @@ jobs:
             os: ubuntu-22.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
-          - build: 'ppc64le'
-            os: ubuntu-24.04-ppc64le
+          # TODO: Disable ppc64le for now to test s390x
+          # - build: 'ppc64le'
+          #   os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
