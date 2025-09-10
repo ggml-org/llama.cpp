@@ -13587,7 +13587,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_outputs_enc);
 
                 cur = build_attn(inp_attn_cross,
-                        model.layers[il_dec].wo_cross, nullptr,
+                        model.layers[il].wo_cross, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
 
