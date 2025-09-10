@@ -902,26 +902,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return std::isfinite(total_err) ? total_err : infinity;
     };
 
-    // Scaling factor to increase lambda when activations are concentrated
-    auto directional_scale = [&](const float * values, const float * activations, int64_t n_per_row) {
-        if (!activations) { return 1.0f; }
-        double sum_v   = 0.0;
-        double sum_aw2 = 0.0;
-        double sum_a2  = 0.0;
-        for (int64_t j = 0; j < n_per_row; ++j) {
-            const double v = values ? std::max(0.0f, values[j]) : 1.0;
-            const double a = activations[j];
-            sum_v += v;
-            sum_aw2 += v * a * a;
-            sum_a2 += a * a;
-        }
-        const double rms_a = std::sqrt(sum_a2 / std::max(1.0, (double)n_per_row));
-        const double denom = std::sqrt(std::max(epsilon, sum_v)) * std::max(epsilon, rms_a);
-        const double scale = denom > 0.0 ? std::sqrt(sum_aw2) / denom : 1.0;
-
-        return (float)std::clamp(scale, 0.5, 2.0);
-    };
-
     // Higher precision but much longer to compute
     auto precise_lambda = [&](const ggml_tensor * t,
         const std::vector<float> & f32_sample,
@@ -979,11 +959,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (ratios.empty()) { return 0.0f; }
 
         std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
-        double lambda = ratios[ratios.size() / 2];
-
-        const float scale = directional_scale(values, activations, n_per_row);
-        lambda *= scale;
-        lambda = std::clamp(lambda, 0.0, 8.0);
+        const double lambda = std::clamp(ratios[ratios.size() / 2], 0.0, 8.0);
 
         return (float)lambda;
     };
@@ -1007,8 +983,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         double base = 1.0 - s * s / (d * s2 + epsilon);
         base = std::clamp(base, 0.0, 1.0);
 
-        const double scale = directional_scale(values, activations, n_per_row);
-        const double lambda = std::clamp(base * scale, 0.0, 1.0) * 8.0;
+        const double lambda = std::clamp(base, 0.0, 1.0) * 8.0;
 
         return (float)lambda;
     };
@@ -1159,8 +1134,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         {
             const float * values = values_sample.empty() ? nullptr : values_sample.data();
             const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
-            bias_lambda = params->precise_lambda ? precise_lambda(t, f32_sample, sample_rows_per_slice, values, activations, compatible_candidates) :
-                fast_lambda(values, activations, n_per_row);
+            if (params->bpw_bias == 1) {
+                bias_lambda = fast_lambda(values, activations, n_per_row);
+            } else if (params->bpw_bias == 2) {
+                bias_lambda = precise_lambda(t, f32_sample, sample_rows_per_slice, values, activations, compatible_candidates);
+            }
         }
 
         // Now evaluate candidates
@@ -1656,7 +1634,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             } else {
                 LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate - ", __func__);
             }
-            LLAMA_LOG_INFO("using %s\n", params->precise_lambda ? "precise lambda (slow)" : "fast lambda");
+            const char* msg[] = {"no bias (MSE only)", "fast (default)", "precise (slow)"};
+            LLAMA_LOG_INFO("using %s error estimation\n", msg[params->bpw_bias]);
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
             bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
         } else {
@@ -1967,7 +1946,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
-        /*.precise_lambda              =*/ false
+        /*.bpw_bias                    =*/ 1
     };
 
     return result;
