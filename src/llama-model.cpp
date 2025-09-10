@@ -13529,7 +13529,6 @@ struct llm_build_t5_dec : public llm_graph_context {
 
         for (int il = 0; il < n_dec_layer; ++il) {
             ggml_tensor * inpSA = inpL;
-            int il_dec = n_layer + il;
 
             // norm
             cur = build_norm(inpL,
