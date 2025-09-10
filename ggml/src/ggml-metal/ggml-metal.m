@@ -828,8 +828,8 @@ struct ggml_backend_metal_context {
     // extra command buffers for things like getting, setting and copying tensors
     NSMutableArray * cmd_bufs_ext;
 
+    // the last command buffer queued into the Metal queue with operations relevant to the current Metal backend
     id<MTLCommandBuffer> cmd_buf_last;
-    id<MTLCommandBuffer> cmd_buf_ext_last;
 
     // abort ggml_metal_graph_compute if callback returns true
     ggml_abort_callback abort_callback;
@@ -1110,7 +1110,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     ctx->cmd_bufs_ext = [[NSMutableArray alloc] init];
 
     ctx->cmd_buf_last = nil;
-    ctx->cmd_buf_ext_last = nil;
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
     if (@available(macOS 10.12, iOS 16.0, *)) {
@@ -5735,6 +5734,12 @@ static enum ggml_status ggml_metal_graph_compute(
         if (should_capture) {
             ctx->capture_next_compute = false;
 
+            // make sure all previous computations have finished before starting the capture
+            if (ctx->cmd_buf_last) {
+                [ctx->cmd_buf_last waitUntilCompleted];
+                ctx->cmd_buf_last = nil;
+            }
+
             if (!ctx->capture_started) {
                 // create capture scope
                 ctx->capture_scope = [[MTLCaptureManager sharedCaptureManager] newCaptureScopeWithDevice:ctx_dev->mtl_device];
@@ -5757,16 +5762,11 @@ static enum ggml_status ggml_metal_graph_compute(
         // the main thread commits the first few commands immediately
         // cmd_buf[n_cb]
         {
-            // first wait for any previous command buffer to be completed
-            // note: this checks only yhat the first part of the previous graph has been computed
-            //       the rest of the graph might still be computing, but it is Ok to start queuing the beginning of the
-            ///      new graph
-            if (ctx->cmd_bufs[n_cb].obj) {
-                [ctx->cmd_bufs[n_cb].obj waitUntilCompleted];
-                [ctx->cmd_bufs[n_cb].obj release];
-            }
-
-            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            // cannot use commandBufferWithUnretainedReferences because the buffers from the memory pool can get destroyed
+            // TODO: when the memory pools are removed, we can again use commandBufferWithUnretainedReferences
+            //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2334215009
+            //id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
             [cmd_buf retain];
 
             ctx->cmd_bufs[n_cb].obj = cmd_buf;
@@ -5776,23 +5776,14 @@ static enum ggml_status ggml_metal_graph_compute(
             ctx->encode_async(n_cb);
         }
 
-        // here we guarantee the full previous graph has finished computing
-        // but note that we have already enqueued the first part of the new graph so it can start processing, while
-        //   continue to encode the rest of the graph
-        // TODO: remove these waits after we remove the memory pools
-        //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2334215009
-        if (ctx->cmd_buf_last) {
-            [ctx->cmd_buf_last waitUntilCompleted];
-            ctx->cmd_buf_last = nil;
-        }
-
         // remember the command buffer for the next iteration
         ctx->cmd_buf_last = ctx->cmd_bufs[n_cb].obj;
 
         // prepare the rest of the command buffers asynchronously (optional)
         // cmd_buf[0.. n_cb)
         for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
-            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            //id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
             [cmd_buf retain];
 
             if (ctx->cmd_bufs[cb_idx].obj) {
@@ -5866,11 +5857,6 @@ static enum ggml_status ggml_metal_graph_compute(
                 }
 
                 [next_buffer commit];
-            }
-
-            if (ctx->cmd_buf_last) {
-                [ctx->cmd_buf_last waitUntilCompleted];
-                ctx->cmd_buf_last = nil;
             }
 
             [ctx->capture_scope endScope];
@@ -6017,7 +6003,7 @@ static void ggml_backend_metal_buffer_get_tensor(ggml_backend_buffer_t buffer, c
                                                               deallocator:nil];
 
             id<MTLCommandQueue>  queue   = ctx->queue;
-            id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+            id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
             {
                 id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
@@ -6062,7 +6048,7 @@ static void ggml_backend_metal_buffer_clear(ggml_backend_buffer_t buffer, uint8_
     } else {
         @autoreleasepool {
             id<MTLCommandQueue>  queue   = ctx->queue;
-            id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+            id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
             {
                 id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
@@ -6350,16 +6336,10 @@ static void ggml_backend_metal_free(ggml_backend_t backend) {
 static void ggml_backend_metal_synchronize(ggml_backend_t backend) {
     struct ggml_backend_metal_context * ctx = backend->context;
 
-    // wait for the computation of the graph to finish
+    // wait for any backend operations to finish
     if (ctx->cmd_buf_last) {
         [ctx->cmd_buf_last waitUntilCompleted];
         ctx->cmd_buf_last = nil;
-    }
-
-    // wait for any pending async get/set operations
-    if (ctx->cmd_buf_ext_last) {
-        [ctx->cmd_buf_ext_last waitUntilCompleted];
-        ctx->cmd_buf_ext_last = nil;
     }
 
     // release any completed command buffers
@@ -6423,7 +6403,7 @@ static void ggml_backend_metal_set_tensor_async(ggml_backend_t backend,       st
 
         // instead, remember a reference to the command buffer and wait for it later if needed
         [ctx->cmd_bufs_ext addObject:cmd_buf];
-        ctx->cmd_buf_ext_last = cmd_buf;
+        ctx->cmd_buf_last = cmd_buf;
 
         [cmd_buf retain];
     }
@@ -6469,7 +6449,7 @@ static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const st
 
         // instead, remember a reference to the command buffer and wait for it later if needed
         [ctx->cmd_bufs_ext addObject:cmd_buf];
-        ctx->cmd_buf_ext_last = cmd_buf;
+        ctx->cmd_buf_last = cmd_buf;
 
         [cmd_buf retain];
     }
