@@ -8,6 +8,14 @@ struct ggml_et_binary_params {
     ggml_tensor dst;
 };
 
+// Element map parameters for embarrassingly parallel binary operations (MUL, ADD, etc.)
+// Operation type is determined by dst->op (GGML_OP_MUL, GGML_OP_ADD, etc.)
+struct ggml_et_elmap_params {
+    ggml_tensor src0;
+    ggml_tensor src1;
+    ggml_tensor dst;
+};
+
 typedef struct {
     int32_t n_past;
     int32_t n_dims;        // Number of dimensions to apply ROPE to (must be even)
@@ -32,12 +40,14 @@ struct ggml_et_rope_params {
 };
 
 struct ggml_et_rms_norm_params {
-    ggml_tensor src0;  // F32 input tensor  
+    ggml_tensor src0;  // F32 input tensor
     ggml_tensor dst;   // F32 output tensor
     float eps;         // Epsilon parameter for numerical stability
 };
 
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
