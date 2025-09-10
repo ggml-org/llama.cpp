@@ -2149,59 +2149,52 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_ACL_GRAPH
 /**
- * @brief Populate the internal CANN graph node properties from the ggml computation graph.
+ * @brief Add a new CANN graph to the LRU cache by populating node properties from the ggml graph.
  *
- * This function copies all node attributes (operation type, dimensions, strides, input sources,
- * and operation parameters) into a CANN graph structure. The graph is then managed by the
- * LRU cache in the CANN context.
+ * This function creates a new ggml_cann_graph object and fills its node properties
+ * (operation type, dimensions, strides, input sources, and operation parameters)
+ * based on the current ggml computation graph.
  *
- * Key behavior:
- * - If `matched_graph` is nullptr, a new ggml_cann_graph is created, initialized with
- *   the properties of the current ggml graph, and pushed into the cache.
- * - If `matched_graph` is not nullptr, it is moved to the front of the cache.
+ * Each node in the ggml graph is mapped to a property entry in the new CANN graph:
+ * - node address
+ * - operation type
+ * - shape (ne) and strides (nb)
+ * - source tensor addresses
+ * - operation parameters
  *
- * This ensures that the **first element of the cache list always points to the current
- * matched graph or the newly created graph**, allowing quick access and reuse.
+ * After initialization, the new graph is pushed into the LRU cache owned by the
+ * CANN backend context. The cache takes ownership of the graph and manages its
+ * lifetime (including deletion upon eviction).
  *
- * @param cann_ctx      The CANN backend context containing the graph cache.
- * @param cgraph        The current ggml computation graph.
- * @param matched_graph A pointer to the matched CANN graph. If null, a new graph will
- *                      be created and pushed into the cache. The cache takes ownership
- *                      and will delete the graph when evicted.
+ * @param cann_ctx  The CANN backend context containing the graph cache.
+ * @param cgraph    The current ggml computation graph.
  */
-static void set_lru_matched_graph_node_properties(
+static void add_lru_matched_graph_node_properties(
         ggml_backend_cann_context * cann_ctx,
-        ggml_cgraph * cgraph,
-        ggml_cann_graph * matched_graph) {
+        ggml_cgraph * cgraph) {
+    // Create a new ggml_cann_graph object on the heap (its lifetime is managed by the cache).
+    ggml_cann_graph * new_graph = new ggml_cann_graph();
+    new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
 
-    if (!matched_graph) {
-        // Create a new ggml_cann_graph object on the heap (its lifetime is managed by the cache).
-        ggml_cann_graph * new_graph = new ggml_cann_graph();
-        new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        ggml_tensor * node = cgraph->nodes[node_idx];
+        auto & prop = new_graph->ggml_graph_properties[node_idx];
 
-        for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
-            ggml_tensor * node = cgraph->nodes[node_idx];
-            auto & prop = new_graph->ggml_graph_properties[node_idx];
+        prop.node_address = node->data;
+        prop.node_op      = node->op;
 
-            prop.node_address = node->data;
-            prop.node_op      = node->op;
+        std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
+        std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
 
-            std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
-            std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
-
-            for (int src = 0; src < GGML_MAX_SRC; ++src) {
-                prop.src_address[src] = node->src[src] ? node->src[src]->data : nullptr;
-            }
-
-            memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
+        for (int src = 0; src < GGML_MAX_SRC; ++src) {
+            prop.src_address[src] = node->src[src] ? node->src[src]->data : nullptr;
         }
 
-        // Insert into the LRU cache (cache takes ownership and will delete it when evicted).
-        cann_ctx->graph_lru_cache.push(new_graph);
-    } else {
-        // Cast to the proper type and move to the front of the cache.
-        cann_ctx->graph_lru_cache.move_to_front(matched_graph);
+        memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
     }
+
+    // Insert into the LRU cache (cache takes ownership and will delete it when evicted).
+    cann_ctx->graph_lru_cache.push(new_graph);
 }
 
 /**
@@ -2246,21 +2239,22 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 }
 
 /**
- * @brief Find a cached CANN graph that matches the current ggml graph.
+ * @brief Check whether there is a cached CANN graph that matches the current ggml graph.
  *
- * This function checks the cached CANN graphs in the LRU cache to determine
- * whether there is an existing graph whose node properties match the current
- * ggml computation graph. If a matching graph is found, it can be reused
- * without rebuilding; otherwise, a new CANN graph must be captured.
+ * This function iterates through the cached CANN graphs stored in the LRU cache and
+ * compares them against the given ggml computation graph. A match requires that the
+ * number of nodes is the same and that each node’s properties (operation type,
+ * dimensions, strides, inputs, and operation parameters) are identical.
  *
- * The comparison includes the number of nodes and their properties, such as
- * operation type, dimensions, strides, inputs, and operation parameters.
+ * If a matching graph is found, it is promoted to the front of the LRU cache and the
+ * function returns true. Otherwise, the function returns false, indicating that a new
+ * CANN graph needs to be captured.
  *
  * @param cann_ctx  The CANN backend context containing the graph cache.
  * @param cgraph    The current ggml computation graph.
- * @return Pointer to a matching ggml_cann_graph if found; nullptr otherwise.
+ * @return true if a matching cached graph exists; false otherwise.
  */
-static ggml_cann_graph* get_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
+static bool is_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
     ggml_cann_graph_lru_cache &lru_cache = cann_ctx->graph_lru_cache;
     for (auto &graph_ptr : lru_cache.cache_list) {
         // Skip graphs with a different number of nodes.
@@ -2278,11 +2272,13 @@ static ggml_cann_graph* get_matched_graph(ggml_backend_cann_context * cann_ctx, 
         }
 
         if (all_match) {
-            return graph_ptr;
+            // update cache_list && renturn graph_ptr
+            lru_cache.move_to_front(graph_ptr);
+            return true;
         }
     }
 
-    return nullptr;
+    return false;
 }
 #endif  // USE_ACL_GRAPH
 
@@ -2360,18 +2356,18 @@ static enum ggml_status ggml_backend_cann_graph_compute(
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
-    ggml_cann_graph * matched_graph = nullptr;
 
     if (!cann_ctx->acl_graph_mode) {
         use_cann_graph = false;
     }
 
     if (use_cann_graph) {
-        matched_graph = get_matched_graph(cann_ctx, cgraph);
-        if (!matched_graph) {
-            cann_graph_update_required = true;
+        // If no matching graph is found, the graph needs to be recaptured.
+        cann_graph_update_required = !is_matched_graph(cann_ctx, cgraph);
+        if (cann_graph_update_required) {
+            // If no matching graph is found, add a new ACL graph.
+            add_lru_matched_graph_node_properties(cann_ctx, cgraph);
         }
-        set_lru_matched_graph_node_properties(cann_ctx, cgraph, matched_graph);
     }
 #else
     bool use_cann_graph = false;
