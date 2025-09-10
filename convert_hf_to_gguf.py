@@ -5122,6 +5122,29 @@ class Gemma3Model(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+@ModelBase.register("Gemma3TextModel")
+class EmbeddingGemma(Gemma3Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Override the sliding window size as it gets adjusted by the Gemma3TextConfig
+        # constructor. We want to use the value from the original model's config.json.
+        # ref: https://github.com/huggingface/transformers/pull/40700
+        with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+            config = json.load(f)
+            orig_sliding_window = config.get("sliding_window")
+            if orig_sliding_window is None:
+                raise ValueError("sliding_window not found in model config - this is required for the model")
+
+            logger.info(f"Using original sliding_window from config: {orig_sliding_window} "
+                        f"instead of {self.hparams['sliding_window']}")
+            self.gguf_writer.add_sliding_window(orig_sliding_window)
+
+        self._try_set_pooling_type()
+
+
 @ModelBase.register("Gemma3ForConditionalGeneration")
 class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):

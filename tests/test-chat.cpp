@@ -420,6 +420,7 @@ const common_chat_msg message_assist_call_empty_args             = simple_assist
 const common_chat_msg message_assist_call_cutoff_args            = simple_assist_msg("", "", "special_function", "{\"arg");
 const common_chat_msg message_assist_call_thoughts               = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}");
 const common_chat_msg message_assist_call_thoughts_unparsed      = simple_assist_msg("<think>I'm\nthinking</think>\n\n", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_thoughts_content       = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": 1}");
 const common_chat_msg message_assist_call_id                     = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "123456789");
 const common_chat_msg message_assist_call_idx                    = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "0");
 const common_chat_msg message_assist_thoughts_call_idx           = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}", /* id = */ "0");
@@ -436,6 +437,7 @@ static void test_msgs_oaicompat_json_conversion() {
         message_assist_call,
         message_assist_call_thoughts,
         message_assist_call_thoughts_unparsed,
+        message_assist_call_thoughts_content,
         message_assist_call_id,
         message_assist_call_idx,
         message_assist_call_python,
@@ -1754,6 +1756,212 @@ static void test_template_output_parsers() {
                 "This is a simple response without reasoning.",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_SEED_OSS}));
+    }
+    {
+        auto tmpls = read_templates("models/templates/NVIDIA-Nemotron-Nano-v2.jinja");
+        std::vector<std::string> end_tokens{ "<SPECIAL_12>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_NEMOTRON_V2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_NEMOTRON_V2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_NEMOTRON_V2}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_NEMOTRON_V2}));
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_NEMOTRON_V2}
+            ));
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "Hello, world!\nWhat's up?\n",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                      /* expect_grammar_triggered= */ true
+        );
+    }
+    {
+        auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V3.1.jinja");
+        std::vector<std::string>   end_tokens{ "<｜end▁of▁sentence｜>" };
+
+        for (const auto & inputs : { inputs_no_tools, inputs_tools }) {
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_V3_1, params.format);
+            assert_equals(true, params.thinking_forced_open);
+        }
+
+        test_templates(tmpls.get(), end_tokens, message_assist, tools, "</think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+        test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "</think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+        assert_msg_equals(
+            simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking"),
+            common_chat_parse(
+                "I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                }));
+        // variant: thinking forced open, reasoning_format none
+        assert_msg_equals(
+            simple_assist_msg("REASONING</think>ok", ""),
+            common_chat_parse(
+                "REASONING</think>ok",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: happy path for when it works as the model card says it should
+        assert_msg_equals(
+            simple_assist_msg("", "", "get_time", "{\"city\":\"Tokyo\"}"),
+            common_chat_parse(
+                "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ false,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: simple + thinking open
+        assert_msg_equals(
+            simple_assist_msg("", "REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
+            common_chat_parse(
+                "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: simple + multiple tool calls
+        common_chat_msg message_assist_multiple_calls;
+        message_assist_multiple_calls.role = "assistant";
+        message_assist_multiple_calls.content = "CONTENT";
+        message_assist_multiple_calls.tool_calls.push_back({"get_time", "{\"city\":\"Paris\"}", ""});
+        message_assist_multiple_calls.tool_calls.push_back({"get_weather", "{\"city\":\"Paris\"}", ""});
+        assert_msg_equals(
+            message_assist_multiple_calls,
+            common_chat_parse(
+                "CONTENT<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ false,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: thinking forced open + tool call in reasoning content
+        assert_msg_equals(
+            simple_assist_msg("", "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
+            common_chat_parse(
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: thinking forced open + tool call in reasoning content + no closing think + not partial
+        //          This is a bit of a fine tuning issue on the model's part IMO. It really should not be attempting
+        //          to make tool calls in reasoning content according to the model card, but it does sometimes, so
+        //          add the reasoning content as regular content and parse the tool calls.
+        assert_msg_equals(
+            simple_assist_msg("REASONING", "", "get_time", "{\"city\":\"Tokyo\"}"),
+            common_chat_parse(
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: thinking forced open + tool call in reasoning content + no closing think + partial
+        assert_msg_equals(
+            simple_assist_msg("", "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>", "", ""),
+            common_chat_parse(
+                "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
+                /* is_partial= */ true,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                    /* .parse_tool_calls = */ true,
+                }));
+        // variant: thinking not forced open + missing reasoning + no tool calls
+        assert_msg_equals(
+            simple_assist_msg("CONTENT", ""),
+            common_chat_parse(
+                "CONTENT",
+                /* is_partial= */ false,
+                {
+                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ false,
+                    /* .parse_tool_calls = */ true,
+                }));
     }
 }
 

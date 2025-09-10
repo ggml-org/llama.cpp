@@ -1154,17 +1154,15 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     webgpu_context ctx = reg_ctx->webgpu_ctx;
 
     wgpu::RequestAdapterOptions options = {};
-    auto                        callback =
-        [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message, void * userdata) {
-            if (status != wgpu::RequestAdapterStatus::Success) {
-                GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
-                return;
-            }
-            *static_cast<wgpu::Adapter *>(userdata) = std::move(adapter);
-        };
-    void * userdata = &ctx->adapter;
     ctx->instance.WaitAny(
-        ctx->instance.RequestAdapter(&options, wgpu::CallbackMode::AllowSpontaneous, callback, userdata), UINT64_MAX);
+        ctx->instance.RequestAdapter(&options, wgpu::CallbackMode::AllowSpontaneous,
+            [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
+                if (status != wgpu::RequestAdapterStatus::Success) {
+                    GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
+                    return;
+                }
+                ctx->adapter = std::move(adapter);
+            }), UINT64_MAX);
     GGML_ASSERT(ctx->adapter != nullptr);
 
     ctx->adapter.GetLimits(&ctx->limits);
