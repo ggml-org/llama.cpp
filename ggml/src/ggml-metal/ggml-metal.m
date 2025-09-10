@@ -6025,18 +6025,9 @@ static void ggml_backend_metal_buffer_get_tensor(ggml_backend_buffer_t buffer, c
 }
 
 static bool ggml_backend_metal_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
-    if (ggml_backend_buffer_is_host(src->buffer)) {
-        struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
-
-        if (ctx->is_shared) {
-            memcpy(dst->data, src->data, ggml_nbytes(src));
-        } else {
-            // TODO: implement
-            return false;
-        }
-
-        return true;
-    }
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst);
 
     return false;
 }
