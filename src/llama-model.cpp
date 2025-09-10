@@ -13573,7 +13573,7 @@ struct llm_build_t5_dec : public llm_graph_context {
 
             // cross-attention
             {
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il_dec].wq_cross, cur);
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq_cross, cur);
                 cb(Qcur, "Qcur", il);
 
                 ggml_tensor * Kcur = build_lora_mm(model.layers[il_dec].wk_cross, embd_enc);
