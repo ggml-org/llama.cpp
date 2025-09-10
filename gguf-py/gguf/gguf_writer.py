@@ -676,6 +676,9 @@ class GGUFWriter:
     def add_decoder_start_token_id(self, id: int) -> None:
         self.add_uint32(Keys.LLM.DECODER_START_TOKEN_ID.format(arch=self.arch), id)
 
+    def add_decoder_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.DECODER_BLOCK_COUNT.format(arch=self.arch), value)
+
     def add_embedding_length_per_layer_input(self, value: int) -> None:
         self.add_uint32(Keys.LLM.EMBD_LENGTH_PER_LAYER_INP.format(arch=self.arch), value)
 
