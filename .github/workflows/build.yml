@@ -190,6 +190,10 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-22.04-arm
+          - build: 's390x'
+            os: ubuntu-22.04-s390x
+          - build: 'ppc64le'
+            os: ubuntu-22.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
