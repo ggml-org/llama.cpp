@@ -61,8 +61,10 @@ static struct ggml_backend_metal_device_context {
     bool has_bfloat;
     bool use_bfloat;
     bool use_fusion;
+    bool use_concurrency;
     bool use_shared_buffers;
 
+    int debug_graph;
     int debug_fusion;
 
     // how many times a given op was fused
@@ -83,7 +85,9 @@ static struct ggml_backend_metal_device_context {
     /*.has_bfloat              =*/ false,
     /*.use_bfloat              =*/ false,
     /*.use_fusion              =*/ true,
+    /*.use_concurrency         =*/ true,
     /*.use_shared_buffers      =*/ true,
+    /*.debug_graph             =*/ 0,
     /*.debug_fusion            =*/ 0,
     /*.fuse_cnt                =*/ { 0 },
     /*.max_size                =*/ 0,
@@ -124,7 +128,14 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
 #else
             ctx->use_bfloat = false;
 #endif
-            ctx->use_fusion = getenv("GGML_METAL_FUSION_DISABLE") == nil;
+
+            ctx->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
+            ctx->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+
+            {
+                const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
+                ctx->debug_graph = val ? atoi(val) : 0;
+            }
 
             {
                 const char * val = getenv("GGML_METAL_FUSION_DEBUG");
@@ -1091,6 +1102,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, ctx_dev->has_bfloat                  ? "true" : "false");
     GGML_LOG_INFO("%s: use bfloat            = %s\n", __func__, ctx_dev->use_bfloat                  ? "true" : "false");
     GGML_LOG_INFO("%s: use fusion            = %s\n", __func__, ctx_dev->use_fusion                  ? "true" : "false");
+    GGML_LOG_INFO("%s: use concurrency       = %s\n", __func__, ctx_dev->use_concurrency             ? "true" : "false");
     GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, ctx_dev->use_shared_buffers          ? "true" : "false");
     GGML_LOG_INFO("%s: hasUnifiedMemory      = %s\n", __func__, ctx_dev->mtl_device.hasUnifiedMemory ? "true" : "false");
 
@@ -2230,6 +2242,20 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
         srct[i]   = node->src[i] ? node->src[i]->type : GGML_TYPE_COUNT;
     }
 
+    // TODO: tmp shorthands - remove
+    size_t offs_src0 = offs_src[0];
+    size_t offs_src1 = offs_src[1];
+    size_t offs_src2 = offs_src[2];
+
+    id<MTLBuffer> id_src0 = id_src[0];
+    id<MTLBuffer> id_src1 = id_src[1];
+    id<MTLBuffer> id_src2 = id_src[2];
+
+    const enum ggml_type src0t = src0 ? src0->type : GGML_TYPE_COUNT;
+    const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
+    const enum ggml_type src2t = src2 ? src2->type : GGML_TYPE_COUNT;
+    const enum ggml_type dstt  = dst  ? dst->type  : GGML_TYPE_COUNT;
+
     size_t offs_dst = 0;
 
     id<MTLBuffer> id_dst = dst ? ggml_metal_get_buffer(dst, &offs_dst) : nil;
@@ -2244,9 +2270,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
     // if the condition is not satisfied, we put a memory barrier and clear all ranges
     // otherwise, we add the new ranges to the encoding context and add the node for concurrent execution
     //
-    {
-        bool is_concurrent = true;
+    bool is_concurrent = ctx_dev->use_concurrency;
 
+    if (is_concurrent) {
         // do not read from any previous dst ranges
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             if (id_src[i] == nil) {
@@ -2311,36 +2337,21 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
         }
     }
 
-    // TODO: tmp shorthands - remove
-    size_t offs_src0 = offs_src[0];
-    size_t offs_src1 = offs_src[1];
-    size_t offs_src2 = offs_src[2];
-
-    id<MTLBuffer> id_src0 = id_src[0];
-    id<MTLBuffer> id_src1 = id_src[1];
-    id<MTLBuffer> id_src2 = id_src[2];
-
-    const enum ggml_type src0t = src0 ? src0->type : GGML_TYPE_COUNT;
-    const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
-    const enum ggml_type src2t = src2 ? src2->type : GGML_TYPE_COUNT;
-    const enum ggml_type dstt  = dst  ? dst->type  : GGML_TYPE_COUNT;
-
-
-#if 0
-    GGML_LOG_INFO("%s: op - %s\n", __func__, ggml_op_name(dst->op));
-    if (src0) {
-        GGML_LOG_INFO("%s: src0 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src0t), ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03,
-                ggml_is_contiguous(src0), src0->name);
+    if (ctx_dev->debug_graph > 0) {
+        GGML_LOG_INFO("%s: op - %s, concurrent = %d\n", __func__, ggml_op_name(dst->op), is_concurrent);
+        if (src0) {
+            GGML_LOG_INFO("%s: src0 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src0t), ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03,
+                    ggml_is_contiguous(src0), src0->name);
+        }
+        if (src1) {
+            GGML_LOG_INFO("%s: src1 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src1t), ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
+                    ggml_is_contiguous(src1), src1->name);
+        }
+        if (dst) {
+            GGML_LOG_INFO("%s: dst  - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], 1, %s\n", __func__, ggml_type_name(dstt), ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3,
+                    dst->name);
+        }
     }
-    if (src1) {
-        GGML_LOG_INFO("%s: src1 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src1t), ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
-                ggml_is_contiguous(src1), src1->name);
-    }
-    if (dst) {
-        GGML_LOG_INFO("%s: dst  - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], 1, %s\n", __func__, ggml_type_name(dstt), ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3,
-                dst->name);
-    }
-#endif
 
     id<MTLDevice> device = ctx_dev->mtl_device;
 
@@ -2684,7 +2695,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                     [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
 
-                    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    if (ctx_dev->use_concurrency) {
+                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    }
                 }
 
                 const id<MTLComputePipelineState> pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD].pipeline;
@@ -4209,7 +4222,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(ne02, 1, 1)];
                     }
 
-                    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    if (ctx_dev->use_concurrency) {
+                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    }
 
                     {
                         id<MTLComputePipelineState> pipeline = nil;
@@ -5600,7 +5615,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         [encoder setThreadgroupMemoryLength:smem atIndex:0];
                         [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
 
-                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                        if (ctx_dev->use_concurrency) {
+                            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                        }
 
                         // reduce the results from the workgroups
                         {
@@ -5864,8 +5881,14 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
             }
     }
 
+    if (ctx_dev->debug_graph > 0) {
+        if (n_fuse > 1) {
+            GGML_LOG_INFO("%s: fuse: %d ops\n", __func__, n_fuse);
+        }
+    }
+
     // after fusing, we have to add the new destination range to the encoding context
-    if (n_fuse > 1) {
+    if (ctx_dev->use_concurrency && n_fuse > 1) {
         struct ggml_tensor * dstf = nodes[n_fuse - 1];
 
         size_t offs_dstf = 0;
@@ -6754,7 +6777,15 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 
         ggml_metal_mem_pool_reset(mem_pool);
 
-        id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
+        id<MTLComputeCommandEncoder> encoder;
+
+        struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
+
+        if (ctx_dev->use_concurrency) {
+            encoder = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
+        } else {
+            encoder = [cmd_buf computeCommandEncoder];
+        }
 
         int node_start = 0;
         int node_end   = n_nodes_0;
