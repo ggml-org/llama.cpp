@@ -1974,10 +1974,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_unary(params, tensor);
             } break;
-        case GGML_OP_XIELU:
-            {
-                ggml_compute_forward_xielu(params, tensor);
-            } break;
         case GGML_OP_GLU:
             {
                 ggml_compute_forward_glu(params, tensor);
@@ -2167,7 +2163,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_REPEAT:
         case GGML_OP_REPEAT_BACK:
         case GGML_OP_LEAKY_RELU:
-        case GGML_OP_XIELU:
             {
                 n_tasks = 1;
             } break;

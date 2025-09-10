@@ -554,7 +554,6 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
-        GGML_OP_XIELU,
 
         GGML_OP_COUNT,
     };
