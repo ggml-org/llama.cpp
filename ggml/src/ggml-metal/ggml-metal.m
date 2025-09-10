@@ -5946,15 +5946,29 @@ static void * ggml_backend_metal_split_buffer_get_base(ggml_backend_buffer_t buf
 static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
     GGML_ASSERT(tensor->view_src == NULL); // views of split tensors are not supported
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
-
+    
+    GGML_LOG_DEBUG("%s: initializing tensor '%s' with %d dimensions [%lld, %lld, %lld, %lld]\n", 
+                   __func__, tensor->name, ggml_n_dims(tensor), 
+                   tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    
     struct ggml_backend_metal_split_buffer_context * ctx = (struct ggml_backend_metal_split_buffer_context *)buffer->context;
     struct ggml_backend_metal_split_buffer_type_context * buft_ctx = (struct ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
 
     const int64_t ne0 = tensor->ne[0];
 
     struct ggml_tensor_extra_metal * extra = calloc(1, sizeof(struct ggml_tensor_extra_metal));
+    if (extra == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate tensor extra for '%s'\n", __func__, tensor->name);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
+    
     // For a dynamic array, we need to manually manage the array
     ctx->tensor_extras = realloc(ctx->tensor_extras, (ctx->tensor_extras_size + 1) * sizeof(struct ggml_tensor_extra_metal *));
+    if (ctx->tensor_extras == NULL) {
+        GGML_LOG_ERROR("%s: failed to reallocate tensor_extras array\n", __func__);
+        free(extra);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
     ctx->tensor_extras[ctx->tensor_extras_size] = extra;
     ctx->tensor_extras_size++;
 
@@ -5962,31 +5976,57 @@ static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend
     int id = 0;
     int64_t row_low, row_high;
     get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
+    
+    GGML_LOG_DEBUG("%s: tensor '%s' row split: low=%lld, high=%lld\n", __func__, tensor->name, row_low, row_high);
 
     int64_t nrows_split = row_high - row_low;
     if (nrows_split == 0) {
+        GGML_LOG_DEBUG("%s: tensor '%s' has 0 rows, skipping allocation\n", __func__, tensor->name);
         tensor->extra = extra;
         return GGML_STATUS_SUCCESS;
     }
 
     size_t size = ggml_nbytes_split(tensor, nrows_split);
+    GGML_LOG_DEBUG("%s: tensor '%s' size=%zu bytes\n", __func__, tensor->name, size);
+    
     // const size_t original_size = size; // Not used in this implementation
 
     // Pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
     if (ne0 % MATRIX_ROW_PADDING != 0) {
-        size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        size_t padding = ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        GGML_LOG_DEBUG("%s: tensor '%s' adding padding=%zu bytes\n", __func__, tensor->name, padding);
+        size += padding;
     }
 
     // Get Metal device context
     struct ggml_backend_metal_device_context * ctx_dev = (struct ggml_backend_metal_device_context *)buffer->buft->device->context;
+    GGML_LOG_DEBUG("%s: tensor '%s' using Metal device: %s\n", __func__, tensor->name, ctx_dev->name);
 
     // Allocate Metal buffer directly using ctx_dev->mtl_device
+    GGML_LOG_DEBUG("%s: tensor '%s' allocating Metal buffer with size=%zu\n", __func__, tensor->name, size);
     extra->data_device[id] = [ctx_dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
     
+    if (extra->data_device[id] == nil) {
+        GGML_LOG_ERROR("%s: failed to allocate Metal buffer for tensor '%s' with size=%zu\n", __func__, tensor->name, size);
+        free(extra);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
+    
+    GGML_LOG_DEBUG("%s: tensor '%s' Metal buffer allocated at %p\n", __func__, tensor->name, extra->data_device[id]);
+
     // Initialize buffer with zeros
-    memset([extra->data_device[id] contents], 0, size);
+    GGML_LOG_DEBUG("%s: tensor '%s' initializing buffer with zeros\n", __func__, tensor->name);
+    void * bufferContents = [extra->data_device[id] contents];
+    if (bufferContents == NULL) {
+        GGML_LOG_ERROR("%s: Metal buffer contents is NULL for tensor '%s'\n", __func__, tensor->name);
+        [extra->data_device[id] release];
+        free(extra);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
+    memset(bufferContents, 0, size);
 
     tensor->extra = extra;
+    GGML_LOG_DEBUG("%s: tensor '%s' initialization completed\n", __func__, tensor->name);
     return GGML_STATUS_SUCCESS;
 }
 
@@ -6163,15 +6203,36 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_split_buffer_type(int m
     // We'll just create a new buffer type context each time since Metal only has one device
     
     struct ggml_backend_metal_split_buffer_type_context * ctx = calloc(1, sizeof(struct ggml_backend_metal_split_buffer_type_context));
+    if (ctx == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate buffer type context\n", __func__);
+        return NULL;
+    }
+    
     ctx->main_device = main_device;
     ctx->tensor_split[0] = 1.0f; // All tensors go to the single Metal device
     ctx->name = "Metal_Split";
+    
+    GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, ctx->tensor_split[0]);
 
     // Allocate a new buffer type structure each time
     struct ggml_backend_buffer_type * buft = calloc(1, sizeof(struct ggml_backend_buffer_type));
+    if (buft == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate buffer type\n", __func__);
+        free(ctx);
+        return NULL;
+    }
+    
     buft->iface = ggml_backend_split_buffer_type_interface;
     buft->device = ggml_backend_reg_dev_get(ggml_backend_metal_reg(), main_device);
+    if (buft->device == NULL) {
+        GGML_LOG_ERROR("%s: failed to get device for main_device=%d\n", __func__, main_device);
+        free(ctx);
+        free(buft);
+        return NULL;
+    }
     buft->context = ctx;
+    
+    GGML_LOG_DEBUG("%s: buffer type created successfully\n", __func__);
 
     return buft;
 }
