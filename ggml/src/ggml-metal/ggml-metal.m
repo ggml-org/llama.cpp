@@ -48,6 +48,9 @@ static struct ggml_backend_metal_device_context {
     int            mtl_device_ref_count;
     id<MTLLibrary> mtl_library;
 
+    // a single global queue shared by all Metal backends
+    // technically not needed for devices with unified memory, but enables discrete GPUs support
+    // ref: https://github.com/ggml-org/llama.cpp/pull/15906
     id<MTLCommandQueue> mtl_queue;
 
     NSLock * mtl_lock;
@@ -58,7 +61,7 @@ static struct ggml_backend_metal_device_context {
     bool has_bfloat;
     bool use_bfloat;
     bool use_fusion;
-    bool use_private_buffers; // TMP until we settle on the best implementation
+    bool use_shared_buffers;
 
     int debug_fusion;
 
@@ -80,7 +83,7 @@ static struct ggml_backend_metal_device_context {
     /*.has_bfloat              =*/ false,
     /*.use_bfloat              =*/ false,
     /*.use_fusion              =*/ true,
-    /*.use_private_buffers     =*/ true,
+    /*.use_shared_buffers      =*/ true,
     /*.debug_fusion            =*/ 0,
     /*.fuse_cnt                =*/ { 0 },
     /*.max_size                =*/ 0,
@@ -100,6 +103,9 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
 
         if (ctx->mtl_device) {
             ctx->mtl_queue = [ctx->mtl_device newCommandQueue];
+            if (ctx->mtl_queue == nil) {
+                GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+            }
 
             ctx->has_simdgroup_reduction  = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
             ctx->has_simdgroup_reduction |= [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
@@ -125,7 +131,11 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
                 ctx->debug_fusion = val ? atoi(val) : 0;
             }
 
-            ctx->use_private_buffers = true;
+            ctx->use_shared_buffers = ctx->mtl_device.hasUnifiedMemory;
+
+            if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
+                ctx->use_shared_buffers = false;
+            }
 
             memset(ctx->fuse_cnt, 0, sizeof(ctx->fuse_cnt));
 
@@ -785,7 +795,7 @@ struct ggml_metal_command_buffer {
 
 struct ggml_backend_metal_context {
     id<MTLDevice>       device;
-    id<MTLCommandQueue> queue;
+    id<MTLCommandQueue> queue; // currently a pointer to the device queue, but might become separate queue [TAG_QUEUE_PER_BACKEND]
 
     dispatch_queue_t d_queue;
 
@@ -1020,7 +1030,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 
     // TODO: question - would it be better to have one queue for the backend and one queue for the device?
     //                  the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
-    //ctx->queue = [device newCommandQueue]; [TAG_QUEUE_BACKEND]
+    //ctx->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
     ctx->queue = ctx_dev->mtl_queue;
     if (ctx->queue == nil) {
         GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
@@ -1081,7 +1091,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, ctx_dev->has_bfloat                  ? "true" : "false");
     GGML_LOG_INFO("%s: use bfloat            = %s\n", __func__, ctx_dev->use_bfloat                  ? "true" : "false");
     GGML_LOG_INFO("%s: use fusion            = %s\n", __func__, ctx_dev->use_fusion                  ? "true" : "false");
-    GGML_LOG_INFO("%s: use private buffers   = %s\n", __func__, ctx_dev->use_private_buffers         ? "true" : "false");
+    GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, ctx_dev->use_shared_buffers          ? "true" : "false");
     GGML_LOG_INFO("%s: hasUnifiedMemory      = %s\n", __func__, ctx_dev->mtl_device.hasUnifiedMemory ? "true" : "false");
 
     ctx->capture_next_compute = false;
@@ -1690,7 +1700,7 @@ static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
 
     Block_release(ctx->encode_async);
 
-    //[ctx->queue release]; // [TAG_QUEUE_BACKEND]
+    //[ctx->queue release]; // [TAG_QUEUE_PER_BACKEND]
 
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
@@ -1721,19 +1731,19 @@ struct ggml_backend_metal_buffer_context {
     void * all_data;
     size_t all_size;
 
-    // if true, then the buffer data is allocated in private GPU memory and is not shared with the host
-    bool is_private;
+    // if false, the Metal buffer data is allocated in private GPU memory and is not shared with the host
+    bool is_shared;
 
     // multiple buffers are used only to avoid the maximum buffer size limitation when using mmap
     int n_buffers;
     struct ggml_backend_metal_buffer buffers[GGML_METAL_MAX_BUFFERS];
 
     // optional MTLResidencySet
-    id rset;
+    id<MTLResidencySet> rset;
 
     // pointers to global device objects
-    id device;
-    id queue;
+    id<MTLDevice> device;
+    id<MTLCommandQueue> queue;
 };
 
 // rset init
@@ -5756,7 +5766,7 @@ static enum ggml_status ggml_metal_graph_compute(
                 [ctx->cmd_bufs[n_cb].obj release];
             }
 
-            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
             [cmd_buf retain];
 
             ctx->cmd_bufs[n_cb].obj = cmd_buf;
@@ -5782,7 +5792,7 @@ static enum ggml_status ggml_metal_graph_compute(
         // prepare the rest of the command buffers asynchronously (optional)
         // cmd_buf[0.. n_cb)
         for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
-            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
             [cmd_buf retain];
 
             if (ctx->cmd_bufs[cb_idx].obj) {
@@ -5884,7 +5894,7 @@ static void ggml_backend_metal_buffer_free_buffer(ggml_backend_buffer_t buffer) 
 
     ggml_backend_metal_buffer_rset_free(ctx);
 
-    if (!ctx->is_private) {
+    if (ctx->is_shared) {
 #if TARGET_OS_OSX
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ctx->all_data, ctx->all_size);
 #else
@@ -5904,114 +5914,134 @@ static void * ggml_backend_metal_buffer_get_base(ggml_backend_buffer_t buffer) {
 static void ggml_backend_metal_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    if (!ctx->is_private) {
+    if (ctx->is_shared) {
         memset((char *)tensor->data + offset, value, size);
     } else {
         @autoreleasepool {
-            //id<MTLCommandQueue>       queue   = [ctx->device newCommandQueue];
-            id<MTLCommandQueue>       queue   = ctx->queue;
-            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-
+            // dst
             size_t buf_dst_offset = 0;
             id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
 
             buf_dst_offset += offset;
 
-            [encoder fillBuffer:buf_dst
-                          range:NSMakeRange(buf_dst_offset, buf_dst_offset + size)
-                          value:value];
+            id<MTLCommandQueue>  queue   = ctx->queue;
+            id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
-            [encoder endEncoding];
+            {
+                id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+                [encoder fillBuffer:buf_dst
+                              range:NSMakeRange(buf_dst_offset, buf_dst_offset + size)
+                              value:value];
+
+                [encoder endEncoding];
+            }
 
             [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
         }
     }
-
-    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    if (!ctx->is_private) {
+    if (ctx->is_shared) {
         memcpy((char *)tensor->data + offset, data, size);
     } else {
         @autoreleasepool {
-            id<MTLCommandQueue>       queue   = ctx->queue;
-            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-
-            void * data_ptr = (void *)(uintptr_t) data;
+            // src
+            void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
             id<MTLBuffer> buf_src = [ctx->device newBufferWithBytesNoCopy:data_ptr
                                                                    length:size
                                                                   options:MTLResourceStorageModeShared
                                                               deallocator:nil];
 
+            // dst
             size_t buf_dst_offset = 0;
             id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
 
             buf_dst_offset += offset;
 
-            [encoder copyFromBuffer:buf_src
-                       sourceOffset:0
-                           toBuffer:buf_dst
-                  destinationOffset:buf_dst_offset
-                               size:size];
+            // note: for experimentation purposes, here we use a semaphore to wait for the copy to complete
+            //       this is alternative to waitUntilCompleted, which should be faster, but don't seem to make much difference
+            dispatch_semaphore_t completion_semaphore = dispatch_semaphore_create(0);
 
-            [encoder endEncoding];
+            id<MTLCommandQueue>  queue   = ctx->queue;
+            id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+
+            {
+                id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+                [encoder copyFromBuffer:buf_src
+                           sourceOffset:0
+                               toBuffer:buf_dst
+                      destinationOffset:buf_dst_offset
+                                   size:size];
+
+                [encoder endEncoding];
+            }
+
+            [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+                // TODO: can check for errors here
+                GGML_UNUSED(cb);
+
+                dispatch_semaphore_signal(completion_semaphore);
+            }];
 
             [cmd_buf commit];
+
+            dispatch_semaphore_wait(completion_semaphore, DISPATCH_TIME_FOREVER);
+            //[cmd_buf waitUntilCompleted];
         }
     }
-
-    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    if (!ctx->is_private) {
+    if (ctx->is_shared) {
         memcpy(data, (const char *)tensor->data + offset, size);
     } else {
         @autoreleasepool {
-            id<MTLCommandQueue>       queue   = ctx->queue;
-            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
-
+            // src
             size_t buf_src_offset = 0;
             id<MTLBuffer> buf_src = ggml_metal_get_buffer(tensor, &buf_src_offset);
 
             buf_src_offset += offset;
 
+            // dst
             id<MTLBuffer> buf_dst = [ctx->device newBufferWithBytesNoCopy:data
                                                                    length:size
                                                                   options:MTLResourceStorageModeShared
                                                               deallocator:nil];
 
-            [encoder copyFromBuffer:buf_src
-                       sourceOffset:buf_src_offset
-                           toBuffer:buf_dst
-                  destinationOffset:0
-                               size:size];
+            id<MTLCommandQueue>  queue   = ctx->queue;
+            id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
 
-            [encoder endEncoding];
+            {
+                id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+                [encoder copyFromBuffer:buf_src
+                           sourceOffset:buf_src_offset
+                               toBuffer:buf_dst
+                      destinationOffset:0
+                                   size:size];
+
+                [encoder endEncoding];
+            }
 
             [cmd_buf commit];
-
-            // here we have to wait for the copy to complete before we can return
             [cmd_buf waitUntilCompleted];
         }
     }
-
-    GGML_UNUSED(buffer);
 }
 
 static bool ggml_backend_metal_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     if (ggml_backend_buffer_is_host(src->buffer)) {
         struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-        if (!ctx->is_private) {
+        if (ctx->is_shared) {
             memcpy(dst->data, src->data, ggml_nbytes(src));
         } else {
             // TODO: implement
@@ -6022,28 +6052,30 @@ static bool ggml_backend_metal_buffer_cpy_tensor(ggml_backend_buffer_t buffer, c
     }
 
     return false;
-
-    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    if (!ctx->is_private) {
+    if (ctx->is_shared) {
         memset(ctx->all_data, value, ctx->all_size);
     } else {
         @autoreleasepool {
-            id<MTLCommandQueue>       queue   = ctx->queue;
-            id<MTLCommandBuffer>      cmd_buf = [queue commandBuffer];
-            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+            id<MTLCommandQueue>  queue   = ctx->queue;
+            id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
 
-            [encoder fillBuffer:ctx->buffers[0].metal
-                          range:NSMakeRange(0, ctx->buffers[0].size)
-                          value:value];
+            {
+                id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            [encoder endEncoding];
+                [encoder fillBuffer:ctx->buffers[0].metal
+                              range:NSMakeRange(0, ctx->buffers[0].size)
+                              value:value];
+
+                [encoder endEncoding];
+            }
 
             [cmd_buf commit];
+            [cmd_buf waitUntilCompleted];
         }
     }
 }
@@ -6059,14 +6091,6 @@ static struct ggml_backend_buffer_i ggml_backend_metal_buffer_i = {
     /* .clear           = */ ggml_backend_metal_buffer_clear,
     /* .reset           = */ NULL,
 };
-
-// default buffer type
-
-static const char * ggml_backend_metal_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    return "Metal";
-
-    GGML_UNUSED(buft);
-}
 
 static void ggml_backend_metal_log_allocated_size(id<MTLDevice> device, size_t size_aligned) {
 #ifndef GGML_METAL_NDEBUG
@@ -6093,7 +6117,8 @@ static void ggml_backend_metal_log_allocated_size(id<MTLDevice> device, size_t s
     GGML_UNUSED(size_aligned);
 }
 
-static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+// common method for allocating shread or private Metal buffers
+static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size, bool shared) {
     struct ggml_backend_metal_buffer_context * ctx = calloc(1, sizeof(struct ggml_backend_metal_buffer_context));
 
     const size_t size_page = sysconf(_SC_PAGESIZE);
@@ -6109,13 +6134,14 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
 
     id<MTLDevice> device = ctx_dev->mtl_device;
 
-    if (ctx_dev->use_private_buffers) {
-        // we'll populate this after creating the Metal buffer below
-        ctx->all_data = (void *) 0x000000400ULL;
-        ctx->is_private = true;
-    } else {
+    // allocate shared buffer if the device supports it and it is required by the buffer type
+    if (ctx_dev->use_shared_buffers && shared) {
         ctx->all_data = ggml_metal_host_malloc(size_aligned);
-        ctx->is_private = false;
+        ctx->is_shared = true;
+    } else {
+        // dummy, non-NULL value - we'll populate this after creating the Metal buffer below
+        ctx->all_data = (void *) 0x000000400ULL;
+        ctx->is_shared = false;
     }
     ctx->all_size = size_aligned;
 
@@ -6129,15 +6155,15 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         ctx->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (ctx_dev->use_private_buffers) {
-                ctx->buffers[0].metal = [device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
-
-                ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
-            } else {
+            if (ctx_dev->use_shared_buffers) {
                 ctx->buffers[0].metal = [device newBufferWithBytesNoCopy:ctx->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
                                                              deallocator:nil];
+            } else {
+                ctx->buffers[0].metal = [device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
+
+                ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
             }
         }
 
@@ -6161,33 +6187,45 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
     return ggml_backend_buffer_init(buft, ggml_backend_metal_buffer_i, ctx, size);
 }
 
-static size_t ggml_backend_metal_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+// default (shared) buffer type
+
+static const char * ggml_backend_metal_buffer_type_shared_get_name(ggml_backend_buffer_type_t buft) {
+    return "Metal";
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_metal_buffer_type_shared_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    return ggml_backend_metal_buffer_type_alloc_buffer(buft, size, true);
+}
+
+static size_t ggml_backend_metal_buffer_type_shared_get_alignment(ggml_backend_buffer_type_t buft) {
     return 32;
 
     GGML_UNUSED(buft);
 }
 
-static size_t ggml_backend_metal_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+static size_t ggml_backend_metal_buffer_type_shared_get_max_size(ggml_backend_buffer_type_t buft) {
     const size_t max_size = ((struct ggml_backend_metal_device_context *)buft->device->context)->max_size;
 
     return max_size;
 }
 
-static bool ggml_backend_metal_buffer_from_ptr_type_is_host(ggml_backend_buffer_type_t buft) {
+static bool ggml_backend_metal_buffer_type_shared_is_host(ggml_backend_buffer_type_t buft) {
     return false;
 
     GGML_UNUSED(buft);
 }
 
-ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(void) {
+static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_shared(void) {
     static struct ggml_backend_buffer_type ggml_backend_buffer_type_metal = {
         /* .iface = */ {
-            /* .get_name         = */ ggml_backend_metal_buffer_type_get_name,
-            /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_alloc_buffer,
-            /* .get_alignment    = */ ggml_backend_metal_buffer_type_get_alignment,
-            /* .get_max_size     = */ ggml_backend_metal_buffer_type_get_max_size,
+            /* .get_name         = */ ggml_backend_metal_buffer_type_shared_get_name,
+            /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_shared_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_metal_buffer_type_shared_get_alignment,
+            /* .get_max_size     = */ ggml_backend_metal_buffer_type_shared_get_max_size,
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-            /* .is_host          = */ NULL,
+            /* .is_host          = */ ggml_backend_metal_buffer_type_shared_is_host,
         },
         /* .device  = */ &g_ggml_backend_metal_device,
         /* .context = */ NULL,
@@ -6196,29 +6234,101 @@ ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(void) {
     return &ggml_backend_buffer_type_metal;
 }
 
-static const char * ggml_backend_metal_buffer_from_ptr_type_get_name(ggml_backend_buffer_type_t buft) {
-    return "Metal_Mapped";
+// default (private) buffer type
+
+static const char * ggml_backend_metal_buffer_type_private_get_name(ggml_backend_buffer_type_t buft) {
+    return "Metal_Private";
 
     GGML_UNUSED(buft);
 }
 
-static ggml_backend_buffer_type_t ggml_backend_metal_buffer_from_ptr_type(void) {
-    // note: not obvious, but this buffer type still needs to implement .alloc_buffer:
-    //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2333177099
-    static struct ggml_backend_buffer_type ggml_backend_buffer_from_ptr_type_metal = {
+static ggml_backend_buffer_t ggml_backend_metal_buffer_type_private_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    return ggml_backend_metal_buffer_type_alloc_buffer(buft, size, false);
+}
+
+static size_t ggml_backend_metal_buffer_type_private_get_alignment(ggml_backend_buffer_type_t buft) {
+    return 32;
+
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_metal_buffer_type_private_get_max_size(ggml_backend_buffer_type_t buft) {
+    const size_t max_size = ((struct ggml_backend_metal_device_context *)buft->device->context)->max_size;
+
+    return max_size;
+}
+
+static bool ggml_backend_metal_buffer_type_private_is_host(ggml_backend_buffer_type_t buft) {
+    return false;
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_private(void) {
+    static struct ggml_backend_buffer_type ggml_backend_buffer_type_metal = {
         /* .iface = */ {
-            /* .get_name         = */ ggml_backend_metal_buffer_from_ptr_type_get_name,
-            /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_alloc_buffer,
-            /* .get_alignment    = */ ggml_backend_metal_buffer_type_get_alignment,
-            /* .get_max_size     = */ ggml_backend_metal_buffer_type_get_max_size,
+            /* .get_name         = */ ggml_backend_metal_buffer_type_private_get_name,
+            /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_private_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_metal_buffer_type_private_get_alignment,
+            /* .get_max_size     = */ ggml_backend_metal_buffer_type_private_get_max_size,
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-            /* .is_host          = */ ggml_backend_metal_buffer_from_ptr_type_is_host,
+            /* .is_host          = */ ggml_backend_metal_buffer_type_private_is_host,
         },
         /* .device  = */ &g_ggml_backend_metal_device,
         /* .context = */ NULL,
     };
 
-    return &ggml_backend_buffer_from_ptr_type_metal;
+    return &ggml_backend_buffer_type_metal;
+}
+
+// mapped buffer type
+
+static const char * ggml_backend_metal_buffer_type_mapped_get_name(ggml_backend_buffer_type_t buft) {
+    return "Metal_Mapped";
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_metal_buffer_type_mapped_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    // for mapped buffers, prefer shared memory
+    return ggml_backend_metal_buffer_type_alloc_buffer(buft, size, true);
+}
+
+static size_t ggml_backend_metal_buffer_type_mapped_get_alignment(ggml_backend_buffer_type_t buft) {
+    return 32;
+
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_metal_buffer_type_mapped_get_max_size(ggml_backend_buffer_type_t buft) {
+    const size_t max_size = ((struct ggml_backend_metal_device_context *)buft->device->context)->max_size;
+
+    return max_size;
+}
+
+static bool ggml_backend_metal_buffer_type_mapped_is_host(ggml_backend_buffer_type_t buft) {
+    return false;
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_mapped(void) {
+    // note: not obvious, but this buffer type still needs to implement .alloc_buffer:
+    //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2333177099
+    static struct ggml_backend_buffer_type ggml_backend_buffer_type_mapped_metal = {
+        /* .iface = */ {
+            /* .get_name         = */ ggml_backend_metal_buffer_type_mapped_get_name,
+            /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_mapped_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_metal_buffer_type_mapped_get_alignment,
+            /* .get_max_size     = */ ggml_backend_metal_buffer_type_mapped_get_max_size,
+            /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+            /* .is_host          = */ ggml_backend_metal_buffer_type_mapped_is_host,
+        },
+        /* .device  = */ &g_ggml_backend_metal_device,
+        /* .context = */ NULL,
+    };
+
+    return &ggml_backend_buffer_type_mapped_metal;
 }
 
 // backend
@@ -6296,7 +6406,7 @@ static void ggml_backend_metal_set_tensor_async(ggml_backend_t backend,       st
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
-        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
+        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
@@ -6342,7 +6452,7 @@ static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const st
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
-        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
+        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
@@ -6601,18 +6711,18 @@ static ggml_backend_t ggml_backend_metal_device_init(ggml_backend_dev_t dev, con
 }
 
 static ggml_backend_buffer_type_t ggml_backend_metal_device_get_buffer_type(ggml_backend_dev_t dev) {
-    return ggml_backend_metal_buffer_type();
+    struct ggml_backend_metal_device_context * ctx_dev = dev->context;
 
-    GGML_UNUSED(dev);
+    return ctx_dev->use_shared_buffers ? ggml_backend_metal_buffer_type_shared() : ggml_backend_metal_buffer_type_private();
 }
 
-static ggml_backend_buffer_t ggml_backend_metal_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
+static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
     struct ggml_backend_metal_buffer_context * ctx = calloc(1, sizeof(struct ggml_backend_metal_buffer_context));
 
     ctx->all_data = ptr;
     ctx->all_size = size;
 
-    ctx->is_private = false;
+    ctx->is_shared = true;
 
     ctx->n_buffers = 0;
 
@@ -6696,7 +6806,7 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_from_ptr(ggml_back
         return NULL;
     }
 
-    return ggml_backend_buffer_init(ggml_backend_metal_buffer_from_ptr_type(), ggml_backend_metal_buffer_i, ctx, size);
+    return ggml_backend_buffer_init(ggml_backend_metal_buffer_type_mapped(), ggml_backend_metal_buffer_i, ctx, size);
 }
 
 static bool ggml_backend_metal_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
@@ -6707,8 +6817,9 @@ static bool ggml_backend_metal_device_supports_op(ggml_backend_dev_t dev, const 
 
 static bool ggml_backend_metal_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     return
-        buft->iface.get_name == ggml_backend_metal_buffer_type_get_name ||
-        buft->iface.get_name == ggml_backend_metal_buffer_from_ptr_type_get_name;
+        buft->iface.get_name == ggml_backend_metal_buffer_type_shared_get_name ||
+        buft->iface.get_name == ggml_backend_metal_buffer_type_private_get_name ||
+        buft->iface.get_name == ggml_backend_metal_buffer_type_mapped_get_name;
 
     GGML_UNUSED(dev);
 }
@@ -6744,7 +6855,7 @@ static struct ggml_backend_device_i ggml_backend_metal_device_i = {
     /* .init_backend         = */ ggml_backend_metal_device_init,
     /* .get_buffer_type      = */ ggml_backend_metal_device_get_buffer_type,
     /* .get_host_buffer_type = */ NULL,
-    /* .buffer_from_host_ptr = */ ggml_backend_metal_device_buffer_from_ptr,
+    /* .buffer_from_host_ptr = */ ggml_backend_metal_device_buffer_mapped,
     /* .supports_op          = */ ggml_backend_metal_device_supports_op,
     /* .supports_buft        = */ ggml_backend_metal_device_supports_buft,
     /* .offload_op           = */ ggml_backend_metal_device_offload_op,
