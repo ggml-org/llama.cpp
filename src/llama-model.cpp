@@ -13636,9 +13636,9 @@ struct llm_build_t5_dec : public llm_graph_context {
 
                 // T5 uses relu, flan-T5 uses gelu-gated
                 cur = build_ffn(cur,
-                        model.layers[il_dec].ffn_up,   NULL, NULL,
-                        model.layers[il_dec].ffn_gate, NULL, NULL,
-                        model.layers[il_dec].ffn_down, NULL, NULL,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
                         NULL,
                         model.layers[il_dec].ffn_gate ? LLM_FFN_GELU : LLM_FFN_RELU,
                         model.layers[il_dec].ffn_gate ? LLM_FFN_PAR : LLM_FFN_SEQ,
