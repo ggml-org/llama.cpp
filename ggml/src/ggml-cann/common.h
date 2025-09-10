@@ -425,12 +425,27 @@ struct ggml_cann_rope_cache {
         if(theta_scale_cache != nullptr) {
             ACL_CHECK(aclrtFree(theta_scale_cache));
         }
+        if(sin_cache != nullptr) {
+            ACL_CHECK(aclrtFree(sin_cache));
+        }
+        if(cos_cache != nullptr) {
+            ACL_CHECK(aclrtFree(cos_cache));
+        }
     }
 
     void* theta_scale_cache = nullptr;
     int64_t theta_scale_length = 0;
+    // sin/cos cache, used only to accelerate first layer on each device
+    void* sin_cache = nullptr;
+    void* cos_cache = nullptr;
+    int64_t position_length = 0;
+    // Properties to check before reusing the sincos cache
+    bool cached = false;
+    float ext_factor = 0.0f;
     float theta_scale = 0.0f;
     float freq_scale = 0.0f;
+    float attn_factor = 0.0f;
+    bool is_neox = false;
 };
 
 struct ggml_cann_tensor_cache {
