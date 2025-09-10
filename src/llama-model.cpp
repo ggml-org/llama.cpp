@@ -13576,7 +13576,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq_cross, cur);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il_dec].wk_cross, embd_enc);
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk_cross, embd_enc);
                 cb(Kcur, "Kcur", il);
 
                 ggml_tensor * Vcur = build_lora_mm(model.layers[il_dec].wv_cross, embd_enc);
