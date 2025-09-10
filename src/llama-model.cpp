@@ -13629,7 +13629,7 @@ struct llm_build_t5_dec : public llm_graph_context {
             // feed-forward network
             {
                 cur = build_norm(ffn_inp,
-                        model.layers[il_dec].ffn_norm, NULL,
+                        model.layers[il].ffn_norm, NULL,
                         LLM_NORM_RMS, il);
                 cb(cur, "ffn_norm", il);
 
