@@ -1,1 +1,0 @@
-Usage: ./build/bin/test-backend-ops [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--show-coverage]
