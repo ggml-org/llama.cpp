@@ -5878,6 +5878,20 @@ static enum ggml_status ggml_metal_graph_compute(
 
 // backend interface
 
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_split_buffer_type(int main_device, const float * tensor_split) {
+    GGML_LOG_INFO("%s: creating Metal split buffer type, main_device=%d\n", __func__, main_device);
+    
+    // For Metal split buffer type, we return the regular Metal buffer type
+    // since Metal currently only supports one device
+    ggml_backend_buffer_type_t buft = ggml_backend_metal_buffer_type();
+    GGML_LOG_INFO("%s: returning Metal buffer type\n", __func__);
+    return buft;
+    
+    GGML_UNUSED(main_device);
+    GGML_UNUSED(tensor_split);
+}
+
+
 static void ggml_backend_metal_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
@@ -6593,7 +6607,7 @@ static struct ggml_backend_feature * ggml_backend_metal_get_features(ggml_backen
 
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
-        return (void *)ggml_backend_metal_split_buffer_type;
+        return (void *)ggml_backend_split_buffer_type;
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
@@ -6631,7 +6645,7 @@ struct ggml_tensor_extra_metal {
 };
 
 // Buffer type context
-struct ggml_backend_metal_split_buffer_type_context {
+struct ggml_backend_split_buffer_type_context {
     int main_device;
     std::array<float, 1> tensor_split;  // Metal only supports one device, but keeping array for API consistency
     std::string name;
@@ -6660,6 +6674,7 @@ static size_t ggml_nbytes_split(const struct ggml_tensor * tensor, int nrows_spl
 
 // Tensor split calculation
 static void get_row_split(int64_t * row_low, int64_t * row_high, const ggml_tensor * tensor, const std::array<float, 1> & tensor_split, int id) {
+    GGML_LOG_INFO("Returning Row Splits.\n");
     // For Metal, we only have one device, so all rows go to device 0
     if (id == 0) {
         *row_low = 0;
@@ -6692,7 +6707,7 @@ static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
     ggml_backend_metal_split_buffer_context * ctx = (ggml_backend_metal_split_buffer_context *)buffer->context;
-    ggml_backend_metal_split_buffer_type_context * buft_ctx = (ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
+    ggml_backend_split_buffer_type_context * buft_ctx = (ggml_backend_split_buffer_type_context *)buffer->buft->context;
 
     const int64_t ne0 = tensor->ne[0];
 
@@ -6739,7 +6754,7 @@ static void ggml_backend_metal_split_buffer_set_tensor(ggml_backend_buffer_t buf
     GGML_ASSERT(size == ggml_nbytes(tensor));
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
-    ggml_backend_metal_split_buffer_type_context * buft_ctx = (ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
+    ggml_backend_split_buffer_type_context * buft_ctx = (ggml_backend_split_buffer_type_context *)buffer->buft->context;
 
     const int64_t ne0 = tensor->ne[0];
     const size_t nb1 = tensor->nb[1];
@@ -6777,7 +6792,7 @@ static void ggml_backend_metal_split_buffer_get_tensor(ggml_backend_buffer_t buf
     GGML_ASSERT(size == ggml_nbytes(tensor));
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
-    ggml_backend_metal_split_buffer_type_context * buft_ctx = (ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
+    ggml_backend_split_buffer_type_context * buft_ctx = (ggml_backend_split_buffer_type_context *)buffer->buft->context;
 
     const int64_t ne0 = tensor->ne[0];
     const size_t nb1 = tensor->nb[1];
@@ -6829,16 +6844,16 @@ static const ggml_backend_buffer_i ggml_backend_metal_split_buffer_interface = {
 };
 
 // Buffer type interface functions
-static const char * ggml_backend_metal_split_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    ggml_backend_metal_split_buffer_type_context * ctx = (ggml_backend_metal_split_buffer_type_context *)buft->context;
+static const char * ggml_backend_split_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_split_buffer_type_context * ctx = (ggml_backend_split_buffer_type_context *)buft->context;
     return ctx->name.c_str();
 }
 
 static bool ggml_backend_buft_is_metal_split(ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_metal_split_buffer_type_get_name;
+    return buft->iface.get_name == ggml_backend_split_buffer_type_get_name;
 }
 
-static ggml_backend_buffer_t ggml_backend_metal_split_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+static ggml_backend_buffer_t ggml_backend_split_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     // Since we don't know the exact split after rounding, we cannot allocate the device buffers at this point
     // Instead, we allocate them for each tensor separately in init_tensor
     // However, the size still represents the maximum cumulative size of all the device buffers after the tensors are allocated,
@@ -6848,14 +6863,14 @@ static ggml_backend_buffer_t ggml_backend_metal_split_buffer_type_alloc_buffer(g
     return ggml_backend_buffer_init(buft, ggml_backend_metal_split_buffer_interface, ctx, size);
 }
 
-static size_t ggml_backend_metal_split_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+static size_t ggml_backend_split_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     return 128;
     
     GGML_UNUSED(buft);
 }
 
-static size_t ggml_backend_metal_split_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    ggml_backend_metal_split_buffer_type_context * ctx = (ggml_backend_metal_split_buffer_type_context *)buft->context;
+static size_t ggml_backend_split_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    ggml_backend_split_buffer_type_context * ctx = (ggml_backend_split_buffer_type_context *)buft->context;
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
     size_t total_size = 0;
@@ -6882,65 +6897,23 @@ static size_t ggml_backend_metal_split_buffer_type_get_alloc_size(ggml_backend_b
     return total_size;
 }
 
-static bool ggml_backend_metal_split_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+static bool ggml_backend_split_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return false;
     
     GGML_UNUSED(buft);
 }
 
 // Buffer type interface
-static const ggml_backend_buffer_type_i ggml_backend_metal_split_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_metal_split_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_metal_split_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_metal_split_buffer_type_get_alignment,
+static const ggml_backend_buffer_type_i ggml_backend_split_buffer_type_interface = {
+    /* .get_name         = */ ggml_backend_split_buffer_type_get_name,
+    /* .alloc_buffer     = */ ggml_backend_split_buffer_type_alloc_buffer,
+    /* .get_alignment    = */ ggml_backend_split_buffer_type_get_alignment,
     /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
-    /* .get_alloc_size   = */ ggml_backend_metal_split_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_metal_split_buffer_type_is_host,
+    /* .get_alloc_size   = */ ggml_backend_split_buffer_type_get_alloc_size,
+    /* .is_host          = */ ggml_backend_split_buffer_type_is_host,
 };
 
 #endif // __cplusplus
-
-// Main function to create Metal split buffer type
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_metal_split_buffer_type(int main_device, const float * tensor_split) {
-    GGML_LOG_INFO("%s: creating Metal split buffer type, main_device=%d\n", __func__, main_device);
-#ifdef __cplusplus
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-
-    static std::map<std::pair<int, std::array<float, 1>>, struct ggml_backend_buffer_type> buft_map;
-
-    std::array<float, 1> tensor_split_arr = {};
-
-    // For Metal, we only support one device, so we simplify the tensor split logic
-    tensor_split_arr[0] = 1.0f; // All tensors go to the single Metal device
-
-    auto it = buft_map.find({main_device, tensor_split_arr});
-    if (it != buft_map.end()) {
-        GGML_LOG_INFO("%s: returning existing buffer type\n", __func__);
-        return &it->second;
-    }
-    
-    auto * ctx = new ggml_backend_metal_split_buffer_type_context{
-        main_device,
-        tensor_split_arr,
-        std::string("Metal_Split"),
-    };
-
-    struct ggml_backend_buffer_type buft {
-        /* .iface   = */ ggml_backend_metal_split_buffer_type_interface,
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_metal_reg(), main_device),
-        /* .context = */ ctx,
-    };
-
-    auto result = buft_map.emplace(std::make_pair(main_device, tensor_split_arr), buft);
-    GGML_LOG_INFO("%s: created new Metal split buffer type\n", __func__);
-    return &result.first->second;
-#else
-    // For C builds, return the regular Metal buffer type
-    GGML_LOG_INFO("%s: C build, returning regular Metal buffer type\n", __func__);
-    return ggml_backend_metal_buffer_type();
-#endif
-}
 
 // TODO: make thread-safe
 ggml_backend_reg_t ggml_backend_metal_reg(void) {
