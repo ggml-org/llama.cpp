@@ -13567,7 +13567,7 @@ struct llm_build_t5_dec : public llm_graph_context {
 
             // norm
             cur = build_norm(cur,
-                    model.layers[il_dec].attn_norm_cross, NULL,
+                    model.layers[il].attn_norm_cross, NULL,
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm_cross", il);
 
