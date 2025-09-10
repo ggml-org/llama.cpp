@@ -83,7 +83,9 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
         GGML_ASSERT(dev && "CPU backend is not loaded");
         auto * reg = ggml_backend_dev_backend_reg(dev);
         auto * numa_init_fn = (decltype(ggml_numa_init) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_numa_init");
-        numa_init_fn(numa);
+        if (numa_init_fn) {
+            numa_init_fn(numa);
+        }
     }
 }
 
