@@ -43,6 +43,8 @@ bool is_prefill(struct ggml_cgraph * cgraph);
 ov::AnyMap get_npu_prefill_config();
 ov::AnyMap get_npu_generate_config();
 
+std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& device);
+
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name);
 
 bool is_naive(struct ggml_cgraph* cgraph);
