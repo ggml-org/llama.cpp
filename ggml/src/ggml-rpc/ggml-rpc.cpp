@@ -1772,12 +1772,29 @@ static ggml_backend_dev_t ggml_backend_rpc_reg_get_device(ggml_backend_reg_t reg
     GGML_UNUSED(index);
 }
 
+static ggml_backend_buffer_type_t ggml_backend_rpc_split_buffer_type(int main_device, const float * tensor_split) {
+    // For RPC backend, we don't implement actual tensor splitting
+    // Just return the default buffer type for the main device
+    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_rpc_reg(), main_device);
+    if (!dev) {
+        return nullptr;
+    }
+    
+    // Suppress unused parameter warning
+    GGML_UNUSED(tensor_split);
+    
+    return ggml_backend_dev_buffer_type(dev);
+}
+
 static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (std::strcmp(name, "ggml_backend_rpc_add_device") == 0) {
         return (void *)ggml_backend_rpc_add_device;
     }
     if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
         return (void *)ggml_backend_rpc_start_server;
+    }
+    if (std::strcmp(name, "ggml_backend_split_buffer_type") == 0) {
+        return (void *)ggml_backend_rpc_split_buffer_type;
     }
     return NULL;
 
