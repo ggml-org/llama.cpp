@@ -5916,15 +5916,20 @@ static void ggml_backend_metal_split_buffer_context_free(struct ggml_backend_met
 
 // Tensor split calculation
 static void get_row_split(int64_t * row_low, int64_t * row_high, const struct ggml_tensor * tensor, const float tensor_split[1], int id) {
+    GGML_LOG_DEBUG("%s: tensor '%s', id=%d, ne[1]=%lld\n", __func__, tensor->name, id, tensor->ne[1]);
+    
     // For Metal, we only have one device, so all rows go to device 0
     if (id == 0) {
         *row_low = 0;
         *row_high = tensor->ne[1];
+        GGML_LOG_DEBUG("%s: assigning rows [%lld, %lld] to device %d\n", __func__, *row_low, *row_high, id);
     } else {
         *row_low = 0;
         *row_high = 0;
+        GGML_LOG_DEBUG("%s: device %d gets no rows\n", __func__, id);
     }
     
+    GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, (double)tensor_split[0]);
     GGML_UNUSED(tensor_split);
 }
 
@@ -6012,7 +6017,7 @@ static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend
         return GGML_STATUS_ALLOC_FAILED;
     }
     
-    GGML_LOG_DEBUG("%s: tensor '%s' Metal buffer allocated at %p\n", __func__, tensor->name, extra->data_device[id]);
+    GGML_LOG_DEBUG("%s: tensor '%s' Metal buffer allocated at %p\n", __func__, tensor->name, (void *)extra->data_device[id]);
 
     // Initialize buffer with zeros
     GGML_LOG_DEBUG("%s: tensor '%s' initializing buffer with zeros\n", __func__, tensor->name);
@@ -6212,7 +6217,7 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_split_buffer_type(int m
     ctx->tensor_split[0] = 1.0f; // All tensors go to the single Metal device
     ctx->name = "Metal_Split";
     
-    GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, ctx->tensor_split[0]);
+    GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, (double)ctx->tensor_split[0]);
 
     // Allocate a new buffer type structure each time
     struct ggml_backend_buffer_type * buft = calloc(1, sizeof(struct ggml_backend_buffer_type));
