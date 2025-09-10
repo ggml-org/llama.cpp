@@ -13640,8 +13640,8 @@ struct llm_build_t5_dec : public llm_graph_context {
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
                         NULL,
-                        model.layers[il_dec].ffn_gate ? LLM_FFN_GELU : LLM_FFN_RELU,
-                        model.layers[il_dec].ffn_gate ? LLM_FFN_PAR : LLM_FFN_SEQ,
+                        model.layers[il].ffn_gate_enc ? LLM_FFN_GELU : LLM_FFN_RELU,
+                        model.layers[il].ffn_gate_enc ? LLM_FFN_PAR : LLM_FFN_SEQ,
                         il);
                 cb(cur, "ffn_out", il);
             }
