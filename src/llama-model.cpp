@@ -4444,7 +4444,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // load decoder layers
                     for (int i = 0; i < n_dec_layer; ++i) {
-                        auto & layer = layers[i + n_layer];
+                        auto & layer = layers[i];
 
                         layer.attn_norm  = create_tensor(tn(LLM_TENSOR_DEC_ATTN_NORM,  "weight", i), {n_embd}, 0);
                         layer.attn_rel_b = create_tensor(tn(LLM_TENSOR_DEC_ATTN_REL_B, "weight", i), {n_head, n_rel_attn_bkts}, TENSOR_NOT_REQUIRED);
