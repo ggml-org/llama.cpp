@@ -3461,7 +3461,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         cl_image_format img_format_q = {CL_RG, CL_UNSIGNED_INT32};
         cl_image_desc img_desc_q = {
             CL_MEM_OBJECT_IMAGE1D_BUFFER,
-            static_cast<size_t>(tensor->ne[0] * tensor->ne[1] * tensor->ne[2] / 32 * 2),
+            static_cast<size_t>(ggml_nelements(tensor)/32*2),
             0, 0, 0, 0, 0, 0, 0,
             { extra->q }
         };
