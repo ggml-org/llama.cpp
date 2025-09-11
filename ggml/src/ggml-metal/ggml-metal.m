@@ -1850,6 +1850,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
                     return false;
             }
         case GGML_OP_NONE:
+        //case GGML_OP_NOPE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
         case GGML_OP_TRANSPOSE:
@@ -6207,7 +6208,7 @@ static size_t ggml_backend_split_buffer_type_get_alloc_size(ggml_backend_buffer_
 }
 
 static bool ggml_backend_split_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return false;
+    return true;
     
     GGML_UNUSED(buft);
 }
@@ -6913,9 +6914,14 @@ static bool ggml_backend_metal_device_supports_op(ggml_backend_dev_t dev, const 
 }
 
 static bool ggml_backend_metal_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return
-        buft->iface.get_name == ggml_backend_metal_buffer_type_get_name ||
-        buft->iface.get_name == ggml_backend_metal_buffer_from_ptr_type_get_name;
+    bool res =
+        buft->iface.get_name == ggml_backend_metal_buffer_type_get_name 
+    ||
+        buft->iface.get_name == ggml_backend_metal_buffer_from_ptr_type_get_name
+    ||
+        buft->iface.get_name == ggml_backend_split_buffer_type_get_name;
+
+    return res;
 
     GGML_UNUSED(dev);
 }

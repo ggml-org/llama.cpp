@@ -533,7 +533,8 @@ bool ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_t
 
 bool ggml_backend_dev_supports_buft(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(device);
-    return device->iface.supports_buft(device, buft);
+    bool res = device->iface.supports_buft(device, buft);
+    return res;
 }
 
 bool ggml_backend_dev_offload_op(ggml_backend_dev_t device, const struct ggml_tensor * op) {
