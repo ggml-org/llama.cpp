@@ -17,7 +17,6 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
-	import { error } from '@sveltejs/kit';
 
 	let { children } = $props();
 

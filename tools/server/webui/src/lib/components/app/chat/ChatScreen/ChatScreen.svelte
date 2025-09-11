@@ -4,12 +4,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
-	import {
-		supportsVision,
-		supportsAudio,
-		serverError,
-		serverLoading
-	} from '$lib/stores/server.svelte';
+	import { supportsVision, supportsAudio, serverLoading } from '$lib/stores/server.svelte';
 	import {
 		ChatForm,
 		ChatScreenHeader,

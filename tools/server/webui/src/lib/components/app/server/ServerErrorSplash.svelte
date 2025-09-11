@@ -3,7 +3,6 @@
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
-	import { ServerStatus } from '$lib/components/app';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, updateConfig } from '$lib/stores/settings.svelte';
 	import { goto } from '$app/navigation';
