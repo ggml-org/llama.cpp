@@ -216,18 +216,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             python3 python3-pip python3-dev \
             libjpeg-dev build-essential libcurl4-openssl-dev
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
-          sudo whoami
-          ls -la ~/
-          ls -la $HOME
-          find / -name cargo -type d 2>/dev/null || true
-          source ~/.cargo/env
 
       - name: Python Dependencies
         id: python_depends
         run: |
           python3 -m pip install --upgrade pip
-          pip3 install -r requirements.txt
+          pip3 install gguf-py
 
       - name: Swap Endianness
         id: endianness
@@ -236,7 +230,7 @@ jobs:
           for f in models/*.gguf; do
             yes YES | head -n 1 | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
           done
-          
+
       - name: Build
         id: cmake_build
         run: |
