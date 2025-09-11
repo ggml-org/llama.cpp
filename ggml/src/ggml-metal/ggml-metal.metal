@@ -4167,7 +4167,7 @@ kernel void kernel_timestep_embedding_f32(
     }
 
     if (args.dim % 2 != 0 && tpitg.x == 0) {
-        embed_data[args.dim] = 0.f;
+        embed_data[2 * half_] = 0.f;
     }
 }
 
