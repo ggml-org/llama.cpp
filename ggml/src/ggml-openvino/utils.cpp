@@ -276,6 +276,7 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
             {GGML_TYPE_Q6_K, ExtraQuantType::Q8_1_C},
         };
     }
+    return {};
 }
 
 ov::AnyMap get_npu_generate_config() {
