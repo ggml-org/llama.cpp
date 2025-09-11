@@ -2128,13 +2128,9 @@ static bool ggml_metal_encode_mem_ranges_add_src(struct ggml_metal_encode_contex
         return true;
     }
 
-    size_t offs = 0;
-    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
-    GGML_ASSERT(id_node != nil);
-
     struct mem_range r = {
-        /*.p0 =*/ id_node.gpuAddress + offs,
-        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.p0 =*/ (uint64_t) node->data,
+        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ 0,
     };
 
@@ -2148,13 +2144,9 @@ static bool ggml_metal_encode_mem_ranges_add_src(struct ggml_metal_encode_contex
 static bool ggml_metal_encode_mem_ranges_add_dst(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    size_t offs = 0;
-    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
-    GGML_ASSERT(id_node != nil);
-
     struct mem_range r = {
-        /*.p0 =*/ id_node.gpuAddress + offs,
-        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.p0 =*/ (uint64_t) node->data,
+        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ 1,
     };
 
@@ -2187,13 +2179,9 @@ static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encod
         return false;
     }
 
-    size_t offs = 0;
-    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
-    GGML_ASSERT(id_node != nil);
-
     struct mem_range r = {
-        /*.p0 =*/ id_node.gpuAddress + offs,
-        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.p0 =*/ (uint64_t) node->data,
+        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ 0,
     };
 
@@ -2211,13 +2199,9 @@ static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encod
 static bool ggml_metal_encode_mem_ranges_check_dst(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    size_t offs = 0;
-    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
-    GGML_ASSERT(id_node != nil);
-
     struct mem_range r = {
-        /*.p0 =*/ id_node.gpuAddress + offs,
-        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.p0 =*/ (uint64_t) node->data,
+        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ 1,
     };
 
