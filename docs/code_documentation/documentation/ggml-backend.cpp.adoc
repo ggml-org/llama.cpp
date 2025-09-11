@@ -1,0 +1,205 @@
+[[docs:funcstructs:ggml-backend.cpp]]
+== ggml-backend.cpp
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_graph_compute_async]]
+=== ggml_backend_graph_compute_async
+
+Signature:
+[.codebit]#`enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph)`#
+
+[source,C++]
+----
+return backend->iface.graph_compute(backend, cgraph);
+----
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_dev_init]]
+=== ggml_backend_dev_init
+
+Signature:
+[.codebit]#`ggml_backend_t ggml_backend_dev_init(ggml_backend_dev_t device, const char * params)`#
+
+[source,C++]
+----
+return device->iface.init_backend(device, params);
+----
+
+
+[[docs:funcstructs:ggml-backend.cpp:struct-ggml_backend_sched_split]]
+=== struct ggml_backend_sched_split
+
+Holds the information necessary to describe and use (compute) a split. A split is a sequence of tensors that are to be computed on the same backend. It is composed of the following members:
+
+* [.codebit]#`int backend_id`#
+* [.codebit]#`int i_start`#: index of the first tensor of the split in the full computation graph
+* [.codebit]#`int i_end`#: index of the last tensor of the split in the full computation graph
+* [.codebit]#`struct ggml_tensor * inputs[GGML_SCHED_MAX_SPLIT_INPUTS]`#
+* [.codebit]#`int n_inputs`#
+* [.codebit]#`struct ggml_cgraph graph`#: this split as a [.codebit]#`ggml_cgraph`# (for computation)
+
+
+[[docs:funcstructs:ggml-backend.cpp:struct-ggml_backend_sched]]
+=== struct ggml_backend_sched
+
+This structure is used to schedule the graph splits on backends. It has not been fully analyzed, but it holds the following members:
+
+* [.codebit]#`bool is_reset`#
+* [.codebit]#`bool is_alloc`#
+* [.codebit]#`int n_backends`#
+* [.codebit]#`ggml_backend_t backends[GGML_SCHED_MAX_BACKENDS]`#
+* [.codebit]#`ggml_backend_buffer_type_t bufts[GGML_SCHED_MAX_BACKENDS]`#
+* [.codebit]#`ggml_gallocr_t galloc`#
+* [.codebit]#`struct ggml_hash_set hash_set`#
+* [.codebit]#`int * hv_tensor_backend_ids`#: dimension [.codebit]#`[hash_set.size]`#
+* [.codebit]#`struct ggml_tensor ** hv_tensor_copies`#: dimension [.codebit]#`[hash_set.size][n_backends][n_copies]`#
+* [.codebit]#`int * node_backend_ids`#: dimension [.codebit]#`[graph.size]`#
+* [.codebit]#`int * leaf_backend_ids`#: dimension [.codebit]#`[graph.size]`#
+* [.codebit]#`int * prev_node_backend_ids`#: the id of the assigned backend of each node tensor in [.codebit]#`graph`# at the previous splitting, used to determine if reallocation is necessary (dimension [.codebit]#`[graph.size]`#)
+* [.codebit]#`int * prev_leaf_backend_ids`#: same as above, but for leaves (dimension [.codebit]#`[graph.size]`#)
+* [.codebit]#`struct ggml_cgraph graph`#: a local copy of the computation graph with additional tensors that are used to pass data between consecutive splits on different backends ("consecutive" as in one uses as input parts of the output of the other)
+* [.codebit]#`struct ggml_backend_sched_split * splits`#: splits array
+* [.codebit]#`int n_splits`#
+* [.codebit]#`int splits_capacity`#
+* [.codebit]#`int n_copies`#: for "pipeline parallelism support"
+* [.codebit]#`int cur_copy`#: for "pipeline parallelism support"
+* [.codebit]#`ggml_backend_event_t events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES]`#: for "pipeline parallelism support"
+* [.codebit]#`struct ggml_tensor * graph_inputs[GGML_SCHED_MAX_SPLIT_INPUTS]`#: for "pipeline parallelism support"
+* [.codebit]#`int n_graph_inputs`#: for "pipeline parallelism support"
+* [.codebit]#`struct ggml_context * ctx`#
+* [.codebit]#`ggml_backend_sched_eval_callback callback_eval`#
+* [.codebit]#`void * callback_eval_user_data`#
+* [.codebit]#`char * context_buffer`#: buffer used by [.codebit]#`ctx`#
+* [.codebit]#`size_t context_buffer_size`#
+* [.codebit]#`inr debug`#
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_split_graph]]
+=== ggml_backend_sched_split_graph
+
+Signature:
+[.codebit]#`static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph)`#
+
+Firstly, the scheduler's [.codebit]#`ggml_context`# is regenerated so that it uses the scheduler's [.codebit]#`context_buffer`# member as a buffer, then each tensor in the computation graph is assigned a backend so that data transfers between backends are minimized and the higher priority backends (gpus) are preferentially used. This assignation in done in 5 passes over the tensors:
+
+The first pass assigns some tensors a backend based on which device's the weights are currently stored in. See [.codebit]#`ggml_backend_sched_backend_id_from_cur(...)`#.
+
+The second pass "`expands`" the initial assignments, i.e. it sets unassigned tensors to the backend of one of the closest assigned neighbours in each direction, with priority for the gpu backends, if it supports their operation. For example:
+
+[cols=15*]
+|===
+| After pass 1
+| cpu
+| unassigned
+| unassigned
+| gpu0
+| unassigned
+| cpu
+| gpu1
+| unassigned
+| unassigned
+| gpu0
+| unassigned
+| cpu
+| unassigned
+| cpu
+
+| After pass 2
+| cpu
+| gpu0
+| gpu0
+| gpu0
+| gpu0
+| cpu
+| gpu1
+| gpu1
+| gpu1
+| gpu0
+| gpu0
+| cpu
+| cpu
+| cpu
+|===
+
+The other passes were not explicitly analyzed, but helpful comments were left about them:
+
+[source,C++]
+----
+// pass 3: upgrade nodes to higher prio backends with compatible buffer types
+// if the tensor is already in the same buffer type (*) as another higher priority backend, we should move it there
+// however, we also need to verify that the sources are in compatible buffer types
+// (*) the actual requirement is more relaxed, the buffer type of the backend should be supported by all the users of this tensor further down the graph
+// however, this is slow to verify, so we have a more strict requirement that the buffer type is the same
+// this is not uncommon since multiple backends can use host memory, with the same buffer type (eg. BLAS and CPU)
+// additionally, set remaining unassigned nodes to the backend with the most supported inputs
+// only nodes that could not be assigned during expansion due to the backend not supporting the op should be unassigned at this point
+
+// pass 4: assign backends to remaining src from dst and view_src
+
+// pass 5: split graph, find tensors that need to be copied
+----
+
+After these passes, the final section sets up the scheduler's [.codebit]#`graph`# field.
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_alloc_splits]]
+=== ggml_backend_sched_alloc_splits
+
+Signature:
+[.codebit]#`static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched)`#
+
+Not well documented. Deffers to [.codebit]#`ggml_gallocr_alloc_graph(...)`# for the actual allocation.
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_compute_splits]]
+=== ggml_backend_sched_compute_splits
+
+Signature:
+[.codebit]#`static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched)`#
+
+For each split:
+
+* for each tensor in the split:
+    ** copies input tensors to the split backend, if there are any
+* if no [.codebit]#`callback_eval`# is set in the scheduler:
+    ** computes the split by calling [.codebit]#`ggml_backend_graph_compute_async`#
+* otherwise:
+    ** succesively calls the scheduler's [.codebit]#`callback_eval`# for each tensor in the split with the [.codebit]#`ask`# argument [.codebit]#`true`# until a [.codebit]#`true`# is returned (this is the first tensor whose data is needed)
+    ** computes the subgraph composed of the unneeded tensors and the needed tensor
+    ** calls the [.codebit]#`callback_eval`# on the needed tensor with [.codebit]#`ask=false`#
+    ** repeats this process until the whole split has been computed or halts the computation entirely if the [.codebit]#`callback_eval`# signals so
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_new]]
+=== ggml_backend_sched_new
+
+Signature:
+[.codebit]#`ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel)`#
+
+Creates a new [.codebit]#`ggml_backend_sched`#.
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_alloc_graph]]
+=== ggml_backend_sched_alloc_graph
+
+Signature:
+[.codebit]#`bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph)`#
+
+First splits the graph by calling [.codebit]#`ggml_backend_sched_split_graph(...)`#, then allocates the resulting splits with [.codebit]#`ggml_backend_sched_alloc_splits(...)`# and marks the scheduler as allocated (by setting its [.codebit]#`is_alloc`# member to [.codebit]#`true`#).
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_graph_compute_async]]
+=== ggml_backend_sched_graph_compute_async
+
+Signature:
+[.codebit]#`enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph)`#
+
+Resets and allocates the scheduler if needed by calls to [.codebit]#`ggml_backend_sched_reset(...)`# and [.codebit]#`ggml_backend_sched_alloc_graph(...)`#, and finally deffers to [.codebit]#`ggml_backend_sched_compute_splits(...)`# for the computation.
+
+
+[[docs:funcstructs:ggml-backend.cpp:ggml_backend_sched_set_eval_callback]]
+=== ggml_backend_sched_set_eval_callback
+
+Signature:
+[.codebit]#`void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data)`#
+
+Sets the scheduler's [.codebit]#`callback_eval`# and [.codebit]#`callback_eval_user_data`# members.
