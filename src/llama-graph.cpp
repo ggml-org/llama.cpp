@@ -1375,9 +1375,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
-    if (ubatch.n_seqs > 1) {
-        assert(!ubatch.equal_seqs());
-    }
+    assert(!ubatch.equal_seqs());
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
@@ -1547,7 +1545,6 @@ ggml_tensor * llm_graph_context::build_attn_with_sinks(
     // optionally store to KV cache
     if (k_cur) {
         const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
-
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
