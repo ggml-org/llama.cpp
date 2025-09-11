@@ -217,7 +217,7 @@ jobs:
             python3 python3-pip python3-dev \
             libjpeg-dev build-essential libcurl4-openssl-dev
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
-          source $HOME/.cargo/env
+          source ~/.cargo/env || true
 
       - name: Python Dependencies
         id: python_depends
