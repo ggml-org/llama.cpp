@@ -260,6 +260,7 @@ struct cmd_params {
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                amx_enable_mmap; // NEW: presence-only --amx flag
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -296,6 +297,7 @@ static const cmd_params cmd_params_defaults = {
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* amx_enable_mmap      */ { false }, // NEW default: disabled
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -367,6 +369,7 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.flash_attn, ",").c_str());
     printf("  -mmp, --mmap <0|1>                        (default: %s)\n",
            join(cmd_params_defaults.use_mmap, ",").c_str());
+    printf("  --amx                                     enable AMX-aware CPU 'extra' with GPU host+mmap (presence = enabled)\n");
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
@@ -639,6 +642,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.use_mmap.insert(params.use_mmap.end(), p.begin(), p.end());
+            } else if (arg == "--amx") {
+                // presence-only: enable AMX-aware CPU 'extra' with GPU host+mmap
+                params.amx_enable_mmap.push_back(true);
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -865,6 +871,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.use_mmap.empty()) {
         params.use_mmap = cmd_params_defaults.use_mmap;
     }
+    if (params.amx_enable_mmap.empty()) {
+        params.amx_enable_mmap = cmd_params_defaults.amx_enable_mmap; // NEW
+    }
     if (params.embeddings.empty()) {
         params.embeddings = cmd_params_defaults.embeddings;
     }
@@ -909,6 +918,7 @@ struct cmd_params_instance {
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               use_mmap;
+    bool               amx_enable_mmap; // NEW
     bool               embeddings;
     bool               no_op_offload;
 
@@ -963,10 +973,11 @@ struct cmd_params_instance {
                 mparams.devices = devices.data();
             }
         }
-        mparams.split_mode   = split_mode;
-        mparams.main_gpu     = main_gpu;
-        mparams.tensor_split = tensor_split.data();
-        mparams.use_mmap     = use_mmap;
+        mparams.split_mode       = split_mode;
+        mparams.main_gpu         = main_gpu;
+        mparams.tensor_split     = tensor_split.data();
+        mparams.use_mmap         = use_mmap;
+        mparams.amx_enable_mmap  = amx_enable_mmap; // NEW: carry the toggle to model load
 
         if (tensor_buft_overrides.empty()) {
             mparams.tensor_buft_overrides = nullptr;
@@ -981,6 +992,7 @@ struct cmd_params_instance {
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
                split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
+               amx_enable_mmap == other.amx_enable_mmap && // NEW: changing this requires reload
                tensor_split == other.tensor_split && vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1015,6 +1027,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ts : params.tensor_split)
     for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & mmp : params.use_mmap)
+    for (const auto & amx : params.amx_enable_mmap) // NEW
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1054,6 +1067,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
+                /* .amx_enable_mmap = */ amx, // NEW
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
             };
@@ -1086,6 +1100,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
+                /* .amx_enable_mmap = */ amx, // NEW
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
             };
@@ -1118,6 +1133,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
+                /* .amx_enable_mmap = */ amx, // NEW
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
             };
@@ -1154,6 +1170,7 @@ struct test {
     std::vector<float>       tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     use_mmap;
+    bool                     amx_enable_mmap; // NEW
     bool                     embeddings;
     bool                     no_op_offload;
     int                      n_prompt;
@@ -1188,6 +1205,7 @@ struct test {
         tensor_split   = inst.tensor_split;
         tensor_buft_overrides = inst.tensor_buft_overrides;
         use_mmap       = inst.use_mmap;
+        amx_enable_mmap= inst.amx_enable_mmap; // NEW
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
         n_prompt       = inst.n_prompt;
@@ -1235,7 +1253,7 @@ struct test {
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
             "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
+            "use_mmap",     "amx_enable_mmap", "embeddings",  "no_op_offload",   "n_prompt", "n_gen", "n_depth", "test_time",
             "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
         };
         return fields;
@@ -1251,7 +1269,7 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "embeddings") {
+            field == "use_mmap" || field == "embeddings" || field == "amx_enable_mmap") { // NEW
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1297,41 +1315,44 @@ struct test {
                 }
             }
         }
-        std::vector<std::string> values = { build_commit,
-                                            std::to_string(build_number),
-                                            cpu_info,
-                                            gpu_info,
-                                            get_backend(),
-                                            model_filename,
-                                            model_type,
-                                            std::to_string(model_size),
-                                            std::to_string(model_n_params),
-                                            std::to_string(n_batch),
-                                            std::to_string(n_ubatch),
-                                            std::to_string(n_threads),
-                                            cpu_mask,
-                                            std::to_string(cpu_strict),
-                                            std::to_string(poll),
-                                            ggml_type_name(type_k),
-                                            ggml_type_name(type_v),
-                                            std::to_string(n_gpu_layers),
-                                            split_mode_str(split_mode),
-                                            std::to_string(main_gpu),
-                                            std::to_string(no_kv_offload),
-                                            std::to_string(flash_attn),
-                                            tensor_split_str,
-                                            tensor_buft_overrides_str,
-                                            std::to_string(use_mmap),
-                                            std::to_string(embeddings),
-                                            std::to_string(no_op_offload),
-                                            std::to_string(n_prompt),
-                                            std::to_string(n_gen),
-                                            std::to_string(n_depth),
-                                            test_time,
-                                            std::to_string(avg_ns()),
-                                            std::to_string(stdev_ns()),
-                                            std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+        std::vector<std::string> values = {
+            build_commit,
+            std::to_string(build_number),
+            cpu_info,
+            gpu_info,
+            get_backend(),
+            model_filename,
+            model_type,
+            std::to_string(model_size),
+            std::to_string(model_n_params),
+            std::to_string(n_batch),
+            std::to_string(n_ubatch),
+            std::to_string(n_threads),
+            cpu_mask,
+            std::to_string(cpu_strict),
+            std::to_string(poll),
+            ggml_type_name(type_k),
+            ggml_type_name(type_v),
+            std::to_string(n_gpu_layers),
+            split_mode_str(split_mode),
+            std::to_string(main_gpu),
+            std::to_string(no_kv_offload),
+            std::to_string(flash_attn),
+            tensor_split_str,
+            tensor_buft_overrides_str,
+            std::to_string(use_mmap),
+            std::to_string(amx_enable_mmap), // NEW
+            std::to_string(embeddings),
+            std::to_string(no_op_offload),
+            std::to_string(n_prompt),
+            std::to_string(n_gen),
+            std::to_string(n_depth),
+            test_time,
+            std::to_string(avg_ns()),
+            std::to_string(stdev_ns()),
+            std::to_string(avg_ts()),
+            std::to_string(stdev_ts())
+        };
         return values;
     }
 
@@ -1537,6 +1558,9 @@ struct markdown_printer : public printer {
         if (field == "use_mmap") {
             return "mmap";
         }
+        if (field == "amx_enable_mmap") { // NEW
+            return "amx";
+        }
         if (field == "embeddings") {
             return "embd";
         }
@@ -1607,6 +1631,9 @@ struct markdown_printer : public printer {
         }
         if (params.use_mmap.size() > 1 || params.use_mmap != cmd_params_defaults.use_mmap) {
             fields.emplace_back("use_mmap");
+        }
+        if (params.amx_enable_mmap.size() > 1 || params.amx_enable_mmap != cmd_params_defaults.amx_enable_mmap) { // NEW
+            fields.emplace_back("amx_enable_mmap");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");

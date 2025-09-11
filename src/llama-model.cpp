@@ -2211,24 +2211,56 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 }
             }
 
-            // avoid using a host buffer when using mmap
-            auto * buft_dev = ggml_backend_buft_get_device(buft);
-            if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
-                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-                if (!cpu_dev) {
-                    throw std::runtime_error("no CPU backend found");
-                }
-                buft = ggml_backend_dev_buffer_type(cpu_dev);
+// avoid using a host buffer when using mmap
+auto * buft_dev = ggml_backend_buft_get_device(buft);
+if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!cpu_dev) {
+        throw std::runtime_error("no CPU backend found");
+    }
+
+    // If enabled, prefer CPU "extra" (AMX) buffer types for weights on CPU; else use CPU default
+    ggml_backend_buffer_type_t cpu_default_buft = ggml_backend_dev_buffer_type(cpu_dev);
+    const bool prefer_cpu_extra = params.amx_enable_mmap;
+
+    if (!prefer_cpu_extra) {
+        buft = cpu_default_buft;
+    } else {
+        ggml_backend_buffer_type_t chosen = nullptr;
+
+        // Iterate available buffer types, skipping device-host buffer types
+        for (const auto & cur : *buft_list) {
+            ggml_backend_dev_t           cur_dev  = cur.first;
+            ggml_backend_buffer_type_t   cur_buft = cur.second;
+
+            if (cur_dev && cur_buft == ggml_backend_dev_host_buffer_type(cur_dev)) {
+                continue;
             }
 
-            if (buft != buft_list->front().second) {
-                n_moved_tensors++;
-                if (!first_moved_tensor) {
-                    first_moved_tensor = t_meta;
-                    first_moved_from_buft = buft_list->front().second;
-                    first_moved_to_buft   = buft;
+            // Prefer CPU "extra" (non-default) if supported for this tensor/op
+            if (cur_dev == cpu_dev && cur_buft != cpu_default_buft) {
+                if (weight_buft_supported(hparams, t_meta, op, cur_buft, cur_dev)) {
+                    chosen = cur_buft;
+                    break;
                 }
             }
+        }
+
+        buft = chosen ? chosen : cpu_default_buft;
+    }
+}
+
+
+// (keep your existing moved-tensors accounting exactly as-is)
+if (buft != buft_list->front().second) {
+    n_moved_tensors++;
+    if (!first_moved_tensor) {
+        first_moved_tensor   = t_meta;
+        first_moved_from_buft = buft_list->front().second;
+        first_moved_to_buft   = buft;
+    }
+}
+
 
             ggml_context * ctx = ctx_for_buft(buft);
 
@@ -19163,6 +19195,7 @@ llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
+        /*.amx_enable_mmap             =*/ false,
     };
 
     return result;

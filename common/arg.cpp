@@ -2369,6 +2369,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.use_mmap = false;
         }
     ).set_env("LLAMA_ARG_NO_MMAP"));
+add_opt(common_arg(
+    {"--amx"},
+    "enable AMX-aware CPU repack when mmap is on and a GPU host buffer would be used; prefers CPU \"extra\" buffer types (e.g., AMX) for weights on CPU.",
+    [](common_params & params) {
+        params.amx_enable_mmap = true;
+    }
+));
+
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"

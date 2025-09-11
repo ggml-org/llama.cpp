@@ -1110,28 +1110,42 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
 
-    mparams.main_gpu        = params.main_gpu;
-    mparams.split_mode      = params.split_mode;
-    mparams.tensor_split    = params.tensor_split;
-    mparams.use_mmap        = params.use_mmap;
-    mparams.use_mlock       = params.use_mlock;
-    mparams.check_tensors   = params.check_tensors;
+    mparams.main_gpu      = params.main_gpu;
+    mparams.split_mode    = params.split_mode;
+
+    // NOTE: common_params::tensor_split is a C-array (float [LLAMA_MAX_DEVICES])
+    // Upstream expects a pointer to the first element – do NOT use .data().
+    mparams.tensor_split  = params.tensor_split;
+
+    mparams.use_mmap      = params.use_mmap;
+    mparams.use_mlock     = params.use_mlock;
+    mparams.check_tensors = params.check_tensors;
+
+    // Keep upstream policy: disable extra buffer types when --no-extra-bufts is set
     mparams.use_extra_bufts = !params.no_extra_bufts;
 
+    // NEW: forward the AMX toggle from CLI into model params
+    mparams.amx_enable_mmap = params.amx_enable_mmap;
+
+    // Preserve upstream sentinel handling for KV overrides
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
-        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
+        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 &&
+            "KV overrides not terminated with empty key");
         mparams.kv_overrides = params.kv_overrides.data();
     }
 
+    // Preserve upstream sentinel handling for tensor buffer overrides
     if (params.tensor_buft_overrides.empty()) {
         mparams.tensor_buft_overrides = NULL;
     } else {
-        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
+        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr &&
+            "Tensor buffer overrides not terminated with empty pattern");
         mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
     }
 
+    // Keep upstream progress callback wiring
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
 

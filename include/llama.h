@@ -296,6 +296,7 @@ extern "C" {
         bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
+        bool amx_enable_mmap; // prefer CPU 'extra' buffers with GPU host+mmap (enable AMX repack on CPU)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
