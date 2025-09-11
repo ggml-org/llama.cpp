@@ -36,6 +36,14 @@ static ggml_et_cpu_compare_config glu_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config mul_mat_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 0.01,
+    /* .max_log_elements = */ 4096
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -205,14 +213,28 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     }
 
     const char* kernel_name;
+    const char* src0_type_name;
 
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q8_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
-        kernel_name = "mul_mat_q8_0_f32";
+        kernel_name = "mul_mat_f32";
+        src0_type_name = "Q8_0";
 
         GGML_LOG_DEBUG("ET: MUL_MAT Q8_0xF32->F32 kernel selected for shapes src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld]\n",
+                       (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1], (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                       (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                       (long long)node->ne[0], (long long)node->ne[1], (long long)node->ne[2], (long long)node->ne[3]);
+
+    } else if (node->type == GGML_TYPE_F32 &&
+               node->src[0]->type == GGML_TYPE_F16 &&
+               node->src[1]->type == GGML_TYPE_F32) {
+
+        kernel_name = "mul_mat_f32";
+        src0_type_name = "F16";
+
+        GGML_LOG_DEBUG("ET: MUL_MAT F16xF32->F32 kernel selected for shapes src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld]\n",
                        (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1], (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
                        (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
                        (long long)node->ne[0], (long long)node->ne[1], (long long)node->ne[2], (long long)node->ne[3]);
@@ -225,19 +247,48 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         return false;
     }
 
+    // Log tensor strides (nb arrays) for debugging memory layout
+    GGML_LOG_DEBUG("ET: MUL_MAT tensor strides - src0.nb=[%zu,%zu,%zu,%zu] src1.nb=[%zu,%zu,%zu,%zu] dst.nb=[%zu,%zu,%zu,%zu]\n",
+                   node->src[0]->nb[0], node->src[0]->nb[1], node->src[0]->nb[2], node->src[0]->nb[3],
+                   node->src[1]->nb[0], node->src[1]->nb[1], node->src[1]->nb[2], node->src[1]->nb[3],
+                   node->nb[0], node->nb[1], node->nb[2], node->nb[3]);
+
     // Pack parameters - copy full tensor structures
     ggml_et_binary_params params;
     params.src0 = *node->src[0];  // weight matrix
     params.src1 = *node->src[1];  // activation matrix
     params.dst = *node;           // output matrix
 
-    GGML_LOG_DEBUG("ET: Launching MUL_MAT kernel %s (Q8_0[%lld,%lld] x F32[%lld,%lld] -> F32[%lld,%lld])\n",
-                   kernel_name,
+    GGML_LOG_DEBUG("ET: Launching MUL_MAT kernel %s (%s[%lld,%lld] x F32[%lld,%lld] -> F32[%lld,%lld])\n",
+                   kernel_name, src0_type_name,
                    (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
                    (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
                    (long long)node->ne[0], (long long)node->ne[1]);
 
-    return ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (mul_mat_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for MUL_MAT operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_MUL_MAT)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for MUL_MAT operation\n");
+        }
+    }
+
+    // Launch ET kernel
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for MUL_MAT operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &mul_mat_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for MUL_MAT operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
 }
 
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {

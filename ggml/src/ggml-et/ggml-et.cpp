@@ -360,13 +360,29 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[1]);
             break;
         case GGML_OP_MUL_MAT:
-            // Support Q8_0 x F32 -> F32 matrix multiplication
-            supported = op->type == GGML_TYPE_F32 &&
-                       op->src[0] && op->src[0]->type == GGML_TYPE_Q8_0 &&
-                       op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
-                       ggml_is_contiguous(op) &&
-                       ggml_is_contiguous(op->src[0]) &&
-                       ggml_is_contiguous(op->src[1]);
+            // Support Q8_0 x F32 -> F32 and F16 x F32 -> F32 matrix multiplication
+            // Stride requirements: first dimension must be contiguous for all tensors
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+
+                // Check first dimension contiguity requirements
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                // Check destination stride ordering
+                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
+                                            op->nb[1] <= op->nb[2] &&
+                                            op->nb[2] <= op->nb[3]);
+
+                supported = src0_first_dim_contiguous &&
+                           src1_first_dim_contiguous &&
+                           dst_first_dim_contiguous &&
+                           dst_properly_ordered;
+            } else {
+                supported = false;
+            }
             break;
         case GGML_OP_ROPE:
             // Support F32 x I32 -> F32 RoPE (standard and NEOX modes only)
@@ -436,12 +452,26 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                    ggml_is_contiguous(op->src[0]) &&
                    ggml_is_contiguous(op->src[1]);
         case GGML_OP_MUL_MAT:
-            return op->type == GGML_TYPE_F32 &&
-                   op->src[0] && op->src[0]->type == GGML_TYPE_Q8_0 &&
-                   op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
-                   ggml_is_contiguous(op) &&
-                   ggml_is_contiguous(op->src[0]) &&
-                   ggml_is_contiguous(op->src[1]);
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+
+                // Check first dimension contiguity requirements
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                // Check destination stride ordering
+                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
+                                            op->nb[1] <= op->nb[2] &&
+                                            op->nb[2] <= op->nb[3]);
+
+                return src0_first_dim_contiguous &&
+                       src1_first_dim_contiguous &&
+                       dst_first_dim_contiguous &&
+                       dst_properly_ordered;
+            }
+            return false;
         case GGML_OP_ROPE:
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
@@ -458,6 +488,7 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                    op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                    ggml_is_contiguous(op) &&
                    ggml_is_contiguous(op->src[0]);
+            return false;
         case GGML_OP_GLU:
             if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&

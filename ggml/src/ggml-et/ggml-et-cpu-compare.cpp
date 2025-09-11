@@ -108,6 +108,8 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
             goto cleanup;
         }
         ctx->cpu_src0->data = ctx->cpu_src0_data;
+        // Copy stride array (nb) for correct memory layout
+        memcpy(ctx->cpu_src0->nb, node->src[0]->nb, sizeof(node->src[0]->nb));
         // Copy op_params if present
         if (node->src[0]->op_params) {
             memcpy(ctx->cpu_src0->op_params, node->src[0]->op_params, sizeof(node->src[0]->op_params));
@@ -121,6 +123,8 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
             goto cleanup;
         }
         ctx->cpu_src1->data = ctx->cpu_src1_data;
+        // Copy stride array (nb) for correct memory layout
+        memcpy(ctx->cpu_src1->nb, node->src[1]->nb, sizeof(node->src[1]->nb));
         // Copy op_params if present
         if (node->src[1]->op_params) {
             memcpy(ctx->cpu_src1->op_params, node->src[1]->op_params, sizeof(node->src[1]->op_params));
@@ -134,6 +138,8 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
             goto cleanup;
         }
         ctx->cpu_src2->data = ctx->cpu_src2_data;
+        // Copy stride array (nb) for correct memory layout
+        memcpy(ctx->cpu_src2->nb, node->src[2]->nb, sizeof(node->src[2]->nb));
         // Copy op_params if present
         if (node->src[2]->op_params) {
             memcpy(ctx->cpu_src2->op_params, node->src[2]->op_params, sizeof(node->src[2]->op_params));
@@ -217,6 +223,8 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
     }
 
     ctx->cpu_dst->data = ctx->cpu_dst_data;
+    // Copy stride array (nb) for correct memory layout
+    memcpy(ctx->cpu_dst->nb, node->nb, sizeof(node->nb));
 
     // Create minimal computation graph
     GGML_LOG_DEBUG("ET: Creating CPU computation graph\n");
@@ -277,11 +285,23 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         float* cpu_src0_float = is_elementwise ? (float*)ctx->cpu_src0_data : nullptr;
         float* cpu_src1_float = is_elementwise ? (float*)ctx->cpu_src1_data : nullptr;
 
-        // Show first few elements from each buffer for debugging
-        GGML_LOG_DEBUG("ET: First %zu elements comparison:\n", max_log);
+        // Compare all elements but log only the first max_log_elements
+        GGML_LOG_DEBUG("ET: First %zu elements comparison (checking all %zu elements):\n", max_log, num_elements);
         bool matches = true;
-        size_t mismatches = 0;
+        size_t total_mismatches = 0;
         
+        // First pass: check all elements for mismatches
+        for (size_t i = 0; i < num_elements; i++) {
+            float diff = fabsf(cpu_float[i] - et_float[i]);
+            float rel_diff = diff / (fabsf(cpu_float[i]) + 1e-8f);
+
+            if (rel_diff > config->tolerance) {
+                matches = false;
+                total_mismatches++;
+            }
+        }
+        
+        // Second pass: log detailed info for first max_log elements only
         for (size_t i = 0; i < max_log; i++) {
             float diff = fabsf(cpu_float[i] - et_float[i]);
             float rel_diff = diff / (fabsf(cpu_float[i]) + 1e-8f);
@@ -296,11 +316,6 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
                 GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f\n",
                               i, cpu_float[i], et_float[i], diff);
             }
-
-            if (rel_diff > config->tolerance) {
-                matches = false;
-                mismatches++;
-            }
         }
 
         // Check some elements from the middle and end for full coverage
@@ -314,7 +329,7 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         }
 
         GGML_LOG_DEBUG("ET: Results %s (%zu/%zu elements match within tolerance %.6f)\n",
-                      matches ? "MATCH" : "DIFFER", max_log - mismatches, max_log, config->tolerance);
+                      matches ? "MATCH" : "DIFFER", num_elements - total_mismatches, num_elements, config->tolerance);
     }
 
     // Copy CPU result to device if flag is set
