@@ -18358,7 +18358,6 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_MODERN_BERT:
             {
                 llm = std::make_unique<llm_build_modern_bert>(*this, params);
-                LLAMA_LOG_INFO("Built llm\n");
             } break;
         case LLM_ARCH_NEO_BERT:
             {
@@ -18676,8 +18675,6 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         default:
             GGML_ABORT("fatal error");
     }
-
-    LLAMA_LOG_INFO("Building pooling\n");
 
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
