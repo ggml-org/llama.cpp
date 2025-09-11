@@ -135,7 +135,14 @@ export class SlotsService {
 		}
 
 		try {
-			const response = await fetch('/slots');
+			const currentConfig = config();
+			const apiKey = currentConfig.apiKey?.toString().trim();
+
+			const response = await fetch('/slots', {
+				headers: {
+					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+				}
+			});
 			if (response.ok) {
 				const slotsData = await response.json();
 				if (Array.isArray(slotsData) && slotsData.length > 0) {

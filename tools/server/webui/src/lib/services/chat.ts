@@ -150,10 +150,14 @@ export class ChatService {
 		}
 
 		try {
+			const currentConfig = config();
+			const apiKey = currentConfig.apiKey?.toString().trim();
+
 			const response = await fetch(`/v1/chat/completions`, {
 				method: 'POST',
 				headers: {
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
+					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				},
 				body: JSON.stringify(requestBody),
 				signal: this.abortController.signal
@@ -505,9 +509,13 @@ export class ChatService {
 	 */
 	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
 		try {
+			const currentConfig = config();
+			const apiKey = currentConfig.apiKey?.toString().trim();
+
 			const response = await fetch(`/props`, {
 				headers: {
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
+					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});
 

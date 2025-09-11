@@ -1,4 +1,5 @@
 import { ChatService } from '$lib/services/chat';
+import { config } from '$lib/stores/settings.svelte';
 
 /**
  * ServerStore - Server state management and capability detection
@@ -94,7 +95,14 @@ class ServerStore {
 		}
 
 		try {
-			const response = await fetch('/slots');
+			const currentConfig = config();
+			const apiKey = currentConfig.apiKey?.toString().trim();
+
+			const response = await fetch('/slots', {
+				headers: {
+					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+				}
+			});
 
 			if (response.status === 501) {
 				console.info('Slots endpoint not implemented - server started without --slots flag');
