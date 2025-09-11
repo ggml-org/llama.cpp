@@ -132,6 +132,8 @@ extern "C" {
         GGML_BACKEND_DEVICE_TYPE_CPU,
         // GPU device using dedicated memory
         GGML_BACKEND_DEVICE_TYPE_GPU,
+        // integrated GPU device using host memory
+        GGML_BACKEND_DEVICE_TYPE_IGPU,
         // accelerator devices intended to be used together with the CPU backend (e.g. BLAS or AMX)
         GGML_BACKEND_DEVICE_TYPE_ACCEL
     };
@@ -150,11 +152,21 @@ extern "C" {
 
     // all the device properties
     struct ggml_backend_dev_props {
+        // device name
         const char * name;
+        // device description
         const char * description;
+        // device free memory in bytes
         size_t memory_free;
+        // device total memory in bytes
         size_t memory_total;
+        // device type
         enum ggml_backend_dev_type type;
+        // device id
+        //   for PCI devices, this should be the PCI bus id formatted as "domain:bus:device.function" (e.g. "0000:01:00.0")
+        //   if the id is unknown, this should be NULL
+        const char * device_id;
+        // device capabilities
         struct ggml_backend_dev_caps caps;
     };
 

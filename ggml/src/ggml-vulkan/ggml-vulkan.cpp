@@ -12113,6 +12113,7 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(gg
 
 static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_dev_t dev) {
     UNUSED(dev);
+    // TODO: return GGML_BACKEND_DEVICE_TYPE_IGPU for integrated GPUs
     return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
@@ -12120,6 +12121,7 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->name        = ggml_backend_vk_device_get_name(dev);
     props->description = ggml_backend_vk_device_get_description(dev);
     props->type        = ggml_backend_vk_device_get_type(dev);
+    // TODO: set props->device_id to PCI bus id
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ false,
