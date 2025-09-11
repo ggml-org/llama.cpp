@@ -6,35 +6,35 @@
 
 // keep this separate from the public ggml_mem_range_params
 struct ggml_mem_range {
-    uint64_t p0; // being
+    uint64_t p0; // begin
     uint64_t p1; // end
 
-    enum ggml_mem_range_type pt;
+    ggml_mem_range_type pt;
 };
 
 struct ggml_mem_ranges {
-    std::vector<struct ggml_mem_range> ranges;
+    std::vector<ggml_mem_range> ranges;
 
     int debug = 0;
 };
 
 struct ggml_mem_ranges * ggml_mem_ranges_init(int debug) {
-    auto * res = new struct ggml_mem_ranges;
+    auto * res = new ggml_mem_ranges;
 
     res->debug = debug;
 
     return res;
 }
 
-void ggml_mem_ranges_free(struct ggml_mem_ranges * mrs) {
+void ggml_mem_ranges_free(ggml_mem_ranges * mrs) {
     delete mrs;
 }
 
-void ggml_mem_ranges_reset(struct ggml_mem_ranges * mrs) {
+void ggml_mem_ranges_reset(ggml_mem_ranges * mrs) {
     mrs->ranges.clear();
 }
 
-bool ggml_mem_ranges_add(struct ggml_mem_ranges * mrs, struct ggml_mem_range_params mrp) {
+bool ggml_mem_ranges_add(ggml_mem_ranges * mrs, ggml_mem_range_params mrp) {
     mrs->ranges.push_back({
         /*.p0 =*/ mrp.p0,
         /*.p1 =*/ mrp.p1,
@@ -44,10 +44,10 @@ bool ggml_mem_ranges_add(struct ggml_mem_ranges * mrs, struct ggml_mem_range_par
     return true;
 }
 
-bool ggml_mem_ranges_add_src(struct ggml_mem_ranges * mrs, const struct ggml_tensor * node) {
+bool ggml_mem_ranges_add_src(ggml_mem_ranges * mrs, const ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct ggml_mem_range_params mrp = {
+    ggml_mem_range_params mrp = {
         /*.p0 =*/ (uint64_t) node->data,
         /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ MEM_RANGE_TYPE_SRC,
@@ -60,10 +60,10 @@ bool ggml_mem_ranges_add_src(struct ggml_mem_ranges * mrs, const struct ggml_ten
     return ggml_mem_ranges_add(mrs, mrp);
 }
 
-bool ggml_mem_ranges_add_dst(struct ggml_mem_ranges * mrs, const struct ggml_tensor * node) {
+bool ggml_mem_ranges_add_dst(ggml_mem_ranges * mrs, const ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct ggml_mem_range_params mrp = {
+    ggml_mem_range_params mrp = {
         /*.p0 =*/ (uint64_t) node->data,
         /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ MEM_RANGE_TYPE_DST,
@@ -76,7 +76,7 @@ bool ggml_mem_ranges_add_dst(struct ggml_mem_ranges * mrs, const struct ggml_ten
     return ggml_mem_ranges_add(mrs, mrp);
 }
 
-bool ggml_mem_ranges_check(const struct ggml_mem_ranges * mrs, struct ggml_mem_range_params mrp) {
+bool ggml_mem_ranges_check(const ggml_mem_ranges * mrs, ggml_mem_range_params mrp) {
     for (size_t i = 0; i < mrs->ranges.size(); i++) {
         if (mrp.pt == MEM_RANGE_TYPE_SRC && mrs->ranges[i].pt == MEM_RANGE_TYPE_SRC) {
             continue;
@@ -90,10 +90,10 @@ bool ggml_mem_ranges_check(const struct ggml_mem_ranges * mrs, struct ggml_mem_r
     return false;
 }
 
-bool ggml_mem_ranges_check_src(const struct ggml_mem_ranges * mrs, const struct ggml_tensor * node) {
+bool ggml_mem_ranges_check_src(const ggml_mem_ranges * mrs, const ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct ggml_mem_range_params mrp = {
+    ggml_mem_range_params mrp = {
         /*.p0 =*/ (uint64_t) node->data,
         /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ MEM_RANGE_TYPE_SRC,
@@ -110,10 +110,10 @@ bool ggml_mem_ranges_check_src(const struct ggml_mem_ranges * mrs, const struct 
     return res;
 }
 
-bool ggml_mem_ranges_check_dst(const struct ggml_mem_ranges * mrs, const struct ggml_tensor * node) {
+bool ggml_mem_ranges_check_dst(const ggml_mem_ranges * mrs, const ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct ggml_mem_range_params mrp = {
+    ggml_mem_range_params mrp = {
         /*.p0 =*/ (uint64_t) node->data,
         /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
         /*.pt =*/ MEM_RANGE_TYPE_DST,
