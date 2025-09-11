@@ -1960,7 +1960,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         }
     }
 
-    if (buf->device_memory == VK_NULL_HANDLE) {
+    if (!buf->device_memory) {
         device->device.destroyBuffer(buf->buffer);
         throw vk::OutOfDeviceMemoryError("No suitable memory type found");
     }
