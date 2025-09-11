@@ -209,29 +209,26 @@ jobs:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
 
-      - name: Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Build Dependencies
         id: build_depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev \
+            build-essential libcurl4-openssl-dev
 
       - name: Python Dependencies
         id: python_depends
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
 
       - name: Swap Endianness
         id: endianness
         if: ${{ matrix.build == 's390x' }}
         run: |
           for f in models/*.gguf; do
-            yes YES | head -n 1 | python gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+            yes YES | head -n 1 | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
           done
           
       - name: Build
