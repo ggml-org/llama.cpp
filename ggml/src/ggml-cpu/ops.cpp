@@ -219,13 +219,13 @@ static void ggml_compute_forward_dup_f16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_fp16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
@@ -518,13 +518,13 @@ static void ggml_compute_forward_dup_bf16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_bf16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
