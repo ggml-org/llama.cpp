@@ -2122,7 +2122,7 @@ extern "C" {
 
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
     // timesteps: [N,]
-    // return: [N, dim]
+    // return: [N, PAD(dim, 2)]
     GGML_API struct ggml_tensor * ggml_timestep_embedding(
             struct ggml_context * ctx,
             struct ggml_tensor  * timesteps,
