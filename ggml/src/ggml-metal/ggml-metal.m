@@ -3,6 +3,7 @@
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
 #import "ggml-metal-impl.h"
+#import "ggml-metal-common.h"
 
 #import <Foundation/Foundation.h>
 
@@ -2083,8 +2084,6 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
     }
 }
 
-#define MEM_RANGE_MAX 128
-
 struct ggml_metal_encode_context {
     ggml_backend_t backend;
 
@@ -2092,33 +2091,13 @@ struct ggml_metal_encode_context {
 
     struct ggml_metal_mem_pool * mem_pool;
 
-    int n_ranges;
-
-    struct mem_range {
-        uint64_t p0; // being
-        uint64_t p1; // end
-        int      pt; // type: 0 - src, 1 - dst
-    } ranges[MEM_RANGE_MAX];
-
-    int debug;
+    struct ggml_mem_ranges * mem_ranges;
 };
 
 static bool ggml_metal_encode_mem_ranges_reset(struct ggml_metal_encode_context * ctx) {
     [ctx->encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
 
-    ctx->n_ranges = 0;
-
-    return true;
-}
-
-static bool ggml_metal_encode_mem_ranges_add(struct ggml_metal_encode_context * ctx, struct mem_range r) {
-    if (ctx->n_ranges == MEM_RANGE_MAX) {
-        return false;
-    }
-
-    ctx->ranges[ctx->n_ranges] = r;
-
-    ctx->n_ranges++;
+    ggml_mem_ranges_reset(ctx->mem_ranges);
 
     return true;
 }
@@ -2128,50 +2107,13 @@ static bool ggml_metal_encode_mem_ranges_add_src(struct ggml_metal_encode_contex
         return true;
     }
 
-    struct mem_range r = {
-        /*.p0 =*/ (uint64_t) node->data,
-        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-        /*.pt =*/ 0,
-    };
-
-    if (ctx->debug > 2) {
-        GGML_LOG_DEBUG("%s: add src range [%lld, %lld)\n", __func__, r.p0, r.p1);
-    }
-
-    return ggml_metal_encode_mem_ranges_add(ctx, r);
+    return ggml_mem_ranges_add_src(ctx->mem_ranges, node);
 }
 
 static bool ggml_metal_encode_mem_ranges_add_dst(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct mem_range r = {
-        /*.p0 =*/ (uint64_t) node->data,
-        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-        /*.pt =*/ 1,
-    };
-
-    if (ctx->debug > 2) {
-        GGML_LOG_DEBUG("%s: add dst range [%lld, %lld)\n", __func__, r.p0, r.p1);
-    }
-
-    return ggml_metal_encode_mem_ranges_add(ctx, r);
-}
-
-// return true if:
-// - new src range overlaps with any existing dst range
-// - new dst range overlaps with any existing range (src or dst)
-static bool ggml_metal_encode_mem_ranges_check(const struct ggml_metal_encode_context * ctx, struct mem_range r) {
-    for (int i = 0; i < ctx->n_ranges; i++) {
-        if (r.pt == 0 && ctx->ranges[i].pt == 0) {
-            continue;
-        }
-
-        if (r.p0 < ctx->ranges[i].p1 && r.p1 > ctx->ranges[i].p0) {
-            return true;
-        }
-    }
-
-    return false;
+    return ggml_mem_ranges_add_dst(ctx->mem_ranges, node);
 }
 
 static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
@@ -2179,41 +2121,13 @@ static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encod
         return false;
     }
 
-    struct mem_range r = {
-        /*.p0 =*/ (uint64_t) node->data,
-        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-        /*.pt =*/ 0,
-    };
-
-    const bool res = ggml_metal_encode_mem_ranges_check(ctx, r);
-
-    if (res) {
-        if (ctx->debug > 2) {
-            GGML_LOG_DEBUG("%s: the src range [%lld, %lld) overlaps with a previous dst range\n", __func__, r.p0, r.p1);
-        }
-    }
-
-    return res;
+    return ggml_mem_ranges_check_src(ctx->mem_ranges, node);
 }
 
 static bool ggml_metal_encode_mem_ranges_check_dst(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
     GGML_ASSERT(node);
 
-    struct mem_range r = {
-        /*.p0 =*/ (uint64_t) node->data,
-        /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-        /*.pt =*/ 1,
-    };
-
-    const bool res = ggml_metal_encode_mem_ranges_check(ctx, r);
-
-    if (res) {
-        if (ctx->debug > 2) {
-            GGML_LOG_DEBUG("%s: the dst range [%lld, %lld) overlaps with a previous src range\n", __func__, r.p0, r.p1);
-        }
-    }
-
-    return res;
+    return ggml_mem_ranges_check_dst(ctx->mem_ranges, node);
 }
 
 static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, int idx, int idx_end) {
@@ -6858,13 +6772,15 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         const bool should_capture = ctx->capture_next_compute;
 
         struct ggml_metal_encode_context ctx_enc = {
-            /*.backend  =*/ backend,
-            /*.encoder  =*/ encoder,
-            /*.mem_pool =*/ mem_pool,
-            /*.n_ranges =*/ 0,
-            /*.ranges   =*/ { 0 },
-            /*.debug    =*/ ctx_dev->debug_graph,
+            /*.backend    =*/ backend,
+            /*.encoder    =*/ encoder,
+            /*.mem_pool   =*/ mem_pool,
+            /*.mem_ranges =*/ NULL,
         };
+
+        if (ctx_dev->use_concurrency) {
+            ctx_enc.mem_ranges = ggml_mem_ranges_init(ctx_dev->debug_graph);
+        }
 
         for (int idx = node_start; idx < node_end;) {
             if (should_capture) {
@@ -6889,6 +6805,8 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         }
 
         [encoder endEncoding];
+
+        ggml_mem_ranges_free(ctx_enc.mem_ranges);
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];
