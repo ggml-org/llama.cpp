@@ -6014,7 +6014,8 @@ static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend
 
     // Allocate Metal buffer directly using ctx_dev->mtl_device
     GGML_LOG_DEBUG("%s: tensor '%s' allocating Metal buffer with size=%zu\n", __func__, tensor->name, size);
-    extra->data_device[id] = [ctx_dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
+    extra->data_device[id] = [ctx_dev->mtl_device newBufferWithLength:size 
+                                                  options:MTLResourceStorageModeShared];
     
     if (extra->data_device[id] == nil) {
         GGML_LOG_ERROR("%s: failed to allocate Metal buffer for tensor '%s' with size=%zu\n", __func__, tensor->name, size);
@@ -6043,42 +6044,47 @@ static enum ggml_status ggml_backend_metal_split_buffer_init_tensor(ggml_backend
 }
 
 // Buffer set tensor function
-static void ggml_backend_metal_split_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    // Split tensors must always be set in their entirety at once
+static void ggml_backend_metal_split_buffer_set_tensor(
+    ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
+    const void * data, size_t offset, size_t size) 
+{
+    // Must set entire tensor at once
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
-    GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
+    GGML_ASSERT(ggml_is_contiguous(tensor)); 
 
-    struct ggml_backend_metal_split_buffer_type_context * buft_ctx = (struct ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
-
+    struct ggml_backend_metal_split_buffer_context *ctx = (struct ggml_backend_metal_split_buffer_type_context *) buffer->buft->context;
     const int64_t ne0 = tensor->ne[0];
     const size_t nb1 = tensor->nb[1];
-    struct ggml_tensor_extra_metal * extra = (struct ggml_tensor_extra_metal *)tensor->extra;
+    struct ggml_tensor_extra_metal *extra = (struct ggml_tensor_extra_metal *) tensor->extra;
 
-    // For Metal, we only have one device
-    int id = 0;
-    int64_t row_low, row_high;
-    get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
+    // For Metal we treat id=0 as the (only) device; loop structure left in place
+    const int device_count = 1; 
+    for (int id = 0; id < device_count; ++id) {
+        const float id_ = 1.0f;
+        int64_t row_low = 0, row_high = 0;
+        get_row_split(&row_low, &row_high, tensor, &id_, id);
+        int64_t nrows = row_high - row_low;
+        if (nrows <= 0) {
+            continue;
+        }
+        // Compute offset and sizes for this slice
+        const size_t offset_split = (size_t)row_low * nb1;
+        size_t original_size = ggml_nbytes_split(tensor, nrows);
+        size_t copy_size = original_size;
+        // Pad for alignment (if needed) but we only copy original_size bytes
+        if (ne0 % MATRIX_ROW_PADDING != 0) {
+            copy_size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - (ne0 % MATRIX_ROW_PADDING));
+        }
+        const char *buf_host = (const char *)data + offset_split;
 
-    int64_t nrows_split = row_high - row_low;
-    if (nrows_split == 0) {
-        return;
+        // Copy the slice into the Metal buffer (contents pointer to GPU memory)
+        memcpy([extra->data_device[id] contents], buf_host, original_size);
+        // On macOS, inform Metal that buffer range was modified so GPU sees new data:contentReference[oaicite:2]{index=2}
+        //[extra->data_device[id] didModifyRange:NSMakeRange(0, original_size)];
     }
-
-    const size_t offset_split = row_low * nb1;
-    size_t alloc_size = ggml_nbytes_split(tensor, nrows_split);
-    const size_t original_size = alloc_size;
-
-    // Pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-    if (ne0 % MATRIX_ROW_PADDING != 0) {
-        alloc_size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-    }
-
-    const char * buf_host = (const char *)data + offset_split;
-    
-    // Copy data to Metal buffer
-    memcpy([extra->data_device[id] contents], buf_host, original_size);
 }
+
 
 // Buffer get tensor function
 static void ggml_backend_metal_split_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
