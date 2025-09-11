@@ -221,7 +221,7 @@ jobs:
         id: python_depends
         run: |
           python3 -m pip install --upgrade pip
-          pip3 install gguf-py
+          pip3 install ./gguf-py
 
       - name: Swap Endianness
         id: endianness
