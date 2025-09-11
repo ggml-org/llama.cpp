@@ -70,8 +70,11 @@ def generate_variants(fname, input_dir, output_dir, outfile):
         except ValueError:
             decls_map = {}
 
+        with open(os.path.join(input_dir, "common_decls.tmpl"), "r", encoding="utf-8") as f:
+            common_decls = f.read()
+        decls_map.update(parse_decls(common_decls))
+
         shader_template = extract_block(text, "SHADER")
-        shader_template = expand_includes(shader_template, input_dir)
         for variant in variants:
             if "DECLS" in variant:
                 decls = variant["DECLS"]
@@ -85,6 +88,7 @@ def generate_variants(fname, input_dir, output_dir, outfile):
 
             shader_variant = replace_placeholders(shader_template, variant["REPLS"])
             final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
+            final_shader = expand_includes(final_shader, input_dir)
 
             if "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
