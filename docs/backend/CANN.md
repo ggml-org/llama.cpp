@@ -314,3 +314,7 @@ Converting the matmul weight format from ND to NZ to improve performance. Enable
 ### GGML_CANN_ACL_GRAPH
 
 Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default.
+
+### GGML_CANN_GRAPH_CACHE_CAPACITY
+
+Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. When the number of cached graphs exceeds this capacity, the least recently used graph will be evicted.

@@ -4063,6 +4063,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .graph_compute           = */ ggml_backend_sycl_graph_compute,
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
+    /* .optimize_graph          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {

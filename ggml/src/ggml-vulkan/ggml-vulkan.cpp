@@ -583,6 +583,7 @@ struct vk_device_struct {
     bool disable_fusion;
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
+    bool disable_optimize_graph;
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
@@ -1936,7 +1937,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
 
-    for (auto &req_flags : req_flags_list) {
+    for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
+        const auto & req_flags = *it;
+
         uint32_t memory_type_index = find_properties(&mem_props, &mem_req, req_flags);
 
         if (memory_type_index == UINT32_MAX) {
@@ -1949,6 +1952,11 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             break;
         } catch (const vk::SystemError& e) {
             // loop and retry
+            // during last attempt throw the exception
+            if (it + 1 == req_flags_list.end()) {
+                device->device.destroyBuffer(buf->buffer);
+                throw e;
+            }
         }
     }
 
@@ -3386,7 +3394,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_wg512, "soft_max_f32_wg512", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16, "soft_max_f32_f16", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16_wg512, "soft_max_f32_f16_wg512", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_soft_max_back_f32, "soft_max_back_f32", soft_max_back_f32_len, soft_max_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_back_f32, "soft_max_back_f32", soft_max_back_f32_len, soft_max_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_rope_norm_f32, "rope_norm_f32", rope_norm_f32_len, rope_norm_f32_data, "main", 4, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_rope_neox_f32, "rope_neox_f32", rope_neox_f32_len, rope_neox_f32_data, "main", 4, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
@@ -3592,6 +3600,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
 
+        const char* GGML_VK_DISABLE_OPTIMIZE_GRAPH = getenv("GGML_VK_DISABLE_OPTIMIZE_GRAPH");
+        device->disable_optimize_graph = GGML_VK_DISABLE_OPTIMIZE_GRAPH != nullptr;
+
         bool fp16_storage = false;
         bool fp16_compute = false;
         bool maintenance4_support = false;
@@ -3732,6 +3743,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
+#ifdef __APPLE__
+        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
+        if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            device->subgroup_arithmetic = false;
+        }
+#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
@@ -9135,7 +9152,7 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
 static void ggml_vk_soft_max_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
     float * op_params = (float *)dst->op_params;
-    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SOFT_MAX_BACK, { (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], op_params[0], op_params[1] }, dryrun);
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SOFT_MAX_BACK, { (uint32_t)src0->ne[0], (uint32_t)ggml_nrows(src0), op_params[0], op_params[1] }, dryrun);
 }
 
 static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, bool backprop, bool dryrun = false) {
@@ -11853,6 +11870,131 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     UNUSED(backend);
 }
 
+// Sort the graph for improved parallelism.
+static void ggml_vk_optimize_graph(ggml_backend_t backend, struct ggml_cgraph * graph)
+{
+    VK_LOG_DEBUG("ggml_vk_optimize_graph(" << graph->n_nodes << " nodes)");
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    if (ctx->device->disable_optimize_graph) {
+        return;
+    }
+
+    auto const &is_empty = [](ggml_tensor * node) -> bool {
+        return node->op == GGML_OP_NONE || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE;
+    };
+
+    auto const &is_src_of = [](const ggml_tensor *dst, const ggml_tensor *src) -> bool {
+        for (uint32_t s = 0; s < GGML_MAX_SRC; ++s) {
+            if (dst->src[s] == src) {
+                return true;
+            }
+        }
+        // implicit dependency if they view the same tensor
+        const ggml_tensor *dst2 = dst->view_src ? dst->view_src : dst;
+        const ggml_tensor *src2 = src->view_src ? src->view_src : src;
+        if (dst2 == src2) {
+            return true;
+        }
+        return false;
+    };
+
+    // This function tries to reorder the graph to allow nodes to run in parallel.
+    // This helps with small batches, but for large batches its a slowdown, probably
+    // due to cache contention. So only reorder if the majority of nodes have few rows.
+    int num_small_nodes = 0;
+    int num_counted_nodes = 0;
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        if (!is_empty(graph->nodes[i]) &&
+            graph->nodes[i]->op != GGML_OP_SET_ROWS) {
+            if (ggml_nrows(graph->nodes[i]) <= 8) {
+                num_small_nodes++;
+            }
+            num_counted_nodes++;
+        }
+    }
+    if (num_small_nodes < num_counted_nodes / 2) {
+        return;
+    }
+
+    std::vector<ggml_tensor *> new_order;
+    std::vector<bool> used(graph->n_nodes, false);
+    int first_unused = 0;
+    while (first_unused < graph->n_nodes) {
+        std::vector<int> current_set;
+
+        // First, grab the next unused node.
+        current_set.push_back(first_unused);
+
+        // Loop through the next N nodes. Grab any that don't depend on other nodes that
+        // haven't already been run. Nodes that have already been run have used[i] set
+        // to true. Allow nodes that depend on the previous node if it's a fusion pattern
+        // that we support (e.g. RMS_NORM + MUL).
+        // This first pass only grabs "real" (non-view nodes). Second pass grabs view nodes.
+        // The goal is to not interleave real and view nodes in a way that breaks fusion.
+        const int NUM_TO_CHECK = 20;
+        for (int j = first_unused+1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
+            if (used[j]) {
+                continue;
+            }
+            if (is_empty(graph->nodes[j])) {
+                continue;
+            }
+            bool ok = true;
+            for (int c = first_unused; c < j; ++c) {
+                if (!used[c] &&
+                    is_src_of(graph->nodes[j], graph->nodes[c]) &&
+                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_RMS_NORM && graph->nodes[j]->op == GGML_OP_MUL)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                current_set.push_back(j);
+            }
+        }
+        // Second pass grabs view nodes.
+        // Skip this if it would break a fusion optimization (don't split up add->rms_norm or add->add).
+        if (graph->nodes[current_set.back()]->op != GGML_OP_ADD) {
+            for (int j = first_unused+1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
+                if (used[j]) {
+                    continue;
+                }
+                if (!is_empty(graph->nodes[j])) {
+                    continue;
+                }
+                bool ok = true;
+                for (int c = first_unused; c < j; ++c) {
+                    bool c_in_current_set = std::find(current_set.begin(), current_set.end(), c) != current_set.end();
+                    // skip views whose srcs haven't been processed.
+                    if (!used[c] &&
+                        is_src_of(graph->nodes[j], graph->nodes[c]) &&
+                        !c_in_current_set) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) {
+                    current_set.push_back(j);
+                }
+            }
+        }
+
+        // Push the current set into new_order
+        for (auto c : current_set) {
+            new_order.push_back(graph->nodes[c]);
+            used[c] = true;
+        }
+        while (first_unused < graph->n_nodes && used[first_unused]) {
+            first_unused++;
+        }
+    }
+    // Replace the graph with the new order.
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        graph->nodes[i] = new_order[i];
+    }
+}
+
 // TODO: enable async and synchronize
 static ggml_backend_i ggml_backend_vk_interface = {
     /* .get_name                = */ ggml_backend_vk_name,
@@ -11868,6 +12010,7 @@ static ggml_backend_i ggml_backend_vk_interface = {
     /* .graph_compute           = */ ggml_backend_vk_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .optimize_graph          = */ ggml_vk_optimize_graph,
 };
 
 static ggml_guid_t ggml_backend_vk_guid() {
