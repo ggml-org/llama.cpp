@@ -515,9 +515,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             op->src[0]->buffer &&
             (ggml_n_dims(op->src[0]) == 2) &&
             op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type() && ctx.kernels) {
-            if (op->op == GGML_OP_GET_ROWS && op->src[1]->ne[0] != 8) {
-                return false;
-            }
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
             }
