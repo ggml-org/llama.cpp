@@ -2100,45 +2100,136 @@ struct ggml_metal_encode_context {
         int      pt; // type: 0 - src, 1 - dst
     } ranges[MEM_RANGE_MAX];
 
+    int debug;
 };
 
-static bool ggml_metal_encode_reset_mem_ranges(struct ggml_metal_encode_context * ctx_enc) {
-    ctx_enc->n_ranges = 0;
+static bool ggml_metal_encode_mem_ranges_reset(struct ggml_metal_encode_context * ctx) {
+    [ctx->encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+
+    ctx->n_ranges = 0;
 
     return true;
 }
 
-static bool ggml_metal_encode_add_mem_range(struct ggml_metal_encode_context * ctx_enc, struct mem_range r) {
-    if (ctx_enc->n_ranges == MEM_RANGE_MAX) {
+static bool ggml_metal_encode_mem_ranges_add(struct ggml_metal_encode_context * ctx, struct mem_range r) {
+    if (ctx->n_ranges == MEM_RANGE_MAX) {
         return false;
     }
 
-    ctx_enc->ranges[ctx_enc->n_ranges] = r;
+    ctx->ranges[ctx->n_ranges] = r;
 
-    ctx_enc->n_ranges++;
+    ctx->n_ranges++;
 
     return true;
 }
 
-// check and return true:
-//  - if new range overlaps with any existing range of a different type
-//  - if we are close to running out of range cells
-static bool ggml_metal_encode_check_mem_range(struct ggml_metal_encode_context * ctx_enc, struct mem_range r) {
-    if (ctx_enc->n_ranges + 2*GGML_MAX_SRC >= MEM_RANGE_MAX) {
+static bool ggml_metal_encode_mem_ranges_add_src(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    if (!node) {
         return true;
     }
 
-    for (int i = 0; i < ctx_enc->n_ranges; i++) {
-        if (ctx_enc->ranges[i].pt == r.pt) {
+    size_t offs = 0;
+    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
+    GGML_ASSERT(id_node != nil);
+
+    struct mem_range r = {
+        /*.p0 =*/ id_node.gpuAddress + offs,
+        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.pt =*/ 0,
+    };
+
+    if (ctx->debug > 2) {
+        GGML_LOG_DEBUG("%s: add src range [%lld, %lld)\n", __func__, r.p0, r.p1);
+    }
+
+    return ggml_metal_encode_mem_ranges_add(ctx, r);
+}
+
+static bool ggml_metal_encode_mem_ranges_add_dst(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    GGML_ASSERT(node);
+
+    size_t offs = 0;
+    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
+    GGML_ASSERT(id_node != nil);
+
+    struct mem_range r = {
+        /*.p0 =*/ id_node.gpuAddress + offs,
+        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.pt =*/ 1,
+    };
+
+    if (ctx->debug > 2) {
+        GGML_LOG_DEBUG("%s: add dst range [%lld, %lld)\n", __func__, r.p0, r.p1);
+    }
+
+    return ggml_metal_encode_mem_ranges_add(ctx, r);
+}
+
+// return true if:
+// - new src range overlaps with any existing dst range
+// - new dst range overlaps with any existing range (src or dst)
+static bool ggml_metal_encode_mem_ranges_check(const struct ggml_metal_encode_context * ctx, struct mem_range r) {
+    for (int i = 0; i < ctx->n_ranges; i++) {
+        if (r.pt == 0 && ctx->ranges[i].pt == 0) {
             continue;
         }
 
-        if (r.p0 < ctx_enc->ranges[i].p1 && r.p1 > ctx_enc->ranges[i].p0) {
+        if (r.p0 < ctx->ranges[i].p1 && r.p1 > ctx->ranges[i].p0) {
             return true;
         }
     }
 
     return false;
+}
+
+static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    if (!node) {
+        return false;
+    }
+
+    size_t offs = 0;
+    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
+    GGML_ASSERT(id_node != nil);
+
+    struct mem_range r = {
+        /*.p0 =*/ id_node.gpuAddress + offs,
+        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.pt =*/ 0,
+    };
+
+    const bool res = ggml_metal_encode_mem_ranges_check(ctx, r);
+
+    if (res) {
+        if (ctx->debug > 2) {
+            GGML_LOG_DEBUG("%s: the src range [%lld, %lld) overlaps with a previous dst range\n", __func__, r.p0, r.p1);
+        }
+    }
+
+    return res;
+}
+
+static bool ggml_metal_encode_mem_ranges_check_dst(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    GGML_ASSERT(node);
+
+    size_t offs = 0;
+    id<MTLBuffer> id_node = ggml_metal_get_buffer(node, &offs);
+    GGML_ASSERT(id_node != nil);
+
+    struct mem_range r = {
+        /*.p0 =*/ id_node.gpuAddress + offs,
+        /*.p1 =*/ id_node.gpuAddress + offs + ggml_nbytes(node),
+        /*.pt =*/ 1,
+    };
+
+    const bool res = ggml_metal_encode_mem_ranges_check(ctx, r);
+
+    if (res) {
+        if (ctx->debug > 2) {
+            GGML_LOG_DEBUG("%s: the dst range [%lld, %lld) overlaps with a previous src range\n", __func__, r.p0, r.p1);
+        }
+    }
+
+    return res;
 }
 
 static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, int idx, int idx_end) {
@@ -2262,94 +2353,47 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
     int n_fuse = 1;
 
-    // check if the current node can run concurrently with other nodes before it
-    // the condition is that:
-    //  - the current node cannot write to any previous src ranges
-    //  - the current node cannot read from any previous dst ranges
-    //
-    // if the condition is not satisfied, we put a memory barrier and clear all ranges
-    // otherwise, we add the new ranges to the encoding context and add the node for concurrent execution
-    //
-    bool is_concurrent = ctx_dev->use_concurrency;
-
-    if (is_concurrent) {
-        // do not read from any previous dst ranges
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (id_src[i] == nil) {
-                continue;
-            }
-
-            struct mem_range r = {
-                /*.p0 =*/ id_src[i].gpuAddress + offs_src[i],
-                /*.p1 =*/ id_src[i].gpuAddress + offs_src[i] + ggml_nbytes(node->src[i]),
-                /*.pt =*/ 0,
-            };
-
-            if (ggml_metal_encode_check_mem_range(ctx_enc, r)) {
-                is_concurrent = false;
-
-                break;
-            }
-        }
-
-        // do not write to any previous src ranges
-        if (is_concurrent) {
-            struct mem_range r = {
-                /*.p0 =*/ id_dst.gpuAddress + offs_dst,
-                /*.p1 =*/ id_dst.gpuAddress + offs_dst + ggml_nbytes(dst),
-                /*.pt =*/ 1,
-            };
-
-            if (ggml_metal_encode_check_mem_range(ctx_enc, r)) {
-                is_concurrent = false;
-            }
-        }
-
-        if (!is_concurrent) {
-            ggml_metal_encode_reset_mem_ranges(ctx_enc);
-
-            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
-        }
-
-        // add new ranges
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (id_src[i] == nil) {
-                continue;
-            }
-
-            struct mem_range r = {
-                /*.p0 =*/ id_src[i].gpuAddress + offs_src[i],
-                /*.p1 =*/ id_src[i].gpuAddress + offs_src[i] + ggml_nbytes(node->src[i]),
-                /*.pt =*/ 0,
-            };
-
-            ggml_metal_encode_add_mem_range(ctx_enc, r);
-        }
-
-        {
-            struct mem_range r = {
-                /*.p0 =*/ id_dst.gpuAddress + offs_dst,
-                /*.p1 =*/ id_dst.gpuAddress + offs_dst + ggml_nbytes(dst),
-                /*.pt =*/ 1,
-            };
-
-            ggml_metal_encode_add_mem_range(ctx_enc, r);
-        }
-    }
-
     if (ctx_dev->debug_graph > 0) {
-        GGML_LOG_INFO("%s: op - %s, concurrent = %d\n", __func__, ggml_op_name(dst->op), is_concurrent);
+        GGML_LOG_DEBUG("%s: op - %s\n", __func__, ggml_op_name(dst->op));
         if (src0) {
-            GGML_LOG_INFO("%s: src0 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src0t), ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03,
+            GGML_LOG_DEBUG("%s: src0 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src0t), ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03,
                     ggml_is_contiguous(src0), src0->name);
         }
         if (src1) {
-            GGML_LOG_INFO("%s: src1 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src1t), ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
+            GGML_LOG_DEBUG("%s: src1 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(src1t), ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
                     ggml_is_contiguous(src1), src1->name);
         }
         if (dst) {
-            GGML_LOG_INFO("%s: dst  - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], 1, %s\n", __func__, ggml_type_name(dstt), ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3,
+            GGML_LOG_DEBUG("%s: dst  - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], 1, %s\n", __func__, ggml_type_name(dstt), ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3,
                     dst->name);
+        }
+    }
+
+    // check if the current node can run concurrently with other nodes before it
+    // the condition is that:
+    //  - the current node cannot write to any previous src or dst ranges
+    //  - the current node cannot read from any previous dst ranges
+    //
+    // if the condition is not satisfied, we put a memory barrier and clear all ranges
+    // otherwise, we add the new ranges to the encoding context and process the node concurrently
+    //
+    if (ctx_dev->use_concurrency) {
+        bool is_concurrent = true;
+
+        // do not read from any previous dst ranges
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, node->src[i]);
+        }
+
+        // do not write to any previous ranges
+        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, dst);
+
+        if (!is_concurrent) {
+            ggml_metal_encode_mem_ranges_reset(ctx_enc);
+        }
+
+        if (ctx_dev->debug_graph > 0) {
+            GGML_LOG_DEBUG("%s: concurrent = %d\n", __func__, is_concurrent);
         }
     }
 
@@ -2552,6 +2596,22 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     id_dst = ggml_metal_get_buffer(nodes[n_fuse - 1], &offs_dst);
                 }
 
+                if (ctx_dev->use_concurrency && n_fuse > 1) {
+                    bool is_concurrent = true;
+
+                    // make sure that none of the fused nodes reads from a previous dst range
+                    for (int i = 1; i < n_fuse; ++i) {
+                        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, nodes[i]->src[1]);
+                    }
+
+                    // do not write to any previous range
+                    is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, nodes[n_fuse - 1]);
+
+                    if (!is_concurrent) {
+                        ggml_metal_encode_mem_ranges_reset(ctx_enc);
+                    }
+                }
+
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBytes:&args length:sizeof(args) atIndex:0];
                 [encoder setBuffer:id_src0 offset:offs_src0 atIndex:1];
@@ -2696,7 +2756,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
 
                     if (ctx_dev->use_concurrency) {
-                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                        ggml_metal_encode_mem_ranges_reset(ctx_enc);
                     }
                 }
 
@@ -4223,7 +4283,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     }
 
                     if (ctx_dev->use_concurrency) {
-                        [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                        ggml_metal_encode_mem_ranges_reset(ctx_enc);
                     }
 
                     {
@@ -4694,6 +4754,22 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                 if (n_fuse > 1) {
                     id_dst = ggml_metal_get_buffer(nodes[n_fuse - 1], &offs_dst);
+                }
+
+                if (ctx_dev->use_concurrency) {
+                    bool is_concurrent = true;
+
+                    // make sure that none of the fused nodes reads from a previous dst range
+                    for (int i = 1; i < n_fuse; ++i) {
+                        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, nodes[i]->src[1]);
+                    }
+
+                    // do not write to any previous range
+                    is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, nodes[n_fuse - 1]);
+
+                    if (!is_concurrent) {
+                        ggml_metal_encode_mem_ranges_reset(ctx_enc);
+                    }
                 }
 
                 id<MTLComputePipelineState> pipeline;
@@ -5616,7 +5692,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
 
                         if (ctx_dev->use_concurrency) {
-                            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                            ggml_metal_encode_mem_ranges_reset(ctx_enc);
                         }
 
                         // reduce the results from the workgroups
@@ -5883,28 +5959,28 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
     if (ctx_dev->debug_graph > 0) {
         if (n_fuse > 1) {
-            GGML_LOG_INFO("%s: fuse: %d ops\n", __func__, n_fuse);
+            GGML_LOG_DEBUG("%s: fuse: %d ops\n", __func__, n_fuse);
         }
     }
 
-    // after fusing, we have to add the new destination range to the encoding context
-    if (ctx_dev->use_concurrency && n_fuse > 1) {
-        struct ggml_tensor * dstf = nodes[n_fuse - 1];
+    // update the mem ranges in the encoding context
+    if (ctx_dev->use_concurrency) {
+        bool ok = true;
 
-        size_t offs_dstf = 0;
+        // add new src ranges
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            ok = ok && ggml_metal_encode_mem_ranges_add_src(ctx_enc, node->src[i]);
+        }
 
-        id<MTLBuffer> id_dstf = dstf ? ggml_metal_get_buffer(dstf, &offs_dstf) : nil;
+        // add the destination range
+        ok = ok && ggml_metal_encode_mem_ranges_add_dst(ctx_enc, nodes[n_fuse - 1]);
 
-        struct mem_range r = {
-            /*.p0 =*/ id_dstf.gpuAddress + offs_dstf,
-            /*.p1 =*/ id_dstf.gpuAddress + offs_dstf + ggml_nbytes(dstf),
-            /*.pt =*/ 1,
-        };
+        if (!ok) {
+            if (ctx_dev->debug_graph > 2) {
+                GGML_LOG_DEBUG("%s: the range cache is full -> reset and put a barrier\n", __func__);
+            }
 
-        if (!ggml_metal_encode_add_mem_range(ctx_enc, r)) {
-            ggml_metal_encode_reset_mem_ranges(ctx_enc);
-
-            [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+            ggml_metal_encode_mem_ranges_reset(ctx_enc);
         }
     }
 
@@ -6803,6 +6879,7 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
             /*.mem_pool =*/ mem_pool,
             /*.n_ranges =*/ 0,
             /*.ranges   =*/ { 0 },
+            /*.debug    =*/ ctx_dev->debug_graph,
         };
 
         for (int idx = node_start; idx < node_end;) {
