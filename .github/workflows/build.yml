@@ -209,16 +209,15 @@ jobs:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
 
-      - name: Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1.14.1
-
       - name: Build Dependencies
         id: build_depends
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             python3 python3-pip python3-dev \
-            build-essential libcurl4-openssl-dev
+            libjpeg-dev build-essential libcurl4-openssl-dev
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
+          source $HOME/.cargo/env
 
       - name: Python Dependencies
         id: python_depends
