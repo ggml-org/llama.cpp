@@ -150,7 +150,7 @@ class ServerStore {
 				} else if (error.message.includes('404')) {
 					errorMessage = 'Server endpoint not found';
 				} else if (error.message.includes('403') || error.message.includes('401')) {
-					errorMessage = 'Access denied - check server permissions';
+					errorMessage = 'Access denied';
 				}
 			}
 

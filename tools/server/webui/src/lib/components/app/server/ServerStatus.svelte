@@ -33,7 +33,7 @@
 	}
 </script>
 
-<div class="flex items-center space-x-2 {className}">
+<div class="flex items-center space-x-3 {className}">
 	<div class="flex items-center space-x-2">
 		<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
 
@@ -56,7 +56,7 @@
 
 	{#if showActions && error}
 		<Button variant="outline" size="sm" class="text-destructive">
-			<AlertTriangle class="mr-2 h-4 w-4" />
+			<AlertTriangle class="h-4 w-4" />
 
 			{error}
 		</Button>

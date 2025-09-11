@@ -13,9 +13,11 @@
 	} from '$lib/stores/chat.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
+	import { error } from '@sveltejs/kit';
 
 	let { children } = $props();
 
@@ -53,6 +55,35 @@
 	// Initialize server properties on app load
 	$effect(() => {
 		serverStore.fetchServerProps();
+	});
+
+	// Monitor API key changes and redirect to error page if removed or changed when required
+	$effect(() => {
+		const apiKey = config().apiKey;
+
+		if (
+			(page.route.id === '/' || page.route.id === '/chat/[id]') &&
+			page.status !== 401 &&
+			page.status !== 403
+		) {
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+
+			if (apiKey && apiKey.trim() !== '') {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
+			}
+
+			fetch('/props', { headers })
+				.then((response) => {
+					if (response.status === 401 || response.status === 403) {
+						window.location.reload();
+					}
+				})
+				.catch((e) => {
+					console.error('Error checking API key:', e);
+				});
+		}
 	});
 
 	// Set up title update confirmation callback

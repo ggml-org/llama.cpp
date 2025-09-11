@@ -8,6 +8,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
+	import Label from '$lib/components/ui/label/label.svelte';
 
 	interface Props {
 		class?: string;
@@ -110,9 +111,9 @@
 						bind:checked={shouldBranchAfterEdit}
 						onCheckedChange={(checked) => onShouldBranchAfterEditChange?.(checked === true)}
 					/>
-					<label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
+					<Label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
 						Branch conversation after edit
-					</label>
+					</Label>
 				</div>
 				<div class="flex gap-2">
 					<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">

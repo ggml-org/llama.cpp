@@ -12,6 +12,7 @@
 	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
+	import Label from '$lib/components/ui/label/label.svelte';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -337,9 +338,9 @@
 						{#each currentSection.fields as field (field.key)}
 							<div class="space-y-2">
 								{#if field.type === 'input'}
-									<label for={field.key} class="block text-sm font-medium">
+									<Label for={field.key} class="block text-sm font-medium">
 										{field.label}
-									</label>
+									</Label>
 
 									<Input
 										id={field.key}
@@ -354,9 +355,9 @@
 										</p>
 									{/if}
 								{:else if field.type === 'textarea'}
-									<label for={field.key} class="block text-sm font-medium">
+									<Label for={field.key} class="block text-sm font-medium">
 										{field.label}
-									</label>
+									</Label>
 
 									<Textarea
 										id={field.key}
@@ -376,9 +377,9 @@
 											opt.value === localConfig[field.key]
 									)}
 
-									<label for={field.key} class="block text-sm font-medium">
+									<Label for={field.key} class="block text-sm font-medium">
 										{field.label}
-									</label>
+									</Label>
 
 									<Select.Root
 										type="single"

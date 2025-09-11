@@ -17,7 +17,6 @@
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
 		ServerInfo,
-		ServerErrorSplash,
 		ServerLoadingSplash
 	} from '$lib/components/app';
 	import {
@@ -70,12 +69,11 @@
 	let showEmptyFileDialog = $state(false);
 	let emptyFileNames = $state<string[]>([]);
 
-	const isEmpty = $derived(
+	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
-	const hasServerError = $derived(serverError());
-	const isServerLoading = $derived(serverLoading());
+	let isServerLoading = $derived(serverLoading());
 
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
@@ -322,9 +320,6 @@
 			</div>
 		</div>
 	</div>
-{:else if hasServerError}
-	<!-- Server Error State -->
-	<ServerErrorSplash error={hasServerError} />
 {:else if isServerLoading}
 	<!-- Server Loading State -->
 	<ServerLoadingSplash />
