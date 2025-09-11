@@ -762,7 +762,7 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
     return -1;
 }
 
-#if 0
+#if 1
 #define GGML_SCHED_MAX_SPLITS_DEBUG 4096
 static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML_SCHED_MAX_SPLIT_INPUTS][128]; // debug only
 #define SET_CAUSE(node, ...) sprintf(causes[hash_id(node)], __VA_ARGS__)

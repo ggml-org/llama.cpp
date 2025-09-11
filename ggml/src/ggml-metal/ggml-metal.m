@@ -5918,10 +5918,13 @@ static void ggml_backend_metal_split_buffer_context_free(struct ggml_backend_met
 static void get_row_split(int64_t * row_low, int64_t * row_high, const struct ggml_tensor * tensor, const float tensor_split[1], int id) {
     GGML_LOG_DEBUG("%s: tensor '%s', id=%d, ne[1]=%lld\n", __func__, tensor->name, id, tensor->ne[1]);
     
+    const int64_t nrows = ggml_nrows(tensor);
+    
     // For Metal, we only have one device, so all rows go to device 0
     if (id == 0) {
-        *row_low = 0;
-        *row_high = tensor->ne[1];
+        // Use the tensor_split value to determine how much of the tensor goes to this device
+        *row_low = id == 0 ? 0 : (int64_t)(nrows * tensor_split[id]);
+        *row_high = id == 0 ? nrows : (int64_t)(nrows * tensor_split[id]);
         GGML_LOG_DEBUG("%s: assigning rows [%lld, %lld] to device %d\n", __func__, *row_low, *row_high, id);
     } else {
         *row_low = 0;
@@ -5930,7 +5933,6 @@ static void get_row_split(int64_t * row_low, int64_t * row_high, const struct gg
     }
     
     GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, (double)tensor_split[0]);
-    GGML_UNUSED(tensor_split);
 }
 
 // Buffer free function
@@ -6053,7 +6055,8 @@ static void ggml_backend_metal_split_buffer_set_tensor(
     GGML_ASSERT(size == ggml_nbytes(tensor));
     GGML_ASSERT(ggml_is_contiguous(tensor)); 
 
-    struct ggml_backend_metal_split_buffer_context *ctx = (struct ggml_backend_metal_split_buffer_type_context *) buffer->buft->context;
+    struct ggml_backend_metal_split_buffer_context *ctx = (struct ggml_backend_metal_split_buffer_context *) buffer->context;
+    struct ggml_backend_metal_split_buffer_type_context *buft_ctx = (struct ggml_backend_metal_split_buffer_type_context *) buffer->buft->context;
     const int64_t ne0 = tensor->ne[0];
     const size_t nb1 = tensor->nb[1];
     struct ggml_tensor_extra_metal *extra = (struct ggml_tensor_extra_metal *) tensor->extra;
@@ -6063,7 +6066,7 @@ static void ggml_backend_metal_split_buffer_set_tensor(
     for (int id = 0; id < device_count; ++id) {
         const float id_ = 1.0f;
         int64_t row_low = 0, row_high = 0;
-        get_row_split(&row_low, &row_high, tensor, &id_, id);
+        get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
         int64_t nrows = row_high - row_low;
         if (nrows <= 0) {
             continue;
@@ -6081,7 +6084,7 @@ static void ggml_backend_metal_split_buffer_set_tensor(
         // Copy the slice into the Metal buffer (contents pointer to GPU memory)
         memcpy([extra->data_device[id] contents], buf_host, original_size);
         // On macOS, inform Metal that buffer range was modified so GPU sees new data:contentReference[oaicite:2]{index=2}
-        //[extra->data_device[id] didModifyRange:NSMakeRange(0, original_size)];
+        [extra->data_device[id] didModifyRange:NSMakeRange(0, original_size)];
     }
 }
 
@@ -6093,6 +6096,7 @@ static void ggml_backend_metal_split_buffer_get_tensor(ggml_backend_buffer_t buf
     GGML_ASSERT(size == ggml_nbytes(tensor));
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
+    struct ggml_backend_metal_split_buffer_context * ctx = (struct ggml_backend_metal_split_buffer_context *)buffer->context;
     struct ggml_backend_metal_split_buffer_type_context * buft_ctx = (struct ggml_backend_metal_split_buffer_type_context *)buffer->buft->context;
 
     const int64_t ne0 = tensor->ne[0];
@@ -6160,6 +6164,10 @@ static ggml_backend_buffer_t ggml_backend_split_buffer_type_alloc_buffer(ggml_ba
     // However, the size still represents the maximum cumulative size of all the device buffers after the tensors are allocated,
     // as returned by get_alloc_size. This limit is enforced during tensor allocation by ggml-alloc, so it must be correct.
     struct ggml_backend_metal_split_buffer_context * ctx = calloc(1, sizeof(struct ggml_backend_metal_split_buffer_context));
+    if (ctx == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate split buffer context\n", __func__);
+        return NULL;
+    }
 
     return ggml_backend_buffer_init(buft, ggml_backend_metal_split_buffer_interface, ctx, size);
 }
@@ -6227,10 +6235,17 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_split_buffer_type(int m
     }
     
     ctx->main_device = main_device;
-    ctx->tensor_split[0] = 1.0f; // All tensors go to the single Metal device
-    ctx->name = "Metal_Split";
     
-    GGML_LOG_DEBUG("%s: tensor_split[0] = %f\n", __func__, (double)ctx->tensor_split[0]);
+    // Properly handle tensor split values
+    if (tensor_split != NULL) {
+        ctx->tensor_split[0] = tensor_split[0];
+        GGML_LOG_DEBUG("%s: tensor_split[0] = %f (from input)\n", __func__, (double)ctx->tensor_split[0]);
+    } else {
+        ctx->tensor_split[0] = 1.0f; // All tensors go to the single Metal device
+        GGML_LOG_DEBUG("%s: tensor_split[0] = %f (default)\n", __func__, (double)ctx->tensor_split[0]);
+    }
+    
+    ctx->name = "Metal_Split";
 
     // Allocate a new buffer type structure each time
     struct ggml_backend_buffer_type * buft = calloc(1, sizeof(struct ggml_backend_buffer_type));
