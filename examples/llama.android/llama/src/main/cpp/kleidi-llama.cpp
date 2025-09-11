@@ -23,7 +23,7 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 /**
  * Logging utils
  */
-#define TAG "llama-android.cpp"
+#define TAG "kleidi-llama"
 #define LOGv(...) __android_log_print(ANDROID_LOG_VERBOSE,  TAG, __VA_ARGS__)
 #define LOGd(...) __android_log_print(ANDROID_LOG_DEBUG,    TAG, __VA_ARGS__)
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO,     TAG, __VA_ARGS__)
@@ -177,7 +177,7 @@ Java_android_llama_cpp_internal_InferenceEngineImpl_benchModel(JNIEnv *env, jobj
                                                       jint pl, jint nr) {
     auto *context = init_context(g_model, pp);
     if (!context) {
-        const auto err_msg = "Fail to init_context! Bench aborted.";
+        const auto *const err_msg = "Fail to init_context! Bench aborted.";
         LOGe(err_msg);
         return env->NewStringUTF(err_msg);
     }

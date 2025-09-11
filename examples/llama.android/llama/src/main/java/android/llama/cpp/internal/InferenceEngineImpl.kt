@@ -4,6 +4,7 @@ import android.content.Context
 import android.llama.cpp.InferenceEngine
 import android.llama.cpp.UnsupportedArchitectureException
 import android.util.Log
+import dalvik.annotation.optimization.FastNative
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +38,7 @@ import java.io.IOException
  *
  * State transitions are managed automatically and validated at each operation.
  *
- * @see llama-android.cpp for the native implementation details
+ * @see kleidi-llama.cpp for the native implementation details
  */
 internal class InferenceEngineImpl private constructor(
     private val nativeLibDir: String
@@ -74,20 +75,36 @@ internal class InferenceEngineImpl private constructor(
 
     /**
      * JNI methods
-     * @see llama-android.cpp
+     * @see kleidi-llama.cpp
      */
+    @FastNative
     private external fun init(nativeLibDir: String)
+
+    @FastNative
     private external fun load(modelPath: String): Int
+
+    @FastNative
     private external fun prepare(): Int
 
+    @FastNative
     private external fun systemInfo(): String
+
+    @FastNative
     private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
 
+    @FastNative
     private external fun processSystemPrompt(systemPrompt: String): Int
+
+    @FastNative
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
+
+    @FastNative
     private external fun generateNextToken(): String?
 
+    @FastNative
     private external fun unload()
+
+    @FastNative
     private external fun shutdown()
 
     private val _state =
