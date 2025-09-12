@@ -57,7 +57,8 @@ RUN mkdir -p /app/full && \
     cp *.py /app/full/ && \
     cp -r gguf-py /app/full/ && \
     cp -r requirements /app/full/ && \
-    cp requirements.txt /app/full/
+    cp requirements.txt /app/full/ && \
+    cp .devops/healthcheck.sh /app/full/healthcheck.sh
     # If you have a tools.sh script, make sure it is copied here
     # cp .devops/tools.sh /app/full/tools.sh
 
@@ -124,7 +125,8 @@ FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
 
 COPY --from=build /app/full/llama-server /app
+COPY --from=build /app/full/healthcheck.sh /app
 
-HEALTHCHECK --interval=5m CMD [ "curl", "-f", "http://localhost:8080/health" ]
+HEALTHCHECK --interval=5m CMD [ "/app/healthcheck.sh" ]
 
 ENTRYPOINT [ "/app/llama-server" ]

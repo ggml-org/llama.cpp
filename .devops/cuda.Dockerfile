@@ -33,7 +33,8 @@ RUN mkdir -p /app/full \
     && cp -r gguf-py /app/full \
     && cp -r requirements /app/full \
     && cp requirements.txt /app/full \
-    && cp .devops/tools.sh /app/full/tools.sh
+    && cp .devops/tools.sh /app/full/tools.sh \
+    && cp .devops/healthcheck.sh /app/full/healthcheck.sh
 
 ## Base image
 FROM ${BASE_CUDA_RUN_CONTAINER} AS base
@@ -86,9 +87,10 @@ FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
 
 COPY --from=build /app/full/llama-server /app
+COPY --from=build /app/full/healthcheck.sh /app
 
 WORKDIR /app
 
-HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
+HEALTHCHECK CMD [ "/app/healthcheck.sh" ]
 
 ENTRYPOINT [ "/app/llama-server" ]
