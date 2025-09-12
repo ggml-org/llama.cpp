@@ -2032,7 +2032,7 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
                 throw common_chat_msg_partial_exception("Expected </arg_key> after <arg_key>");
             }
             if (key_res->groups[0].end - key_res->groups[0].begin != 10) {
-                gen_partial_args([&](auto &&rest, auto &&needle){arguments[key_res->prelude + needle] = "";});
+                gen_partial_args([&](auto &&, auto &&needle){arguments[key_res->prelude + needle] = "";});
                 throw common_chat_msg_partial_exception("Expected </arg_key> after <arg_key>");
             }
             auto &key = key_res->prelude;
@@ -2075,7 +2075,7 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             if (val_start == builder.pos()) {
                 if (auto value_plain = builder.try_find_literal("</arg_value>")) {
                     if (value_plain->groups[0].end - value_plain->groups[0].begin != 12) {
-                        gen_partial_args([&](auto &&rest, auto &&needle){arguments[key] = value_plain->prelude + needle;});
+                        gen_partial_args([&](auto &&, auto &&needle){arguments[key] = value_plain->prelude + needle;});
                         throw common_chat_msg_partial_exception("Expected </arg_value> after <arg_value>");
                     }
                     arguments[key] = value_plain->prelude;
@@ -2104,8 +2104,9 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             throw common_chat_msg_partial_exception("Failed to add GLM tool call");
         }
     }
+
+    builder.consume_spaces();
     while (builder.pos() != builder.input().size()) {
-        builder.consume_spaces();
         builder.try_parse_reasoning("<think>", "</think>");
         builder.consume_spaces();
         std::string content;
@@ -2127,6 +2128,10 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             }
             builder.add_content(content);
         }
+        if (!builder.try_consume_literal("<think>")) {
+            break;
+        }
+        builder.move_to(builder.pos() - 7);
     }
 }
 
