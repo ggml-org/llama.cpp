@@ -377,8 +377,13 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
         if (ggml_backend_split_buffer_type_fn) {
             size_t dev_index = [&]() {
                 auto * reg = ggml_backend_dev_backend_reg(dev);
-                for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); ++i) {
-                    if (ggml_backend_reg_dev_get(reg, i) == dev) {
+                size_t reg_dev_count = ggml_backend_reg_dev_count(reg);
+                LLAMA_LOG_DEBUG("%s: device %s, reg %s, device count %zu\n", __func__, ggml_backend_dev_name(dev), ggml_backend_reg_name(reg), reg_dev_count);
+                for (size_t i = 0; i < reg_dev_count; ++i) {
+                    ggml_backend_dev_t reg_dev = ggml_backend_reg_dev_get(reg, i);
+                    LLAMA_LOG_DEBUG("%s: comparing device %s with reg device %s at index %zu\n", __func__, ggml_backend_dev_name(dev), ggml_backend_dev_name(reg_dev), i);
+                    if (reg_dev == dev) {
+                        LLAMA_LOG_DEBUG("%s: found device %s at index %zu\n", __func__, ggml_backend_dev_name(dev), i);
                         return i;
                     }
                 }
