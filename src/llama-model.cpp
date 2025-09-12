@@ -7550,6 +7550,7 @@ struct llm_build_bert : public llm_graph_context {
     }
 };
 
+template <bool iswa>
 struct llm_build_modern_bert : public llm_graph_context {
     llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -18357,7 +18358,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_MODERN_BERT:
             {
-                llm = std::make_unique<llm_build_modern_bert>(*this, params);
+                llm = std::make_unique<llm_build_modern_bert<true>>(*this, params);
             } break;
         case LLM_ARCH_NEO_BERT:
             {
