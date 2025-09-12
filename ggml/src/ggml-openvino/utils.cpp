@@ -218,7 +218,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     auto gguf_tensor_addrs = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < ov_output_names.size(); i++) {
-        auto result_name = ov_output_names[i];
+        auto& result_name = ov_output_names[i];
         const auto output_tensor = infer_request.get_output_tensor(i);
 
         std::memcpy(gguf_tensor_addrs[result_name], output_tensor.data(), output_tensor.get_byte_size());
@@ -243,20 +243,34 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     GGML_UNUSED(backend);
 }
 
-ov::AnyMap get_npu_prefill_config() {
-    ov::AnyMap config = {
+namespace {
+ov::AnyMap get_npu_base_config() {
+    return {
         {"NPU_COMPILATION_MODE_PARAMS",       "compute-layers-with-higher-precision=Sqrt,Power,ReduceMean,Add_RMSNorm"  },
         {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"                                                                     },
         {"NPU_USE_NPUW",                      "YES"                                                                     },
         {"NPUW_DEVICES",                      "NPU"                                                                     },
         {"NPUW_FOLD",                         "YES"                                                                     },
         {"NPUW_WEIGHTS_BANK",                 "shared"                                                                  },
-        {"NPUW_FUNCALL_ASYNC",                "YES"                                                                     },
         {"NPUW_FUNCALL_FOR_ALL",              "YES"                                                                     },
         {"NPUW_DQ",                           "YES"                                                                     },
         {"NPUW_DQ_FULL",                      "NO"                                                                      },
         {"NPUW_CACHE_DIR",                    getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
     };
+}
+}  // namespace
+
+ov::AnyMap get_npu_prefill_config() {
+    auto config = get_npu_base_config();
+    config.emplace("NPUW_FUNCALL_ASYNC", "NO");
+    config.emplace("NPUW_ACC_CHECK", "YES");
+    config.emplace("NPUW_ACC_DEVICE", "CPU");
+    return config;
+}
+
+ov::AnyMap get_npu_generate_config() {
+    auto config = get_npu_base_config();
+    config.emplace("NPUW_FUNCALL_ASYNC", "YES");
     return config;
 }
 
@@ -266,7 +280,7 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
             {GGML_TYPE_Q4_0, ExtraQuantType::Q4_0_128},
             {GGML_TYPE_Q4_1, ExtraQuantType::Q4_0_128},
             {GGML_TYPE_Q4_K, ExtraQuantType::Q4_0_128},
-            {GGML_TYPE_Q6_K, ExtraQuantType::Q8_1_C  },
+            {GGML_TYPE_Q6_K, ExtraQuantType::F16     },
         };
     }
     if (device == "GPU") {
@@ -276,12 +290,6 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
         };
     }
     return {};
-}
-
-ov::AnyMap get_npu_generate_config() {
-    ov::AnyMap config = get_npu_prefill_config();
-    config.emplace("NPUW_UNFOLD_IREQS", "YES");
-    return config;
 }
 
 bool is_naive(struct ggml_cgraph* cgraph) {
@@ -373,7 +381,7 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
 
         } else if (const auto* op = ggml_decoder->get_tensor_used_op(ggml_decoder->get_tensor_from_name(param_name));
                    op && op->op == GGML_OP_SET_ROWS && is_static && is_first_token) {
-            input_tensor = ov::Tensor(ov::element::i64, ov::Shape{1});
+            input_tensor = ov::Tensor(ov::element::i64, ov::Shape{1, 1, 1});
         } else {
             input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
         }
