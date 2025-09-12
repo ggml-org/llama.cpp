@@ -297,9 +297,6 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_SET_ROWS_Q5_0,
     GGML_METAL_KERNEL_TYPE_SET_ROWS_Q5_1,
     GGML_METAL_KERNEL_TYPE_SET_ROWS_IQ4_NL,
-    GGML_METAL_KERNEL_TYPE_RMS_NORM,
-    GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL,
-    GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL_ADD,
     GGML_METAL_KERNEL_TYPE_L2_NORM,
     GGML_METAL_KERNEL_TYPE_GROUP_NORM,
     GGML_METAL_KERNEL_TYPE_NORM,
@@ -1220,9 +1217,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SET_ROWS_Q5_0,                   set_rows_q5_0,                   true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SET_ROWS_Q5_1,                   set_rows_q5_1,                   true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SET_ROWS_IQ4_NL,                 set_rows_iq4_nl,                 true);
-        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_RMS_NORM,                        rms_norm,                        has_simdgroup_reduction);
-        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL,                    rms_norm_mul,                    has_simdgroup_reduction);
-        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL_ADD,                rms_norm_mul_add,                has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_L2_NORM,                         l2_norm,                         has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GROUP_NORM,                      group_norm,                      has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_NORM,                            norm,                            true);
@@ -1701,11 +1695,11 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
 
         if (row) {
             snprintf(base, 256, "kernel_%s_row_c4_fuse_%d", op_str, n_fuse);
-            snprintf(name, 256, "kernel_%s_row_c4_fuse_%d", op_str, n_fuse);
         } else {
             snprintf(base, 256, "kernel_%s_fuse_%d", op_str, n_fuse);
-            snprintf(name, 256, "kernel_%s_fuse_%d", op_str, n_fuse);
         }
+
+        snprintf(name, 256, "%s", base);
 
         id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
         if (res) {
@@ -1717,6 +1711,40 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
 
         return ggml_metal_compile_kernel(backend, base, name, cv);
     }
+}
+
+static id<MTLComputePipelineState> ggml_metal_get_pipeline_rms_norm(
+        ggml_backend_t backend, struct ggml_tensor * op,
+        int32_t n_fuse) {
+    struct ggml_backend_metal_context * ctx = backend->context;
+
+    char base[256];
+    char name[256];
+
+    @autoreleasepool {
+        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
+
+        switch (n_fuse) {
+            case 1: snprintf(base, 256, "kernel_rms_norm");              break;
+            case 2: snprintf(base, 256, "kernel_rms_norm_mul");     break;
+            case 3: snprintf(base, 256, "kernel_rms_norm_mul_add"); break;
+            default: GGML_ABORT("fatal error");
+        }
+
+        snprintf(name, 256, "%s", base);
+
+        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+        if (res) {
+            // kernel found
+            return res;
+        }
+
+        cv = [[MTLFunctionConstantValues alloc] init];
+
+        return ggml_metal_compile_kernel(backend, base, name, cv);
+    }
+
+    GGML_UNUSED(op);
 }
 
 static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
@@ -4619,14 +4647,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     }
                 }
 
-                id<MTLComputePipelineState> pipeline;
-
-                switch (n_fuse) {
-                    case 1: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_RMS_NORM        ].pipeline; break;
-                    case 2: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL    ].pipeline; break;
-                    case 3: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_RMS_NORM_MUL_ADD].pipeline; break;
-                    default: GGML_ABORT("unsupported n_fuse = %d\n", n_fuse);
-                }
+                const id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_rms_norm(backend, node, n_fuse);
 
                 int nth = 32; // SIMD width
 
