@@ -24,6 +24,13 @@
   },
   {
     "REPLS": {
+      "TYPE" : "q4_0",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": ["BYTE_HELPERS", "Q4_0_T", "Q4_0"]
+  },
+  {
+    "REPLS": {
       "TYPE" : "q4_1",
       "BLOCK_SIZE": 32
     },
