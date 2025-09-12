@@ -19,6 +19,7 @@ namespace ggml {
 namespace pass {
 
 FuseToSDPA::FuseToSDPA() {
+    // Not maintained since FLASH_ATTN_EXT has replaced this pattern
     const auto m_k = ov::pass::pattern::any_input();
     const auto m_q = ov::pass::pattern::any_input();
     const auto m_qk = ov::pass::pattern::wrap_type<ov::op::v0::MatMul>({m_q, m_k});
