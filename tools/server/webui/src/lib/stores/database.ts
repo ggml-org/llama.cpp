@@ -52,6 +52,8 @@ const db = new LlamacppDatabase();
  * enabling conversation branching and alternative response paths. The conversation's
  * `currNode` tracks the currently active branch endpoint.
  */
+import { v4 as uuid } from 'uuid';
+
 export class DatabaseStore {
 	/**
 	 * Adds a new message to the database.
@@ -62,7 +64,7 @@ export class DatabaseStore {
 	static async addMessage(message: Omit<DatabaseMessage, 'id'>): Promise<DatabaseMessage> {
 		const newMessage: DatabaseMessage = {
 			...message,
-			id: crypto.randomUUID()
+			id: uuid()
 		};
 
 		await db.messages.add(newMessage);
@@ -77,7 +79,7 @@ export class DatabaseStore {
 	 */
 	static async createConversation(name: string): Promise<DatabaseConversation> {
 		const conversation: DatabaseConversation = {
-			id: crypto.randomUUID(),
+			id: uuid(),
 			name,
 			lastModified: Date.now(),
 			currNode: ''
@@ -110,7 +112,7 @@ export class DatabaseStore {
 
 			const newMessage: DatabaseMessage = {
 				...message,
-				id: crypto.randomUUID(),
+				id: uuid(),
 				parent: parentId,
 				children: []
 			};
@@ -144,7 +146,7 @@ export class DatabaseStore {
 	 */
 	static async createRootMessage(convId: string): Promise<string> {
 		const rootMessage: DatabaseMessage = {
-			id: crypto.randomUUID(),
+			id: uuid(),
 			convId,
 			type: 'root',
 			timestamp: Date.now(),

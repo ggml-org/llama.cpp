@@ -67,6 +67,7 @@
 		"tw-animate-css": "^1.3.5",
 		"typescript": "^5.0.0",
 		"typescript-eslint": "^8.20.0",
+		"uuid": "^13.0.0",
 		"vite": "^7.0.4",
 		"vite-plugin-devtools-json": "^0.2.0",
 		"vitest": "^3.2.3",
