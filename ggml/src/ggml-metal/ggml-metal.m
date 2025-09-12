@@ -640,7 +640,7 @@ static void ggml_metal_heap_free(struct ggml_metal_heap * heap) {
 @end
 
 //
-// ggml_metal_mem_pool
+// ggml_metal_mem_pool [TAG_MEM_POOL_REMOVE]
 //
 
 struct ggml_metal_mem_pool {
@@ -4120,6 +4120,14 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         default: break;
                     }
 
+                    // TODO: using mem pool allocations with enabled concurrency is not safe because the mem pool
+                    // reuses buffers. this can result in 2 concurrent MUL_MAT_ID ops using the same mem pool buffer.
+                    // so we add this extra barrier to prevent the race.
+                    // the correct solution is to remove mem pools and then remove this barrier [TAG_MEM_POOL_REMOVE]
+                    if (ctx_dev->use_concurrency) {
+                        ggml_metal_encode_mem_ranges_reset(ctx_enc);
+                    }
+
                     // tokens per expert
                     const size_t s_tpe = ggml_type_size(GGML_TYPE_I32)*ne02;
                     id<MTLBuffer> h_tpe = ggml_metal_mem_pool_alloc(mem_pool, s_tpe);
@@ -4180,6 +4188,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(ne02, 1, 1)];
                     }
 
+                    // this barrier is always needed because the next kernel has to wait for the id maps to be computed
                     if (ctx_dev->use_concurrency) {
                         ggml_metal_encode_mem_ranges_reset(ctx_enc);
                     }
@@ -5569,6 +5578,12 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         GGML_ASSERT(ne01*ne02*ne03 == ne1*ne2*ne3);
                         GGML_ASSERT(ne1*ne2*ne3 <= (1u << 31));
 
+                        // using mem pool allocations with enabled concurrency is not safe [TAG_MEM_POOL_REMOVE]
+                        // still, we assume that concurrent FA won't happen before we do the refactor
+                        //if (ctx_dev->use_concurrency) {
+                        //    ggml_metal_encode_mem_ranges_reset(ctx_enc);
+                        //}
+
                         const int32_t nrows = ne1*ne2*ne3;
 
                         // temp buffer for writing the results from each workgroup
@@ -5947,6 +5962,7 @@ static enum ggml_status ggml_metal_graph_compute(
             // cannot use commandBufferWithUnretainedReferences because the buffers from the memory pool can get destroyed
             // TODO: when the memory pools are removed, we can again use commandBufferWithUnretainedReferences
             //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2334215009
+            // [TAG_MEM_POOL_REMOVE]
             //id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
             id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
             [cmd_buf retain];
