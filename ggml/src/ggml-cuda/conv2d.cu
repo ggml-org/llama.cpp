@@ -1,19 +1,6 @@
 #include "conv2d.cuh"
 #include "convert.cuh"
 
-#ifdef FP16_MMA_AVAILABLE
-#    if !defined(GGML_USE_HIP)
-#        include <mma.h>
-#        ifdef GGML_USE_MUSA
-namespace wmma = mtmusa::wmma;
-#        else
-namespace wmma = nvcuda::wmma;
-#        endif
-#    else
-#        include <rocwmma/rocwmma.hpp>
-namespace wmma = rocwmma;
-#    endif
-#endif
 struct conv_params {
     const int64_t IW, IH;
     const int64_t OW, OH;
@@ -26,10 +13,6 @@ struct conv_params {
     const int64_t TOTAL;
     // helpers
     const int64_t IC_KH_KW, N_OH_OW;
-};
-
-auto ceil_div = [](int a, int b) {
-    return (a + b - 1) / b;
 };
 
 __device__ __forceinline__ static int calculate_input_coord(int64_t out_coord,
@@ -88,151 +71,227 @@ struct whcn_layout {
     }
 };
 
-class float_mma {
+template <typename layout> class float_mma {
   public:
-    float * buf;
+    static constexpr int num_acc = (WMMA_M * WMMA_N + WARP_SIZE - 1) / WARP_SIZE;
 
-    __device__ __forceinline__ float_mma(float * scratch) {
-        buf               = scratch;
-        const int lane_id = threadIdx.x % warpSize;
+    float acc[num_acc];
+
+    __device__ __forceinline__ float_mma() {
 #pragma unroll
-        for (int i = lane_id; i < WMMA_M * WMMA_N; i += warpSize) {
-            buf[i] = 0.0f;
+        for (int i = 0; i < num_acc; i++) {
+            acc[i] = 0.0f;
         }
     }
 
-    __device__ __forceinline__ void mma(const float * A_sh, const float * B_sh, const int strideA, const int strideB) {
-        const int lane_id = threadIdx.x % warpSize;
+    __device__ __forceinline__ void clear() {
 #pragma unroll
-        for (int e = lane_id; e < (WMMA_M * WMMA_N); e += warpSize) {
-            int   m   = e / WMMA_N;
-            int   n   = e % WMMA_N;
-            float sum = buf[m * WMMA_N + n];
+        for (int i = 0; i < num_acc; i++) {
+            acc[i] = 0.0f;
+        }
+    }
+
+    __device__ __forceinline__ void mma(const float * __restrict__ A_sh,
+                                        const float * __restrict__ B_sh,
+                                        const int strideA,
+                                        const int strideB) {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+#pragma unroll
+        for (int e = lane_id, i = 0; e < WMMA_M * WMMA_N; e += WARP_SIZE, i++) {
+            const int m = e / WMMA_N;
+            const int n = e % WMMA_N;
+
 #pragma unroll
             for (int k = 0; k < WMMA_K; k++) {
-                float a = A_sh[m * strideA + k];
-                float b = B_sh[k * strideB + n];
-                sum     = fmaf(a, b, sum);
+                const float a = A_sh[m * strideA + k];
+                const float b = B_sh[k * strideB + n];
+                acc[i]        = fmaf(a, b, acc[i]);
             }
-            buf[m * WMMA_N + n] = sum;
         }
     }
 
-    __device__ __forceinline__ float * store_result() const { return buf; }
+    __device__ __forceinline__ void store_result(const int64_t OC_BASE,
+                                                 const int64_t NOHOW_BASE,
+                                                 float * __restrict__ OUT,
+                                                 const conv_params & P) const {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+#pragma unroll
+        for (int e = lane_id, i = 0; e < WMMA_M * WMMA_N; e += WARP_SIZE, i++) {
+            const int m = e / WMMA_N;
+            const int n = e % WMMA_N;
+
+            const int64_t oc    = OC_BASE + m;
+            const int64_t nohow = NOHOW_BASE + n;
+
+            if (oc < P.OC && nohow < P.N_OH_OW) {
+                int64_t n_, oh, ow;
+                layout::unpack_nohow(nohow, n_, oh, ow, P);
+                const int64_t out_idx = layout::output_index(n_, oc, oh, ow, P);
+                OUT[out_idx]          = acc[i];
+            }
+        }
+    }
 };
 
 #if (__CUDA_ARCH__ == GGML_CUDA_CC_VOLTA || (defined(FP16_MMA_AVAILABLE)))
+#    include "mma.cuh"
+using namespace ggml_cuda_mma;
 
-class half_mma {
+typedef ggml_cuda_mma::tile<WMMA_M, WMMA_K / 2, half2> tile_a;
+typedef ggml_cuda_mma::tile<WMMA_N, WMMA_K / 2, half2> tile_b;
+typedef ggml_cuda_mma::tile<WMMA_M, WMMA_N, float>     tile_acc;
+
+template <typename layout> class half_mma {
   private:
-    wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float>              acc;
-    wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> b_frag;
+    tile_a   a_frag;
+    tile_b   b_frag;
+    tile_acc c_frag;
   public:
-    float * buf;
+    __device__ __forceinline__ half_mma() {}
 
-    __device__ __forceinline__ half_mma(float * scratch) {
-        buf = scratch;
-        wmma::fill_fragment(acc, 0.0f);
+    __device__ __forceinline__ void clear() {
+#    pragma unroll
+        for (int l = 0; l < c_frag.ne; ++l) {
+            c_frag.x[l] = 0.0f;
+        }
     }
 
     __device__ __forceinline__ void mma(const half * A_sh, const half * B_sh, const int strideA, const int strideB) {
-        wmma::load_matrix_sync(a_frag, A_sh, strideA);
-        wmma::load_matrix_sync(b_frag, B_sh, strideB);
-        wmma::mma_sync(acc, a_frag, b_frag, acc);
+        ggml_cuda_mma::load_ldmatrix(a_frag, (const half2 *) A_sh, strideA / 2);
+        ggml_cuda_mma::load_ldmatrix_trans(b_frag, (const half2 *) B_sh, strideB / 2);
+        ggml_cuda_mma::mma(c_frag, a_frag, b_frag);
     }
 
-    __device__ __forceinline__ float * store_result() const {
-        wmma::store_matrix_sync(buf, acc, WMMA_N, wmma::mem_row_major);
-        return buf;
+    __device__ __forceinline__ void store_result(const int64_t       OC_BASE,
+                                                 const int64_t       NOHOW_BASE,
+                                                 float *             OUT,
+                                                 const conv_params & P) const {
+#    pragma unroll
+        for (int l = 0; l < tile_acc::ne; ++l) {
+            const int64_t e = tile_acc::get_i(l) * WMMA_N + tile_acc::get_j(l);
+            const int     m = e / WMMA_N;
+            const int     n = e % WMMA_N;
+
+            const int64_t oc    = OC_BASE + m;
+            const int64_t nohow = NOHOW_BASE + n;
+
+            if (oc < P.OC && nohow < (P.N_OH_OW)) {
+                int64_t n, oh, ow;
+                layout::unpack_nohow(nohow, n, oh, ow, P);
+                OUT[layout::output_index(n, oc, oh, ow, P)] = c_frag.x[l];
+            }
+        }
     }
 };
 
 #else
 
-class half_mma {
+template <typename layout> class half_mma {
   public:
-    float * buf;
+    static constexpr int num_acc = (WMMA_M * WMMA_N + WARP_SIZE - 1) / WARP_SIZE;
 
-    __device__ __forceinline__ half_mma(float * scratch) {
-        buf               = scratch;
-        const int lane_id = threadIdx.x % warpSize;
+    float acc[num_acc];
+
+    __device__ __forceinline__ half_mma() {
 #    pragma unroll
-        for (int i = lane_id; i < WMMA_M * WMMA_N; i += warpSize) {
-            buf[i] = 0.0f;
+        for (int i = 0; i < num_acc; i++) {
+            acc[i] = 0.0f;
         }
     }
 
-    __device__ __forceinline__ void mma(const half * A_sh, const half * B_sh, const int strideA, const int strideB) {
-        const int lane_id = threadIdx.x % warpSize;
+    __device__ __forceinline__ void clear() {
 #    pragma unroll
-        for (int e = lane_id; e < (WMMA_M * WMMA_N); e += warpSize) {
-            int   m   = e / WMMA_N;
-            int   n   = e % WMMA_N;
-            float sum = buf[m * WMMA_N + n];
+        for (int i = 0; i < num_acc; i++) {
+            acc[i] = 0.0f;
+        }
+    }
+
+    __device__ __forceinline__ void mma(const half * __restrict__ A_sh,
+                                        const half * __restrict__ B_sh,
+                                        const int strideA,
+                                        const int strideB) {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+#    pragma unroll
+        for (int e = lane_id, i = 0; e < WMMA_M * WMMA_N; e += WARP_SIZE, i++) {
+            const int m = e / WMMA_N;
+            const int n = e % WMMA_N;
+
 #    pragma unroll
             for (int k = 0; k < WMMA_K; k++) {
-                float a = A_sh[m * strideA + k];
-                float b = B_sh[k * strideB + n];
-                sum     = fmaf(__half2float(a), __half2float(b), sum);
+                const half a = A_sh[m * strideA + k];
+                const half b = B_sh[k * strideB + n];
+                acc[i]       = fmaf(__half2float(a), __half2float(b), acc[i]);
             }
-            buf[m * WMMA_N + n] = sum;
         }
     }
 
-    __device__ __forceinline__ float * store_result() const { return buf; }
+    __device__ __forceinline__ void store_result(const int64_t OC_BASE,
+                                                 const int64_t NOHOW_BASE,
+                                                 float * __restrict__ OUT,
+                                                 const conv_params & P) const {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+#    pragma unroll
+        for (int e = lane_id, i = 0; e < WMMA_M * WMMA_N; e += WARP_SIZE, i++) {
+            const int m = e / WMMA_N;
+            const int n = e % WMMA_N;
+
+            const int64_t oc    = OC_BASE + m;
+            const int64_t nohow = NOHOW_BASE + n;
+
+            if (oc < P.OC && nohow < P.N_OH_OW) {
+                int64_t n_, oh, ow;
+                layout::unpack_nohow(nohow, n_, oh, ow, P);
+                const int64_t out_idx = layout::output_index(n_, oc, oh, ow, P);
+                OUT[out_idx]          = acc[i];
+            }
+        }
+    }
 };
+
 #endif  // defined((__CUDA_ARCH__ == GGML_CUDA_CC_VOLTA || defined(FP16_MMA_AVAILABLE))
 
-template <typename T, typename layout, typename mma>
-static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT, const conv_params P) {
+template <typename T, typename layout, typename mma, int num_warps>
+__global__ void conv2d_kernel(const float * IN, const T * IK, float * Out, const conv_params P) {
     extern __shared__ unsigned char smem_raw[];
 
-    const int64_t OUTPUT_NUMEL = WMMA_M * WMMA_N;
     const int64_t NUM_IC_TILES = (P.IC_KH_KW + BS_ICKHKW - 1) / BS_ICKHKW;
+    const int64_t warpId       = threadIdx.y;
 
-    const int64_t WARPS_PER_NOHOW = max(1, BS_NOHOW / WMMA_N);
+    const int64_t WARPS_PER_NOHOW    = max(1, BS_NOHOW / WMMA_N);
+    const int64_t total_warps_need   = (((BS_OC * BS_NOHOW) + (WMMA_M * WMMA_N) - 1) / (WMMA_M * WMMA_N));
+    const int64_t num_work_per_warps = (total_warps_need + num_warps - 1) / num_warps;
 
-    const int64_t NUM_BL_NOHOW     = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
-    const int64_t tile_id          = blockIdx.x;
-    const int64_t tile_oc          = tile_id / NUM_BL_NOHOW;
-    const int64_t tile_nohow       = tile_id % NUM_BL_NOHOW;
-    const int64_t BLOCK_OC_BASE    = tile_oc * BS_OC;
-    const int64_t BLOCK_NOHOW_BASE = tile_nohow * BS_NOHOW;
+    mma acc[num_work_per_warps];
 
-    const int64_t laneId = threadIdx.x % WARP_SIZE;
-    const int64_t warpId = threadIdx.x / WARP_SIZE;
+    const int64_t num_block_nohow = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
+    const int64_t BL_IDX_OC       = blockIdx.x / num_block_nohow;
+    const int64_t BL_IDX_NOHOW    = blockIdx.x % num_block_nohow;
 
-    const int64_t WARP_OC    = warpId / WARPS_PER_NOHOW;
-    const int64_t WARP_NOHOW = warpId % WARPS_PER_NOHOW;
+    const int64_t BLOCK_OC_BASE    = BL_IDX_OC * BS_OC;
+    const int64_t BLOCK_NOHOW_BASE = BL_IDX_NOHOW * BS_NOHOW;
 
-    const int64_t OC_BASE    = BLOCK_OC_BASE + WARP_OC * WMMA_M;
-    const int64_t NOHOW_BASE = BLOCK_NOHOW_BASE + WARP_NOHOW * WMMA_N;
-
-    unsigned char * ptr  = smem_raw;
-    T *             A_sh = reinterpret_cast<T *>(ptr);
-
-    size_t offsetA = BS_OC * BS_ICKHKW * sizeof(T);
-    ptr += offsetA;
-
-    T * B_sh = reinterpret_cast<T *>(ptr);
-    ptr += BS_ICKHKW * BS_NOHOW * sizeof(T);
-
-    float * shared_scratch = reinterpret_cast<float *>(ptr);
-    float * warp_scratch   = shared_scratch + warpId * (WMMA_M * WMMA_N);
-
-    const T * A_warp_base = A_sh + WARP_OC * WMMA_M * BS_ICKHKW;
-    const T * B_warp_base = B_sh + WARP_NOHOW * WMMA_N;
-
-    mma acc(warp_scratch);
+    unsigned char * ptr = smem_raw;
 
     const int64_t A_total = BS_OC * BS_ICKHKW;
     const int64_t B_total = BS_ICKHKW * BS_NOHOW;
 
-#pragma unroll
+    size_t offsetA = (size_t) A_total * sizeof(T);
+    T *    A_sh    = reinterpret_cast<T *>(ptr);
+    ptr += offsetA;
+
+    size_t offsetB = (size_t) B_total * sizeof(T);
+    T *    B_sh    = reinterpret_cast<T *>(ptr);
+    ptr += offsetB;
+
+    int64_t ic, kh, kw;
+    int64_t n, oh, ow;
     for (int64_t t = 0; t < NUM_IC_TILES; ++t) {
 #pragma unroll
-        for (int64_t tid = (threadIdx.x); tid < A_total; tid += blockDim.x) {
+        for (int64_t tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < A_total; tid += (blockDim.x * blockDim.y)) {
             const int row = tid / BS_ICKHKW;
             const int col = tid % BS_ICKHKW;
 
@@ -241,7 +300,6 @@ static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT
 
             T val = ggml_cuda_cast<T>(0);
             if (shared_oc < P.OC && shared_ickhkw < P.IC_KH_KW) {
-                int64_t ic, kh, kw;
                 layout::unpack_ickhkw(shared_ickhkw, ic, kh, kw, P);
 
                 const int64_t kidx = layout::kernel_index(shared_oc, ic, kh, kw, P);
@@ -249,9 +307,8 @@ static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT
             }
             A_sh[row * BS_ICKHKW + col] = val;
         }
-
 #pragma unroll
-        for (int64_t tid = (threadIdx.x); tid < B_total; tid += blockDim.x) {
+        for (int64_t tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < B_total; tid += (blockDim.x * blockDim.y)) {
             const int brow = tid / BS_NOHOW;
             const int bcol = tid % BS_NOHOW;
 
@@ -260,9 +317,7 @@ static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT
 
             T val = ggml_cuda_cast<T>(0);
             if (N_OH_OW_IDX < P.N_OH_OW && IC_KH_KW_IDX < P.IC_KH_KW) {
-                int64_t n, oh, ow;
                 layout::unpack_nohow(N_OH_OW_IDX, n, oh, ow, P);
-                int64_t ic, kh, kw;
                 layout::unpack_ickhkw(IC_KH_KW_IDX, ic, kh, kw, P);
                 int in_y = calculate_input_coord(oh, kh, P.ST_Y, P.DL_Y, P.PD_Y);
                 int in_x = calculate_input_coord(ow, kw, P.ST_X, P.DL_X, P.PD_X);
@@ -277,76 +332,88 @@ static __global__ void conv2d_kernel(const float * IN, const T * IK, float * OUT
         __syncthreads();
 
 #pragma unroll
-        for (int k_tile = 0; k_tile < BS_ICKHKW; k_tile += WMMA_K) {
-            const T * A_k_ptr = A_warp_base + k_tile;
-            const T * B_k_ptr = B_warp_base + k_tile * BS_NOHOW;
-
-            acc.mma(A_k_ptr, B_k_ptr, BS_ICKHKW, BS_NOHOW);
+        for (int warp = warpId, i = 0; warp < total_warps_need; warp += num_warps, i++) {
+            const int64_t WARP_OC     = warp / WARPS_PER_NOHOW;
+            const int64_t WARP_NOHOW  = warp % WARPS_PER_NOHOW;
+            const T *     A_warp_base = A_sh + WARP_OC * WMMA_M * BS_ICKHKW;
+            const T *     B_warp_base = B_sh + WARP_NOHOW * WMMA_N;
+#pragma unroll
+            for (int k_tile = 0; k_tile < BS_ICKHKW; k_tile += WMMA_K) {
+                const T * A_k_ptr = A_warp_base + k_tile;
+                const T * B_k_ptr = B_warp_base + k_tile * BS_NOHOW;
+                acc[i].mma(A_k_ptr, B_k_ptr, BS_ICKHKW, BS_NOHOW);
+            }
         }
         __syncthreads();
     }
 
-    const float * out_buf = acc.store_result();
 #pragma unroll
-    for (int e = laneId; e < OUTPUT_NUMEL; e += WARP_SIZE) {
-        const int m = e / WMMA_N;
-        const int n = e % WMMA_N;
+    for (int warp = warpId, i = 0; warp < total_warps_need; warp += num_warps, i++) {
+        const int64_t WARP_OC    = warp / WARPS_PER_NOHOW;
+        const int64_t WARP_NOHOW = warp % WARPS_PER_NOHOW;
+        const int64_t OC_BASE    = BLOCK_OC_BASE + WARP_OC * WMMA_M;
+        const int64_t NOHOW_BASE = BLOCK_NOHOW_BASE + WARP_NOHOW * WMMA_N;
+        acc[i].store_result(OC_BASE, NOHOW_BASE, Out, P);
+    }
+}
 
-        const int64_t oc    = OC_BASE + m;
-        const int64_t nohow = NOHOW_BASE + n;
+template <typename T, template <typename> class mma>
+static void conv2d_cuda(const float * X_D, const T * K_D, float * Y_D, const conv_params P, cudaStream_t st) {
+    const int warp_size      = 32;
+    const int max_block_size = 256;
 
-        if (oc < P.OC && nohow < (P.N_OH_OW)) {
-            int64_t n, oh, ow;
-            layout::unpack_nohow(nohow, n, oh, ow, P);
-            const int64_t out_idx = layout::output_index(n, oc, oh, ow, P);
-            OUT[out_idx]          = out_buf[e];
+    GGML_ASSERT(BS_OC >= WMMA_M && BS_ICKHKW >= WMMA_K && BS_NOHOW >= WMMA_N);
+
+    const int num_block_oc    = (P.OC + BS_OC - 1) / BS_OC;
+    const int num_block_nohow = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
+    const int num_blocks      = num_block_oc * num_block_nohow;
+
+    int nwarps_best = 1;
+    int niter_best  = (BS_OC * BS_NOHOW + warp_size - 1) / (warp_size);
+    for (int nwarps = 2; nwarps <= max_block_size / warp_size; ++nwarps) {
+        const int niter = (BS_OC * BS_NOHOW + nwarps * warp_size - 1) / (nwarps * warp_size);
+        if (niter < niter_best) {
+            niter_best  = niter;
+            nwarps_best = nwarps;
         }
     }
+
+    const size_t A_bytes      = BS_OC * BS_ICKHKW * sizeof(T);
+    const size_t B_bytes      = BS_ICKHKW * BS_NOHOW * sizeof(T);
+    const size_t shared_bytes = A_bytes + B_bytes;
+
+    dim3 grid(num_blocks, 1, 1);
+    dim3 block(warp_size, nwarps_best);
+
+    switch (nwarps_best) {
+        case 1:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 1><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        case 2:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 2><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        case 4:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 4><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        case 8:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 8><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        case 16:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 16><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        case 32:
+            conv2d_kernel<T, whcn_layout, mma<whcn_layout>, 32><<<grid, block, shared_bytes, st>>>(X_D, K_D, Y_D, P);
+            break;
+        default:
+            GGML_ABORT("UNSUPPROTED NWARPS_BEST");
+    }
 }
 
-template <typename T, typename mma>
-static void conv2d_cuda(const float * X_D, const T * K_D, float * Y_D, conv_params P, cudaStream_t st)
-
-{
-    const int64_t NUM_BL_OC    = (P.OC + BS_OC - 1) / BS_OC;
-    const int64_t NUM_BL_NOHOW = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
-
-    int64_t TOTAL_TILES = NUM_BL_OC * NUM_BL_NOHOW;
-    TOTAL_TILES         = std::min(TOTAL_TILES, (int64_t) INT_MAX);
-
-    const int WARPS_PER_OC    = std::max(1, ceil_div(BS_OC, WMMA_M));
-    const int WARPS_PER_NOHOW = std::max(1, ceil_div(BS_NOHOW, WMMA_N));
-    const int EXPECTED_WARPS  = WARPS_PER_OC * WARPS_PER_NOHOW;
-    int       N_THREADS       = EXPECTED_WARPS * WARP_SIZE;
-
-    const int MAX_TPB = 1024;
-    if (N_THREADS > MAX_TPB) {
-        N_THREADS = (MAX_TPB / WARP_SIZE) * WARP_SIZE;
-    }
-
-    if (N_THREADS < WARP_SIZE) {
-        N_THREADS = WARP_SIZE;
-    }
-
-    const int N_WARPS = N_THREADS / WARP_SIZE;
-
-    // scratch_buff to store output, can't store directly using wmma,
-    // output mapping is unknown
-    const int64_t scratch_bytes = N_WARPS * (WMMA_M * WMMA_N) * sizeof(float);
-
-    const int64_t A_bytes      = BS_OC * BS_ICKHKW * sizeof(T);
-    const int64_t B_bytes      = BS_ICKHKW * BS_NOHOW * sizeof(T);
-    const int64_t shared_bytes = A_bytes + B_bytes + scratch_bytes;
-
-    dim3 grid(TOTAL_TILES, 1, 1);
-    conv2d_kernel<T, whcn_layout, mma><<<grid, N_THREADS, shared_bytes, st>>>(X_D, K_D, Y_D, P);
-}
-
-static void conv2d_cuda_f16(const float * X_D, const half * K_D, float * Y_D, conv_params & P, cudaStream_t st) {
+static void conv2d_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const conv_params & P, cudaStream_t st) {
     conv2d_cuda<half, half_mma>(X_D, K_D, Y_D, P, st);
 }
 
-static void conv2d_cuda_f32(const float * X_D, const float * K_D, float * Y_D, conv_params & P, cudaStream_t st) {
+static void conv2d_cuda_f32(const float * X_D, const float * K_D, float * Y_D, const conv_params & P, cudaStream_t st) {
     conv2d_cuda<float, float_mma>(X_D, K_D, Y_D, P, st);
 }
 
