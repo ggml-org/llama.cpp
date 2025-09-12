@@ -76,6 +76,7 @@ struct ggml_backend_zdnn_context {
 
 struct ggml_backend_zdnn_buffer {
     void * data;
+    ggml_backend_zdnn_buffer * extra;  // for bias, etc.
     size_t size;
 
     zdnn_tensor_desc pre_tfm_desc;

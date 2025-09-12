@@ -115,9 +115,7 @@ static void ggml_zdnn_mul_mat_op(ggml_backend_zdnn_context * ctx, const ggml_ten
     ggml_backend_zdnn_buffer * weights_extra = (ggml_backend_zdnn_buffer *)weights->extra;
     ggml_backend_zdnn_buffer * inputs_extra  = (ggml_backend_zdnn_buffer *)inputs->extra;
     ggml_backend_zdnn_buffer * output_extra  = (ggml_backend_zdnn_buffer *)output->extra;
-
-    zdnn_tensor_desc ptd_bias, td_bias;
-    zdnn_ztensor zt_bias;
+    ggml_backend_zdnn_buffer * bias_extra    = (ggml_backend_zdnn_buffer *)output_extra->extra;
 
     const int64_t weights_rows = ne01;
     const int64_t weights_cols = ne00;
@@ -129,13 +127,10 @@ static void ggml_zdnn_mul_mat_op(ggml_backend_zdnn_context * ctx, const ggml_ten
     const int64_t output_rows = ne1;
     const int64_t output_cols = ne0;
 
-    const int64_t bias_dim  [GGML_MAX_DIMS]  = { 1, 1, 1, output_cols };
-    ggml_zdnn_create_tensor(ptd_bias, td_bias, zt_bias, output, bias_dim, ZDNN_1D);
-
-    void * bias_data = (void *)calloc(ne0, ggml_element_size(output));
+    // TODO: Weights are somehow not going through `ggml_backend_zdnn_buffer_set_tensor` during model loading.
+    //       So we need to load the weights here. Remove this when the issue is fixed.
+    //       Problem might be residing in `ggml_backend_zdnn_device_supports_buft`.
     if (weights_extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(weights_extra->ztensor, weights->data);
-    if (inputs_extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(inputs_extra->ztensor, inputs->data);
-    ggml_zdnn_load_tensor(zt_bias, bias_data);
 
     // GGML_LOG_INFO("%s: tensor '%s' tensor dimensions: [%ld, %ld, %ld, %ld] pre_tfm_desc dimensions: [%ld, %ld, %ld, %ld]\n",
     //               __func__, weights_extra->name,
@@ -158,29 +153,21 @@ static void ggml_zdnn_mul_mat_op(ggml_backend_zdnn_context * ctx, const ggml_ten
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim1  == inputs->ne[0]  && "inputs_extra->pre_tfm_desc.dim1 must match inputs->ne[0]");
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim2  == inputs->ne[1]  && "inputs_extra->pre_tfm_desc.dim2 must match inputs->ne[1]");
 
-    ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &zt_bias,
+    ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));
     // TODO: Remove in the future as we are currently DLF16 -> FP32 then in the next op, FP32 -> DLF16 again. Inefficient.
     ZDNN_CHECK(zdnn_transform_origtensor(&output_extra->ztensor, output->data));
 
-    ZDNN_CHECK(zdnn_free_ztensor_buffer(&zt_bias));
-    free(bias_data);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(weights_rows);
+    GGML_UNUSED(weights_cols);
+    GGML_UNUSED(inputs_rows);
+    GGML_UNUSED(inputs_cols);
+    GGML_UNUSED(output_rows);
+    GGML_UNUSED(output_cols);
 }
 
 static void ggml_zdnn_mul_mat_dispatch(ggml_backend_zdnn_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    bool use_mul_mat_vec =
-        (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F16)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
-        && src0->ne[0] % 2 == 0 && src1->ne[1] == 1;
-
-    bool use_mul_mat_vec_q =
-        ggml_is_quantized(src0->type)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-
-    bool use_mul_mat_q =
-        ggml_is_quantized(src0->type)
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-
     // debug helpers
     // GGML_LOG_INFO("%s: use_mul_mat_vec   = %d\n", __func__, use_mul_mat_vec);
     // GGML_LOG_INFO("%s: use_mul_mat_vec_q = %d\n", __func__, use_mul_mat_vec_q);
@@ -192,25 +179,7 @@ static void ggml_zdnn_mul_mat_dispatch(ggml_backend_zdnn_context * ctx, const gg
     // GGML_LOG_INFO("%s: src0 is contiguous %d, transposed %d, type = %s, name = %s\n", __func__, ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
     // GGML_LOG_INFO("%s: src1 is contiguous %d, transposed %d, type = %s, name = %s\n", __func__, ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
 
-    if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16
-        && !ggml_is_transposed(src0) && !ggml_is_transposed(src1)
-        && src1->ne[2] * src1->ne[3] > 1) {
-        // general KQ + KQV multi-batch
-        GGML_LOG_INFO("%s: using zdnn_mul_mat_batched for KQ + KQV multi-batch\n", __func__);
-        // ggml_zdnn_mul_mat_batched(ctx, src0, src1, dst);
-    } else if (use_mul_mat_vec) {
-        GGML_LOG_INFO("%s: using zdnn_op_mul_mat_vec for vector multiplication\n", __func__);
-        // ggml_zdnn_op_mul_mat(ctx, src0, src1, dst, ggml_zdnn_op_mul_mat_vec, nullptr);
-    } else if (use_mul_mat_vec_q) {
-        GGML_LOG_INFO("%s: using zdnn_op_mul_mat_vec_q for quantized vector multiplication\n", __func__);
-        // ggml_zdnn_op_mul_mat(ctx, src0, src1, dst, ggml_zdnn_op_mul_mat_vec_q, ggml_zdnn_quantize_row_q8_1);
-    } else if (use_mul_mat_q) {
-        GGML_LOG_INFO("%s: using zdnn_op_mul_mat_q for quantized matrix multiplication\n", __func__);
-        // ggml_zdnn_op_mul_mat(ctx, src0, src1, dst, ggml_zdnn_op_mul_mat_q, ggml_zdnn_quantize_mmq_q8_1);
-    } else {
-        // GGML_LOG_INFO("%s: using zdnn_op_mul_mat for general matrix multiplication\n", __func__);
-        ggml_zdnn_mul_mat_op(ctx, src0, src1, dst);
-    }
+    ggml_zdnn_mul_mat_op(ctx, src0, src1, dst);
 }
 
 static bool ggml_zdnn_compute_forward(ggml_backend_zdnn_context * ctx, ggml_tensor * dst) {
@@ -253,6 +222,8 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
     }
 
     return GGML_STATUS_SUCCESS;
+
+    GGML_UNUSED(ctx_dev);
 }
 
 static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_dev, const ggml_tensor * op) {
@@ -266,22 +237,30 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
         case GGML_OP_MUL_MAT:
             {
-                const ggml_tensor * src0 = op->src[0];
-                const ggml_tensor * src1 = op->src[1];
+                const ggml_tensor * weights = op->src[0];
+                const ggml_tensor * inputs  = op->src[1];
 
-                const int64_t ne10 = src1->ne[0];
-                const int64_t ne0 = op->ne[0];
-                const int64_t ne1 = op->ne[1];
+                const int64_t ne10 = inputs->ne[0];
+                const int64_t ne0  = op->ne[0];
+                const int64_t ne1  = op->ne[1];
 
                 const int64_t max_batch = ctx_dev->max_size;
 
-                return ggml_is_matrix(src0) &&
-                       ggml_is_matrix(src1) &&
-                       ggml_is_contiguous(src0) &&
-                       ggml_is_contiguous(src1) &&
-                       src0->view_src == nullptr && src1->view_src == nullptr &&
-                       src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
-                       (ne0 <= max_batch && ne1 <= max_batch && ne10 <= max_batch);
+                if (!ggml_is_matrix(weights) || !ggml_is_matrix(inputs) ||
+                    !ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs) ||
+                    weights->view_src != nullptr || inputs->view_src != nullptr ||
+                    ne0 > max_batch || ne1 > max_batch || ne10 > max_batch) {
+                        return false;
+                }
+
+                switch (weights->type) {
+                    case GGML_TYPE_F32:
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
+                        return true;
+                    default:
+                        return false;
+                }
             } break;
 
         default:
@@ -374,10 +353,9 @@ static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
 static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
 
-    for (int i = 0; i < ctx->n_buffers; i++) {
-        if (ctx->buffers[i]->ztensor.buffer != NULL && ctx->buffers[i]->ztensor.is_transformed) {
-            ZDNN_CHECK(zdnn_free_ztensor_buffer(&ctx->buffers[i]->ztensor));
-        }
+    for (const auto & buf_ptr : ctx->buffers) {
+        ggml_backend_zdnn_buffer * buf = buf_ptr.get();
+        if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
     delete ctx;
@@ -402,10 +380,36 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
     std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
     zdnn_buffer->data = tensor->data;
     zdnn_buffer->size = tsize;
-    strncpy(zdnn_buffer->name, tensor->name, GGML_MAX_NAME - 1);
+    zdnn_buffer->extra = nullptr;
+    snprintf(zdnn_buffer->name, GGML_MAX_NAME, "%s", tensor->name);
 
     ggml_zdnn_init_tensor(zdnn_buffer.get(), tensor);
     tensor->extra = zdnn_buffer.get();
+
+    switch (tensor->op) {
+        case GGML_OP_MUL_MAT:
+            {
+                std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_bias_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
+                zdnn_bias_buffer->data = (void *)calloc(tensor->ne[0], ggml_element_size(tensor));
+                zdnn_bias_buffer->size = ggml_element_size(tensor) * tensor->ne[0];
+                snprintf(zdnn_bias_buffer->name, GGML_MAX_NAME, "%.*s (bias)",
+                         GGML_MAX_NAME - (int)sizeof(" (bias)"), tensor->name);
+
+                const int64_t bias_dim[GGML_MAX_DIMS] = { 1, 1, 1, tensor->ne[0] };
+                ggml_zdnn_create_tensor(zdnn_bias_buffer->pre_tfm_desc,
+                                        zdnn_bias_buffer->tfm_desc,
+                                        zdnn_bias_buffer->ztensor,
+                                        tensor, bias_dim, ZDNN_1D);
+
+                ggml_zdnn_load_tensor(zdnn_bias_buffer->ztensor, zdnn_bias_buffer->data);
+                zdnn_buffer->extra = zdnn_bias_buffer.get();
+
+                ctx->buffers.push_back(std::move(zdnn_bias_buffer));
+                ctx->n_buffers++;
+            } break;
+        default:
+            break;
+    }
 
     ctx->buffers.push_back(std::move(zdnn_buffer));
     ctx->n_buffers++;
@@ -414,6 +418,8 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
     //               __func__, tensor->name, buffer_idx, tsize);
 
     return GGML_STATUS_SUCCESS;
+
+    GGML_UNUSED(buffer_idx);
 }
 
 static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
@@ -424,6 +430,10 @@ static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer,
 
 static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     memcpy((char *)tensor->data + offset, data, size);
+
+    ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
+    if (extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
+    ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
 
     GGML_UNUSED(buffer);
 }
@@ -594,27 +604,6 @@ static ggml_guid_t ggml_backend_zdnn_guid(void) {
     return reinterpret_cast<ggml_guid_t>((void *)guid_str);
 }
 
-// TODO: remove in the future
-ggml_backend_t ggml_backend_zdnn_init(void) {
-    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_zdnn_reg(), 0);
-
-    ggml_backend_zdnn_context * ctx = ggml_zdnn_init(dev);
-    if (ctx == NULL) {
-        GGML_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
-        return NULL;
-    }
-
-    ggml_backend_t backend = (ggml_backend_t)malloc(sizeof(ggml_backend));
-    *backend = (ggml_backend) {
-        /* .guid       = */ ggml_backend_zdnn_guid(),
-        /* .iface      = */ ggml_backend_zdnn_i,
-        /* .device     = */ dev,
-        /* .context    = */ ctx,
-    };
-
-    return backend;
-}
-
 bool ggml_backend_is_zdnn(ggml_backend_t backend) {
     return backend != NULL &&
            ggml_guid_matches(backend->guid, ggml_backend_zdnn_guid());
@@ -634,11 +623,15 @@ static const char * ggml_backend_zdnn_device_get_name(ggml_backend_dev_t dev) {
 
 static const char * ggml_backend_zdnn_device_get_description(ggml_backend_dev_t dev) {
     return "IBM Z Neural Network Processing Assist (NNPA)";
+
+    GGML_UNUSED(dev);
 }
 
 static void ggml_backend_zdnn_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     *free  = 0;
     *total = 0;
+
+    GGML_UNUSED(dev);
 }
 
 static enum ggml_backend_dev_type ggml_backend_zdnn_device_get_type(ggml_backend_dev_t dev) {
@@ -656,7 +649,7 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ true,
-        /* .events               = */ false,
+        /* .events               = */ false
     };
 }
 
@@ -672,7 +665,7 @@ static ggml_backend_t ggml_backend_zdnn_device_init(ggml_backend_dev_t dev, cons
         /* .guid       = */ ggml_backend_zdnn_guid(),
         /* .iface      = */ ggml_backend_zdnn_i,
         /* .device     = */ dev,
-        /* .context    = */ ctx,
+        /* .context    = */ ctx
     };
 
     return backend;
@@ -724,6 +717,8 @@ static ggml_backend_buffer_t ggml_backend_zdnn_device_buffer_from_ptr(ggml_backe
     ++ctx->n_buffers;
 
     return ggml_backend_buffer_init(ggml_backend_zdnn_buffer_from_ptr_type(), ggml_backend_zdnn_buffer_i, ctx, size);
+
+    GGML_UNUSED(max_tensor_size);
 }
 
 static bool ggml_backend_zdnn_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
@@ -813,7 +808,7 @@ static ggml_backend_reg_i ggml_backend_zdnn_reg_i = {
     /* .get_name         = */ ggml_backend_zdnn_reg_get_name,
     /* .get_device_count = */ ggml_backend_zdnn_reg_device_count,
     /* .get_device       = */ ggml_backend_zdnn_reg_device_get,
-    /* .get_proc_address = */ ggml_backend_zdnn_get_proc_address,
+    /* .get_proc_address = */ ggml_backend_zdnn_get_proc_address
 };
 
 static void ggml_zdnn_cleanup(void) {
@@ -831,13 +826,13 @@ ggml_backend_reg_t ggml_backend_zdnn_reg(void) {
         g_ggml_backend_zdnn_reg = (ggml_backend_reg) {
             /* .api_version = */ GGML_ZDNN_VERSION,
             /* .iface       = */ ggml_backend_zdnn_reg_i,
-            /* .context     = */ NULL,
+            /* .context     = */ NULL
         };
 
         g_ggml_backend_zdnn_device = (ggml_backend_device) {
             /* .iface       = */ ggml_backend_zdnn_device_i,
             /* .reg         = */ &g_ggml_backend_zdnn_reg,
-            /* .context     = */ &g_ggml_ctx_dev_main,
+            /* .context     = */ &g_ggml_ctx_dev_main
         };
 
         return &g_ggml_backend_zdnn_reg;
