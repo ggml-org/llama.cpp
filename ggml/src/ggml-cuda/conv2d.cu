@@ -2,56 +2,44 @@
 #include "convert.cuh"
 
 struct conv_params {
-    const int64_t IW, IH;
-    const int64_t OW, OH;
-    const int64_t KW, KH;
-    const int64_t ST_X, ST_Y;
-    const int64_t PD_X, PD_Y;
-    const int64_t DL_X, DL_Y;
-    const int64_t IC, OC;
-    const int64_t B;
+    const int     IW, IH;
+    const int     OW, OH;
+    const int     KW, KH;
+    const int     ST_X, ST_Y;
+    const int     PD_X, PD_Y;
+    const int     DL_X, DL_Y;
+    const int     IC, OC;
+    const int     B;
     const int64_t TOTAL;
     // helpers
-    const int64_t IC_KH_KW, N_OH_OW;
+    const int     IC_KH_KW, N_OH_OW;
 };
 
-__device__ __forceinline__ static int calculate_input_coord(int64_t out_coord,
-                                                            int64_t kern_coord,
-                                                            int64_t stride,
-                                                            int64_t dilation,
-                                                            int64_t padding) {
+__device__ __forceinline__ static int calculate_input_coord(int out_coord,
+                                                            int kern_coord,
+                                                            int stride,
+                                                            int dilation,
+                                                            int padding) {
     return out_coord * stride + kern_coord * dilation - padding;
 }
 
 struct whcn_layout {
-    __device__ __forceinline__ static int64_t input_index(int64_t             n,
-                                                          int64_t             c,
-                                                          int64_t             y,
-                                                          int64_t             x,
-                                                          const conv_params & P) {
+    __device__ __forceinline__ static int64_t input_index(int n, int c, int y, int x, const conv_params & P) {
         return n * (P.IC * P.IW * P.IH) + c * P.IW * P.IH + y * P.IW + x;
     }
 
-    __device__ __forceinline__ static int64_t kernel_index(int64_t             c_out,
-                                                           int64_t             c_in,
-                                                           int64_t             ky,
-                                                           int64_t             kx,
-                                                           const conv_params & P) {
+    __device__ __forceinline__ static int64_t kernel_index(int c_out, int c_in, int ky, int kx, const conv_params & P) {
         return c_out * (P.IC * P.KH * P.KW) + c_in * (P.KH * P.KW) + ky * P.KW + kx;
     }
 
-    __device__ __forceinline__ static int64_t output_index(int64_t             n,
-                                                           int64_t             c,
-                                                           int64_t             y,
-                                                           int64_t             x,
-                                                           const conv_params & P) {
+    __device__ __forceinline__ static int64_t output_index(int n, int c, int y, int x, const conv_params & P) {
         return n * (P.OC * P.OW * P.OH) + c * P.OW * P.OH + y * P.OW + x;
     }
 
     __device__ __forceinline__ static void unpack_ickhkw(int64_t             idx,
-                                                         int64_t &           ic,
-                                                         int64_t &           kh,
-                                                         int64_t &           kw,
+                                                         int &               ic,
+                                                         int &               kh,
+                                                         int &               kw,
                                                          const conv_params & P) {
         ic        = idx / (P.KW * P.KH);
         int64_t r = idx - ic * (P.KW * P.KH);
@@ -60,9 +48,9 @@ struct whcn_layout {
     }
 
     __device__ __forceinline__ static void unpack_nohow(int64_t             idx,
-                                                        int64_t &           n,
-                                                        int64_t &           oh,
-                                                        int64_t &           ow,
+                                                        int &               n,
+                                                        int &               oh,
+                                                        int &               ow,
                                                         const conv_params & P) {
         n         = idx / (P.OH * P.OW);
         int64_t r = idx - n * (P.OH * P.OW);
@@ -111,8 +99,8 @@ template <typename layout> class float_mma {
         }
     }
 
-    __device__ __forceinline__ void store_result(const int64_t OC_BASE,
-                                                 const int64_t NOHOW_BASE,
+    __device__ __forceinline__ void store_result(const int OC_BASE,
+                                                 const int NOHOW_BASE,
                                                  float * __restrict__ OUT,
                                                  const conv_params & P) const {
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -122,14 +110,13 @@ template <typename layout> class float_mma {
             const int m = e / WMMA_N;
             const int n = e % WMMA_N;
 
-            const int64_t oc    = OC_BASE + m;
-            const int64_t nohow = NOHOW_BASE + n;
+            const int oc    = OC_BASE + m;
+            const int nohow = NOHOW_BASE + n;
 
             if (oc < P.OC && nohow < P.N_OH_OW) {
-                int64_t n_, oh, ow;
+                int n_, oh, ow;
                 layout::unpack_nohow(nohow, n_, oh, ow, P);
-                const int64_t out_idx = layout::output_index(n_, oc, oh, ow, P);
-                OUT[out_idx]          = acc[i];
+                OUT[layout::output_index(n_, oc, oh, ow, P)] = acc[i];
             }
         }
     }
@@ -158,27 +145,30 @@ template <typename layout> class half_mma {
         }
     }
 
-    __device__ __forceinline__ void mma(const half * A_sh, const half * B_sh, const int strideA, const int strideB) {
+    __device__ __forceinline__ void mma(const half * __restrict__ A_sh,
+                                        const half * __restrict__ B_sh,
+                                        const int strideA,
+                                        const int strideB) {
         ggml_cuda_mma::load_ldmatrix(a_frag, (const half2 *) A_sh, strideA / 2);
         ggml_cuda_mma::load_ldmatrix_trans(b_frag, (const half2 *) B_sh, strideB / 2);
         ggml_cuda_mma::mma(c_frag, a_frag, b_frag);
     }
 
-    __device__ __forceinline__ void store_result(const int64_t       OC_BASE,
-                                                 const int64_t       NOHOW_BASE,
-                                                 float *             OUT,
+    __device__ __forceinline__ void store_result(const int OC_BASE,
+                                                 const int NOHOW_BASE,
+                                                 float * __restrict__ OUT,
                                                  const conv_params & P) const {
 #    pragma unroll
         for (int l = 0; l < tile_acc::ne; ++l) {
-            const int64_t e = tile_acc::get_i(l) * WMMA_N + tile_acc::get_j(l);
-            const int     m = e / WMMA_N;
-            const int     n = e % WMMA_N;
+            const int e = tile_acc::get_i(l) * WMMA_N + tile_acc::get_j(l);
+            const int m = e / WMMA_N;
+            const int n = e % WMMA_N;
 
-            const int64_t oc    = OC_BASE + m;
-            const int64_t nohow = NOHOW_BASE + n;
+            const int oc    = OC_BASE + m;
+            const int nohow = NOHOW_BASE + n;
 
             if (oc < P.OC && nohow < (P.N_OH_OW)) {
-                int64_t n, oh, ow;
+                int n, oh, ow;
                 layout::unpack_nohow(nohow, n, oh, ow, P);
                 OUT[layout::output_index(n, oc, oh, ow, P)] = c_frag.x[l];
             }
@@ -228,8 +218,8 @@ template <typename layout> class half_mma {
         }
     }
 
-    __device__ __forceinline__ void store_result(const int64_t OC_BASE,
-                                                 const int64_t NOHOW_BASE,
+    __device__ __forceinline__ void store_result(const int OC_BASE,
+                                                 const int NOHOW_BASE,
                                                  float * __restrict__ OUT,
                                                  const conv_params & P) const {
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -239,14 +229,13 @@ template <typename layout> class half_mma {
             const int m = e / WMMA_N;
             const int n = e % WMMA_N;
 
-            const int64_t oc    = OC_BASE + m;
-            const int64_t nohow = NOHOW_BASE + n;
+            const int oc    = OC_BASE + m;
+            const int nohow = NOHOW_BASE + n;
 
             if (oc < P.OC && nohow < P.N_OH_OW) {
-                int64_t n_, oh, ow;
+                int n_, oh, ow;
                 layout::unpack_nohow(nohow, n_, oh, ow, P);
-                const int64_t out_idx = layout::output_index(n_, oc, oh, ow, P);
-                OUT[out_idx]          = acc[i];
+                OUT[layout::output_index(n_, oc, oh, ow, P)] = acc[i];
             }
         }
     }
@@ -258,26 +247,26 @@ template <typename T, typename layout, typename mma, int num_warps>
 __global__ void conv2d_kernel(const float * IN, const T * IK, float * Out, const conv_params P) {
     extern __shared__ unsigned char smem_raw[];
 
-    const int64_t NUM_IC_TILES = (P.IC_KH_KW + BS_ICKHKW - 1) / BS_ICKHKW;
-    const int64_t warpId       = threadIdx.y;
+    const int NUM_IC_TILES = (P.IC_KH_KW + BS_ICKHKW - 1) / BS_ICKHKW;
+    const int warpId       = threadIdx.y;
 
-    const int64_t WARPS_PER_NOHOW    = max(1, BS_NOHOW / WMMA_N);
-    const int64_t total_warps_need   = (((BS_OC * BS_NOHOW) + (WMMA_M * WMMA_N) - 1) / (WMMA_M * WMMA_N));
-    const int64_t num_work_per_warps = (total_warps_need + num_warps - 1) / num_warps;
+    const int WARPS_PER_NOHOW    = max(1, BS_NOHOW / WMMA_N);
+    const int total_warps_need   = (((BS_OC * BS_NOHOW) + (WMMA_M * WMMA_N) - 1) / (WMMA_M * WMMA_N));
+    const int num_work_per_warps = (total_warps_need + num_warps - 1) / num_warps;
 
     mma acc[num_work_per_warps];
 
-    const int64_t num_block_nohow = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
-    const int64_t BL_IDX_OC       = blockIdx.x / num_block_nohow;
-    const int64_t BL_IDX_NOHOW    = blockIdx.x % num_block_nohow;
+    const int num_block_nohow = (P.N_OH_OW + BS_NOHOW - 1) / BS_NOHOW;
+    const int BL_IDX_OC       = blockIdx.x / num_block_nohow;
+    const int BL_IDX_NOHOW    = blockIdx.x % num_block_nohow;
 
-    const int64_t BLOCK_OC_BASE    = BL_IDX_OC * BS_OC;
-    const int64_t BLOCK_NOHOW_BASE = BL_IDX_NOHOW * BS_NOHOW;
+    const int BLOCK_OC_BASE    = BL_IDX_OC * BS_OC;
+    const int BLOCK_NOHOW_BASE = BL_IDX_NOHOW * BS_NOHOW;
 
     unsigned char * ptr = smem_raw;
 
-    const int64_t A_total = BS_OC * BS_ICKHKW;
-    const int64_t B_total = BS_ICKHKW * BS_NOHOW;
+    const int A_total = BS_OC * BS_ICKHKW;
+    const int B_total = BS_ICKHKW * BS_NOHOW;
 
     size_t offsetA = (size_t) A_total * sizeof(T);
     T *    A_sh    = reinterpret_cast<T *>(ptr);
@@ -287,33 +276,33 @@ __global__ void conv2d_kernel(const float * IN, const T * IK, float * Out, const
     T *    B_sh    = reinterpret_cast<T *>(ptr);
     ptr += offsetB;
 
-    int64_t ic, kh, kw;
-    int64_t n, oh, ow;
-    for (int64_t t = 0; t < NUM_IC_TILES; ++t) {
+    int ic, kh, kw;
+    int n, oh, ow;
+    for (int t = 0; t < NUM_IC_TILES; ++t) {
 #pragma unroll
-        for (int64_t tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < A_total; tid += (blockDim.x * blockDim.y)) {
+        for (int tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < A_total; tid += (blockDim.x * blockDim.y)) {
             const int row = tid / BS_ICKHKW;
             const int col = tid % BS_ICKHKW;
 
-            int64_t shared_oc     = BLOCK_OC_BASE + row;
-            int64_t shared_ickhkw = t * BS_ICKHKW + col;
+            int shared_oc     = BLOCK_OC_BASE + row;
+            int shared_ickhkw = t * BS_ICKHKW + col;
 
             T val = ggml_cuda_cast<T>(0);
             if (shared_oc < P.OC && shared_ickhkw < P.IC_KH_KW) {
                 layout::unpack_ickhkw(shared_ickhkw, ic, kh, kw, P);
 
-                const int64_t kidx = layout::kernel_index(shared_oc, ic, kh, kw, P);
-                val                = IK[kidx];
+                const int kidx = layout::kernel_index(shared_oc, ic, kh, kw, P);
+                val            = IK[kidx];
             }
             A_sh[row * BS_ICKHKW + col] = val;
         }
 #pragma unroll
-        for (int64_t tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < B_total; tid += (blockDim.x * blockDim.y)) {
+        for (int tid = (threadIdx.y * blockDim.x + threadIdx.x); tid < B_total; tid += (blockDim.x * blockDim.y)) {
             const int brow = tid / BS_NOHOW;
             const int bcol = tid % BS_NOHOW;
 
-            int64_t IC_KH_KW_IDX = t * BS_ICKHKW + brow;
-            int64_t N_OH_OW_IDX  = BLOCK_NOHOW_BASE + bcol;
+            int IC_KH_KW_IDX = t * BS_ICKHKW + brow;
+            int N_OH_OW_IDX  = BLOCK_NOHOW_BASE + bcol;
 
             T val = ggml_cuda_cast<T>(0);
             if (N_OH_OW_IDX < P.N_OH_OW && IC_KH_KW_IDX < P.IC_KH_KW) {
@@ -333,10 +322,10 @@ __global__ void conv2d_kernel(const float * IN, const T * IK, float * Out, const
 
 #pragma unroll
         for (int warp = warpId, i = 0; warp < total_warps_need; warp += num_warps, i++) {
-            const int64_t WARP_OC     = warp / WARPS_PER_NOHOW;
-            const int64_t WARP_NOHOW  = warp % WARPS_PER_NOHOW;
-            const T *     A_warp_base = A_sh + WARP_OC * WMMA_M * BS_ICKHKW;
-            const T *     B_warp_base = B_sh + WARP_NOHOW * WMMA_N;
+            const int WARP_OC     = warp / WARPS_PER_NOHOW;
+            const int WARP_NOHOW  = warp % WARPS_PER_NOHOW;
+            const T * A_warp_base = A_sh + WARP_OC * WMMA_M * BS_ICKHKW;
+            const T * B_warp_base = B_sh + WARP_NOHOW * WMMA_N;
 #pragma unroll
             for (int k_tile = 0; k_tile < BS_ICKHKW; k_tile += WMMA_K) {
                 const T * A_k_ptr = A_warp_base + k_tile;
@@ -349,10 +338,10 @@ __global__ void conv2d_kernel(const float * IN, const T * IK, float * Out, const
 
 #pragma unroll
     for (int warp = warpId, i = 0; warp < total_warps_need; warp += num_warps, i++) {
-        const int64_t WARP_OC    = warp / WARPS_PER_NOHOW;
-        const int64_t WARP_NOHOW = warp % WARPS_PER_NOHOW;
-        const int64_t OC_BASE    = BLOCK_OC_BASE + WARP_OC * WMMA_M;
-        const int64_t NOHOW_BASE = BLOCK_NOHOW_BASE + WARP_NOHOW * WMMA_N;
+        const int WARP_OC    = warp / WARPS_PER_NOHOW;
+        const int WARP_NOHOW = warp % WARPS_PER_NOHOW;
+        const int OC_BASE    = BLOCK_OC_BASE + WARP_OC * WMMA_M;
+        const int NOHOW_BASE = BLOCK_NOHOW_BASE + WARP_NOHOW * WMMA_N;
         acc[i].store_result(OC_BASE, NOHOW_BASE, Out, P);
     }
 }
@@ -454,8 +443,8 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int B  = input->ne[3];   // n_batches
 
     const int64_t TOTAL    = B * OC * OH * OW;
-    const int64_t IC_KH_KW = IC * KH * KW;
-    const int64_t N_OH_OW  = B * OH * OW;
+    const int     IC_KH_KW = IC * KH * KW;
+    const int     N_OH_OW  = B * OH * OW;
     conv_params   params   = { IW,   IH,   OW,   OH, KW, KH, ST_X,  ST_Y,     PD_X,
                                PD_Y, DL_X, DL_Y, IC, OC, B,  TOTAL, IC_KH_KW, N_OH_OW };
 
