@@ -64,6 +64,7 @@ static struct ggml_backend_metal_device_context {
     bool use_fusion;
     bool use_concurrency;
     bool use_shared_buffers;
+    bool use_graph_optimize;
 
     int debug_graph;
     int debug_fusion;
@@ -88,6 +89,7 @@ static struct ggml_backend_metal_device_context {
     /*.use_fusion              =*/ true,
     /*.use_concurrency         =*/ true,
     /*.use_shared_buffers      =*/ true,
+    /*.use_graph_optimize      =*/ true,
     /*.debug_graph             =*/ 0,
     /*.debug_fusion            =*/ 0,
     /*.fuse_cnt                =*/ { 0 },
@@ -147,6 +149,12 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
 
             if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                 ctx->use_shared_buffers = false;
+            }
+
+            ctx->use_graph_optimize = true;
+
+            if (getenv("GGML_METAL_GRAPH_OPTIMIZE_DISABLE") != NULL) {
+                ctx->use_graph_optimize = false;
             }
 
             memset(ctx->fuse_cnt, 0, sizeof(ctx->fuse_cnt));
@@ -1105,6 +1113,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     GGML_LOG_INFO("%s: use fusion            = %s\n", __func__, ctx_dev->use_fusion                  ? "true" : "false");
     GGML_LOG_INFO("%s: use concurrency       = %s\n", __func__, ctx_dev->use_concurrency             ? "true" : "false");
     GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, ctx_dev->use_shared_buffers          ? "true" : "false");
+    GGML_LOG_INFO("%s: use graph optimize    = %s\n", __func__, ctx_dev->use_graph_optimize          ? "true" : "false");
     GGML_LOG_INFO("%s: hasUnifiedMemory      = %s\n", __func__, ctx_dev->mtl_device.hasUnifiedMemory ? "true" : "false");
 
     ctx->capture_next_compute = false;
@@ -6737,11 +6746,13 @@ static enum ggml_status ggml_backend_metal_graph_compute(ggml_backend_t backend,
 }
 
 static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    GGML_UNUSED(backend);
+    struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
     //const int64_t t_start = ggml_time_us();
 
-    ggml_metal_graph_optimize(cgraph);
+    if (ctx_dev->use_graph_optimize) {
+        ggml_metal_graph_optimize(cgraph);
+    }
 
     //printf("%s: initial graph optimize took %.3f ms\n", __func__, (ggml_time_us() - t_start) / 1000.0);
 }
