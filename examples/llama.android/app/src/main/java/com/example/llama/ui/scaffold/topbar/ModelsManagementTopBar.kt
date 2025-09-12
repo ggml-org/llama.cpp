@@ -79,7 +79,7 @@ private fun StorageIndicator(
                 contentDescription = "Storage",
                 tint = when {
                     storageMetrics.availableGB < 5.0f -> MaterialTheme.colorScheme.error
-                    storageMetrics.availableGB < 10.0f -> MaterialTheme.colorScheme.tertiary
+                    storageMetrics.availableGB < 10.0f -> MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                     else -> MaterialTheme.colorScheme.onSurface
                 }
             )

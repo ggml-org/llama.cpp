@@ -137,6 +137,7 @@ fun ModelLoadingScreen(
         selectedModel?.let { model ->
             ModelCardCoreExpandable(
                 model = model,
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                 isExpanded = isModelCardExpanded,
                 onExpanded = { isModelCardExpanded = !isModelCardExpanded },
             )

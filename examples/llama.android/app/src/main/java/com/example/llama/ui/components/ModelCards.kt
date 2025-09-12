@@ -35,6 +35,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -56,9 +57,15 @@ import java.util.Locale
 @Composable
 fun ModelCardCoreExpandable(
     model: ModelInfo,
+    containerColor: Color = MaterialTheme.colorScheme.primaryContainer,
     isExpanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null
-) = ModelCardCoreExpandable(model, isExpanded, onExpanded) {
+) = ModelCardCoreExpandable(
+    model = model,
+    containerColor = containerColor,
+    isExpanded = isExpanded,
+    onExpanded = onExpanded
+) {
     Spacer(modifier = Modifier.height(8.dp))
 
     // Row 2: Context length, size label
@@ -80,6 +87,7 @@ fun ModelCardCoreExpandable(
 @Composable
 fun ModelCardCoreExpandable(
     model: ModelInfo,
+    containerColor: Color = MaterialTheme.colorScheme.primaryContainer,
     isExpanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
     expandableSection: @Composable () -> Unit
@@ -89,9 +97,7 @@ fun ModelCardCoreExpandable(
             .fillMaxWidth()
             .clickable { onExpanded?.invoke(!isExpanded) },
         colors = when (isExpanded) {
-            true -> CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            )
+            true -> CardDefaults.cardColors(containerColor = containerColor)
             false -> CardDefaults.cardColors()
         },
         elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
@@ -151,6 +157,7 @@ fun ModelCardCoreExpandable(
 @Composable
 fun ModelCardFullExpandable(
     model: ModelInfo,
+    containerColor: Color = MaterialTheme.colorScheme.primaryContainer,
     isSelected: Boolean? = null,
     onSelected: ((Boolean) -> Unit)? = null,
     isExpanded: Boolean = false,
@@ -162,9 +169,7 @@ fun ModelCardFullExpandable(
                 .fillMaxWidth()
                 .clickable { onExpanded?.invoke(!isExpanded) },
             colors = when (isSelected) {
-                true -> CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                true -> CardDefaults.cardColors(containerColor = containerColor)
                 false -> CardDefaults.cardColors()
                 else -> CardDefaults.cardColors()
             },

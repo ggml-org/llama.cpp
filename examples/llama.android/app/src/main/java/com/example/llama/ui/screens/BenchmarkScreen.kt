@@ -192,7 +192,12 @@ private fun ModelCardWithLoadingMetrics(
     loadingMetrics: ModelLoadingMetrics,
     isExpanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
-) = ModelCardCoreExpandable(model, isExpanded, onExpanded) {
+) = ModelCardCoreExpandable(
+    model = model,
+    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+    isExpanded = isExpanded,
+    onExpanded = onExpanded
+) {
     Spacer(modifier = Modifier.height(8.dp))
 
     // Row 2: Context length, size label

@@ -66,7 +66,8 @@ class ConversationViewModel @Inject constructor(
         // Add placeholder for assistant response
         val assistantMessage = Message.Assistant.Ongoing(
             content = "",
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            tokensCount = 0,
         )
         _messages.value += assistantMessage
 
@@ -139,7 +140,8 @@ class ConversationViewModel @Inject constructor(
                     // Ongoing message update
                     add(Message.Assistant.Ongoing(
                         content = update.text,
-                        timestamp = it.timestamp
+                        timestamp = it.timestamp,
+                        tokensCount = it.tokensCount + 1,
                     ))
                 }
                 _messages.value = toList()
@@ -187,6 +189,7 @@ sealed class Message {
         data class Ongoing(
             override val timestamp: Long,
             override val content: String,
+            val tokensCount: Int,
         ) : Assistant()
 
         data class Stopped(
