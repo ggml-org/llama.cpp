@@ -1679,6 +1679,7 @@ private:
         if (timings.size() > 0) {
             ss << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
         }
+        ss << std::endl;
         GGML_LOG_DEBUG("%s", ss.str().c_str());
     }
 
@@ -1729,8 +1730,8 @@ private:
             ss << "Total operation types: " << operation_groups.size() << std::endl;
             ss << "Total variations: " << triplet_timings.size() << std::endl;
             ss << std::endl;
-        } catch (...) {
             GGML_LOG_DEBUG("%s", ss.str().c_str());
+        } catch (...) {
             GGML_LOG_DEBUG("Error in triplet timing analysis - analysis skipped.\n");
         }
     }
