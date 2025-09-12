@@ -285,8 +285,8 @@ llama_context::llama_context(
         const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        // avoid reserving graphs with zero outputs
-        n_outputs = 1;
+        // avoid reserving graphs with zero outputs - assume one output per sequence
+        n_outputs = n_seqs;
 
         LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
@@ -1447,7 +1447,9 @@ ggml_status llama_context::graph_compute(
     if (backend_cpu != nullptr) {
         auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
         auto * set_threadpool_fn = (decltype(ggml_backend_cpu_set_threadpool) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_threadpool");
-        set_threadpool_fn(backend_cpu, tp);
+        if (set_threadpool_fn) {
+            set_threadpool_fn(backend_cpu, tp);
+        }
     }
 
     // set the number of threads for all the backends

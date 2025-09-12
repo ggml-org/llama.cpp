@@ -109,6 +109,7 @@ class Keys:
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
+        DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         SWIN_NORM                         = "{arch}.swin_norm"
@@ -231,10 +232,11 @@ class Keys:
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
 
     class Adapter:
-        TYPE               = "adapter.type"
-        LORA_ALPHA         = "adapter.lora.alpha"
-        LORA_TASK_NAME     = "adapter.lora.task_name"
-        LORA_PROMPT_PREFIX = "adapter.lora.prompt_prefix"
+        TYPE                    = "adapter.type"
+        LORA_ALPHA              = "adapter.lora.alpha"
+        LORA_TASK_NAME          = "adapter.lora.task_name"
+        LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
+        ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"
 
     class IMatrix:
         CHUNK_COUNT = "imatrix.chunk_count"

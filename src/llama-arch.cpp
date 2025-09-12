@@ -137,6 +137,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
     { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
     { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
+    { LLM_KV_DECODER_BLOCK_COUNT,               "%s.decoder_block_count"               },
     { LLM_KV_ATTN_LOGIT_SOFTCAPPING,            "%s.attn_logit_softcapping"            },
     { LLM_KV_FINAL_LOGIT_SOFTCAPPING,           "%s.final_logit_softcapping"           },
     { LLM_KV_SWIN_NORM,                         "%s.swin_norm"                         },
@@ -237,10 +238,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_FIM_REP_ID,           "tokenizer.ggml.fim_rep_token_id"         },
     { LLM_KV_TOKENIZER_FIM_SEP_ID,           "tokenizer.ggml.fim_sep_token_id"         },
 
-    { LLM_KV_ADAPTER_TYPE,               "adapter.type"               },
-    { LLM_KV_ADAPTER_LORA_ALPHA,         "adapter.lora.alpha"         },
-    { LLM_KV_ADAPTER_LORA_TASK_NAME,     "adapter.lora.task_name"     },
-    { LLM_KV_ADAPTER_LORA_PROMPT_PREFIX, "adapter.lora.prompt_prefix" },
+    { LLM_KV_ADAPTER_TYPE,                    "adapter.type"               },
+    { LLM_KV_ADAPTER_LORA_ALPHA,              "adapter.lora.alpha"         },
+    { LLM_KV_ADAPTER_LORA_TASK_NAME,          "adapter.lora.task_name"     },
+    { LLM_KV_ADAPTER_LORA_PROMPT_PREFIX,      "adapter.lora.prompt_prefix" },
+    { LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS, "adapter.alora.invocation_tokens" },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
