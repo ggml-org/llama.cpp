@@ -763,7 +763,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 hparams.swa_type = LLAMA_SWA_TYPE_LOCAL;
 
                 hparams.set_swa_pattern(3, 0);
-                hparams.n_swa         = 128;
+                hparams.rope_freq_base_train_swa = 10000.f;
+                hparams.rope_freq_base_train = 160000.f;
+                hparams.n_swa = 128;
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
@@ -7553,8 +7555,10 @@ struct llm_build_bert : public llm_graph_context {
 template <bool iswa>
 struct llm_build_modern_bert : public llm_graph_context {
     llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-        const int64_t n_embd_head = hparams.n_embd_head_v;
-        const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
+        const int64_t n_embd_head     = hparams.n_embd_head_v;
+        const int64_t n_embd_gqa      = hparams.n_embd_v_gqa();
+        const float rope_theta_global = hparams.rope_freq_base_train;
+        const float rope_theta_local  = hparams.rope_freq_base_train_swa;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -7580,7 +7584,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * Kcur;
             ggml_tensor * Vcur;
 
-            float rope_theta = il % 3 == 0 ? hparams.rope_freq_base_train : hparams.rope_freq_base_train_swa;
+            const float rope_theta = il % 3 == 0 ? rope_theta_global : rope_theta_local;
 
             // attention layer norm
             if (model.layers[il].attn_norm) {
