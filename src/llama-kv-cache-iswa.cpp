@@ -113,6 +113,10 @@ llama_pos llama_kv_cache_iswa::seq_pos_max(llama_seq_id seq_id) const {
     return kv_swa->seq_pos_max(seq_id);
 }
 
+size_t llama_kv_cache_iswa::memory_use(ggml_backend_dev_t dev) const {
+    return kv_base->memory_use(dev) + kv_swa->memory_use(dev);
+}
+
 llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     GGML_UNUSED(embd_all);
 

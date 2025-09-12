@@ -449,9 +449,10 @@ struct llama_model {
 
     std::string desc() const;
 
-    size_t size() const;
+    size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;
+    size_t memory_use(ggml_backend_dev_t dev) const;
 
     // total number of parameters in the model
     uint64_t n_elements() const;
