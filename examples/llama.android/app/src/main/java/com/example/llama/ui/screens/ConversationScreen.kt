@@ -32,19 +32,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonColors
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -78,7 +71,6 @@ import com.example.llama.ui.components.ModelCardContentContextRow
 import com.example.llama.ui.components.ModelCardContentField
 import com.example.llama.ui.components.ModelCardCoreExpandable
 import com.example.llama.ui.components.ModelUnloadDialogHandler
-import com.example.llama.ui.theme.ButtonShape
 import com.example.llama.util.formatMilliSeconds
 import com.example.llama.util.formatMilliSecondstructured
 import com.example.llama.util.toEnglishName
@@ -319,6 +311,7 @@ private fun ConversationMessageList(
 
                 is Message.Assistant.Ongoing -> AssistantMessageBubble(
                     formattedTime = message.formattedTime,
+                    tokensCount = message.tokensCount,
                     content = message.content,
                     isThinking = message.content.isBlank(),
                     isGenerating = true,
@@ -328,6 +321,7 @@ private fun ConversationMessageList(
 
                 is Message.Assistant.Stopped -> AssistantMessageBubble(
                     formattedTime = message.formattedTime,
+                    tokensCount = message.metrics.tokensCount,
                     content = message.content,
                     isThinking = false,
                     isGenerating = false,
@@ -385,83 +379,99 @@ private fun UserMessageBubble(content: String, formattedTime: String) {
 @Composable
 private fun AssistantMessageBubble(
     formattedTime: String,
+    tokensCount: Int,
     content: String,
     isThinking: Boolean,
     isGenerating: Boolean,
     metrics: TokenMetrics? = null,
     onInfoClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
+    val formattedTokensCount = when(tokensCount) {
+        0 -> ""
+        1 -> "1 token"
+        else -> "$tokensCount tokens"
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(0.95f),
     ) {
-        // Assistant avatar
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center
+        // AI Assistant Avatar + Timestamp + Token count
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "AI",
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.labelMedium
-            )
-        }
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.secondary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "AI",
+                    color = MaterialTheme.colorScheme.onSecondary,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        Column(modifier = Modifier.fillMaxWidth(0.9f)) {
-            // Timestamp above bubble
-            if (formattedTime.isNotBlank()) {
+            Column(
+                modifier = Modifier.padding(start = 12.dp),
+            ) {
                 Text(
                     text = formattedTime,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
-            }
 
-            Card(
-                shape = RoundedCornerShape(2.dp, 16.dp, 16.dp, 16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-            ) {
-                // Show actual content
                 Text(
-                    modifier = Modifier.padding(12.dp),
-                    text = content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = formattedTokensCount,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
 
-            // Show metrics or generation status below the bubble
-            if (isGenerating) {
-                Row(
-                    modifier = Modifier.height(20.dp).padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    PulsatingDots(small = true)
+        }
 
-                    Spacer(modifier = Modifier.width(4.dp))
+        Card(
+            shape = RoundedCornerShape(2.dp, 16.dp, 16.dp, 16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        ) {
+            // Show actual content
+            Text(
+                modifier = Modifier.padding(12.dp),
+                text = content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
 
-                    Text(
-                        text = if (isThinking) "Thinking" else "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            } else {
-                // Show metrics when message is complete
-                metrics?.let {
-                    ExpandableTokenMetricsBubble(metrics, onInfoClick)
-                }
+        // Show metrics or generation status below the bubble
+        if (isGenerating) {
+            Row(
+                modifier = Modifier.height(20.dp).padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PulsatingDots(small = true)
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                Text(
+                    text = if (isThinking) "Thinking" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        } else {
+            // Show metrics when message is complete
+            metrics?.let {
+                ExpandableTokenMetricsBubble(metrics, onInfoClick)
             }
         }
+
     }
 }
 
@@ -512,7 +522,7 @@ private fun ExpandableTokenMetricsBubble(
 ) {
     var showMetrics by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxWidth(0.9f)) {
+    Column(Modifier.fillMaxWidth()) {
         FilterChip(
             selected = showMetrics,
             onClick = { showMetrics = !showMetrics },
@@ -536,13 +546,14 @@ private fun ExpandableTokenMetricsBubble(
             Card(
                 shape = RoundedCornerShape(2.dp, 16.dp, 16.dp, 16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp)
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     val ttft = formatMilliSecondstructured(metrics.ttftMs)
                     TokenMetricSection("1st Token", ttft.value.toString(), ttft.unit.toEnglishName())
@@ -557,7 +568,7 @@ private fun ExpandableTokenMetricsBubble(
                         Icon(
                             modifier = Modifier.size(24.dp),
                             imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             contentDescription = "Information on token metrics"
                         )
                     }
