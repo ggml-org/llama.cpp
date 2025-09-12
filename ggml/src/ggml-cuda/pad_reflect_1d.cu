@@ -21,32 +21,33 @@ static __global__ void pad_reflect_1d_kernel_f32(
 
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
-    const int64_t i1 = blockIdx.x;
 
-    if (i1 >= ne01 || i2 >= ne02 || i3 >= ne03) {
+    const int64_t tile1  = blockIdx.x % ne01;     // i1
+    const int64_t tile0  = blockIdx.x / ne01;     // nth i0 tile
+    const int64_t i1     = tile1;
+    const int64_t i0     = threadIdx.x + tile0 * blockDim.x;
+    if ( i0 >= ne0 || i1 >= ne01 || i2 >= ne02 || i3 >= ne03 ) {
         return;
     }
 
     const char * src0_ptr = (const char *)src0 + i3*nb03 + i2*nb02 + i1*nb01;
-    char * dst_ptr = (char *)dst + i3*nb3 + i2*nb2 + i1*nb1;
+    const char * dst_ptr = (const char *)dst + i3*nb3 + i2*nb2 + i1*nb1;
 
-    for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
-        float value;
+    float value;
+    const int64_t j = i0 - p0;
 
-        if (i0 < p0) {
-            // Left padding - reflect
-            value = *(const float *)(src0_ptr + (p0 - i0) * nb00);
-        } else if (i0 < ne0 - p1) {
-            // Middle - copy
-            value = *(const float *)(src0_ptr + (i0 - p0) * nb00);
-        } else {
-            // Right padding - reflect
-            int64_t src_idx = (ne0 - p1 - p0) - (p1 + 1 - (ne0 - i0)) - 1;
-            value = *(const float *)(src0_ptr + src_idx * nb00);
-        }
-
-        *(float *)(dst_ptr + i0 * nb0) = value;
+    if ( j<0 ) {// i0<p0
+        // Left padding - reflect
+        value = *(const float *)(src0_ptr - j * nb00);
+    } else if (j < ne00) { //i0 < ne0 - p1
+        // Middle - copy
+        value = *(const float *)(src0_ptr + j * nb00);
+    } else  {
+        // Right padding - reflect
+        const int64_t src_idx = (ne0 - p1 - p0) - (p1 + 1 - (ne0 - i0)) - 1;
+        value = *(const float *)(src0_ptr + src_idx * nb00);
     }
+    *(float *)(dst_ptr + i0 * nb0) = value;
 }
 
 void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -67,10 +68,16 @@ void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int64_t ne0 = dst->ne[0];
 
+    // sanity: padded length matches
     GGML_ASSERT(ne0 == ne00 + p0 + p1);
 
-    const dim3 block_dims(CUDA_PAD_REFLECT_1D_BLOCK_SIZE, 1, 1);
-    const dim3 grid_dims(ne01, ne02, ne03);
+    constexpr int64_t bx =  CUDA_PAD_REFLECT_1D_BLOCK_SIZE; // threads per block (x)
+    const int64_t tiles0 = (ne0 + bx - 1) / bx; // number of tiles along i0
+    // grid.x covers i1 and all tiles of i0: [ne01 * tiles0]
+    // grid.y covers i2: [ne02]
+    // grid.z covers i3: [ne03]
+    const dim3 grid_dims((unsigned)(ne01 * tiles0), (unsigned)ne02, (unsigned)ne03);
+    const dim3 block_dims((unsigned)bx, 1, 1);
 
     pad_reflect_1d_kernel_f32<<<grid_dims, block_dims, 0, stream>>>(
         src0->data, dst->data,
