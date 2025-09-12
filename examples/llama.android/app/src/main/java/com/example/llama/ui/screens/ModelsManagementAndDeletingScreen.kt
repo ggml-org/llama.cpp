@@ -537,31 +537,48 @@ fun HuggingFaceModelListItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(0.9f)) {
-                    Row(
-                        modifier = Modifier.padding(bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Attribution,
-                            contentDescription = "Author",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                Column(modifier = Modifier.fillMaxWidth(0.85f)) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Attribution,
+                                contentDescription = "Author",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                        Text(
-                            modifier = Modifier.padding(start = 4.dp),
-                            text = model.author,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            Text(
+                                modifier = Modifier.padding(start = 4.dp),
+                                text = model.author,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        Row(
+                            modifier = Modifier.padding(start = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Favorite count",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Text(
+                                modifier = Modifier.padding(start = 4.dp),
+                                text = formatContextLength(model.likes),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(modifier = Modifier.weight(5f).padding(end = 8.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Default.Today,
                                 contentDescription = "Author",
@@ -577,23 +594,12 @@ fun HuggingFaceModelListItem(
                             )
                         }
 
-                        Row(modifier = Modifier.weight(3f).padding(end = 8.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Favorite,
-                                contentDescription = "Favorite count",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Spacer(modifier = Modifier.weight(1f))
 
-                            Text(
-                                modifier = Modifier.padding(start = 4.dp),
-                                text = formatContextLength(model.likes),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Row(modifier = Modifier.weight(4f).padding(end = 4.dp)) {
+                        Row(
+                            modifier = Modifier.padding(start = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Download,
                                 contentDescription = "Download count",
@@ -611,11 +617,14 @@ fun HuggingFaceModelListItem(
                     }
                 }
 
-                Checkbox(
-                    modifier = Modifier.size(32.dp).alpha(if (isSelected) 1f else 0f),
-                    checked = isSelected,
-                    onCheckedChange = null, // handled by parent selectable
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Checkbox(
+                        modifier = Modifier.align(Alignment.Center).size(32.dp)
+                            .alpha(if (isSelected) 1f else 0f),
+                        checked = isSelected,
+                        onCheckedChange = null, // handled by parent selectable
+                    )
+                }
             }
         }
     }

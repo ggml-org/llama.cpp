@@ -308,7 +308,7 @@ fun ModelCardContentArchitectureRow(model: ModelInfo) =
 
 @Composable
 fun ModelCardContentDatesRow(model: ModelInfo) {
-    val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val dateFormatter = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
