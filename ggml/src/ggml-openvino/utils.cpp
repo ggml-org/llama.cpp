@@ -251,7 +251,6 @@ ov::AnyMap get_npu_prefill_config() {
         {"NPUW_DEVICES",                      "NPU"                                                                     },
         {"NPUW_FOLD",                         "YES"                                                                     },
         {"NPUW_WEIGHTS_BANK",                 "shared"                                                                  },
-        {"NPUW_SLICE_OUT",                    "YES"                                                                     },
         {"NPUW_FUNCALL_ASYNC",                "YES"                                                                     },
         {"NPUW_FUNCALL_FOR_ALL",              "YES"                                                                     },
         {"NPUW_DQ",                           "YES"                                                                     },
