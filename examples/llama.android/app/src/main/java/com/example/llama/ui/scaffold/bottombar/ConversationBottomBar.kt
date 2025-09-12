@@ -32,7 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.example.llama.APP_NAME
 
 @Composable
 fun ConversationBottomBar(
@@ -123,6 +122,7 @@ fun ConversationBottomBar(
             floatingActionButton = {
                 FloatingActionButton(
                     onClick = { if (isReady) { onSendClick() } },
+                    containerColor = MaterialTheme.colorScheme.primary,
                 ) {
                     if (isReady) {
                         Icon(

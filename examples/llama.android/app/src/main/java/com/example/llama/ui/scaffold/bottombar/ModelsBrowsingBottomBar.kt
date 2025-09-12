@@ -208,10 +208,11 @@ fun ModelsBrowsingBottomBar(
                                 runActionConfig.onClickRun(it)
                             }
                         },
+                        containerColor = MaterialTheme.colorScheme.primary,
                     ) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Run with selected model"
+                            contentDescription = "Run with selected model",
                         )
                     }
                 }

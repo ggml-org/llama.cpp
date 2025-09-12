@@ -193,6 +193,7 @@ fun ModelsManagementBottomBar(
             ) {
                 FloatingActionButton(
                     onClick = { importingConfig.toggleMenu(true) },
+                    containerColor = MaterialTheme.colorScheme.primary,
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,

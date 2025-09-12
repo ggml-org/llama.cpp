@@ -577,7 +577,7 @@ fun AppContent(
                     )
                 }
 
-                // General Settings Screen
+                // Settings Screen
                 composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
                     SettingsGeneralScreen(
                         viewModel = settingsViewModel

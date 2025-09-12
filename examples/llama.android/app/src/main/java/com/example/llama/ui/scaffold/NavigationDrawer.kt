@@ -145,19 +145,9 @@ private fun DrawerContent(
             }
         )
 
-//        Spacer(modifier = Modifier.height(24.dp))
-        //  TODO-han.yin: add back once we add more features
-//        // Settings Group
-//        Text(
-//            text = "Settings",
-//            style = MaterialTheme.typography.labelMedium,
-//            color = MaterialTheme.colorScheme.onSurfaceVariant,
-//            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
-//        )
-
         DrawerNavigationItem(
             icon = Icons.Default.Settings,
-            label = "General Settings",
+            label = "Settings",
             isSelected = currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToSettingsGeneral() } }
         )

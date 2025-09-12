@@ -64,7 +64,10 @@ fun BenchmarkBottomBar(
                 enter = scaleIn() + fadeIn(),
                 exit = scaleOut() + fadeOut()
             ) {
-                FloatingActionButton(onClick = onShare) {
+                FloatingActionButton(
+                    onClick = onShare,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                ) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = "Share the benchmark results"
