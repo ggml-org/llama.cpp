@@ -452,7 +452,7 @@ struct common_params {
 
     std::string slot_save_path;
 
-    float slot_prompt_similarity = 0.5f;
+    float slot_prompt_similarity = 0.1f;
 
     // batched-bench params
     bool is_pp_shared = false;

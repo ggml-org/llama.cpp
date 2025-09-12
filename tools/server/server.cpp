@@ -2372,7 +2372,7 @@ struct server_context {
             }
 
             if (ret != nullptr) {
-                SLT_DBG(*ret, "selected slot by lcs similarity, lcs_len = %d, similarity = %f\n", lcs_len, similarity);
+                SLT_INF(*ret, "selected slot by lcs similarity, lcs_len = %d, similarity = %.3f (> %.3f thold)\n", lcs_len, similarity, slot_prompt_similarity);
             }
         }
 
@@ -2394,7 +2394,7 @@ struct server_context {
             }
 
             if (ret != nullptr) {
-                SLT_DBG(*ret, "selected slot by lru, t_last = %" PRId64 "\n", t_last);
+                SLT_INF(*ret, "selected slot by LRU, t_last = %" PRId64 "\n", t_last);
             }
         }
 
