@@ -259,23 +259,7 @@ bool llama_batch_allocr::init(
         const llama_pos p0 = memory ? memory->seq_pos_max(s) : -1;
 
         if (p0 >= 0) {
-            bool ok = true;
-
-            if (batch.token) {
-                if (seq_pos_min(s) != p0 + 1) {
-                    ok = false;
-                }
-            } else {
-                assert(batch.embd);
-
-                // for embeddings (typically used as vision input), we allow them to have repeating positions
-                // ref: https://github.com/ggml-org/llama.cpp/issues/13694#issuecomment-2983871762
-                if (seq_pos_min(s) != p0 && seq_pos_min(s) != p0 + 1) {
-                    ok = false;
-                }
-            }
-
-            if (!ok) {
+            if (seq_pos_min(s) != p0 + 1) {
                 LLAMA_LOG_ERROR(
                         "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
                         " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
@@ -655,7 +639,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
     auto udata = std::make_shared<llama_ubatch::data_t>();
 
-    const int32_t n_pos_cur = batch.embd ? n_pos_per_embd : 1;
+    const int32_t n_pos_cur = batch.embd ? (n_pos_per_embd + 1) : 1;
 
     const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
     const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_cur;
@@ -681,7 +665,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         }
 
         for (int j = 0; j < n_pos_cur; ++j) {
-            udata->pos[j*n_tokens + i] = batch.pos[j*batch.n_tokens + idxs[i]];
+            udata->pos[j * n_tokens + i] = batch.pos[j * batch.n_tokens + idxs[i]];
         }
 
         udata->n_seq_id[i] = batch.n_seq_id[idxs[i]];
