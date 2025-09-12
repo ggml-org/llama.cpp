@@ -4497,7 +4497,7 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
                 // Check if there are two physical devices corresponding to the same GPU
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
@@ -4567,7 +4567,7 @@ static void ggml_vk_instance_init() {
             }
         }
 
-        // If no dedicated GPUs found, fall back to the first non-CPU device.
+        // If no GPUs found, fall back to the first non-CPU device.
         // If only CPU devices are available, return without devices.
         if (vk_instance.device_indices.empty()) {
             for (size_t i = 0; i < devices.size(); i++) {
@@ -12078,12 +12078,63 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     }
 }
 
+static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+
+    vk::PhysicalDeviceProperties2 props = {};
+    device.getProperties2(&props);
+
+    return props.properties.deviceType;
+}
+
+static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+
+    const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+    bool ext_support = false;
+
+    for (const auto& properties : ext_props) {
+        if (strcmp("VK_EXT_pci_bus_info", properties.extensionName) == 0) {
+            ext_support = true;
+            break;
+        }
+    }
+
+    if (!ext_support) {
+        return "";
+    }
+
+    vk::PhysicalDeviceProperties2 props = {};
+    vk::PhysicalDevicePCIBusInfoPropertiesEXT pci_bus_info = {};
+
+    props.pNext = &pci_bus_info;
+
+    device.getProperties2(&props);
+
+    const uint32_t pci_domain = pci_bus_info.pciDomain;
+    const uint32_t pci_bus = pci_bus_info.pciBus;
+    const uint32_t pci_device = pci_bus_info.pciDevice;
+    const uint8_t pci_function = (uint8_t) pci_bus_info.pciFunction; // pci function is between 0 and 7, prevent printf overflow warning
+
+    char pci_bus_id[16] = {};
+    snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.%x", pci_domain, pci_bus, pci_device, pci_function);
+
+    return std::string(pci_bus_id);
+}
+
 //////////////////////////
 
 struct ggml_backend_vk_device_context {
     size_t device;
     std::string name;
     std::string description;
+    bool is_integrated_gpu;
+    std::string pci_bus_id;
 };
 
 static const char * ggml_backend_vk_device_get_name(ggml_backend_dev_t dev) {
@@ -12112,16 +12163,18 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(gg
 }
 
 static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_dev_t dev) {
-    UNUSED(dev);
-    // TODO: return GGML_BACKEND_DEVICE_TYPE_IGPU for integrated GPUs
-    return GGML_BACKEND_DEVICE_TYPE_GPU;
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+
+    return ctx->is_integrated_gpu ? GGML_BACKEND_DEVICE_TYPE_IGPU : GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+
     props->name        = ggml_backend_vk_device_get_name(dev);
     props->description = ggml_backend_vk_device_get_description(dev);
     props->type        = ggml_backend_vk_device_get_type(dev);
-    // TODO: set props->device_id to PCI bus id
+    props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ false,
@@ -12388,8 +12441,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
 
                 if (
-                    src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32 ||
-                    src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32
+                    (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32) ||
+                    (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32)
                 ) {
                     return true;
                 }
@@ -12554,6 +12607,8 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                 ctx->device = i;
                 ctx->name = GGML_VK_NAME + std::to_string(i);
                 ctx->description = desc;
+                ctx->is_integrated_gpu = ggml_backend_vk_get_device_type(i) == vk::PhysicalDeviceType::eIntegratedGpu;
+                ctx->pci_bus_id = ggml_backend_vk_get_device_pci_id(i);
                 devices.push_back(new ggml_backend_device {
                     /* .iface   = */ ggml_backend_vk_device_i,
                     /* .reg     = */ reg,
