@@ -273,6 +273,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_mul_mat(dev_ctx, node);
                 break;
 
+            case GGML_OP_ROPE:
+                ggml_et_op_rope(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -351,6 +355,20 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[0]) &&
                        ggml_is_contiguous(op->src[1]);
             break;
+        case GGML_OP_ROPE:
+            // Support F32 x I32 -> F32 RoPE (standard and NEOX modes only)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0])) {
+                // Check ROPE mode - only support standard (0x0) and NEOX (0x2)
+                const int mode = ((const int32_t *) op->op_params)[2];
+                supported = (mode == 0x0) || (mode & GGML_ROPE_TYPE_NEOX);
+            } else {
+                supported = false;
+            }
+            break;
         default:
             supported = false;
             break;
@@ -389,6 +407,17 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                    ggml_is_contiguous(op) &&
                    ggml_is_contiguous(op->src[0]) &&
                    ggml_is_contiguous(op->src[1]);
+        case GGML_OP_ROPE:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0])) {
+                // Check ROPE mode - only support standard (0x0) and NEOX (0x2)
+                const int mode = ((const int32_t *) op->op_params)[2];
+                return (mode == 0x0) || (mode & GGML_ROPE_TYPE_NEOX);
+            }
+            return false;
         default:
             return false;
     }
