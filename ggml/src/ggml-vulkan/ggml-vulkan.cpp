@@ -1477,51 +1477,32 @@ private:
 #define VK_LOG_MEMORY(msg) ((void) 0)
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
+struct triplet_timing_info {
+    std::string operation_type;     // Specific Vulkan matmul operation name
+    std::string triplet;
+    std::string size_combination;
+    std::vector<uint64_t> times;
+    uint64_t total_time = 0;
+    size_t count = 0;
+    double avg_time_us = 0.0;
+};
+
 class vk_perf_logger {
-  public:
+public:
+    // Simplified approach without context storage
+
     void print_timings() {
-        if (timings.empty()) {
-            return;
-        }
-        std::stringstream ss;
-        uint64_t total_all_op_times = 0;
-        ss << "----------------\nVulkan Timings:" << std::endl;
-        for (const auto & t : timings) {
-            uint64_t total_op_times = 0;
-            for (const auto & time : t.second) {
-                total_op_times += time;
-            }
-            ss << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
-                      << " us";
+        GGML_LOG_DEBUG("================\nVulkan Profiling Results:\n================\n\n");
+        print_legacy_timings();
+        print_triplet_timings();
 
-            // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
-            auto it = flops.find(t.first);
-            if (it != flops.end() && (it->second).size() == t.second.size()) {
-                uint64_t total_op_flops = 0;
-                for (const auto & elem : it->second) {
-                    total_op_flops += elem;
-                }
-                ss << " ("
-                          << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
-                                 (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
-                          << " GFLOPS/s)";
-            }
-
-            total_all_op_times += total_op_times;
-
-            ss << std::endl;
-        }
-
-        if (timings.size() > 0) {
-            ss << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
-        }
-        auto ssStr = ss.str();
-        GGML_LOG_DEBUG("%s", ssStr.c_str());
         timings.clear();
         flops.clear();
+        triplet_timings.clear();
     }
 
     void log_timing(const ggml_tensor * node, uint64_t time) {
+        // Legacy timing tracking (for backward compatibility)
         if (node->op == GGML_OP_UNARY) {
             timings[ggml_unary_op_name(ggml_get_unary_op(node))].push_back(time);
             return;
@@ -1544,6 +1525,13 @@ class vk_perf_logger {
             }
             timings[name].push_back(time);
             flops[name].push_back(m * n * (k + (k - 1)) * batch);
+
+            // Enhanced triplet tracking for matrix operations
+            if (time > 0) {  // Only log when we have actual timing data
+                // Determine operation type based on tensor characteristics
+                std::string op_type = determine_matmul_operation_type(node);
+                log_triplet_timing(node, time, op_type);
+            }
             return;
         }
         if (node->op == GGML_OP_CONV_2D || node->op == GGML_OP_CONV_TRANSPOSE_2D) {
@@ -1575,10 +1563,180 @@ class vk_perf_logger {
         }
         timings[ggml_op_name(node->op)].push_back(time);
     }
-  private:
+
+private:
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
+    std::map<std::string, triplet_timing_info> triplet_timings;
+
+    void log_triplet_timing(const ggml_tensor * node, uint64_t time, const std::string& operation_type = "generic_matmul") {
+        if (!node || !node->src[0] || !node->src[1] || time == 0) return;
+
+        try {
+            // Extract tensor type information
+            std::string src0_type = ggml_type_name(node->src[0]->type);
+            std::string src1_type = ggml_type_name(node->src[1]->type);
+            std::string dst_type = ggml_type_name(node->type);
+
+            // Create triplet string (using safe ASCII characters)
+            std::string triplet = src0_type + " x " + src1_type + " -> " + dst_type;
+
+            // Extract dimensions
+            const uint64_t m = node->src[0]->ne[1];
+            const uint64_t n = node->src[1]->ne[1];
+            const uint64_t k = node->src[1]->ne[0];
+
+            // Create size combination string
+            std::string size_combo = "[" + std::to_string(k) + "x" + std::to_string(m) + "] x " +
+                                    "[" + std::to_string(k) + "x" + std::to_string(n) + "] -> " +
+                                    "[" + std::to_string(m) + "x" + std::to_string(n) + "]";
+
+            // Create combined key including operation type
+            std::string full_key = operation_type + " | " + triplet + " | " + size_combo;
+
+            // Update triplet timing info
+            auto& info = triplet_timings[full_key];
+            info.operation_type = operation_type;
+            info.triplet = triplet;
+            info.size_combination = size_combo;
+            info.times.push_back(time);
+            info.total_time += time;
+            info.count++;
+            info.avg_time_us = (info.total_time / info.count) / 1000.0;
+        } catch (...) {
+            // Silently ignore errors to prevent crashes
+        }
+    }
+
+    // Determine operation type based on tensor characteristics
+    std::string determine_matmul_operation_type(const ggml_tensor * node) {
+        if (!node || !node->src[0] || !node->src[1]) return "unknown_matmul";
+
+        try {
+            const uint64_t n = node->src[1]->ne[1];  // Number of columns in second tensor
+            const bool is_permuted_src0 = ggml_is_permuted(node->src[0]);
+            const bool is_permuted_src1 = ggml_is_permuted(node->src[1]);
+            const bool is_contiguous_src0 = ggml_is_contiguous(node->src[0]);
+            const ggml_type src0_type = node->src[0]->type;
+            // const ggml_type src1_type = node->src[1]->type; // unused for now
+
+            // Logic based on ggml_vk_mul_mat function selection
+            if (src0_type == GGML_TYPE_F16 && is_permuted_src0 && is_permuted_src1 && n == 1) {
+                return "ggml_vk_mul_mat_vec_p021_f16_f32";
+            } else if (src0_type == GGML_TYPE_F16 && !is_contiguous_src0 && !ggml_is_transposed(node->src[1]) && n == 1 &&
+                       !is_permuted_src0 && !is_permuted_src1) {
+                return "ggml_vk_mul_mat_vec_nc_f16_f32";
+            } else if (n == 1 && (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 ||
+                       src0_type == GGML_TYPE_BF16 || ggml_is_quantized(src0_type))) {
+                return "ggml_vk_mul_mat_vec_q_f16";
+            } else if (node->op == GGML_OP_MUL_MAT_ID) {
+                if (n == 1) {
+                    return "ggml_vk_mul_mat_vec_id_q_f16";
+                } else {
+                    return "ggml_vk_mul_mat_id_q_f16";
+                }
+            } else {
+                return "ggml_vk_mul_mat_q_f16";
+            }
+        } catch (...) {
+            return "unknown_matmul";
+        }
+    }
+
+    void print_legacy_timings() {
+        if (timings.empty()) {
+            return;
+        }
+        std::stringstream ss;
+        uint64_t total_all_op_times = 0;
+        ss << "Legacy Timing Summary:\n---------------------" << std::endl;
+        for (const auto & t : timings) {
+            uint64_t total_op_times = 0;
+            for (const auto & time : t.second) {
+                total_op_times += time;
+            }
+            ss << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
+                      << " us";
+
+            // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
+            auto it = flops.find(t.first);
+            if (it != flops.end() && (it->second).size() == t.second.size()) {
+                uint64_t total_op_flops = 0;
+                for (const auto & elem : it->second) {
+                    total_op_flops += elem;
+                }
+                ss << " ("
+                          << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
+                                 (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
+                          << " GFLOPS/s)";
+            }
+
+            total_all_op_times += total_op_times;
+
+            ss << std::endl;
+        }
+
+        if (timings.size() > 0) {
+            ss << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
+        }
+        GGML_LOG_DEBUG("%s", ss.str().c_str());
+    }
+
+    void print_triplet_timings() {
+        std::stringstream ss;
+        try {
+            if (triplet_timings.empty()) {
+                ss << "No triplet timing data available." << std::endl;
+                return;
+            }
+
+            ss << "Enhanced Triplet Timing Analysis by Operation Type:" << std::endl;
+            ss << "====================================================" << std::endl;
+
+            // Group by operation type
+            std::map<std::string, std::vector<triplet_timing_info*>> operation_groups;
+            for (auto& [key, info] : triplet_timings) {
+                operation_groups[info.operation_type].push_back(&info);
+            }
+
+            // Print results organized by operation type
+            for (const auto& [operation_type, entries] : operation_groups) {
+                ss << "\n" << operation_type << ":" << std::endl;
+                ss << std::string(operation_type.length() + 1, '-') << std::endl;
+
+                uint64_t operation_total_time = 0;
+                size_t operation_total_count = 0;
+
+                for (const auto& info : entries) {
+                    if (info->count > 0) {
+                        ss << "  " << info->triplet << " | " << info->size_combination
+                                 << ": " << info->count << " ops, "
+                                 << std::fixed << std::setprecision(2) << info->avg_time_us << " us avg" << std::endl;
+
+                        operation_total_time += info->total_time;
+                        operation_total_count += info->count;
+                    }
+                }
+
+                if (operation_total_count > 0) {
+                    double operation_avg_us = (operation_total_time / operation_total_count) / 1000.0;
+                    ss << "  → " << operation_type << " Summary: " << operation_total_count
+                             << " total ops, " << std::fixed << std::setprecision(2) << operation_avg_us << " us avg" << std::endl;
+                }
+            }
+
+            ss << "\nOverall Statistics:" << std::endl;
+            ss << "Total operation types: " << operation_groups.size() << std::endl;
+            ss << "Total variations: " << triplet_timings.size() << std::endl;
+            ss << std::endl;
+        } catch (...) {
+            GGML_LOG_DEBUG("%s", ss.str().c_str());
+            GGML_LOG_DEBUG("Error in triplet timing analysis - analysis skipped.\n");
+        }
+    }
 };
+
+// Thread-local storage definition is now handled above the class
 
 struct ggml_backend_vk_context {
     std::string name;
