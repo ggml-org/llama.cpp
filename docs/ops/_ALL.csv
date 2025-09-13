@@ -1,3 +1,4 @@
+"backend_name","op_name","op_params","test_mode","supported","error_message","backend_reg_name"
 "SYCL0","COUNT_EQUAL","type=f32,ne=[4,500,1,1]","support","1","yes","SYCL"
 "SYCL0","COUNT_EQUAL","type=f32,ne=[4,5000,1,1]","support","1","yes","SYCL"
 "SYCL0","COUNT_EQUAL","type=f32,ne=[1024,1,1,1]","support","1","yes","SYCL"
