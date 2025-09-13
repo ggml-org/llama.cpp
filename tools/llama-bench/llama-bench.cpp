@@ -250,6 +250,7 @@ struct cmd_params {
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
+    std::vector<int>                 n_cpu_moe;
     std::vector<std::string>         rpc_servers;
     std::vector<llama_split_mode>    split_mode;
     std::vector<int>                 main_gpu;
@@ -286,6 +287,7 @@ static const cmd_params cmd_params_defaults = {
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { 99 },
+    /* n_cpu_moe            */ { 0 },
     /* rpc_servers          */ { "" },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* main_gpu             */ { 0 },
@@ -353,6 +355,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --poll <0...100>                          (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                  (default: %s)\n",
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
+           join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     if (llama_supports_rpc()) {
         printf("  -rpc, --rpc <rpc_servers>                 (default: %s)\n",
                join(cmd_params_defaults.rpc_servers, ",").c_str());
@@ -564,6 +568,45 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
+            } else if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+
+                const auto values = parse_int_range(argv[i]);
+                if (values.size() != 1) {
+                    invalid_param = true;
+                    break;
+                }
+
+                const int n_layers = values[0];
+                if (n_layers < 0) {
+                    invalid_param = true;
+                    break;
+                }
+
+                if (n_layers > 0) {
+                    static std::vector<std::vector<std::string> > buft_batches;
+                    buft_batches.emplace_back();
+                    std::vector<std::string> & batch = buft_batches.back();
+                    batch.reserve(static_cast<size_t>(n_layers));
+
+                    std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides;
+                    group_tensor_buft_overrides.reserve(static_cast<size_t>(n_layers) + 1);
+
+                    for (int i = 0; i < n_layers; ++i) {
+                        batch.push_back(llm_ffn_exps_block_regex(i));
+                        const char * pattern = batch.back().c_str();
+                        group_tensor_buft_overrides.push_back({
+                            pattern,
+                            ggml_backend_cpu_buffer_type()
+                        });
+                    }
+
+                    group_tensor_buft_overrides.push_back({ nullptr, nullptr });
+                    params.tensor_buft_overrides.push_back(std::move(group_tensor_buft_overrides));
+                }
             } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1514,6 +1557,9 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
+        if (field == "tensor_buft_overrides") {
+            return 40;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1683,7 +1729,13 @@ struct markdown_printer : public printer {
                 exit(1);
             }
 
-            int width = get_field_width(field);
+            unsigned int width = get_field_width(field);
+
+            if (field == "tensor_buft_overrides") {
+                if (value.size() > width)
+                    value.erase(width);
+            }
+
             if (field == "t/s") {
                 // HACK: the utf-8 character is 2 bytes
                 width += 1;
