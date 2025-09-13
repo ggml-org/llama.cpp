@@ -454,6 +454,9 @@ void process_shaders() {
         }
     }
 
+    string_to_spv("mul_mat_f16_f32_embed", "mul_mm_embed.comp", {{"A_TYPE_FP16", "1"}});
+    string_to_spv("mul_mat_f32_f32_embed", "mul_mm_embed.comp", {});
+
     // flash attention
     for (const auto& f16acc : {false, true}) {
         std::map<std::string, std::string> fa_base_dict = base_dict;
