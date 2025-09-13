@@ -27,6 +27,7 @@ kernel void kernel_timestep_embedding(
     local_embed_data_ptr = (global float *)((global char *)local_dst_output_base_ptr + local_i * dst_nb1_bytes);
 
     if (logical_dim % 2 != 0 && local_j == ((logical_dim + 1) / 2)) {
+        local_embed_data_ptr[2 * local_half_dim] = 0.0f;
         local_embed_data_ptr[logical_dim] = 0.0f;
     }
 
