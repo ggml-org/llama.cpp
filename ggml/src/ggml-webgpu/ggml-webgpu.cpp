@@ -1275,7 +1275,18 @@ static bool ggml_webgpu_supported_qtype(ggml_type type) {
 }
 
 static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    GGML_UNUSED(dev);
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
+
+    webgpu_context webgpu_ctx = ctx->webgpu_ctx;
+
+    ggml_tensor * src0 = op->src[0];
+    ggml_tensor * src1 = op->src[1];
+    // on smaller devices (or CI), tensors may be larger than the max storage buffer size
+    if (ggml_nbytes(op) > webgpu_ctx->limits.maxStorageBufferBindingSize ||
+        (src0 != nullptr && ggml_nbytes(src0) > webgpu_ctx->limits.maxStorageBufferBindingSize) ||
+        (src1 != nullptr && ggml_nbytes(src1) > webgpu_ctx->limits.maxStorageBufferBindingSize)) {
+        return false;
+    }
 
     bool supports_op = false;
     switch (op->op) {
@@ -1399,19 +1410,20 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     webgpu_context ctx = reg_ctx->webgpu_ctx;
 
     wgpu::RequestAdapterOptions options = {};
-    ctx->instance.WaitAny(
-        ctx->instance.RequestAdapter(&options, wgpu::CallbackMode::AllowSpontaneous,
-            [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
-                if (status != wgpu::RequestAdapterStatus::Success) {
-                    GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
-                    return;
-                }
-                ctx->adapter = std::move(adapter);
-            }), UINT64_MAX);
+    ctx->instance.WaitAny(ctx->instance.RequestAdapter(
+                              &options, wgpu::CallbackMode::AllowSpontaneous,
+                              [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
+                                  if (status != wgpu::RequestAdapterStatus::Success) {
+                                      GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
+                                      return;
+                                  }
+                                  ctx->adapter = std::move(adapter);
+                              }),
+                          UINT64_MAX);
     GGML_ASSERT(ctx->adapter != nullptr);
 
     ctx->adapter.GetLimits(&ctx->limits);
-    ctx->max_wg_size_x = 256; // default value
+    ctx->max_wg_size_x = 256;  // default value
 
     wgpu::AdapterInfo info{};
     ctx->adapter.GetInfo(&info);
