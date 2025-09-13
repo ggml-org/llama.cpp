@@ -1,6 +1,7 @@
 #include "ggml-metal-common.h"
 
 #include "ggml-impl.h"
+#include "ggml-backend-impl.h"
 
 #include <vector>
 
@@ -51,11 +52,17 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
     ggml_mem_range mrp;
 
     if (tensor->buffer) {
+        // take the actual allocated size
+        // this can be larger than the tensor size if the buffer type allocates extra memory
+        // ref: https://github.com/ggml-org/llama.cpp/pull/15966
+        ggml_backend_buffer_type_t buft = tensor->buffer->buft;
+        const size_t alloc_size = buft->iface.get_alloc_size ? buft->iface.get_alloc_size(buft, tensor) : ggml_nbytes(tensor);
+
         // when the tensor is allocated, use the actual memory address range of the buffer
         mrp = {
             /*.pb =*/ (uint64_t) tensor->buffer,
             /*.p0 =*/ (uint64_t) tensor->data,
-            /*.p1 =*/ (uint64_t) tensor->data + ggml_nbytes(tensor),
+            /*.p1 =*/ (uint64_t) tensor->data + alloc_size,
             /*.pt =*/ pt,
         };
     } else {
