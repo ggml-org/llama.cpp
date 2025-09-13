@@ -26,7 +26,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 30
+DEFAULT_HTTP_TIMEOUT = 60
 
 
 class ServerResponse:
@@ -45,6 +45,7 @@ class ServerProcess:
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
     seed: int = 42
+    offline: bool = False
 
     # custom options
     model_alias: str | None = None
@@ -66,7 +67,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
-    fa: bool | None = None
+    fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
@@ -118,6 +119,8 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        if self.offline:
+            server_args.append("--offline")
         if self.model_file:
             server_args.extend(["--model", self.model_file])
         if self.model_url:
@@ -148,6 +151,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.server_slots:
             server_args.append("--slots")
+        else:
+            server_args.append("--no-slots")
         if self.pooling:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
@@ -161,7 +166,7 @@ class ServerProcess:
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
         if self.fa is not None:
-            server_args.append("-fa")
+            server_args.extend(["-fa", self.fa])
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -391,6 +396,19 @@ server_instances: Set[ServerProcess] = set()
 
 class ServerPreset:
     @staticmethod
+    def load_all() -> None:
+        """ Load all server presets to ensure model files are cached. """
+        servers: List[ServerProcess] = [
+            method()
+            for name, method in ServerPreset.__dict__.items()
+            if callable(method) and name != "load_all"
+        ]
+        for server in servers:
+            server.offline = False
+            server.start()
+            server.stop()
+
+    @staticmethod
     def tinyllama2() -> ServerProcess:
         server = ServerProcess()
         server.model_hf_repo = "ggml-org/models"
@@ -406,6 +424,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -420,6 +439,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small_with_fa() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -427,7 +447,7 @@ class ServerPreset:
         server.n_batch = 300
         server.n_ubatch = 300
         server.n_slots = 2
-        server.fa = True
+        server.fa = "on"
         server.seed = 42
         server.server_embeddings = True
         return server
@@ -435,6 +455,7 @@ class ServerPreset:
     @staticmethod
     def tinyllama_infill() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "tinyllamas/stories260K-infill.gguf"
         server.model_alias = "tinyllama-infill"
@@ -449,6 +470,7 @@ class ServerPreset:
     @staticmethod
     def stories15m_moe() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/stories15M_MOE"
         server.model_hf_file = "stories15M_MOE-F16.gguf"
         server.model_alias = "stories15m-moe"
@@ -463,6 +485,7 @@ class ServerPreset:
     @staticmethod
     def jina_reranker_tiny() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "jina-reranker-v1-tiny-en/ggml-model-f16.gguf"
         server.model_alias = "jina-reranker"
@@ -476,6 +499,7 @@ class ServerPreset:
     @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
         server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
         server.model_hf_file = "tinygemma3-Q8_0.gguf"
