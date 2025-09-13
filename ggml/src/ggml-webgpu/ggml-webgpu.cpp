@@ -116,6 +116,10 @@ struct webgpu_context_struct {
     wgpu::Queue    queue;
     wgpu::Limits   limits;
 
+    // Separate this out from limits since on some Metal systems, the limit returned by
+    // querying the limits is higher than the actual allowed maximum.
+    uint32_t max_wg_size_x;
+
     std::recursive_mutex mutex;
 
     webgpu_buf_pool param_buf_pool;
@@ -421,7 +425,7 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0, .buffer = buf, .offset = 0, .size = buf.GetSize() }
     };
-    size_t   bytes_per_wg = ctx->limits.maxComputeWorkgroupSizeX * ctx->memset_bytes_per_thread;
+    size_t   bytes_per_wg = ctx->max_wg_size_x * ctx->memset_bytes_per_thread;
     uint32_t wg_x         = ((size + 3) + bytes_per_wg - 1) / bytes_per_wg;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->memset_pipeline, params, entries, wg_x, "MEMSET", true);
 }
@@ -499,7 +503,7 @@ static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
     };
 
-    size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
+    size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (ne + max_wg_size - 1) / max_wg_size;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->cpy_pipeline, params, entries, wg_x, ggml_op_name(dst->op));
 }
@@ -547,7 +551,7 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
         { .binding = 3, .buffer = error_bufs.dev_buf, .offset = 0, .size = error_bufs.dev_buf.GetSize() }
     };
 
-    size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
+    size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (src->ne[1] * src->ne[2] * src->ne[3] + max_wg_size - 1) / max_wg_size;
 
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
@@ -588,7 +592,7 @@ static void ggml_webgpu_get_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
     };
 
-    size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
+    size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (dst->ne[1] * dst->ne[2] * dst->ne[3] + max_wg_size - 1) / max_wg_size;
 
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->get_rows_pipeline[src->type], params, entries, wg_x,
@@ -677,7 +681,7 @@ static void ggml_webgpu_binary_op(webgpu_context &        ctx,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
+    size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (ggml_nelements(dst) + max_wg_size - 1) / max_wg_size;
     ggml_backend_webgpu_build_and_enqueue(ctx, pipeline, params, entries, wg_x, ggml_op_name(dst->op));
 }
@@ -727,7 +731,7 @@ static void ggml_webgpu_rms_norm(webgpu_context & ctx, ggml_tensor * src, ggml_t
     } else {
         pipeline = ctx->rms_norm_pipeline;
     }
-    size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
+    size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (src->ne[1] * src->ne[2] * src->ne[3] + max_wg_size - 1) / max_wg_size;
     ggml_backend_webgpu_build_and_enqueue(ctx, pipeline, params, entries, wg_x, ggml_op_name(dst->op));
 }
@@ -1040,13 +1044,13 @@ static ggml_guid_t ggml_backend_webgpu_guid(void) {
 static std::vector<wgpu::ConstantEntry> ggml_webgpu_max_wg_size_entry(webgpu_context & webgpu_ctx) {
     std::vector<wgpu::ConstantEntry> constants(1);
     constants[0].key   = "wg_size";
-    constants[0].value = webgpu_ctx->limits.maxComputeWorkgroupSizeX;
+    constants[0].value = webgpu_ctx->max_wg_size_x;
     return constants;
 }
 
 static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
     // we use the maximum workgroup size for the memset pipeline
-    size_t max_wg_size = webgpu_ctx->limits.maxComputeWorkgroupSizeX;
+    size_t max_wg_size = webgpu_ctx->max_wg_size_x;
     size_t max_threads = max_wg_size * webgpu_ctx->limits.maxComputeWorkgroupsPerDimension;
     // Size the bytes_per_thread so that the largest buffer size can be handled
     webgpu_ctx->memset_bytes_per_thread =
@@ -1407,6 +1411,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     GGML_ASSERT(ctx->adapter != nullptr);
 
     ctx->adapter.GetLimits(&ctx->limits);
+    ctx->max_wg_size_x = 256; // default value
 
     wgpu::AdapterInfo info{};
     ctx->adapter.GetInfo(&info);
