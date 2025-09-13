@@ -75,7 +75,7 @@
  * @param device The device ID to set.
  */
 void ggml_cann_set_device(const int32_t device) {
-    int current_device;
+    int current_device = -1;
     aclrtGetDevice(&current_device);
 
     if (device == current_device) {
