@@ -1,6 +1,7 @@
 #include "ggml-metal-common.h"
 
 #include "ggml-impl.h"
+#include "ggml-backend-impl.h"
 
 #include <vector>
 
@@ -51,11 +52,15 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
     ggml_mem_range mrp;
 
     if (tensor->buffer) {
-        // when the tensor is allocated, use the actual memory address range of the buffer
+        // when the tensor is allocated, use the actual memory address range in the buffer
+        //
+        // take the actual allocated size
+        // this can be larger than the tensor size if the buffer type allocates extra memory
+        // ref: https://github.com/ggml-org/llama.cpp/pull/15966
         mrp = {
             /*.pb =*/ (uint64_t) tensor->buffer,
             /*.p0 =*/ (uint64_t) tensor->data,
-            /*.p1 =*/ (uint64_t) tensor->data + ggml_nbytes(tensor),
+            /*.p1 =*/ (uint64_t) tensor->data + ggml_backend_buft_get_alloc_size(tensor->buffer->buft, tensor),
             /*.pt =*/ pt,
         };
     } else {
@@ -329,7 +334,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
                 const bool is_empty = node1.is_empty();
 
-                // to add a concurrent node, it has to be:
+                // to reorder a node and add it to the concurrent set, it has to be:
                 //   + empty or concurrent with all nodes in the existing concurrent set (mrs0)
                 //   + concurrent with all nodes prior to it that haven't been processed yet (mrs1)
                 if ((is_empty || h_check(mrs0, node1)) && h_check(mrs1, node1)) {
