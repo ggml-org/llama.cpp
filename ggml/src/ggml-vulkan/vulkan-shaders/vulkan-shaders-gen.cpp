@@ -235,14 +235,60 @@ std::string basename(const std::string &path) {
     return path.substr(path.find_last_of("/\\") + 1);
 }
 
+std::stringstream make_generic_stringstream() {
+    std::stringstream ss;
+    ss.imbue(c_locale);
+    return ss;
+}
+
+struct compile_command {
+    std::string name;
+    std::string input_filepath;
+    std::string output_filepath;
+    std::string flags;
+};
+
+// Code for writing a ninja build file
+
+static std::stringstream ninja_build;
+
+std::string ninja_escape(const std::string& str) {
+    std::string result;
+    for (char c : str) {
+        if (c == ' ' || c == '$' || c == ':') {
+            result += '$';
+        }
+        result += c;
+    }
+    return result;
+}
+
+void ninja_init() {
+    ninja_build = make_generic_stringstream();
+    ninja_build << "ninja_required_version = 1.3\n\n";
+    ninja_build << "rule glslc\n";
+    ninja_build << "  command = " << GLSLC << " $FLAGS -MD -MF $out.d $in -o $out\n";
+    ninja_build << "  depfile = $out.d\n";
+    ninja_build << "  deps = gcc\n";
+    ninja_build << "  description = Building Vulkan shader ${NAME}.spv\n\n";
+}
+
+void ninja_add_build_command(const compile_command& cmd) {
+    ninja_build << "build " << ninja_escape(cmd.output_filepath) << ": glslc " << ninja_escape(cmd.input_filepath) << "\n";
+    ninja_build << "  NAME = " << cmd.name << "\n";
+    ninja_build << "  FLAGS = " << cmd.flags << "\n\n";
+    shader_fnames.push_back(std::make_pair(cmd.name, cmd.output_filepath));
+}
+
+
 // variables to track number of compiles in progress
 static uint32_t compile_count = 0;
 static std::mutex compile_count_mutex;
 static std::condition_variable compile_count_cond;
 
-void string_to_spv_func(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+compile_command create_compile_command(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16, bool coopmat, bool coopmat2, bool f16acc) {
     std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
-    std::string out_fname = join_paths(output_dir, name + ".spv");
+    std::string out_path = join_paths(output_dir, name + ".spv");
     std::string in_path = join_paths(input_dir, in_fname);
 
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
@@ -251,25 +297,24 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     std::string opt_level = (coopmat || name.find("bf16") != std::string::npos) ? "" : "-O";
 
-    #ifdef _WIN32
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, "\"" + in_path + "\"", "-o", "\"" + out_fname + "\""};
-    #else
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_fname};
-    #endif
+    std::vector<std::string> flags = {"-fshader-stage=compute", target_env, opt_level};
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
-        cmd.push_back("-g");
+        flags.push_back("-g");
     #endif
 
     for (const auto& define : defines) {
-        cmd.push_back("-D" + define.first + "=" + define.second);
+        flags.push_back("-D" + define.first + "=" + define.second);
     }
 
-    std::string command;
-    for (const auto& part : cmd) {
-        command += part + " ";
+    std::string flags_str;
+    for (const auto& part : flags) {
+        flags_str += part + " ";
     }
+    return {std::move(name), std::move(in_path), std::move(out_path), std::move(flags_str)};
+}
 
+void execute_compile_command(compile_command cmd) {
     std::string stdout_str, stderr_str;
     try {
         // std::cout << "Executing command: ";
@@ -278,16 +323,22 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
         // }
         // std::cout << std::endl;
 
+        #ifdef _WIN32
+            std::string command = GLSLC + " " + cmd.flags + " \"" + cmd.input_filepath + "\" -o \"" + cmd.output_filepath + "\"";
+        #else
+            std::string command = GLSLC + " " + cmd.flags + " " + cmd.input_filepath + " -o " + cmd.output_filepath;
+        #endif
         execute_command(command, stdout_str, stderr_str);
+
         if (!stderr_str.empty()) {
-            std::cerr << "cannot compile " << name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
+            std::cerr << "cannot compile " << cmd.name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
             return;
         }
 
         std::lock_guard<std::mutex> guard(lock);
-        shader_fnames.push_back(std::make_pair(name, out_fname));
+        shader_fnames.push_back(std::make_pair(cmd.name, cmd.output_filepath));
     } catch (const std::exception& e) {
-        std::cerr << "Error executing command for " << name << ": " << e.what() << std::endl;
+        std::cerr << "Error executing command for " << cmd.name << ": " << e.what() << std::endl;
     }
     {
         std::lock_guard<std::mutex> guard(compile_count_mutex);
@@ -305,6 +356,12 @@ std::map<std::string, std::string> merge_maps(const std::map<std::string, std::s
 
 static std::vector<std::future<void>> compiles;
 void string_to_spv(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+    compile_command cmd = create_compile_command(_name, in_fname, defines, fp16, coopmat, coopmat2, f16acc);
+
+    if (!ninja_build_file.empty()) {
+        ninja_add_build_command(cmd);
+        return;
+    }
     {
         // wait until fewer than N compiles are in progress.
         // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
@@ -315,7 +372,7 @@ void string_to_spv(const std::string& _name, const std::string& in_fname, const 
         }
         compile_count++;
     }
-    compiles.push_back(std::async(string_to_spv_func, _name, in_fname, defines, fp16, coopmat, coopmat2, f16acc));
+    compiles.push_back(std::async(execute_compile_command, std::move(cmd)));
 }
 
 void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool coopmat2, bool f16acc) {
@@ -765,12 +822,6 @@ void process_shaders() {
     }
 }
 
-std::stringstream make_generic_stringstream() {
-    std::stringstream ss;
-    ss.imbue(c_locale);
-    return ss;
-}
-
 std::vector<unsigned char> read_binary_file(const std::string& path, bool may_not_exist = false) {
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) {
@@ -810,10 +861,14 @@ void write_binary_file(const std::string& path, const unsigned char * data, size
     }
 }
 
+void write_binary_file(const std::string& path, const std::string& content) {
+    write_binary_file(path, (const unsigned char *)content.data(), content.size());
+}
+
 void write_file_if_changed(const std::string& path, const std::string& content) {
     std::vector<unsigned char> existing = read_binary_file(path, true);
     if (existing.size() != content.size() || memcmp(existing.data(), content.data(), content.size()) != 0) {
-        write_binary_file(path, (const unsigned char *)content.data(), content.size());
+        write_binary_file(path, content);
     }
 }
 
@@ -944,8 +999,10 @@ void write_output_files() {
     if (no_embed) {
         write_file_if_changed(target_cpp, src.str());
     } else {
-        std::string src_str = src.str();
-        write_binary_file(target_cpp, (const unsigned char *)src_str.data(), src_str.size());
+        write_binary_file(target_cpp, src.str());
+    }
+    if (!ninja_build_file.empty()) {
+        write_file_if_changed(ninja_build_file, ninja_build.str());
     }
 }
 
@@ -988,6 +1045,7 @@ int main(int argc, char** argv) {
     }
     if (args.find("--ninja") != args.end()) {
         ninja_build_file = args["--ninja"]; // Write a ninja build file instead of invoking glslc directly
+        ninja_init();
     }
 
     if (!directory_exists(input_dir)) {

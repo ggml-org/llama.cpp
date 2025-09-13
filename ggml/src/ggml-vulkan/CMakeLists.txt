@@ -175,12 +175,14 @@ if (Vulkan_FOUND)
                                 "${_ggml_vk_input_dir}/*.h")
 
     if(GGML_VULKAN_SHADER_DEV)
-        set(_ggml_vk_shader_dev_args --no-embed --ninja)
+        set(_ggml_vk_shader_ninja_file "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.ninja")
+        set(_ggml_vk_shader_dev_args --no-embed --ninja ${_ggml_vk_shader_ninja_file})
     endif()
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
                ${_ggml_vk_source}
+               ${_ggml_vk_shader_ninja_file}
 
         COMMAND ${_ggml_vk_genshaders_cmd}
             --glslc      ${Vulkan_GLSLC_EXECUTABLE}
@@ -197,6 +199,16 @@ if (Vulkan_FOUND)
 
         COMMENT "Generate vulkan shaders"
     )
+
+    if(GGML_VULKAN_SHADER_DEV)
+        add_custom_target(ggml-vulkan-shaders-build
+            DEPENDS ${_ggml_vk_shader_ninja_file}
+                    ${_ggml_vk_shader_files}
+            COMMAND ninja -f ${_ggml_vk_shader_ninja_file}
+            COMMENT "Build vulkan shaders"
+        )
+        add_dependencies(ggml-vulkan ggml-vulkan-shaders-build)
+    endif()
 
     target_sources(ggml-vulkan PRIVATE ${_ggml_vk_source} ${_ggml_vk_header})
 
