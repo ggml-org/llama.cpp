@@ -1,9 +1,9 @@
 #pragma once
 #include "common.cuh"
 
-#define BS_OC     64
+#define BS_OC     16
 #define BS_ICKHKW 16
-#define BS_NOHOW  64
+#define BS_NOHOW  128
 
 #define WMMA_M 16
 #define WMMA_N 16
