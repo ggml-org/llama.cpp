@@ -440,7 +440,7 @@ ggml_float ggml_vec_centered_variance_f32(const int n, float * y, const float * 
         val = _mm_add_ps(val, tmp);
         tmp = _mm_movehl_ps(tmp, val);
         val = _mm_add_ss(val, tmp);
-#endif
+#endif  // __AVX__ || __AVX2__ || __AVX512F__
         sum += (ggml_float)_mm_cvtss_f32(val);
     }
 #elif defined(__ARM_NEON) && defined(__aarch64__)
