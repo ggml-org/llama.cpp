@@ -451,6 +451,13 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
         val = vmulq_f32(val, val);
         sum += (ggml_float)vaddvq_f32(val);
     }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        float32x4_t val = vec_sub(vec_xl(0, x + i), vec_splats(mean));
+        vec_xst(val, 0, y + i);
+        val = vec_mul(val, val);
+        sum += (ggml_float)vec_hsum_f32x4(val);
+    }
 #endif
     for (; i < n; ++i) {
         float val = x[i] - mean;
