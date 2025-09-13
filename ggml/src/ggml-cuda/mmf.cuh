@@ -11,7 +11,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
 
 bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * scr0_ne, const int src1_ncols);
 
-template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids>
+template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids, size_t n_expert_used = 0>
 __launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
 static __global__ void mul_mat_f(
         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
@@ -57,30 +57,49 @@ static __global__ void mul_mat_f(
     T * tile_xy = (T *) compute_base + threadIdx.y*(tile_A::I * tile_k_padded);
 
     if constexpr (has_ids) {
-        __shared__ int has_any;
-        if (threadIdx.y == 0) {
-            int local_has_any = 0;
-            for (int j = threadIdx.x; j < cols_per_block; j += warp_size) {
-                int slot = -1;
-                for (int k = 0; k < nchannels_dst; ++k) {
-                    const int idv = ids[j*stride_row_id + k*stride_col_id];
-                    if (idv == expert_idx) {
-                        slot = k;
+
+        int found = 0;
+
+#pragma unroll
+        for (int j0 = 0; j0 < cols_per_block; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+            const int32_t * __restrict__ id_row = ids + j*stride_row_id;
+
+            if (threadIdx.x == 0) {
+                slot_map[j] = -1;
+            }
+
+            if constexpr (n_expert_used == 0) {
+                for (int k_base = 0; k_base < nchannels_dst; k_base += warp_size) {
+                    int k = k_base + threadIdx.x;
+                    int match = (k < nchannels_dst) && (id_row[k*stride_col_id] == expert_idx);
+
+                    if (match) {
+                        slot_map[j] = k;
+                        found = 1;
                         break;
                     }
                 }
-                if (j < cols_per_block) {
-                    local_has_any |= (slot >= 0);
-                    slot_map[j] = slot;
+             } else {
+#pragma unroll
+                for (int k_base = 0; k_base < n_expert_used; k_base += warp_size) {
+                    int k = k_base + threadIdx.x;
+                    int match = (k < n_expert_used) && (id_row[k*stride_col_id] == expert_idx);
+
+                    if (match) {
+                        slot_map[j] = k;
+                        found = 1;
+                        break;
+                    }
                 }
             }
-            has_any = warp_reduce_any(local_has_any);
         }
-        __syncthreads();
-        if (has_any == 0) {
+
+        if (!__syncthreads_or(found)) {
             return;
         }
     }
+
 
     for (int col = threadIdx.y*warp_size + threadIdx.x; col < ncols; col += nwarps*warp_size) {
         tile_A A[ntA][warp_size / tile_A::J];
@@ -106,14 +125,7 @@ static __global__ void mul_mat_f(
                     if constexpr (!has_ids) {
                         tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[j*stride_col_y + col] : 0.0f;
                     } else {
-                        float val = 0.0f;
-                        if (j < cols_per_block) {
-                            const int slot = slot_map[j];
-                            if (slot >= 0) {
-                                val = y[slot*stride_channel_y + j*stride_col_y + col];
-                            }
-                        }
-                        tile_xy[j0*tile_k_padded + threadIdx.x] = val;
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = j < cols_per_block ? y[slot_map[j]*stride_channel_y + j*stride_col_y + col] : 0.0f;
                     }
                 }
             } else if constexpr (std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) {
@@ -125,14 +137,7 @@ static __global__ void mul_mat_f(
                         const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                     } else {
-                        float2 tmp = make_float2(0.0f, 0.0f);
-                        if (j < cols_per_block) {
-                            const int slot = slot_map[j];
-                            if (slot >= 0) {
-                                const float2 * y2_slot = (const float2 *)(y + slot*stride_channel_y);
-                                tmp = y2_slot[j*stride_col_y + col];
-                            }
-                        }
+                        float2 tmp = j < cols_per_block && slot_map[j] >= 0 ? *(const float2*) &y[slot_map[j]*stride_channel_y + 2*(j*stride_col_y + col)] : make_float2(0.0f, 0.0f);
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                     }
                 }
@@ -210,6 +215,71 @@ static __global__ void mul_mat_f(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
+template<typename T, int rows_per_block, int cols_per_block, int nwarps>
+static inline void launch_mul_mat_ids(
+        const T * x, const float * y, const int32_t * ids, float * dst,
+        const int64_t ncols_x, const int64_t nchannels_dst,
+        const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+        const int64_t stride_col_id, const int64_t stride_row_id,
+        const int64_t channel_ratio, const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst,
+        const int64_t sample_ratio, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
+        const dim3 & block_nums, const dim3 & block_dims, const int nbytes_shared_total, cudaStream_t stream) {
+
+    const int n_expert_used = nchannels_dst;
+
+    switch (n_expert_used) {
+        case 1: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 1><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 2: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 2><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 4: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 4><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 6: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 6><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 8: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 8><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 16: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 16><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        case 32: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 32><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+        default: {
+            mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true, 0><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+                (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+        } break;
+    }
+}
+
+
 template<typename T, int cols_per_block, int nwarps>
 static inline void mul_mat_f_switch_ids(
         const T * x, const float * y, const int32_t * ids, float * dst,
@@ -220,10 +290,11 @@ static inline void mul_mat_f_switch_ids(
         const int64_t sample_ratio, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
         const dim3 & block_nums, const dim3 & block_dims, const int nbytes_shared_total, cudaStream_t stream) {
     if (ids) {
-        mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, true><<<block_nums, block_dims, nbytes_shared_total, stream>>>
-            (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+        launch_mul_mat_ids<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps>(
+             x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
              stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-             sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+             sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
+             block_nums, block_dims, nbytes_shared_total, stream);
     } else {
         mul_mat_f<T, MMF_ROWS_PER_BLOCK, cols_per_block, nwarps, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
             (x, y, ids, dst, ncols_x, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
