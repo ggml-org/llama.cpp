@@ -1705,9 +1705,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
             return res;
         }
 
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
-        return ggml_metal_compile_kernel(backend, base, name, cv);
+        return ggml_metal_compile_kernel(backend, base, name, nil);
     }
 }
 
