@@ -105,6 +105,11 @@ struct llama_hparams {
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
 
+    float    yarn_ext_factor  = -1.0f;
+    float    yarn_attn_factor =  1.0f;
+    float    yarn_beta_fast   = 32.0f;
+    float    yarn_beta_slow   =  1.0f;
+
     std::array<int, 4> rope_sections;
 
     // Sliding Window Attention (SWA)

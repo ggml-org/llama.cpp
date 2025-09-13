@@ -154,15 +154,19 @@ class Keys:
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
 
     class Rope:
-        DIMENSION_COUNT         = "{arch}.rope.dimension_count"
-        DIMENSION_SECTIONS      = "{arch}.rope.dimension_sections"
-        FREQ_BASE               = "{arch}.rope.freq_base"
-        SCALING_TYPE            = "{arch}.rope.scaling.type"
-        SCALING_FACTOR          = "{arch}.rope.scaling.factor"
-        SCALING_ATTN_FACTOR     = "{arch}.rope.scaling.attn_factor"
-        SCALING_ORIG_CTX_LEN    = "{arch}.rope.scaling.original_context_length"
-        SCALING_FINETUNED       = "{arch}.rope.scaling.finetuned"
-        SCALING_YARN_LOG_MUL    = "{arch}.rope.scaling.yarn_log_multiplier"
+        DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
+        FREQ_BASE                = "{arch}.rope.freq_base"
+        SCALING_TYPE             = "{arch}.rope.scaling.type"
+        SCALING_FACTOR           = "{arch}.rope.scaling.factor"
+        SCALING_ATTN_FACTOR      = "{arch}.rope.scaling.attn_factor"
+        SCALING_ORIG_CTX_LEN     = "{arch}.rope.scaling.original_context_length"
+        SCALING_FINETUNED        = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_LOG_MUL     = "{arch}.rope.scaling.yarn_log_multiplier"
+        SCALING_YARN_EXT_FACTOR  = "{arch}.rope.scaling.yarn_ext_factor"
+        SCALING_YARN_ATTN_FACTOR = "{arch}.rope.scaling.yarn_attn_factor"
+        SCALING_YARN_BETA_FAST   = "{arch}.rope.scaling.yarn_beta_fast"
+        SCALING_YARN_BETA_SLOW   = "{arch}.rope.scaling.yarn_beta_slow"
 
     class Split:
         LLM_KV_SPLIT_NO            = "split.no"

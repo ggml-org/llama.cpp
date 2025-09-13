@@ -686,6 +686,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_GROK:
             {
                 // defaults for old GGUFs
+                hparams.yarn_beta_fast = 8.0f;
                 hparams.f_logit_scale = 0.5773502691896257f;
                 hparams.f_embedding_scale = 78.38367176906169f;
                 hparams.f_attn_out_scale = 0.08838834764831845f;
@@ -703,7 +704,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ROUTER_LOGIT_SOFTCAPPING,     hparams.f_router_logit_softcapping, false);
                 ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,      hparams.f_final_logit_softcapping, false);
 
-                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.attn_temp_length, false);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH,  hparams.attn_temp_length, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,  hparams.yarn_ext_factor, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow, false);
 
                 switch (hparams.n_layer) {
                     case 64: type = LLM_TYPE_314B; break;
