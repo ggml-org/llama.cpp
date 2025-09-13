@@ -88,6 +88,7 @@ jobs:
             -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
 
       - name: Test
         id: cmake_test
