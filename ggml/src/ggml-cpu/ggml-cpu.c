@@ -2144,6 +2144,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ADD_ID:
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
+        case GGML_OP_XIELU:
             {
                 n_tasks = n_threads;
             } break;
@@ -2167,7 +2168,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_REPEAT:
         case GGML_OP_REPEAT_BACK:
         case GGML_OP_LEAKY_RELU:
-        case GGML_OP_XIELU:
             {
                 n_tasks = 1;
             } break;

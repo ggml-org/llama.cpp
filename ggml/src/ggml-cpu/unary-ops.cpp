@@ -207,9 +207,6 @@ void ggml_compute_forward_xielu(const ggml_compute_params * params, ggml_tensor 
     const float beta = op_params[2];
     const float eps = op_params[3];
 
-//    alpha_p = softplus(alpha_p);
-//    alpha_n = beta + softplus(alpha_n);
-
     const auto xielu_op_params = [alpha_n, alpha_p, beta, eps](float f) {
         return op_xielu(f, alpha_n, alpha_p, beta, eps);
     };
