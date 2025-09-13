@@ -612,7 +612,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         ggml_type type;
         float bpw;
         size_t bytes;
-        float error;
+        double error;
     };
 
     struct tensor_info {
