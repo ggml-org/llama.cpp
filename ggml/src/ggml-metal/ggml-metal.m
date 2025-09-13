@@ -1682,8 +1682,6 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
     char name[256];
 
     @autoreleasepool {
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
         const char * op_str = "undefined";
         switch (op) {
             case GGML_OP_ADD:   op_str = "add";   break;
@@ -1707,9 +1705,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
             return res;
         }
 
-        cv = [[MTLFunctionConstantValues alloc] init];
-
-        return ggml_metal_compile_kernel(backend, base, name, cv);
+        return ggml_metal_compile_kernel(backend, base, name, nil);
     }
 }
 
@@ -1722,8 +1718,6 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_rms_norm(
     char name[256];
 
     @autoreleasepool {
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
         switch (n_fuse) {
             case 1: snprintf(base, 256, "kernel_rms_norm");              break;
             case 2: snprintf(base, 256, "kernel_rms_norm_mul");     break;
@@ -1739,9 +1733,7 @@ static id<MTLComputePipelineState> ggml_metal_get_pipeline_rms_norm(
             return res;
         }
 
-        cv = [[MTLFunctionConstantValues alloc] init];
-
-        return ggml_metal_compile_kernel(backend, base, name, cv);
+        return ggml_metal_compile_kernel(backend, base, name, nil);
     }
 
     GGML_UNUSED(op);
