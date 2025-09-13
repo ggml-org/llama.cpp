@@ -22,8 +22,52 @@
 #include <filesystem>
 #include <algorithm>
 #include <thread>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#if defined(__linux__)
+#include <seccomp.h>
+#endif
 
 namespace fs = std::filesystem;
+
+static void install_seccomp_filter() {
+#if defined(__linux__)
+    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_KILL);
+    if (!ctx) {
+        fprintf(stderr, "Failed to create seccomp filter %s\n", strerror(errno));
+        exit(1);
+    }
+
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(close), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(read), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(write), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(exit), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(exit_group), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(fstat), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(mmap), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(munmap), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(brk), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(rt_sigreturn), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(rt_sigaction), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(clock_gettime), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(gettimeofday), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(accept), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(accept4), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(setsockopt), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(sendto), 0);
+    seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(recvfrom), 0);
+
+    if (seccomp_load(ctx) < 0) {
+        fprintf(stderr, "Failed to create seccomp filter %s\n", strerror(errno));
+        exit(1);
+    } else {
+        fprintf(stdout, "Seccomp filter installed\n");
+    }
+#else
+    fprintf(stdout, "Seccomp filter only supported on Linux\n");
+#endif
+}
 
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
 // returns true if successful, false otherwise
@@ -137,6 +181,9 @@ struct rpc_server_params {
     bool        use_cache   = false;
     int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
     std::string device;
+#if defined(__linux__)
+    bool        use_seccomp  = false;
+#endif
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
@@ -149,6 +196,9 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
     fprintf(stderr, "  -c,      --cache          enable local file cache\n");
+#if defined(__linux__)
+    fprintf(stderr, "  -s,      --seccomp        enable basic seccomp filter\n");
+#endif
     fprintf(stderr, "\n");
 }
 
@@ -201,6 +251,10 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 return false;
             }
             params.backend_mem = std::stoul(argv[i]) * 1024 * 1024;
+#if defined(__linux__)
+        } else if (arg == "-s" || arg == "--seccomp") {
+            params.use_seccomp = true;
+#endif
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -309,8 +363,37 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(backend, endpoint.c_str(), cache_dir, free_mem, total_mem);
-
+#if defined(__linux__)
+    if (params.use_seccomp) {
+        start_server_fn(
+            backend,
+            endpoint.c_str(),
+            cache_dir,
+            free_mem,
+        total_mem,
+        []() {
+            install_seccomp_filter();
+        });
+    } else {
+        start_server_fn(
+            backend,
+            endpoint.c_str(),
+            cache_dir,
+            free_mem,
+            total_mem,
+            nullptr
+        );
+    }
+#else
+    start_server_fn(
+        backend,
+        endpoint.c_str(),
+        cache_dir,
+        free_mem,
+        total_mem,
+        nullptr
+    );
+#endif
     ggml_backend_free(backend);
     return 0;
 }

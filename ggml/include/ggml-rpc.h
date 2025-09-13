@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include <functional>
 
 #ifdef  __cplusplus
 extern "C" {
@@ -22,7 +23,8 @@ GGML_BACKEND_API void ggml_backend_rpc_get_device_memory(const char * endpoint, 
 
 GGML_BACKEND_API void ggml_backend_rpc_start_server(ggml_backend_t backend, const char * endpoint,
                                                     const char * cache_dir,
-                                                    size_t free_mem, size_t total_mem);
+                                                    size_t free_mem, size_t total_mem,
+                                                    std::function<void(void)> on_sock_create = nullptr);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_reg(void);
 
