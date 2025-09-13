@@ -1,0 +1,131 @@
+{% macro render_item_list(item_list, tag_name='required') %}
+    {%- if item_list is defined and item_list is iterable and item_list | length > 0 %}
+        {%- if tag_name %}{{- '\n<' ~ tag_name ~ '>' -}}{% endif %}
+            {{- '[' }}
+                {%- for item in item_list -%}
+                    {%- if loop.index > 1 %}{{- ", "}}{% endif -%}
+                    {%- if item is string -%}
+                        {{ "`" ~ item ~ "`" }}
+                    {%- else -%}
+                        {{ item }}
+                    {%- endif -%}
+                {%- endfor -%}
+            {{- ']' }}
+        {%- if tag_name %}{{- '</' ~ tag_name ~ '>' -}}{% endif %}
+    {%- endif %}
+{% endmacro %}
+
+{%- if messages[0]["role"] == "system" %}
+    {%- set system_message = messages[0]["content"] %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+
+{%- if not tools is defined %}
+    {%- set tools = [] %}
+{%- endif %}
+
+{%- if system_message is defined %}
+    {{- "<|im_start|>system\n" + system_message }}
+{%- else %}
+    {%- if tools is iterable and tools | length > 0 %}
+        {{- "<|im_start|>system\nYou are Qwen, a helpful AI assistant that can interact with a computer to solve tasks." }}
+    {%- endif %}
+{%- endif %}
+{%- if tools is iterable and tools | length > 0 %}
+    {{- "\n\nYou have access to the following functions:\n\n" }}
+    {{- "<tools>" }}
+    {%- for tool in tools %}
+        {%- if tool.function is defined %}
+            {%- set tool = tool.function %}
+        {%- endif %}
+        {{- "\n<function>\n<name>" ~ tool.name ~ "</name>" }}
+        {{- '\n<description>' ~ (tool.description | trim) ~ '</description>' }}
+        {{- '\n<parameters>' }}
+        {%- for param_name, param_fields in tool.parameters.properties|items %}
+            {{- '\n<parameter>' }}
+            {{- '\n<name>' ~ param_name ~ '</name>' }}
+            {%- if param_fields.type is defined %}
+                {{- '\n<type>' ~ (param_fields.type | string) ~ '</type>' }}
+            {%- endif %}
+            {%- if param_fields.description is defined %}
+                {{- '\n<description>' ~ (param_fields.description | trim) ~ '</description>' }}
+            {%- endif %}
+            {{- render_item_list(param_fields.enum, 'enum') }}
+            {%- set handled_keys = ['type', 'description', 'enum', 'required'] %}
+            {%- for json_key in param_fields.keys() | reject("in", handled_keys) %}
+                {%- set normed_json_key = json_key | replace("-", "_") | replace(" ", "_") | replace("$", "") %}
+                {%- if param_fields[json_key] is mapping %}
+                    {{- '\n<' ~ normed_json_key ~ '>' ~ (param_fields[json_key] | tojson | safe) ~ '</' ~ normed_json_key ~ '>' }}
+                {%- else %}
+                    {{-'\n<' ~ normed_json_key ~ '>' ~ (param_fields[json_key] | string) ~ '</' ~ normed_json_key ~ '>' }}
+                {%- endif %}
+            {%- endfor %}
+            {{- render_item_list(param_fields.required, 'required') }}
+            {{- '\n</parameter>' }}
+        {%- endfor %}
+        {{- render_item_list(tool.parameters.required, 'required') }}
+        {{- '\n</parameters>' }}
+        {%- if tool.return is defined %}
+            {%- if tool.return is mapping %}
+                {{- '\n<return>' ~ (tool.return | tojson | safe) ~ '</return>' }}
+            {%- else %}
+                {{- '\n<return>' ~ (tool.return | string) ~ '</return>' }}
+            {%- endif %}
+        {%- endif %}
+        {{- '\n</function>' }}
+    {%- endfor %}
+    {{- "\n</tools>" }}
+    {{- '\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>' }}
+{%- endif %}
+{%- if system_message is defined %}
+    {{- '<|im_end|>\n' }}
+{%- else %}
+    {%- if tools is iterable and tools | length > 0 %}
+        {{- '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- for message in loop_messages %}
+    {%- if message.role == "assistant" and message.tool_calls is defined and message.tool_calls is iterable and message.tool_calls | length > 0 %}
+        {{- '<|im_start|>' + message.role }}
+        {%- if message.content is defined and message.content is string and message.content | trim | length > 0 %}
+            {{- '\n' + message.content | trim + '\n' }}
+        {%- endif %}
+        {%- for tool_call in message.tool_calls %}
+            {%- if tool_call.function is defined %}
+                {%- set tool_call = tool_call.function %}
+            {%- endif %}
+            {{- '\n<tool_call>\n<function=' + tool_call.name + '>\n' }}
+            {%- if tool_call.arguments is defined %}
+                {%- for args_name, args_value in tool_call.arguments|items %}
+                    {{- '<parameter=' + args_name + '>\n' }}
+                    {%- set args_value = args_value if args_value is string else args_value | string %}
+                    {{- args_value }}
+                    {{- '\n</parameter>\n' }}
+                {%- endfor %}
+            {%- endif %}
+            {{- '</function>\n</tool_call>' }}
+        {%- endfor %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "user" or message.role == "system" or message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.previtem and loop.previtem.role != "tool" %}
+            {{- '<|im_start|>user\n' }}
+        {%- endif %}
+        {{- '<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>\n' }}
+        {%- if not loop.last and loop.nextitem.role != "tool" %}
+            {{- '<|im_end|>\n' }}
+        {%- elif loop.last %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- else %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}
