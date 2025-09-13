@@ -781,27 +781,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN; 
                 }
             } break;
-        case LLM_ARCH_MODERN_BERT:
-            {
-
-                hparams.swa_type = LLAMA_SWA_TYPE_LOCAL;
-
-                hparams.set_swa_pattern(3, 0);
-                hparams.rope_freq_base_train_swa = 10000.f;
-                hparams.rope_freq_base_train = 160000.f;
-                hparams.n_swa = 128;
-
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
-                ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
-                ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
-
-                switch (hparams.n_layer) {
-                    case 12:
-                        type = LLM_TYPE_47M; break; // granite-embeddings-small
-                    default: type = LLM_TYPE_UNKNOWN; 
-                }
-            } break;
         case LLM_ARCH_JINA_BERT_V2:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
@@ -7792,7 +7771,7 @@ struct llm_build_modern_bert : public llm_graph_context {
         inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, -1);
         cb(inpL, "inp_norm", -1);
 
-        auto * inp_attn = build_attn_inp_kv_unified_iswa();
+        auto * inp_attn = build_attn_inp_kv_iswa();
 
         // iterate layers
         for (int il = 0; il < n_layer; ++il) {
@@ -7842,8 +7821,8 @@ struct llm_build_modern_bert : public llm_graph_context {
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                        model.layers[il].wo, nullptr,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
 
             if (il == n_layer - 1 && pooling_type == LLAMA_POOLING_TYPE_NONE) {
