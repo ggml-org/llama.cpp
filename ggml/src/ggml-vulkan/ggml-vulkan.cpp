@@ -1536,6 +1536,29 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
 
+#ifdef GGML_VK_SHADER_DIR
+    std::vector<uint32_t> spv_storage;
+    if (spv_size == 0) {
+        const char * filename = (const char *)spv_data;
+        std::string filepath = std::string(GGML_VK_SHADER_DIR) + "/" + filename;
+        VK_LOG_DEBUG("ggml_vk_create_pipeline: loading shader from " << filepath);
+        FILE * file = fopen(filepath.c_str(), "rb");
+        if (!file) {
+            GGML_ABORT("ggml_vulkan: Failed to open shader file: %s", filepath.c_str());
+        }
+        fseek(file, 0, SEEK_END);
+        spv_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        spv_storage.resize((spv_size + sizeof(uint32_t) - 1) / sizeof(uint32_t));
+        size_t read_size = fread(spv_storage.data(), sizeof(uint32_t), spv_storage.size(), file);
+        fclose(file);
+        if (read_size != spv_size / sizeof(uint32_t)) {
+            GGML_ABORT("ggml_vulkan: Failed to read shader file: %s", filepath.c_str());
+        }
+        spv_data = spv_storage.data();
+    }
+#endif
+
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
 

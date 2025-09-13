@@ -174,6 +174,10 @@ if (Vulkan_FOUND)
               CONFIGURE_DEPENDS "${_ggml_vk_input_dir}/*.cpp"
                                 "${_ggml_vk_input_dir}/*.h")
 
+    if(GGML_VULKAN_SHADER_DEV)
+        set(_ggml_vk_shader_dev_args --no-embed --ninja)
+    endif()
+
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
                ${_ggml_vk_source}
@@ -185,6 +189,7 @@ if (Vulkan_FOUND)
             --target-hpp ${_ggml_vk_header}
             --target-cpp ${_ggml_vk_source}
             --no-clean
+            ${_ggml_vk_shader_dev_args}
 
         DEPENDS ${_ggml_vk_shader_files}
                 ${_ggml_vk_shaders_gen_sources}
