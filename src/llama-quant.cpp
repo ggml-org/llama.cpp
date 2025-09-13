@@ -617,7 +617,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     struct tensor_info {
         const llama_model_loader::llama_tensor_weight * w = nullptr;
-        std::vector<candidate_types> candidate = {};
+        std::vector<candidate_types> candidate;
         int choice = -1;
         float min_bpw = 0.0;
         float max_bpw = 0.0;
@@ -972,8 +972,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
         };
 
-        push_if(GGML_TYPE_Q4_K);
         push_if(GGML_TYPE_Q3_K);
+        push_if(GGML_TYPE_Q4_K);
         push_if(GGML_TYPE_Q5_K);
         if (probes.empty() && !compatible_candidates.empty()) {
             probes.push_back(compatible_candidates[compatible_candidates.size() / 2]);
@@ -1011,7 +1011,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return (float)lambda;
     };
 
-    // Faster to compute but lower precision. Best option for the vast majority of models
+    // Faster to compute but may yield lower precision. Best option for the vast majority of cases
     auto fast_lambda = [&](const float * values, const float * activations, const int64_t n_per_row) {
         if (!activations) { return 0.0f; }
 
@@ -1057,12 +1057,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
 
         // Larger sample_rows_per_expert values may result in more accurate error estimates, but it will take much longer to compute
-        constexpr int sample_rows_per_expert = 256;
+        const int sample_rows_per_expert = activations_data ? 512 : 256;
         std::vector<float> f32_sample;
         f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, sample_rows_per_expert) * (size_t)n_per_row);
 
-        // deterministic sampling seed based on tensor name + fixed constant
-        std::mt19937 rng(std::hash<std::string>{}(name) ^0xeabada55cafed00d);
         std::vector<int64_t> sample_rows_per_slice(ne2, 0);
         const int64_t sample_rows_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, sample_rows_per_expert));
         const int64_t stride = std::max<int64_t>(1, nrows_total / sample_rows_max);
@@ -1072,6 +1070,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const bool src_is_quant = ggml_is_quantized(src_type);
         const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
         for (int64_t slice = 0; slice < ne2; ++slice) {
+            std::mt19937 rng(std::hash<std::string>{}(name) ^ 0xeabada55cafed00d ^ slice);
             int64_t current_sampled_rows = 0;
             int64_t offset = 0;
             if (stride > 1) {
@@ -1084,11 +1083,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     const float * src_row = (const float *)t->data + slice * (n_per_row * nrows_total) + r * n_per_row;
                     f32_sample.insert(f32_sample.end(), src_row, src_row + n_per_row);
                 } else if (src_type == GGML_TYPE_F16) {
-                    const ggml_fp16_t * src_row = (const ggml_fp16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
+                    const auto * src_row = (const ggml_fp16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
                     ggml_fp16_to_fp32_row(src_row, row_buffer.data(), (int)n_per_row);
                     f32_sample.insert(f32_sample.end(), row_buffer.begin(), row_buffer.end());
                 } else if (src_type == GGML_TYPE_BF16) {
-                    const ggml_bf16_t * src_row = (const ggml_bf16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
+                    const auto * src_row = (const ggml_bf16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
                     ggml_bf16_to_fp32_row(src_row, row_buffer.data(), (int)n_per_row);
                     f32_sample.insert(f32_sample.end(), row_buffer.begin(), row_buffer.end());
                 } else if (src_is_quant) {
@@ -1211,7 +1210,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     const ggml_type tt = compatible_candidates[i];
                     const auto bpw = (float)tensor_bpw(t, tt);
                     const size_t bytes = tensor_bytes(t, tt);
-                    const auto err = (float)estimate_error(t, tt, f32_sample, sample_rows_per_slice, values, activations, tl_quantized_buffer, tl_dequantised_buffer, bias_lambda);
+                    const auto err = estimate_error(t, tt, f32_sample, sample_rows_per_slice, values, activations, tl_quantized_buffer, tl_dequantised_buffer, bias_lambda);
                     eval_candidates[i] = candidate_types{ tt, bpw, bytes, err };
                 }
             });
@@ -1240,7 +1239,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 return a.error < b.error;
             });
 
-            double best_err = std::numeric_limits<double>::infinity();
+            double best_err = infinity;
             size_t last_bytes = std::numeric_limits<size_t>::max();
             for (const auto & c : info.candidate) {
                 // Only keep the best error seen so far at strictly larger byte sizes
