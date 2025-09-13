@@ -47,4 +47,12 @@ if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
 endif()
 
+if (UNIX AND NOT APPLE AND LLAMA_SERVER_SYSTEMD)
+    message(STATUS "LLAMA_SERVER_SYSTEMD is ON, enabling systemd support")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SYSTEMD REQUIRED libsystemd)
+    target_link_libraries(${TARGET} PRIVATE ${SYSTEMD_LIBRARIES})
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_CPP_SYSTEMD_SUPPORT)
+endif()
+
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
