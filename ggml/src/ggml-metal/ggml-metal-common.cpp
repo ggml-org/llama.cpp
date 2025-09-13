@@ -5,6 +5,8 @@
 #include <vector>
 
 struct ggml_mem_range {
+    uint64_t pb; // buffer id
+
     uint64_t p0; // begin
     uint64_t p1; // end
 
@@ -35,147 +37,142 @@ void ggml_mem_ranges_reset(ggml_mem_ranges * mrs) {
 }
 
 static bool ggml_mem_ranges_add(ggml_mem_ranges * mrs, ggml_mem_range mrp) {
-    mrs->ranges.push_back({
-        /*.p0 =*/ mrp.p0,
-        /*.p1 =*/ mrp.p1,
-        /*.pt =*/ mrp.pt,
-    });
+    mrs->ranges.push_back(mrp);
 
     return true;
 }
 
-bool ggml_mem_ranges_add_src(ggml_mem_ranges * mrs, const ggml_tensor * node) {
-    GGML_ASSERT(node);
+static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggml_mem_range_type pt) {
+    // always use the base tensor
+    tensor = tensor->view_src ? tensor->view_src : tensor;
 
-    node = node->view_src ? node->view_src : node;
+    GGML_ASSERT(!tensor->view_src);
 
     ggml_mem_range mrp;
 
-    if (node->buffer) {
+    if (tensor->buffer) {
+        // when the tensor is allocated, use the actual memory address range of the buffer
         mrp = {
-            /*.p0 =*/ (uint64_t) node->data,
-            /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-            /*.pt =*/ MEM_RANGE_TYPE_SRC,
+            /*.pb =*/ (uint64_t) tensor->buffer,
+            /*.p0 =*/ (uint64_t) tensor->data,
+            /*.p1 =*/ (uint64_t) tensor->data + ggml_nbytes(tensor),
+            /*.pt =*/ pt,
         };
     } else {
+        // otherwise, the tensor ptr is used as an unique id of the memory ranges
+        //   that the tensor will be using when it is allocated
         mrp = {
-            /*.p0 =*/ (uint64_t) node,
-            /*.p1 =*/ (uint64_t) node + 1,
-            /*.pt =*/ MEM_RANGE_TYPE_SRC,
+            /*.pb =*/ (uint64_t) tensor,
+            /*.p0 =*/ 0,    //
+            /*.p1 =*/ 1024, // [0, 1024) is a dummy range, not used
+            /*.pt =*/ pt,
         };
     };
 
+    return mrp;
+}
+
+static ggml_mem_range ggml_mem_range_from_tensor_src(const ggml_tensor * tensor) {
+    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_SRC);
+}
+
+static ggml_mem_range ggml_mem_range_from_tensor_dst(const ggml_tensor * tensor) {
+    return ggml_mem_range_from_tensor(tensor, MEM_RANGE_TYPE_DST);
+}
+
+static bool ggml_mem_ranges_add_src(ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor);
+
+    ggml_mem_range mrp = ggml_mem_range_from_tensor_src(tensor);
+
     if (mrs->debug > 2) {
-        GGML_LOG_DEBUG("%s: add src range [%lld, %lld)\n", __func__, mrp.p0, mrp.p1);
+        GGML_LOG_DEBUG("%s: add src range buf=%lld, [%lld, %lld)\n", __func__, mrp.pb, mrp.p0, mrp.p1);
     }
 
     return ggml_mem_ranges_add(mrs, mrp);
 }
 
-bool ggml_mem_ranges_add_dst(ggml_mem_ranges * mrs, const ggml_tensor * node) {
-    GGML_ASSERT(node);
+static bool ggml_mem_ranges_add_dst(ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor);
 
-    node = node->view_src ? node->view_src : node;
-
-    ggml_mem_range mrp;
-
-    if (node->buffer) {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node->data,
-            /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-            /*.pt =*/ MEM_RANGE_TYPE_DST,
-        };
-    } else {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node,
-            /*.p1 =*/ (uint64_t) node + 1,
-            /*.pt =*/ MEM_RANGE_TYPE_DST,
-        };
-    };
+    ggml_mem_range mrp = ggml_mem_range_from_tensor_dst(tensor);
 
     if (mrs->debug > 2) {
-        GGML_LOG_DEBUG("%s: add dst range [%lld, %lld)\n", __func__, mrp.p0, mrp.p1);
+        GGML_LOG_DEBUG("%s: add dst range buf=%lld, [%lld, %lld)\n", __func__, mrp.pb, mrp.p0, mrp.p1);
     }
 
     return ggml_mem_ranges_add(mrs, mrp);
+}
+
+bool ggml_mem_ranges_add(ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (tensor->src[i]) {
+            ggml_mem_ranges_add_src(mrs, tensor->src[i]);
+        }
+    }
+
+    return ggml_mem_ranges_add_dst(mrs, tensor);
 }
 
 static bool ggml_mem_ranges_check(const ggml_mem_ranges * mrs, ggml_mem_range mrp) {
     for (size_t i = 0; i < mrs->ranges.size(); i++) {
-        if (mrp.pt == MEM_RANGE_TYPE_SRC && mrs->ranges[i].pt == MEM_RANGE_TYPE_SRC) {
+        const auto & cmp = mrs->ranges[i];
+
+        if (mrp.pb != cmp.pb) {
             continue;
         }
 
-        if (mrp.p0 < mrs->ranges[i].p1 && mrp.p1 >= mrs->ranges[i].p0) {
-            return true;
+        if (mrp.pt == MEM_RANGE_TYPE_SRC && cmp.pt == MEM_RANGE_TYPE_SRC) {
+            continue;
+        }
+
+        if (mrp.p0 < cmp.p1 && mrp.p1 >= cmp.p0) {
+            if (mrs->debug > 2) {
+                GGML_LOG_DEBUG("%s: the %s range buf=%lld, [%lld, %lld) overlaps with a previous %s range buf=%lld, [%lld, %lld)\n",
+                        __func__,
+                        mrp.pt == MEM_RANGE_TYPE_SRC ? "src" : "dst",
+                        mrp.pb, mrp.p0, mrp.p1,
+                        cmp.pt == MEM_RANGE_TYPE_SRC ? "src" : "dst",
+                        cmp.pb, cmp.p0, cmp.p1);
+            }
+
+            return false;
         }
     }
 
-    return false;
+    return true;
 }
 
-bool ggml_mem_ranges_check_src(const ggml_mem_ranges * mrs, const ggml_tensor * node) {
-    GGML_ASSERT(node);
+static bool ggml_mem_ranges_check_src(const ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor);
 
-    node = node->view_src ? node->view_src : node;
-
-    ggml_mem_range mrp;
-
-    if (node->buffer) {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node->data,
-            /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-            /*.pt =*/ MEM_RANGE_TYPE_SRC,
-        };
-    } else {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node,
-            /*.p1 =*/ (uint64_t) node + 1,
-            /*.pt =*/ MEM_RANGE_TYPE_SRC,
-        };
-    };
+    ggml_mem_range mrp = ggml_mem_range_from_tensor_src(tensor);
 
     const bool res = ggml_mem_ranges_check(mrs, mrp);
-
-    if (res) {
-        if (mrs->debug > 2) {
-            GGML_LOG_DEBUG("%s: the src range [%lld, %lld) overlaps with a previous dst range\n", __func__, mrp.p0, mrp.p1);
-        }
-    }
 
     return res;
 }
 
-bool ggml_mem_ranges_check_dst(const ggml_mem_ranges * mrs, const ggml_tensor * node) {
-    GGML_ASSERT(node);
+static bool ggml_mem_ranges_check_dst(const ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor);
 
-    node = node->view_src ? node->view_src : node;
-
-    ggml_mem_range mrp;
-
-    if (node->buffer) {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node->data,
-            /*.p1 =*/ (uint64_t) node->data + ggml_nbytes(node),
-            /*.pt =*/ MEM_RANGE_TYPE_DST,
-        };
-    } else {
-        mrp = {
-            /*.p0 =*/ (uint64_t) node,
-            /*.p1 =*/ (uint64_t) node + 1,
-            /*.pt =*/ MEM_RANGE_TYPE_DST,
-        };
-    }
+    ggml_mem_range mrp = ggml_mem_range_from_tensor_dst(tensor);
 
     const bool res = ggml_mem_ranges_check(mrs, mrp);
 
-    if (res) {
-        if (mrs->debug > 2) {
-            GGML_LOG_DEBUG("%s: the dst range [%lld, %lld) overlaps with a previous src range\n", __func__, mrp.p0, mrp.p1);
+    return res;
+}
+
+bool ggml_mem_ranges_check(const ggml_mem_ranges * mrs, const ggml_tensor * tensor) {
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (tensor->src[i]) {
+            if (!ggml_mem_ranges_check_src(mrs, tensor->src[i])) {
+                return false;
+            }
         }
     }
 
-    return res;
+    return ggml_mem_ranges_check_dst(mrs, tensor);
 }
 
 // TODO: move to ggml.h?
@@ -195,7 +192,6 @@ static bool is_empty(ggml_op op) {
 struct node_info {
     ggml_tensor * node;
 
-    std::vector<const ggml_tensor *> srcs;
     std::vector<ggml_tensor *> fused;
 
     ggml_op op() const {
@@ -210,45 +206,52 @@ struct node_info {
         return ::is_empty(node->op);
     }
 
-    void add_src(const ggml_tensor * src, bool check = false) {
-        if (!src) {
-            return;
-        }
-
-        src = src->view_src ? src->view_src : src;
-
-        if (check) {
-            for (const auto * prev : srcs) {
-                if (prev == src) {
-                    return;
-                }
-            }
-        }
-
-        srcs.push_back(src);
-    }
-
     void add_fused(ggml_tensor * t) {
         fused.push_back(t);
     }
 };
 
-static std::vector<node_info> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
+static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
     // helper to add node src and dst ranges
     const auto & h_add = [](ggml_mem_ranges * mrs, const node_info & node) {
-        for (const auto * src : node.srcs) {
-            ggml_mem_ranges_add_src(mrs, src);
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (node.node->src[i]) {
+                if (!ggml_mem_ranges_add_src(mrs, node.node->src[i])) {
+                    return false;
+                }
+            }
         }
 
-        ggml_mem_ranges_add_dst(mrs, node.dst());
+        for (const auto * fused : node.fused) {
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (fused->src[i]) {
+                    if (!ggml_mem_ranges_add_src(mrs, fused->src[i])) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return ggml_mem_ranges_add_dst(mrs, node.dst());
     };
 
-    // helper to check if a node ranges overlap with the existing set
-    // if they overlap, the node cannot be executed concurrently with the nodes participating in this set
-    const auto & h_overlap = [](const ggml_mem_ranges * mrs, const node_info & node) {
-        for (const auto * src : node.srcs) {
-            if (ggml_mem_ranges_check_src(mrs, src)) {
-                return true;
+    // helper to check if a node can run concurrently with the existing set of nodes
+    const auto & h_check = [](const ggml_mem_ranges * mrs, const node_info & node) {
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (node.node->src[i]) {
+                if (!ggml_mem_ranges_check_src(mrs, node.node->src[i])) {
+                    return false;
+                }
+            }
+        }
+
+        for (const auto * fused : node.fused) {
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (fused->src[i]) {
+                    if (!ggml_mem_ranges_check_src(mrs, fused->src[i])) {
+                        return false;
+                    }
+                }
             }
         }
 
@@ -267,17 +270,13 @@ static std::vector<node_info> ggml_metal_graph_optimize_reorder(const std::vecto
             case GGML_OP_NORM:
             case GGML_OP_RMS_NORM:
             case GGML_OP_GROUP_NORM:
-            case GGML_OP_SUM:
             case GGML_OP_SUM_ROWS:
-            case GGML_OP_MEAN:
             case GGML_OP_MUL:
             case GGML_OP_ADD:
-            case GGML_OP_SUB:
             case GGML_OP_DIV:
+            case GGML_OP_GLU:
             case GGML_OP_SCALE:
             case GGML_OP_GET_ROWS:
-            case GGML_OP_CLAMP:
-            case GGML_OP_UNARY:
                 return true;
             default:
                 return is_empty(op);
@@ -286,7 +285,7 @@ static std::vector<node_info> ggml_metal_graph_optimize_reorder(const std::vecto
 
     const int n = nodes.size();
 
-    std::vector<node_info> res;
+    std::vector<int> res;
     res.reserve(n);
 
     std::vector<bool> used(n, false);
@@ -301,55 +300,59 @@ static std::vector<node_info> ggml_metal_graph_optimize_reorder(const std::vecto
 
         const auto & node0 = nodes[i0];
 
-        if (node0.is_empty()) {
-            res.push_back(node0);
-            continue;
-        }
-
         // the node is not concurrent with the existing concurrent set, so we have to "put a barrier" (i.e reset mrs0)
         // but before we do that, look forward for some other nodes that can be added to the concurrent set mrs0
-        if (h_overlap(mrs0, node0)) {
+        //
+        // note: we can always add empty nodes to the concurrent set as they don't read nor write anything
+        if (!node0.is_empty() && !h_check(mrs0, node0)) {
             // this will hold the set of memory ranges from the nodes that haven't been processed yet
+            // if a node is not concurrent with this set, we cannot reorder it
             ggml_mem_ranges_reset(mrs1);
 
             // initialize it with the current node
             h_add(mrs1, node0);
 
-            for (int i1 = i0 + 1; i1 < i0 + 32 && i1 < n; i1++) {
+            // that many nodes forward to search for a concurrent node
+            constexpr int N_FORWARD = 8;
+
+            for (int i1 = i0 + 1; i1 < i0 + N_FORWARD && i1 < n; i1++) {
                 if (used[i1]) {
                     continue;
                 }
 
                 const auto & node1 = nodes[i1];
 
+                // disallow reordering of certain ops
                 if (!h_safe(node1.op())) {
                     break;
                 }
 
-                // to add a concurrent node, it has to:
-                //   - be empty
-                //   - be concurrent with all nodes in the existing concurrent set (mrs0)
-                //   - be concurrent with all nodes prior to it that haven't been processed yet (mrs1)
-                if ((node1.is_empty() || !h_overlap(mrs0, node1)) && !h_overlap(mrs1, node1)) {
-                    if (!node1.is_empty()) {
-                        // add the node to the existing concurrent set (i.e. reorder)
-                        h_add(mrs0, node1);
-                    }
-                    res.push_back(node1);
+                const bool is_empty = node1.is_empty();
+
+                // to add a concurrent node, it has to be:
+                //   + empty or concurrent with all nodes in the existing concurrent set (mrs0)
+                //   + concurrent with all nodes prior to it that haven't been processed yet (mrs1)
+                if ((is_empty || h_check(mrs0, node1)) && h_check(mrs1, node1)) {
+                    // add the node to the existing concurrent set (i.e. reorder it for early execution)
+                    h_add(mrs0, node1);
+                    res.push_back(i1);
+
+                    // mark as used, so we skip re-processing it later
                     used[i1] = true;
                 } else {
-                    // add the node to the set of nodes that haven't been processed, to prevent invalid reordering
+                    // expand the set of nodes that haven't been processed yet
                     h_add(mrs1, node1);
                 }
             }
 
-            // finalize the concurrent set and begina new one with the current node
+            // finalize the concurrent set and begin a new one
             ggml_mem_ranges_reset(mrs0);
         }
 
+        // expand the concurrent set with the current node
         {
             h_add(mrs0, node0);
-            res.push_back(node0);
+            res.push_back(i0);
         }
     }
 
@@ -370,18 +373,13 @@ void ggml_metal_graph_optimize(ggml_cgraph * gf) {
     nodes.reserve(gf->n_nodes);
 
     // fuse nodes:
-    // we don't want to make reorders that break fusing, so we pack all fusable tensors
+    // we don't want to make reorders that break fusing, so we first pack all fusable tensors
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
     for (int i = 0; i < n; i++) {
         node_info node = {
             /*.node =*/ gf->nodes[i],
-            /*.srcs =*/ {},
             /*.fused =*/ {},
         };
-
-        for (int j = 0; j < GGML_MAX_SRC; j++) {
-            node.add_src(gf->nodes[i]->src[j]);
-        }
 
         // fuse only ops that start with these operations
         // can be expanded when needed
@@ -415,11 +413,6 @@ void ggml_metal_graph_optimize(ggml_cgraph * gf) {
 
                 // the .dst() becomes the last fused tensor
                 node.add_fused(gf->nodes[i]);
-
-                // track all sources of this fused node
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    node.add_src(gf->nodes[i]->src[j], true);
-                }
             }
         }
 
@@ -427,12 +420,21 @@ void ggml_metal_graph_optimize(ggml_cgraph * gf) {
     }
 
     // reorder to improve concurrency
-    nodes = ggml_metal_graph_optimize_reorder(nodes);
+#if 1
+    const auto order = ggml_metal_graph_optimize_reorder(nodes);
+#else
+    std::vector<int> order(nodes.size());
+    for (size_t i = 0; i < nodes.size(); i++) {
+        order[i] = i;
+    }
+#endif
 
     // unfuse
     {
         int j = 0;
-        for (const auto & node : nodes) {
+        for (const auto i : order) {
+            const auto & node = nodes[i];
+
             gf->nodes[j++] = node.node;
 
             for (auto * fused : node.fused) {

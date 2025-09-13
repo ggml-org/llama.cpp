@@ -2111,32 +2111,12 @@ static bool ggml_metal_encode_mem_ranges_reset(struct ggml_metal_encode_context 
     return true;
 }
 
-static bool ggml_metal_encode_mem_ranges_add_src(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
-    if (!node) {
-        return true;
-    }
-
-    return ggml_mem_ranges_add_src(ctx->mem_ranges, node);
+static bool ggml_metal_encode_mem_ranges_add(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    return ggml_mem_ranges_add(ctx->mem_ranges, node);
 }
 
-static bool ggml_metal_encode_mem_ranges_add_dst(struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
-    GGML_ASSERT(node);
-
-    return ggml_mem_ranges_add_dst(ctx->mem_ranges, node);
-}
-
-static bool ggml_metal_encode_mem_ranges_check_src(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
-    if (!node) {
-        return false;
-    }
-
-    return ggml_mem_ranges_check_src(ctx->mem_ranges, node);
-}
-
-static bool ggml_metal_encode_mem_ranges_check_dst(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
-    GGML_ASSERT(node);
-
-    return ggml_mem_ranges_check_dst(ctx->mem_ranges, node);
+static bool ggml_metal_encode_mem_ranges_check(const struct ggml_metal_encode_context * ctx, const struct ggml_tensor * node) {
+    return ggml_mem_ranges_check(ctx->mem_ranges, node);
 }
 
 static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, int idx, int idx_end) {
@@ -2287,16 +2267,10 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
     if (ctx_dev->use_concurrency) {
         bool is_concurrent = true;
 
-        // do not read from any previous dst ranges
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, node->src[i]);
-        }
-
-        // do not write to any previous ranges
-        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, node);
-
-        if (!is_concurrent) {
+        if (!ggml_metal_encode_mem_ranges_check(ctx_enc, node)) {
             ggml_metal_encode_mem_ranges_reset(ctx_enc);
+
+            is_concurrent = false;
         }
 
         if (ctx_dev->debug_graph > 0) {
@@ -2506,13 +2480,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 if (ctx_dev->use_concurrency && n_fuse > 1) {
                     bool is_concurrent = true;
 
-                    // make sure that none of the fused nodes reads from a previous dst range
                     for (int i = 1; i < n_fuse; ++i) {
-                        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, nodes[i]->src[1]);
+                        is_concurrent = is_concurrent && ggml_metal_encode_mem_ranges_check(ctx_enc, nodes[i]);
                     }
-
-                    // do not write to any previous range
-                    is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, nodes[n_fuse - 1]);
 
                     if (!is_concurrent) {
                         ggml_metal_encode_mem_ranges_reset(ctx_enc);
@@ -4675,13 +4645,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 if (ctx_dev->use_concurrency) {
                     bool is_concurrent = true;
 
-                    // make sure that none of the fused nodes reads from a previous dst range
                     for (int i = 1; i < n_fuse; ++i) {
-                        is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_src(ctx_enc, nodes[i]->src[1]);
+                        is_concurrent = is_concurrent && ggml_metal_encode_mem_ranges_check(ctx_enc, nodes[i]);
                     }
-
-                    // do not write to any previous range
-                    is_concurrent = is_concurrent && !ggml_metal_encode_mem_ranges_check_dst(ctx_enc, nodes[n_fuse - 1]);
 
                     if (!is_concurrent) {
                         ggml_metal_encode_mem_ranges_reset(ctx_enc);
@@ -5889,13 +5855,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
     if (ctx_dev->use_concurrency) {
         bool ok = true;
 
-        // add new src ranges
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            ok = ok && ggml_metal_encode_mem_ranges_add_src(ctx_enc, node->src[i]);
+        for (int i = 0; i < n_fuse; ++i) {
+            ok = ok && ggml_metal_encode_mem_ranges_add(ctx_enc, nodes[i]);
         }
-
-        // add the destination range
-        ok = ok && ggml_metal_encode_mem_ranges_add_dst(ctx_enc, nodes[n_fuse - 1]);
 
         if (!ok) {
             if (ctx_dev->debug_graph > 2) {
@@ -6754,7 +6716,7 @@ static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, struct ggm
         ggml_metal_graph_optimize(cgraph);
     }
 
-    //printf("%s: initial graph optimize took %.3f ms\n", __func__, (ggml_time_us() - t_start) / 1000.0);
+    //printf("%s: graph optimize took %.3f ms\n", __func__, (ggml_time_us() - t_start) / 1000.0);
 }
 
 static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
