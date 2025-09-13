@@ -651,6 +651,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     constexpr double epsilon = 1e-12;
     constexpr double infinity = std::numeric_limits<double>::infinity();
+    const char * func = __func__;
 
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
@@ -1083,7 +1084,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 }
             } else {
                 LLAMA_LOG_WARN("%s: side data size mismatch for %s: got %zu, expected %zu or %zu; ignoring\n",
-                    __func__, name.c_str(), src_sz, (size_t)n_per_row, want);
+                    func, name.c_str(), src_sz, (size_t)n_per_row, want);
             }
         };
 
