@@ -641,12 +641,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     constexpr ggml_type iq_quants[] = {
         GGML_TYPE_IQ1_S,
+        GGML_TYPE_IQ2_XXS,
+        GGML_TYPE_IQ2_XS,
         GGML_TYPE_IQ2_S,
         GGML_TYPE_IQ3_S,
         GGML_TYPE_IQ4_XS,
+        GGML_TYPE_IQ4_NL,
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
-        GGML_TYPE_Q8_0
+        GGML_TYPE_Q8_0,
+        // TODO: find better way to handle F16/BF16
+#ifdef GGML_USE_METAL
+        GGML_TYPE_F16
+#else
+        GGML_TYPE_BF16
+#endif
     };
 
     constexpr double epsilon = 1e-12;
