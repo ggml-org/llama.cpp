@@ -176,47 +176,34 @@ if (Vulkan_FOUND)
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
-
         COMMAND ${_ggml_vk_genshaders_cmd}
-            --glslc      ${Vulkan_GLSLC_EXECUTABLE}
-            --input-dir  ${_ggml_vk_input_dir}
             --output-dir ${_ggml_vk_output_dir}
             --target-hpp ${_ggml_vk_header}
-            --no-clean
-
         DEPENDS ${_ggml_vk_shaders_gen_sources}
                 vulkan-shaders-gen
-
-        COMMENT "Generate vulkan shaders hpp"
+        COMMENT "Generate vulkan shaders header"
     )
     target_sources(ggml-vulkan PRIVATE ${_ggml_vk_header})
-
+    
     foreach (file_full ${_ggml_vk_shader_files})
-
         get_filename_component(file ${file_full} NAME)
-
-        set (_ggml_vk_source     "${CMAKE_CURRENT_BINARY_DIR}/${file}.cpp")
+        set (_ggml_vk_target_cpp "${CMAKE_CURRENT_BINARY_DIR}/${file}.cpp")
 
         add_custom_command(
-            OUTPUT ${_ggml_vk_source}
-
+            OUTPUT  ${_ggml_vk_target_cpp}
+            DEPFILE ${_ggml_vk_target_cpp}.d
             COMMAND ${_ggml_vk_genshaders_cmd}
                 --glslc      ${Vulkan_GLSLC_EXECUTABLE}
-                --input-dir  ${_ggml_vk_input_dir}
+                --source     ${file_full}
                 --output-dir ${_ggml_vk_output_dir}
-                --target-cpp ${_ggml_vk_source}
-                --filter     ${file}
-                --no-clean
-
+                --target-hpp ${_ggml_vk_header}
+                --target-cpp ${_ggml_vk_target_cpp}
             DEPENDS ${file_full}
                     ${_ggml_vk_shaders_gen_sources}
                     vulkan-shaders-gen
-            DEPFILE ${_ggml_vk_source}.d
-
             COMMENT "Generate vulkan shaders for ${file}"
         )
-
-        target_sources(ggml-vulkan PRIVATE ${_ggml_vk_source})
+        target_sources(ggml-vulkan PRIVATE ${_ggml_vk_target_cpp})
     endforeach()
 
 else()
