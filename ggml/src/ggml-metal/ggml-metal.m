@@ -2279,7 +2279,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
         }
 
         if (ctx_dev->debug_graph > 0) {
-            GGML_LOG_DEBUG("%s: op - %-12s %s\n", __func__, ggml_op_name(dst->op), is_concurrent ? "(concurrent)" : "");
+            GGML_LOG_DEBUG("%s: node[%5d] - %-12s %s\n", __func__, idx, ggml_op_name(dst->op), is_concurrent ? "(concurrent)" : "");
         }
         if (ctx_dev->debug_graph > 1) {
             if (src0) {
@@ -5848,7 +5848,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
     if (ctx_dev->debug_graph > 0) {
         if (n_fuse > 1) {
-            GGML_LOG_DEBUG("%s: fuse: %d ops\n", __func__, n_fuse);
+            GGML_LOG_DEBUG("%s:               fuse %d ops\n", __func__, n_fuse);
         }
     }
 
