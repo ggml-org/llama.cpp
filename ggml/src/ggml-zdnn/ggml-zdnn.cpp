@@ -127,11 +127,6 @@ static void ggml_zdnn_mul_mat_op(ggml_backend_zdnn_context * ctx, const ggml_ten
     const int64_t output_rows = ne1;
     const int64_t output_cols = ne0;
 
-    // TODO: Weights are somehow not going through `ggml_backend_zdnn_buffer_set_tensor` during model loading.
-    //       So we need to load the weights here. Remove this when the issue is fixed.
-    //       Problem might be residing in `ggml_backend_zdnn_device_supports_buft`.
-    if (weights_extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(weights_extra->ztensor, weights->data);
-
     // GGML_LOG_INFO("%s: tensor '%s' tensor dimensions: [%ld, %ld, %ld, %ld] pre_tfm_desc dimensions: [%ld, %ld, %ld, %ld]\n",
     //               __func__, weights_extra->name,
     //               weights->ne[3], weights->ne[2], weights->ne[1], weights->ne[0],
@@ -355,6 +350,9 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
     for (const auto & buf_ptr : ctx->buffers) {
         ggml_backend_zdnn_buffer * buf = buf_ptr.get();
+
+        // Free any extra buffer allocated for the tensor. E.g., bias for GGML_OP_MUL_MAT
+        if (buf->extra != nullptr) free(buf->extra->data);
         if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
@@ -432,8 +430,11 @@ static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     memcpy((char *)tensor->data + offset, data, size);
 
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
-    if (extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
-    ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
+
+    // Fixes the LLAMA_SET_ROWS bug
+    // see: https://github.com/ggml-org/llama.cpp/issues/15414
+    if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE && extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
+    if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
 
     GGML_UNUSED(buffer);
 }
@@ -538,29 +539,6 @@ ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_type(void) {
     return &ggml_backend_buffer_type_zdnn;
 }
 
-static const char * ggml_backend_zdnn_buffer_from_ptr_type_get_name(ggml_backend_buffer_type_t buft) {
-    return GGML_ZDNN_NAME "_Mapped";
-
-    GGML_UNUSED(buft);
-}
-
-static ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_from_ptr_type(void) {
-    static ggml_backend_buffer_type ggml_backend_buffer_from_ptr_type_zdnn = {
-        /* .iface = */ {
-            /* .get_name       = */ ggml_backend_zdnn_buffer_from_ptr_type_get_name,
-            /* .alloc_buffer   = */ ggml_backend_zdnn_buffer_type_alloc_buffer,
-            /* .get_alignment  = */ ggml_backend_zdnn_buffer_type_get_alignment,
-            /* .get_max_size   = */ NULL,
-            /* .get_alloc_size = */ NULL,  // defaults to ggml_nbytes
-            /* .is_host        = */ ggml_backend_zdnn_buffer_type_is_host,
-        },
-        /* .device  = */ &g_ggml_backend_zdnn_device,
-        /* .context = */ NULL,
-    };
-
-    return &ggml_backend_buffer_from_ptr_type_zdnn;
-}
-
 //
 // backend
 //
@@ -648,7 +626,7 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->caps = (ggml_backend_dev_caps) {
         /* .async                = */ false,
         /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
+        /* .buffer_from_host_ptr = */ false,
         /* .events               = */ false
     };
 }
@@ -679,48 +657,6 @@ static ggml_backend_buffer_type_t ggml_backend_zdnn_device_get_buffer_type(ggml_
     GGML_UNUSED(dev);
 }
 
-static ggml_backend_buffer_t ggml_backend_zdnn_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
-    ggml_backend_zdnn_buffer_context * ctx = new ggml_backend_zdnn_buffer_context();
-
-    ctx->all_data  = ptr;
-    ctx->all_size  = size;
-    ctx->owned     = false;
-    ctx->n_buffers = 0;
-
-    const size_t size_page = sysconf(_SC_PAGESIZE);
-
-    // page-align the data ptr
-    {
-        const uintptr_t offs = (uintptr_t) ptr % size_page;
-        ptr  = (void *)((char *)ptr - offs);
-        size += offs;
-    }
-
-    size_t size_aligned = size;
-    if ((size_aligned % size_page) != 0) {
-        size_aligned += size_page - (size_aligned % size_page);
-    }
-
-    ggml_backend_zdnn_device_context * ctx_dev = (ggml_backend_zdnn_device_context *)dev->context;
-
-    GGML_ASSERT(ctx_dev->zdnn_device >= 0);
-    int device = ctx_dev->zdnn_device; GGML_UNUSED(device);
-
-    std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
-    zdnn_buffer->data = ptr;
-    zdnn_buffer->size = size;
-    ctx->buffers.push_back(std::move(zdnn_buffer));
-
-    GGML_LOG_INFO("%s: allocated buffer, size = %8.2f MiB\n",
-                  __func__, size_aligned / 1024.0 / 1024.0);
-
-    ++ctx->n_buffers;
-
-    return ggml_backend_buffer_init(ggml_backend_zdnn_buffer_from_ptr_type(), ggml_backend_zdnn_buffer_i, ctx, size);
-
-    GGML_UNUSED(max_tensor_size);
-}
-
 static bool ggml_backend_zdnn_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_zdnn_device_context * ctx_dev = (ggml_backend_zdnn_device_context *) dev->context;
 
@@ -729,8 +665,7 @@ static bool ggml_backend_zdnn_device_supports_op(ggml_backend_dev_t dev, const g
 
 static bool ggml_backend_zdnn_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     return
-        buft->iface.get_name == ggml_backend_zdnn_buffer_type_get_name ||
-        buft->iface.get_name == ggml_backend_zdnn_buffer_from_ptr_type_get_name;
+        buft->iface.get_name == ggml_backend_zdnn_buffer_type_get_name;
 
     GGML_UNUSED(dev);
 }
@@ -744,7 +679,7 @@ static ggml_backend_device_i ggml_backend_zdnn_device_i = {
     /* .init_backend         = */ ggml_backend_zdnn_device_init,
     /* .get_buffer_type      = */ ggml_backend_zdnn_device_get_buffer_type,
     /* .get_host_buffer_type = */ NULL,
-    /* .buffer_from_host_ptr = */ ggml_backend_zdnn_device_buffer_from_ptr,
+    /* .buffer_from_host_ptr = */ NULL,
     /* .supports_op          = */ ggml_backend_zdnn_device_supports_op,
     /* .supports_buft        = */ ggml_backend_zdnn_device_supports_buft,
     /* .offload_op           = */ NULL,
