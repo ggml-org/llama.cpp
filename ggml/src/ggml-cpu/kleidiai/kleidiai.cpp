@@ -123,7 +123,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         }
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, op);
         GGML_ASSERT(kernels);
-        kernel_info * kernel = op->src[1]->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
+        bool is_gemv = op->src[1]->ne[1] == 1;
+        kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
+        lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
 
         size_t k = op->src[0]->ne[0];
         size_t n = op->src[0]->ne[1];
@@ -134,9 +136,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         size_t sr = kernel->get_sr();
 
         if (kernels->rhs_type == GGML_TYPE_Q4_0) {
-            size = variant_call<size_t>(kernels->lhs_info.packed_size, m, k, QK4_0, mr, kr, sr);
+            size = variant_call<size_t>(lhs_info->packed_size, m, k, QK4_0, mr, kr, sr);
         } else if (kernels->rhs_type == GGML_TYPE_F16) {
-            size = variant_call<size_t>(kernels->lhs_info.packed_size, m, k, mr, kr, sr) +
+            size = variant_call<size_t>(lhs_info->packed_size, m, k, mr, kr, sr) +
                    variant_call<size_t>(kernels->rhs_info.packed_size, n, k) +
                    k * n * sizeof(float) + n * sizeof(float);
         } else {
@@ -152,7 +154,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             if (dst->src[0]->type == GGML_TYPE_Q4_0) {
                 return compute_forward_q4_0(params, dst);
             } else if (dst->src[0]->type == GGML_TYPE_F16) {
-                return compute_forward_kv_cache(params, dst);
+                return compute_forward_fp16(params, dst);
             }
         } else if (dst->op == GGML_OP_GET_ROWS) {
             if (dst->src[0]->type == GGML_TYPE_Q4_0) {
@@ -162,7 +164,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         return false;
     }
 
-    bool compute_forward_kv_cache(ggml_compute_params * params, struct ggml_tensor * dst) {
+    bool compute_forward_fp16(ggml_compute_params * params, struct ggml_tensor * dst) {
         static std::atomic_flag first_to_arrive = ATOMIC_FLAG_INIT;
 
         const ggml_tensor * src0 = dst->src[0];
@@ -173,7 +175,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
         GGML_ASSERT(kernels);
 
-        kernel_info * kernel = src1->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
+        bool is_gemv = src1->ne[1] == 1;
+        kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
+        lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
         GGML_ASSERT(kernel);
 
         const int nth = params->nth;
@@ -198,7 +202,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int64_t kr = static_cast<int64_t>(kernel->get_kr());
         const int64_t sr = static_cast<int64_t>(kernel->get_sr());
 
-        const size_t lhs_packed_size = variant_call<size_t>(kernels->lhs_info.packed_size, m, k, mr, kr, sr);
+        const size_t lhs_packed_size = variant_call<size_t>(lhs_info->packed_size, m, k, mr, kr, sr);
         const size_t rhs_packed_size = variant_call<size_t>(kernels->rhs_info.packed_size, n, k);
         const size_t kxn_size        = k * n * sizeof(float);
         const size_t bias_size       = n * sizeof(float);
@@ -229,12 +233,12 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                     const int64_t num_m_per_thread = (ith == num_threads - 1) ? num_m_per_threadN_1 : num_m_per_thread0;
 
                     const size_t lhs_offset        = variant_call<size_t>(kernels->gemm.get_lhs_offset, m_start, lhs_stride);
-                    const size_t lhs_packed_offset = variant_call<size_t>(kernels->lhs_info.get_packed_offset, m_start, k, mr, kr, sr);
+                    const size_t lhs_packed_offset = variant_call<size_t>(lhs_info->get_packed_offset, m_start, k, mr, kr, sr);
 
                     const void * src_ptr = static_cast<const uint8_t *>(lhs_batch) + lhs_offset;
                     void * dst_ptr       = static_cast<uint8_t *>(lhs_packed) + lhs_packed_offset;
 
-                    variant_call<void>(kernels->lhs_info.pack_func, num_m_per_thread, k, mr, kr, sr, 0, src_ptr, lhs_stride, dst_ptr);
+                    variant_call<void>(lhs_info->pack_func, num_m_per_thread, k, mr, kr, sr, 0, src_ptr, lhs_stride, dst_ptr);
                 }
             }
 
@@ -259,7 +263,10 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 const int64_t m_start      = 0;
 
                 const int64_t n_step      = static_cast<int64_t>(kernel->get_n_step());
-                const int64_t num_threads = KAI_MIN(n / n_step, nth);
+                int64_t num_threads       = KAI_MIN(n / n_step, nth);
+                if (num_threads <= 0) {
+                    num_threads = 1;
+                }
 
                 if (ith < num_threads) {
                     const int64_t num_n_per_thread0   = round_down(n / num_threads, n_step);
@@ -303,13 +310,15 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
         GGML_ASSERT(kernels);
 
-        kernel_info * kernel = src1->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
-        lhs_packing_info * lhs_info = &kernels->lhs_info;
+        bool is_gemv = src1->ne[1] == 1;
+        kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
+        lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
 
         GGML_ASSERT(kernel);
 
         const int ith = params->ith;
-        const int nth = params->nth;
+        const int nth_raw = params->nth;
+        const int nth = nth_raw > 0 ? nth_raw : 1;
 
         const size_t k = ne00;
         const size_t m = ne11;
@@ -327,9 +336,12 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const size_t num_n_per_thread = kai_roundup(kai_roundup(n, nth) / nth, n_step);
         const size_t n_start = ith * num_n_per_thread;
 
-        size_t n_to_process = num_n_per_thread;
-        if ((n_start + n_to_process) > n) {
-            n_to_process = n - n_start;
+        size_t n_to_process = 0;
+        if (n_start < n) {
+            n_to_process = num_n_per_thread;
+            if ((n_start + n_to_process) > n) {
+                n_to_process = n - n_start;
+            }
         }
 
         // Calculate number of columns to be processed per thread
@@ -361,8 +373,10 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const void* lhs_ptr            = (const void*)((const char *)lhs_packed + lhs_packed_offset);
         float *dst_ptr                 = reinterpret_cast<float *>(static_cast<uint8_t *>(dst->data) + dst_offset);
 
-        variant_call<void>(kernel->run_kernel, m, n_to_process, k, QK4_0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
-                           sizeof(float), -FLT_MAX, FLT_MAX);
+        if (n_to_process > 0) {
+            variant_call<void>(kernel->run_kernel, m, n_to_process, k, QK4_0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
+                               sizeof(float), -FLT_MAX, FLT_MAX);
+        }
 
         return true;
     }
@@ -501,9 +515,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             op->src[0]->buffer &&
             (ggml_n_dims(op->src[0]) == 2) &&
             op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type() && ctx.kernels) {
-            if (op->op == GGML_OP_GET_ROWS && op->src[1]->ne[0] != 8) {
-                return false;
-            }
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
             }
@@ -520,13 +531,8 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             }
-            else if (ggml_kleidiai_select_kernels(ctx.features, op) &&
-                     op->src[0]->op == GGML_OP_VIEW &&
-                     (op->src[1]->op == GGML_OP_PERMUTE || op->src[1]->op ==  GGML_OP_SOFT_MAX) &&
-                     op->src[1]->ne[1] > 1) {
-                if ((op->src[0]->nb[0] != 2) ||
-                    (op->src[1]->nb[0] != 4) ||
-                    (op->src[0]->nb[1] * op->src[0]->ne[1] != op->src[0]->nb[2]) ||
+            else if (ggml_kleidiai_select_kernels(ctx.features, op) && op->src[1]->ne[1] > 1) {
+                if ((op->src[0]->nb[1] * op->src[0]->ne[1] != op->src[0]->nb[2]) ||
                     (op->src[1]->nb[1] * op->src[1]->ne[1] != op->src[1]->nb[2])) {
                     return nullptr;
                 }

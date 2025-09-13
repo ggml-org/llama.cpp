@@ -42,18 +42,6 @@ cmake --build build --config Release -j $(nproc)
     cmake --build build --config Release -j $(nproc)
     ```
 
--   By default, NNPA is disabled by default. To enable it:
-
-    ```bash
-    cmake -S . -B build             \
-        -DCMAKE_BUILD_TYPE=Release  \
-        -DGGML_BLAS=ON              \
-        -DGGML_BLAS_VENDOR=OpenBLAS \
-        -DGGML_NNPA=ON
-
-    cmake --build build --config Release -j $(nproc)
-    ```
-
 -   For debug builds:
 
     ```bash
@@ -75,6 +63,23 @@ cmake --build build --config Release -j $(nproc)
 
     cmake --build build --config Release -j $(nproc)
     ```
+
+## IBM zDNN Accelerator
+
+This provides acceleration using the IBM zAIU co-processor located in the Telum I and Telum II processors. Make sure to have the [IBM zDNN library](https://github.com/IBM/zDNN) installed.
+
+#### Compile from source from IBM
+
+You may find the official build instructions here: [Building and Installing zDNN](https://github.com/IBM/zDNN?tab=readme-ov-file#building-and-installing-zdnn)
+
+### Compilation
+
+```bash
+cmake -S . -B build             \
+    -DCMAKE_BUILD_TYPE=Release  \
+    -DGGML_ZDNN=ON
+cmake --build build --config Release -j$(nproc)
+```
 
 ## Getting GGUF Models
 
@@ -145,17 +150,13 @@ All models need to be converted to Big-Endian. You can achieve this in three cas
 
 ### 1. SIMD Acceleration
 
-Only available in IBM z15 or later system with the `-DGGML_VXE=ON` (turned on by default) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z14/arch12. In such systems, the APIs can still run but will use a scalar implementation.
+Only available in IBM z15/LinuxONE 3 or later system with the `-DGGML_VXE=ON` (turned on by default) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z14/arch12. In such systems, the APIs can still run but will use a scalar implementation.
 
-### 2. NNPA Vector Intrinsics Acceleration
+### 2. zDNN Accelerator (WIP)
 
-Only available in IBM z16 or later system with the `-DGGML_NNPA=ON` (turned off by default) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z15/arch13. In such systems, the APIs can still run but will use a scalar implementation.
+Only available in IBM z17/LinuxONE 5 or later system with the `-DGGML_ZDNN=ON` compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z15/arch13. In such systems, the APIs will default back to CPU routines.
 
-### 3. zDNN Accelerator
-
-_Only available in IBM z16 / LinuxONE 4 or later system. No support currently available._
-
-### 4. Spyre Accelerator
+### 3. Spyre Accelerator
 
 _Only available with IBM z17 / LinuxONE 5 or later system. No support currently available._
 
@@ -213,10 +214,6 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
     CXXFLAGS="-include cstdint" pip3 install -r requirements.txt
     ```
 
-5. `-DGGML_NNPA=ON` generates gibberish output
-
-    Answer: We are aware of this as detailed in [this issue](https://github.com/ggml-org/llama.cpp/issues/14877). Please either try reducing the number of threads, or disable the compile option using `-DGGML_NNPA=OFF`.
-
 ## Getting Help on IBM Z & LinuxONE
 
 1. **Bugs, Feature Requests**
@@ -229,48 +226,50 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 
 ## Appendix A: Hardware Support Matrix
 
-|         | Support | Minimum Compiler Version |
-| ------- | ------- | ------------------------ |
-| IBM z15 | ✅      |                          |
-| IBM z16 | ✅      |                          |
-| IBM z17 | ✅      | GCC 15.1.0               |
+|          | Support | Minimum Compiler Version |
+| -------- | ------- | ------------------------ |
+| IBM z15  | ✅      |                          |
+| IBM z16  | ✅      |                          |
+| IBM z17  | ✅      | GCC 15.1.0               |
+| IBM zDNN | ✅      |                          |
 
 -   ✅ - supported and verified to run as intended
 -   🚫 - unsupported, we are unlikely able to provide support
 
 ## Appendix B: SIMD Support Matrix
 
-|            | VX/VXE/VXE2 | NNPA | zDNN | Spyre |
-| ---------- | ----------- | ---- | ---- | ----- |
-| FP32       | ✅          | ✅   | ❓   | ❓    |
-| FP16       | ✅          | ✅   | ❓   | ❓    |
-| BF16       | 🚫          | 🚫   | ❓   | ❓    |
-| Q4_0       | ✅          | ✅   | ❓   | ❓    |
-| Q4_1       | ✅          | ✅   | ❓   | ❓    |
-| Q5_0       | 🚫          | 🚫   | ❓   | ❓    |
-| Q5_1       | 🚫          | 🚫   | ❓   | ❓    |
-| Q8_0       | ✅          | ✅   | ❓   | ❓    |
-| Q2_K       | 🚫          | 🚫   | ❓   | ❓    |
-| Q3_K       | ✅          | ✅   | ❓   | ❓    |
-| Q4_K       | ✅          | ✅   | ❓   | ❓    |
-| Q5_K       | ✅          | ✅   | ❓   | ❓    |
-| Q6_K       | ✅          | ✅   | ❓   | ❓    |
-| TQ1_0      | 🚫          | 🚫   | ❓   | ❓    |
-| TQ2_0      | 🚫          | 🚫   | ❓   | ❓    |
-| IQ2_XXS    | 🚫          | 🚫   | ❓   | ❓    |
-| IQ2_XS     | 🚫          | 🚫   | ❓   | ❓    |
-| IQ2_S      | 🚫          | 🚫   | ❓   | ❓    |
-| IQ3_XXS    | 🚫          | 🚫   | ❓   | ❓    |
-| IQ3_S      | 🚫          | 🚫   | ❓   | ❓    |
-| IQ1_S      | 🚫          | 🚫   | ❓   | ❓    |
-| IQ1_M      | 🚫          | 🚫   | ❓   | ❓    |
-| IQ4_NL     | ✅          | ✅   | ❓   | ❓    |
-| IQ4_XS     | ✅          | ✅   | ❓   | ❓    |
-| FP32->FP16 | 🚫          | ✅   | ❓   | ❓    |
-| FP16->FP32 | 🚫          | ✅   | ❓   | ❓    |
+|            | VX/VXE/VXE2 | zDNN | Spyre |
+|------------|-------------|------|-------|
+| FP32       | ✅           | ✅    | ❓     |
+| FP16       | ✅           | ✅    | ❓     |
+| BF16       | 🚫           | ✅    | ❓     |
+| Q4_0       | ✅           | ❓    | ❓     |
+| Q4_1       | ✅           | ❓    | ❓     |
+| MXFP4      | 🚫           | ❓    | ❓     |
+| Q5_0       | ✅           | ❓    | ❓     |
+| Q5_1       | ✅           | ❓    | ❓     |
+| Q8_0       | ✅           | ❓    | ❓     |
+| Q2_K       | 🚫           | ❓    | ❓     |
+| Q3_K       | ✅           | ❓    | ❓     |
+| Q4_K       | ✅           | ❓    | ❓     |
+| Q5_K       | ✅           | ❓    | ❓     |
+| Q6_K       | ✅           | ❓    | ❓     |
+| TQ1_0      | 🚫           | ❓    | ❓     |
+| TQ2_0      | 🚫           | ❓    | ❓     |
+| IQ2_XXS    | 🚫           | ❓    | ❓     |
+| IQ2_XS     | 🚫           | ❓    | ❓     |
+| IQ2_S      | 🚫           | ❓    | ❓     |
+| IQ3_XXS    | 🚫           | ❓    | ❓     |
+| IQ3_S      | 🚫           | ❓    | ❓     |
+| IQ1_S      | 🚫           | ❓    | ❓     |
+| IQ1_M      | 🚫           | ❓    | ❓     |
+| IQ4_NL     | ✅           | ❓    | ❓     |
+| IQ4_XS     | ✅           | ❓    | ❓     |
+| FP32->FP16 | 🚫           | ❓    | ❓     |
+| FP16->FP32 | 🚫           | ❓    | ❓     |
 
 -   ✅ - acceleration available
 -   🚫 - acceleration unavailable, will still run using scalar implementation
 -   ❓ - acceleration unknown, please contribute if you can test it yourself
 
-Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on July 25, 2025.
+Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on Sep 7, 2025.

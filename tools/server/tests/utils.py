@@ -26,10 +26,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 12
-
-if "LLAMA_SANITIZE" in os.environ or "GITHUB_ACTION" in os.environ:
-    DEFAULT_HTTP_TIMEOUT = 30
+DEFAULT_HTTP_TIMEOUT = 60
 
 
 class ServerResponse:
@@ -48,6 +45,7 @@ class ServerProcess:
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
     seed: int = 42
+    offline: bool = False
 
     # custom options
     model_alias: str | None = None
@@ -69,7 +67,7 @@ class ServerProcess:
     n_slots: int | None = None
     ctk: str | None = None
     ctv: str | None = None
-    fa: bool | None = None
+    fa: str | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
@@ -79,7 +77,7 @@ class ServerProcess:
     draft: int | None = None
     api_key: str | None = None
     lora_files: List[str] | None = None
-    disable_ctx_shift: int | None = False
+    enable_ctx_shift: int | None = False
     draft_min: int | None = None
     draft_max: int | None = None
     no_webui: bool | None = None
@@ -121,6 +119,8 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        if self.offline:
+            server_args.append("--offline")
         if self.model_file:
             server_args.extend(["--model", self.model_file])
         if self.model_url:
@@ -151,6 +151,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.server_slots:
             server_args.append("--slots")
+        else:
+            server_args.append("--no-slots")
         if self.pooling:
             server_args.extend(["--pooling", self.pooling])
         if self.model_alias:
@@ -164,7 +166,7 @@ class ServerProcess:
         if self.ctv:
             server_args.extend(["-ctv", self.ctv])
         if self.fa is not None:
-            server_args.append("-fa")
+            server_args.extend(["-fa", self.fa])
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -178,8 +180,8 @@ class ServerProcess:
         if self.lora_files:
             for lora_file in self.lora_files:
                 server_args.extend(["--lora", lora_file])
-        if self.disable_ctx_shift:
-            server_args.extend(["--no-context-shift"])
+        if self.enable_ctx_shift:
+            server_args.append("--context-shift")
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
         if self.draft_max:
@@ -318,46 +320,53 @@ class ServerProcess:
             arguments_parts = 0
 
             for chunk in self.make_stream_request(method, path, data, headers):
-                assert len(chunk['choices']) == 1, f'Expected 1 choice, got {len(chunk["choices"])}'
-                choice = chunk['choices'][0]
-                if choice['delta'].get('content') is not None:
-                    assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
-                    content.append(choice['delta']['content'])
-                    content_parts += 1
-                if choice['delta'].get('reasoning_content') is not None:
-                    assert len(choice['delta']['reasoning_content']) > 0, f'Expected non empty reasoning_content delta!'
-                    reasoning_content.append(choice['delta']['reasoning_content'])
-                    reasoning_content_parts += 1
-                if choice['delta'].get('finish_reason') is not None:
-                    finish_reason = choice['delta']['finish_reason']
-                for tc in choice['delta'].get('tool_calls', []):
-                    if 'function' not in tc:
-                        raise ValueError(f"Expected function type, got {tc['type']}")
-                    if tc['index'] >= len(tool_calls):
-                        assert 'id' in tc
-                        assert tc.get('type') == 'function'
-                        assert 'function' in tc and 'name' in tc['function'] and len(tc['function']['name']) > 0, \
-                            f"Expected function call with name, got {tc.get('function')}"
-                        tool_calls.append(dict(
-                            id="",
-                            type="function",
-                            function=dict(
-                                name="",
-                                arguments="",
-                            )
-                        ))
-                    tool_call = tool_calls[tc['index']]
-                    if tc.get('id') is not None:
-                        tool_call['id'] = tc['id']
-                    fct = tc['function']
-                    assert 'id' not in fct, f"Function call should not have id: {fct}"
-                    if fct.get('name') is not None:
-                        tool_call['function']['name'] = tool_call['function'].get('name', '') + fct['name']
-                    if fct.get('arguments') is not None:
-                        tool_call['function']['arguments'] += fct['arguments']
-                        arguments_parts += 1
-                    tool_call_parts += 1
-
+                if chunk['choices']:
+                    assert len(chunk['choices']) == 1, f'Expected 1 choice, got {len(chunk["choices"])}'
+                    choice = chunk['choices'][0]
+                    if choice['delta'].get('content') is not None:
+                        assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
+                        content.append(choice['delta']['content'])
+                        content_parts += 1
+                    if choice['delta'].get('reasoning_content') is not None:
+                        assert len(choice['delta']['reasoning_content']) > 0, f'Expected non empty reasoning_content delta!'
+                        reasoning_content.append(choice['delta']['reasoning_content'])
+                        reasoning_content_parts += 1
+                    if choice['delta'].get('finish_reason') is not None:
+                        finish_reason = choice['delta']['finish_reason']
+                    for tc in choice['delta'].get('tool_calls', []):
+                        if 'function' not in tc:
+                            raise ValueError(f"Expected function type, got {tc['type']}")
+                        if tc['index'] >= len(tool_calls):
+                            assert 'id' in tc
+                            assert tc.get('type') == 'function'
+                            assert 'function' in tc and 'name' in tc['function'] and len(tc['function']['name']) > 0, \
+                                f"Expected function call with name, got {tc.get('function')}"
+                            tool_calls.append(dict(
+                                id="",
+                                type="function",
+                                function=dict(
+                                    name="",
+                                    arguments="",
+                                )
+                            ))
+                        tool_call = tool_calls[tc['index']]
+                        if tc.get('id') is not None:
+                            tool_call['id'] = tc['id']
+                        fct = tc['function']
+                        assert 'id' not in fct, f"Function call should not have id: {fct}"
+                        if fct.get('name') is not None:
+                            tool_call['function']['name'] = tool_call['function'].get('name', '') + fct['name']
+                        if fct.get('arguments') is not None:
+                            tool_call['function']['arguments'] += fct['arguments']
+                            arguments_parts += 1
+                        tool_call_parts += 1
+                else:
+                    # When `include_usage` is True (the default), we expect the last chunk of the stream
+                    # immediately preceding the `data: [DONE]` message to contain a `choices` field with an empty array
+                    # and a `usage` field containing the usage statistics (n.b., llama-server also returns `timings` in
+                    # the last chunk)
+                    assert 'usage' in chunk, f"Expected finish_reason in chunk: {chunk}"
+                    assert 'timings' in chunk, f"Expected finish_reason in chunk: {chunk}"
             print(f'Streamed response had {content_parts} content parts, {reasoning_content_parts} reasoning_content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
             result = dict(
                 choices=[
@@ -387,6 +396,19 @@ server_instances: Set[ServerProcess] = set()
 
 class ServerPreset:
     @staticmethod
+    def load_all() -> None:
+        """ Load all server presets to ensure model files are cached. """
+        servers: List[ServerProcess] = [
+            method()
+            for name, method in ServerPreset.__dict__.items()
+            if callable(method) and name != "load_all"
+        ]
+        for server in servers:
+            server.offline = False
+            server.start()
+            server.stop()
+
+    @staticmethod
     def tinyllama2() -> ServerProcess:
         server = ServerProcess()
         server.model_hf_repo = "ggml-org/models"
@@ -402,6 +424,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -416,6 +439,7 @@ class ServerPreset:
     @staticmethod
     def bert_bge_small_with_fa() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
         server.model_alias = "bert-bge-small"
@@ -423,7 +447,7 @@ class ServerPreset:
         server.n_batch = 300
         server.n_ubatch = 300
         server.n_slots = 2
-        server.fa = True
+        server.fa = "on"
         server.seed = 42
         server.server_embeddings = True
         return server
@@ -431,6 +455,7 @@ class ServerPreset:
     @staticmethod
     def tinyllama_infill() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "tinyllamas/stories260K-infill.gguf"
         server.model_alias = "tinyllama-infill"
@@ -445,6 +470,7 @@ class ServerPreset:
     @staticmethod
     def stories15m_moe() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/stories15M_MOE"
         server.model_hf_file = "stories15M_MOE-F16.gguf"
         server.model_alias = "stories15m-moe"
@@ -459,6 +485,7 @@ class ServerPreset:
     @staticmethod
     def jina_reranker_tiny() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "jina-reranker-v1-tiny-en/ggml-model-f16.gguf"
         server.model_alias = "jina-reranker"
@@ -472,6 +499,7 @@ class ServerPreset:
     @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
         server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
         server.model_hf_file = "tinygemma3-Q8_0.gguf"

@@ -74,21 +74,7 @@ while read c; do
         cmake/common.cmake \
         cmake/ggml-config.cmake.in \
         src/ggml-cpu/cmake/FindSIMD.cmake \
-        src/ggml*.h \
-        src/ggml*.c \
-        src/ggml*.cpp \
-        src/gguf*.cpp \
-        src/ggml-blas/* \
-        src/ggml-cann/* \
-        src/ggml-cpu/* \
-        src/ggml-cuda/* \
-        src/ggml-hip/* \
-        src/ggml-metal/* \
-        src/ggml-musa/* \
-        src/ggml-opencl/* \
-        src/ggml-rpc/* \
-        src/ggml-sycl/* \
-        src/ggml-vulkan/* \
+        src/ggml* \
         include/ggml*.h \
         include/gguf*.h \
         tests/test-opt.cpp \
@@ -131,21 +117,7 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # cmake/ggml-config.cmake.in        -> ggml/cmake/ggml-config.cmake.in
     # src/ggml-cpu/cmake/FindSIMD.cmake -> ggml/src/ggml-cpu/cmake/FindSIMD.cmake
     #
-    # src/ggml*.c          -> ggml/src/ggml*.c
-    # src/ggml*.cpp        -> ggml/src/ggml*.cpp
-    # src/ggml*.h          -> ggml/src/ggml*.h
-    # src/gguf*.cpp        -> ggml/src/gguf*.cpp
-    # src/ggml-blas/*      -> ggml/src/ggml-blas/*
-    # src/ggml-cann/*      -> ggml/src/ggml-cann/*
-    # src/ggml-cpu/*       -> ggml/src/ggml-cpu/*
-    # src/ggml-cuda/*      -> ggml/src/ggml-cuda/*
-    # src/ggml-hip/*       -> ggml/src/ggml-hip/*
-    # src/ggml-metal/*     -> ggml/src/ggml-metal/*
-    # src/ggml-musa/*      -> ggml/src/ggml-musa/*
-    # src/ggml-opencl/*    -> ggml/src/ggml-opencl/*
-    # src/ggml-rpc/*       -> ggml/src/ggml-rpc/*
-    # src/ggml-sycl/*      -> ggml/src/ggml-sycl/*
-    # src/ggml-vulkan/*    -> ggml/src/ggml-vulkan/*
+    # src/ggml* -> ggml/src/ggml*
     #
     # include/ggml*.h -> ggml/include/ggml*.h
     # include/gguf*.h -> ggml/include/gguf*.h
@@ -163,20 +135,7 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]| [ab]\/)cmake\/common.cmake/\1ggml\/cmake\/common.cmake/g' \
         -e 's/([[:space:]]| [ab]\/)cmake\/ggml-config.cmake.in/\1ggml\/cmake\/ggml-config.cmake.in/g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-cpu\/cmake\/FindSIMD.cmake/\1ggml\/src\/ggml-cpu\/cmake\/FindSIMD.cmake/g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.c/\1ggml\/src\/ggml\2.c/g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.cpp/\1ggml\/src\/ggml\2.cpp/g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.h/\1ggml\/src\/ggml\2.h/g' \
-        -e 's/([[:space:]]| [ab]\/)src\/gguf(.*)\.cpp/\1ggml\/src\/gguf\2.cpp/g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-blas\//\1ggml\/src\/ggml-blas\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-cann\//\1ggml\/src\/ggml-cann\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-cpu\//\1ggml\/src\/ggml-cpu\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-cuda\//\1ggml\/src\/ggml-cuda\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-hip\//\1ggml\/src\/ggml-hip\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-metal\//\1ggml\/src\/ggml-metal\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-opencl\//\1ggml\/src\/ggml-opencl\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-rpc\//\1ggml\/src\/ggml-rpc\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-sycl\//\1ggml\/src\/ggml-sycl\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-vulkan\//\1ggml\/src\/ggml-vulkan\//g' \
+        -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)/\1ggml\/src\/ggml\2/g' \
         -e 's/([[:space:]]| [ab]\/)include\/ggml(.*)\.h/\1ggml\/include\/ggml\2.h/g' \
         -e 's/([[:space:]]| [ab]\/)include\/gguf(.*)\.h/\1ggml\/include\/gguf\2.h/g' \
         -e 's/([[:space:]]| [ab]\/)tests\/(.*)\.cpp/\1tests\/\2.cpp/g' \
