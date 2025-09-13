@@ -111,6 +111,7 @@ class Keys:
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
         DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
+        ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         SWIN_NORM                         = "{arch}.swin_norm"
         RESCALE_EVERY_N_LAYERS            = "{arch}.rescale_every_n_layers"
@@ -146,21 +147,27 @@ class Keys:
         REL_BUCKETS_COUNT            = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW               = "{arch}.attention.sliding_window"
         SCALE                        = "{arch}.attention.scale"
+        OUTPUT_SCALE                 = "{arch}.attention.output_scale"
+        TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
 
     class Rope:
-        DIMENSION_COUNT         = "{arch}.rope.dimension_count"
-        DIMENSION_SECTIONS      = "{arch}.rope.dimension_sections"
-        FREQ_BASE               = "{arch}.rope.freq_base"
-        SCALING_TYPE            = "{arch}.rope.scaling.type"
-        SCALING_FACTOR          = "{arch}.rope.scaling.factor"
-        SCALING_ATTN_FACTOR     = "{arch}.rope.scaling.attn_factor"
-        SCALING_ORIG_CTX_LEN    = "{arch}.rope.scaling.original_context_length"
-        SCALING_FINETUNED       = "{arch}.rope.scaling.finetuned"
-        SCALING_YARN_LOG_MUL    = "{arch}.rope.scaling.yarn_log_multiplier"
+        DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
+        FREQ_BASE                = "{arch}.rope.freq_base"
+        SCALING_TYPE             = "{arch}.rope.scaling.type"
+        SCALING_FACTOR           = "{arch}.rope.scaling.factor"
+        SCALING_ATTN_FACTOR      = "{arch}.rope.scaling.attn_factor"
+        SCALING_ORIG_CTX_LEN     = "{arch}.rope.scaling.original_context_length"
+        SCALING_FINETUNED        = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_LOG_MUL     = "{arch}.rope.scaling.yarn_log_multiplier"
+        SCALING_YARN_EXT_FACTOR  = "{arch}.rope.scaling.yarn_ext_factor"
+        SCALING_YARN_ATTN_FACTOR = "{arch}.rope.scaling.yarn_attn_factor"
+        SCALING_YARN_BETA_FAST   = "{arch}.rope.scaling.yarn_beta_fast"
+        SCALING_YARN_BETA_SLOW   = "{arch}.rope.scaling.yarn_beta_slow"
 
     class Split:
         LLM_KV_SPLIT_NO            = "split.no"
@@ -1114,6 +1121,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_POST_NORM,
         MODEL_TENSOR.LAYER_OUT_NORM,
     ],
     MODEL_ARCH.GPTNEOX: [
