@@ -1148,6 +1148,16 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // xIELU activation function
+    // x = x * (alpha_n + alpha_p * sigmoid(beta * x)) + eps * (x > 0)
+    GGML_API struct ggml_tensor * ggml_xielu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float alpha_n,
+            float alpha_p,
+            float beta,
+            float eps);
+
     // gated linear unit ops
     // A: n columns, r rows,
     // result is n / 2 columns, r rows,

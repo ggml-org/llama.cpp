@@ -1147,7 +1147,6 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
 
 static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
 
-
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
     "GEGLU",
@@ -2639,11 +2638,79 @@ struct ggml_tensor * ggml_gelu_quick_inplace(
 }
 
 // ggml_silu
-
 struct ggml_tensor * ggml_silu(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary(ctx, a, GGML_UNARY_OP_SILU);
+}
+
+// ggml_xielu
+static float softplus(float input) {
+    if (input > 20.0f) return input;
+    return logf(1 + expf(input));
+}
+
+struct ggml_tensor * ggml_xielu(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        float alpha_n,
+        float alpha_p,
+        float beta,
+        float eps) {
+    
+    float sp_alpha_n = beta + softplus(alpha_n);
+    float sp_alpha_p = softplus(alpha_p);
+
+    // Scalars setup (as before):
+    struct ggml_tensor *zero           = ggml_new_tensor_1d(ctx, x->type, 1);
+    struct ggml_tensor *one            = ggml_exp(ctx, zero);
+    struct ggml_tensor *alpha_p_tensor = ggml_scale(ctx, one, sp_alpha_p);
+    struct ggml_tensor *alpha_n_tensor = ggml_scale(ctx, one, sp_alpha_n);
+    struct ggml_tensor *beta_tensor    = ggml_scale(ctx, one, beta);
+    struct ggml_tensor *eps_tensor     = ggml_scale(ctx, one, eps);
+    struct ggml_tensor *zeroes         = ggml_new_tensor_2d(ctx, x->type, x->ne[0], x->ne[1]);
+    struct ggml_tensor *ones_mask      = ggml_exp(ctx, zeroes);
+
+    // 1) Conditional masks
+    struct ggml_tensor *mask_pos = ggml_step(ctx, x);            
+    struct ggml_tensor *mask_neg = ggml_sub(ctx, ones_mask, mask_pos);
+
+    // 2) Positive branch
+    struct ggml_tensor *xx     = ggml_sqr(ctx, x);
+    struct ggml_tensor *a_p_xx = ggml_mul(ctx, xx, alpha_p_tensor);
+    struct ggml_tensor *b_x    = ggml_mul(ctx, x, beta_tensor);
+    struct ggml_tensor *y_pos  = ggml_add(ctx, a_p_xx, b_x);
+
+    // 3) Negative branch:
+    //    min(x, eps)
+    struct ggml_tensor *diff   = ggml_sub(ctx, x, eps_tensor);
+
+    // mask_le = 1 if x <= eps, else 0
+    // (STEP returns 1 if diff >= 0, i.e. x >= eps)
+    // so mask_le = 1 - STEP(diff)
+    struct ggml_tensor *mask_le = ggml_sub(ctx, ones_mask, ggml_step(ctx, diff));
+
+    // now: min(x, eps) = mask_le * x + (1 - mask_le) * eps
+    struct ggml_tensor *term_x   = ggml_mul(ctx, x, mask_le);
+    struct ggml_tensor *term_eps = ggml_mul(ctx, ggml_sub(ctx, ones_mask, mask_le), eps_tensor);
+    struct ggml_tensor *min_x_eps = ggml_add(ctx, term_x, term_eps);
+
+    //    expm1(min_x_eps) = exp(min_x_eps) - 1
+    struct ggml_tensor *exp_val     = ggml_exp(ctx, min_x_eps);
+    struct ggml_tensor *exp_m1      = ggml_sub(ctx, exp_val, one);
+
+    //    negative branch: (expm1(min_x_eps) - x)*alpha_n + beta*x
+    struct ggml_tensor *neg_diff    = ggml_sub(ctx, exp_m1, x);
+    struct ggml_tensor *a_n_diff    = ggml_mul(ctx, neg_diff, alpha_n_tensor);
+    struct ggml_tensor *b_x2        = ggml_mul(ctx, x, beta_tensor);
+    struct ggml_tensor *y_neg       = ggml_add(ctx, a_n_diff, b_x2);
+
+    // 4) Combine branches
+    struct ggml_tensor *term_pos = ggml_mul(ctx, y_pos, mask_pos);
+    struct ggml_tensor *term_neg = ggml_mul(ctx, y_neg, mask_neg);
+    struct ggml_tensor *y        = ggml_add(ctx, term_pos, term_neg);
+
+    return y;
 }
 
 struct ggml_tensor * ggml_silu_inplace(
