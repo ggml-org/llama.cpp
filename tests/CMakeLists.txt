@@ -199,6 +199,9 @@ endif()
 llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
+# Deterministic RMSNorm invariance
+llama_build_and_test(test-rmsnorm-determinism.cpp)
+
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 

@@ -49,6 +49,33 @@ cmake --build build --config Release
   cmake --build build --config Release
   ```
 
+### Containerized Build (Fedora toolchain)
+
+If your host toolchain is unusual (e.g., mixed Homebrew GCC on Fedora Silverblue) and you prefer a clean, reproducible build environment, use the helper script:
+
+```
+scripts/build-in-container.sh
+```
+
+This runs a CPU build inside a Fedora container, installing `gcc-c++`, `cmake`, `make`, and `libcurl-devel`, and outputs binaries under `build-container/bin/`.
+
+Customize via environment variables:
+
+- `ENGINE` (default: auto; prefers `podman`, falls back to `docker`)
+- `IMAGE` (default: `docker.io/library/fedora:41`)
+- `BUILD_TYPE` (default: `Release`)
+- `BUILD_DIR` (default: `build-container`)
+- `JOBS` (default: `nproc`)
+- `CMAKE_ARGS` (extra CMake flags, e.g. `-DGGML_CUDA=ON`)
+
+Examples:
+
+```
+BUILD_TYPE=Debug scripts/build-in-container.sh
+CMAKE_ARGS='-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86' scripts/build-in-container.sh
+ENGINE=docker scripts/build-in-container.sh
+```
+
 - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
     - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
     - Tab Workload: Desktop-development with C++

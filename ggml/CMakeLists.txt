@@ -215,6 +215,9 @@ option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adr
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "gmml: OpenCL API version to target")
 
+# Deterministic numerics controls
+option(GGML_DETERMINISTIC                   "ggml: enable deterministic numerics where supported" OFF)
+
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
@@ -371,6 +374,12 @@ target_compile_definitions(ggml-base PRIVATE
     GGML_VERSION="${GGML_INSTALL_VERSION}"
     GGML_COMMIT="${GGML_BUILD_COMMIT}"
 )
+
+# Propagate GGML_DETERMINISTIC to compilation units and dependents
+if (GGML_DETERMINISTIC)
+    target_compile_definitions(ggml-base PRIVATE GGML_DETERMINISTIC)
+    target_compile_definitions(ggml-base PUBLIC  GGML_DETERMINISTIC)
+endif()
 message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
 message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 

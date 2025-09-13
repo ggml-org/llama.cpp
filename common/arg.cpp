@@ -1443,6 +1443,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--deterministic"},
+        "enable deterministic numerics where supported (sets GGML_DETERMINISTIC=1)",
+        [](common_params &) {
+#if defined(_WIN32)
+            SetEnvironmentVariableA("GGML_DETERMINISTIC", "1");
+#else
+            setenv("GGML_DETERMINISTIC", "1", 1);
+#endif
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--completion-bash"},
         "print source-able bash completion script for llama.cpp",
         [](common_params & params) {
