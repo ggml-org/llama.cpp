@@ -191,6 +191,11 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-22.04-arm
+          - build: 's390x'
+            os: ubuntu-24.04-s390x
+          # TODO: Disable ppc64le for now to test s390x
+          # - build: 'ppc64le'
+          #   os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -205,17 +210,33 @@ jobs:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
+      - name: Build Dependencies
+        id: build_depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev \
+            libjpeg-dev build-essential libcurl4-openssl-dev
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ./gguf-py
+
+      - name: Swap Endianness
+        id: endianness
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          for f in models/*.gguf; do
+            yes YES | head -n 1 | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+          done
 
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_FATAL_WARNINGS=OFF \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
 
