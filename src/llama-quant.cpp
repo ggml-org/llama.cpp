@@ -1266,152 +1266,198 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     if (all.empty()) { return {}; }
 
-    // Greedy allocation from minimum bpw upward to reach target_bpw
-    auto current_total_bytes = [&]() -> size_t {
-        size_t b = 0;
+    // Lagrangian relaxation to minimise error subject to a bpw target constraint
+    auto total_bytes = [&]() -> size_t {
+        size_t tb = 0;
         for (const auto & ti : all) {
-            b += ti.candidate[ti.choice].bytes;
+            tb += ti.candidate[ti.choice].bytes;
         }
 
-        return b;
+        return tb;
     };
 
-    auto total_weights = [&]() -> size_t {
-        size_t w = 0;
-        for (const auto & ti : all) {
-            w += ti.n_elements;
-        }
+    size_t total_elems = 0;
+    size_t min_bytes = 0;
+    size_t max_bytes = 0;
+    for (const auto & ti : all) {
+        total_elems += (size_t)ti.n_elements;
+        min_bytes += ti.candidate.front().bytes;  // smallest candidate per tensor
+        max_bytes += ti.candidate.back().bytes;   // largest candidate per tensor
+    }
 
-        return w;
-    };
+    if (total_elems == 0) { return {}; }
 
-    const size_t tw = total_weights();
-    auto current_bpw = [&]() -> double {
-        return (double)current_total_bytes() * 8.0f / (double)tw;
-    };
+    const double target_bpw = params->target_bpw;
+    size_t budget_bytes = std::llround(target_bpw * (double)total_elems / 8.0);
 
-    // Precompute current bpw
-    double bpw_now = current_bpw();
-
-    float target_bpw = params->target_bpw;
-    // If minimal bpw is already above the target, we're constrained by the tensor's shape; return closest (min bpw)
-    if (bpw_now >= target_bpw) {
+    auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
         std::unordered_map<std::string, ggml_type> overrides;
+        LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", func);
         for (const auto & ti : all) {
+            LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
+                func, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidate[ti.choice].type), ti.candidate[ti.choice].bpw, ti.candidate[ti.choice].error);
             overrides[ggml_get_name(ti.w->tensor)] = ti.candidate[ti.choice].type;
         }
 
         return overrides;
+    };
+
+    if (budget_bytes <= min_bytes) {
+        for (auto & ti : all) { ti.choice = 0; }
+
+        return emit_overrides();
+    }
+    if (budget_bytes >= max_bytes) {
+        for (auto & ti : all) { ti.choice = (int) ti.candidate.size() - 1; }
+
+        return emit_overrides();
     }
 
-    struct upgrade {
-        int idx;
-        int next;
-        double err;
-        size_t delta_bytes;
-        double ratio;
-    };
-
-    // Find next strictly-larger candidate index for a tensor
-    auto next_distinct_idx = [&](const tensor_info & ti) -> int {
-        const auto & cand = ti.candidate;
-        const auto & cur  = cand[ti.choice];
-        int j = ti.choice + 1;
-        while (j < (int)cand.size() && cand[j].bytes == cur.bytes) {
-            ++j;
-        }
-
-        return j < (int)cand.size() ? j : -1;
-    };
-
-    auto recompute_best_upgrade = [&]() -> upgrade {
-        upgrade best{ -1, -1, 0.0, 0, -1.0 };
-        for (int i = 0; i < (int) all.size(); ++i) {
-            const auto & ti = all[i];
-            if (ti.choice >= (int)ti.candidate.size() - 1) { continue; }
-
-            const int j = next_distinct_idx(ti);
-            if (j < 0) { continue; }
-
-            const auto & cur = ti.candidate[ti.choice];
-            const auto & nxt = ti.candidate[j];
-            const size_t delta_bytes = nxt.bytes - cur.bytes;
-            if (delta_bytes == 0) { continue; }
-
-            double err = cur.error - nxt.error;
-            err = std::max(err, 0.0);
-            double ratio = err / (double)(delta_bytes * 8ull);
-            if (ratio > best.ratio + epsilon || (std::abs(ratio - best.ratio) <= epsilon && delta_bytes < best.delta_bytes)) {
-                best = upgrade{ i, j, err, delta_bytes, ratio };
+    auto lagrange_penalty = [&](const double mu, std::vector<int> & choice, size_t & bytes, double & err) {
+        choice.resize(all.size());
+        bytes = 0;
+        err = 0.0;
+        for (size_t i = 0; i < all.size(); ++i) {
+            const auto & cand = all[i].candidate;
+            int best_j = 0;
+            double best_val = infinity;
+            for (int j = 0; j < (int)cand.size(); ++j) {
+                const double bits = (double)cand[j].bytes * 8.0;
+                const double val = cand[j].error + mu * bits;
+                if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && cand[j].bytes < cand[best_j].bytes)) {
+                    best_val = val;
+                    best_j = j;
+                }
             }
-        }
 
-        return best;
+            choice[i] = best_j;
+            bytes += cand[best_j].bytes;
+            err += cand[best_j].error;
+        }
     };
 
-    while (true) {
-        upgrade up = recompute_best_upgrade();
-        if (up.idx < 0) { break; }
+    size_t bytes_lo = 0;
+    size_t bytes_hi = 0;
+    size_t bytes_mid = 0;
+    double mu_lo = 0.0;
+    double mu_hi = 1.0;
+    double err_lo = 0.0;
+    double err_hi = 0.0;
+    double err_mid = 0.0;
+    std::vector<int> choice_lo;
+    std::vector<int> choice_hi;
+    std::vector<int> choice_mid;
+    std::vector<int> best_under_choice;
+    std::vector<int> best_over_choice;
 
-        size_t now_bytes = current_total_bytes();
-        size_t next_bytes = now_bytes + up.delta_bytes;
-        double bpw_next = (double)next_bytes * 8.0 / (double)tw;
-        if (bpw_next <= target_bpw + epsilon) {
-            all[up.idx].choice = up.next;
-            bpw_now = bpw_next;
-        } else {
-            break;
-        }
-    }
+    lagrange_penalty(mu_lo, choice_lo, bytes_lo, err_lo);
 
-    // We might still be below target so we try to find the best upgrade one last time
+    // increase mu until we get under budget or hit a safety cap
     {
-        upgrade best_over{ -1, -1, 0.0, 0, -1.0 };
-        double  best_over_gap = 1e300;
-        double  under_gap = target_bpw - bpw_now;
-        size_t now_bytes = current_total_bytes();
-        for (int i = 0; i < (int) all.size(); ++i) {
-            const auto & ti = all[i];
-            if (ti.choice >= (int)ti.candidate.size() - 1) { continue; }
-
-            int j = next_distinct_idx(ti);
-            if (j < 0) { continue; }
-
-            const auto & cur = ti.candidate[ti.choice];
-            const auto & nxt = ti.candidate[j];
-            size_t delta_bytes = nxt.bytes - cur.bytes;
-            if (delta_bytes == 0) { continue; }
-
-            size_t over_bytes = now_bytes + delta_bytes;
-            double bpw_over = (double)over_bytes * 8.0 / (double)tw;
-            double err = cur.error - nxt.error;
-            if (err < 0.0) { err = 0.0; }
-            double ratio = err / (double)(delta_bytes * 8ull);
-
-            double over_gap = std::abs(bpw_over - (double)target_bpw);
-            if (over_gap < best_over_gap - epsilon || (std::abs(over_gap - best_over_gap) <= epsilon && ratio > best_over.ratio)) {
-                best_over_gap = over_gap;
-                best_over = upgrade{ i, j, err, delta_bytes, ratio };
+        int expand = 0;
+        while (true) {
+            lagrange_penalty(mu_hi, choice_hi, bytes_hi, err_hi);
+            if (bytes_hi <= budget_bytes) {
+                break;
             }
-        }
-
-        if (best_over.idx >= 0) {
-            if (best_over_gap < under_gap) {
-                all[best_over.idx].choice = best_over.next;
+            mu_hi *= 2.0;
+            if (++expand > 60) {
+                break;
             }
         }
     }
 
-    // Build the override map
-    std::unordered_map<std::string, ggml_type> overrides;
-    LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", __func__);
-    for (const auto & ti : all) {
-        LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
-            __func__, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidate[ti.choice].type), ti.candidate[ti.choice].bpw, ti.candidate[ti.choice].error);
-        overrides[ggml_get_name(ti.w->tensor)] = ti.candidate[ti.choice].type;
+    double best_under_gap = infinity;
+    double best_over_gap = infinity;
+    double best_under_err = infinity;
+    double best_over_err = infinity;
+    for (int it = 0; it < 40; ++it) {
+        double mu = 0.5 * (mu_lo + mu_hi);
+        lagrange_penalty(mu, choice_mid, bytes_mid, err_mid);
+
+        const double gap = std::abs((double)bytes_mid - (double)budget_bytes);
+
+        if (bytes_mid > budget_bytes) {
+            // Too big, need stronger penalty
+            mu_lo = mu;
+
+            if (gap < best_over_gap - epsilon || (std::abs(gap - best_over_gap) <= epsilon && err_mid < best_over_err)) {
+                best_over_gap = gap;
+                best_over_err = err_mid;
+                best_over_choice = choice_mid;
+            }
+        } else {
+            // Under budget, good candidate
+            mu_hi = mu;
+
+            if (gap < best_under_gap - epsilon || (std::abs(gap - best_under_gap) <= epsilon && err_mid < best_under_err)) {
+                best_under_gap = gap;
+                best_under_err = err_mid;
+                best_under_choice = choice_mid;
+            }
+        }
     }
 
-    return overrides;
+    if (!best_under_choice.empty()) {
+        for (size_t i = 0; i < all.size(); ++i) {
+            all[i].choice = best_under_choice[i];
+        }
+    } else if (!best_over_choice.empty()) {
+        for (size_t i = 0; i < all.size(); ++i) {
+            all[i].choice = best_over_choice[i];
+        }
+    } else {
+        // Pick whichever side we already have, or keep minimal
+        if (bytes_hi <= budget_bytes && !choice_hi.empty()) {
+            for (size_t i = 0; i < all.size(); ++i) {
+                all[i].choice = choice_hi[i];
+            }
+        } else {
+            for (auto & ti : all) {
+                ti.choice = 0;
+            }
+        }
+    }
+
+    // Spend any remaining budget with best upgrades that still fit (one pass)
+    {
+        auto cur_bytes = total_bytes();
+        while (true) {
+            int best_i = -1;
+            int best_j = -1;
+            double best_ratio = -1.0;
+            size_t best_delta = 0;
+
+            for (int i = 0; i < (int)all.size(); ++i) {
+                const auto & ti = all[i];
+                if (ti.choice >= (int)ti.candidate.size() - 1) {
+                    continue;
+                }
+
+                int j = ti.choice + 1;
+                while (j < (int)ti.candidate.size() && ti.candidate[j].bytes == ti.candidate[ti.choice].bytes) { ++j; }
+                if (j >= (int)ti.candidate.size()) { continue; }
+
+                size_t delta = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
+                if (cur_bytes + delta > budget_bytes) { continue; }
+
+                double err_gain = std::max(0.0, (double)ti.candidate[ti.choice].error - (double)ti.candidate[j].error);
+                double ratio = err_gain / (double)(delta * 8);
+                if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && delta < best_delta)) {
+                    best_ratio = ratio;
+                    best_delta = delta;
+                    best_i = i;
+                    best_j = j;
+                }
+            }
+
+            if (best_i < 0) { break; }
+            all[best_i].choice = best_j;
+            cur_bytes += best_delta;
+        }
+    }
+
+    return emit_overrides();
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
