@@ -417,7 +417,12 @@ class HttpClient {
         }
 
         if (!output_file.empty()) {
-            std::filesystem::rename(output_file_partial, output_file);
+            try {
+                std::filesystem::rename(output_file_partial, output_file);
+            } catch (const std::filesystem::filesystem_error & e) {
+                printe("Failed to rename '%s' to '%s': %s\n", output_file_partial.c_str(), output_file.c_str(), e.what());
+                return 1;
+            }
         }
 
         return 0;
@@ -472,7 +477,7 @@ class HttpClient {
 
         return 0;
     }
-    
+
     void set_write_options(std::string * response_str, const File & out) {
         if (response_str) {
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_data);
