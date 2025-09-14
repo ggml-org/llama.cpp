@@ -374,9 +374,8 @@ llama_context::llama_context(
         }
 
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-            ggml_backend_t             backend = backend_ptrs[i];
-            ggml_backend_buffer_type_t buft    = backend_buft[i];
-            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            ggml_backend_buffer_type_t buft = backend_buft[i];
+            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), buft);
             if (size > 1) {
                 LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
@@ -2027,46 +2026,31 @@ void llama_context::perf_reset() {
     n_reused    = 0;
 }
 
-//
-// backend
-//
+std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
+    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
 
-size_t llama_context::backend_count() const {
-    return backends.size();
-}
-
-llama_backend_info_data llama_context::backend_info(size_t index) const {
-    ggml_backend_t     backend = backends[index].get();
-    ggml_backend_dev_t dev     = ggml_backend_get_device(backend);
-
-    ggml_backend_dev_props dev_props;
-    ggml_backend_dev_get_props(dev, &dev_props);
-
-    const size_t self_model = model.memory_use(dev);
-    const size_t self_context = memory->memory_use(dev);
-    const size_t self_compute = ggml_backend_sched_get_buffer_size(sched.get(), backend);
-    const size_t self = self_model + self_context + self_compute;
-
-    const size_t free = ggml_backend_is_cpu(backend) ? dev_props.memory_total - self : dev_props.memory_free;
-    GGML_ASSERT(dev_props.memory_total >= free + self);
-    const size_t unaccounted = dev_props.memory_total - (free + self);
-
-    return {
-        /*name =*/ ggml_backend_name(backend),
-
-        /*device =*/ {
-            /*name                     =*/ dev_props.name,
-            /*description              =*/ dev_props.description,
-
-            /*memory_total             =*/ dev_props.memory_total,
-            /*memory_free              =*/ free,
-            /*memory_used_self         =*/ self,
-            /*memory_used_self_model   =*/ self_model,
-            /*memory_used_self_context =*/ self_context,
-            /*memory_used_self_compute =*/ self_compute,
-            /*memory_used_unaccounted  =*/ unaccounted,
-        },
+    auto get_memory_breakdown = [&](ggml_backend_buffer_type_t buft) {
+        llama_memory_breakdown_data data;
+        data.model   = model.memory_use(buft);
+        data.context = memory->memory_use(buft);
+        data.compute = ggml_backend_sched_get_buffer_size(sched.get(), buft);
+        return data;
     };
+
+    for (const auto & backend_ptr : backends) {
+        ggml_backend_t     backend = backend_ptr.get();
+        ggml_backend_dev_t dev     = ggml_backend_get_device(backend);
+
+        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+        ret[buft] = get_memory_breakdown(buft);
+
+        ggml_backend_buffer_type_t buft_host = ggml_backend_dev_host_buffer_type(dev);
+        if (!buft_host) {
+            continue;
+        }
+        ret[buft_host] = get_memory_breakdown(buft_host);
+    }
+    return ret;
 }
 
 //
@@ -2807,71 +2791,103 @@ void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }
 
-//
-// backend
-//
+void llama_memory_breakdown_print(const struct llama_context * ctx) {
+    const std::vector<ggml_backend_dev_t> & devices = ctx->get_model().devices;
 
-size_t llama_backend_count(const struct llama_context * ctx) {
-    return ctx->backend_count();
-}
+    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
 
-llama_backend_info_data llama_backend_info(const struct llama_context * ctx, size_t index) {
-    return ctx->backend_info(index);
-}
+    std::vector<std::array<std::string, 9>> table_data;
+    table_data.reserve(devices.size());
+    const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
+    const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
+    const std::string template_host   = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
 
-void llama_print_memory_breakdown(const struct llama_context * ctx) {
-    const size_t backend_count = llama_backend_count(ctx);
-    std::vector<std::array<std::string, 9>> table_data(backend_count + 1);
-    const std::string template_header  = "%s: %s %s   %s    %s   %s   %s   %s    %s\n";
-    const std::string template_default = "%s: %s %s = %s + (%s = %s + %s + %s) + %s\n";
-    const std::string template_cpu     = "%s: %s %s   %s    %s = %s + %s + %s    %s\n";
-
-    table_data[0] = {template_header, "memory breakdown:", "total", "free", "self", "model", "context", "compute", "unaccounted"};
+    table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
 
     constexpr size_t MiB = 1024 * 1024;
     const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
-    const std::vector<std::string> desc_suffixes_strip = {
-        " 2-Core Processor", " 4-Core Processor", " 6-Core Processor", " 8-Core Processor", " 12-Core Processor", " 16-Core Processor",
-        " 24-Core Processor", " 32-Core Processor", " 40-Core Processor", " 48-Core Processor", " 56-Core Processor", " 64-Core Processor"};
 
-    for (size_t i = 0; i < backend_count; i++) {
-        llama_backend_info_data info = llama_backend_info(ctx, i);
+    // "free" host memory is poorly defined, instead track only memory that we know is being used:
+    size_t model_host   = 0;
+    size_t context_host = 0;
+    size_t compute_host = 0;
+    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types; // track seen host buffer types to avoid double counting
 
-        std::string desc = info.device.description;
-        for (const std::string & prefix : desc_prefixes_strip) {
-            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
-                desc = desc.substr(prefix.length());
+    for (const ggml_backend_dev_t & dev : devices) {
+        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
+
+        const llama_memory_breakdown_data & mb = memory_breakdown[buft];
+
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            const std::string name = ggml_backend_buft_name(buft);
+            std::string desc = ggml_backend_dev_description(dev);
+            for (const std::string & prefix : desc_prefixes_strip) {
+                if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
+                    desc = desc.substr(prefix.length());
+                }
             }
-        }
-        for (const std::string & suffix : desc_suffixes_strip) {
-            if (desc.length() >= suffix.length() && desc.substr(desc.length() - suffix.length()) == suffix) {
-                desc = desc.substr(0, desc.length() - suffix.length());
+
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+
+            const size_t self = mb.model + mb.context + mb.compute;
+            const size_t unaccounted = total - self - free;
+
+            table_data.push_back({
+                template_gpu,
+                "  - " + name + " (" + desc + ")",
+                std::to_string(total / MiB),
+                std::to_string(free / MiB),
+                std::to_string(self / MiB),
+                std::to_string(mb.model / MiB),
+                std::to_string(mb.context / MiB),
+                std::to_string(mb.compute / MiB),
+                std::to_string(unaccounted / MiB)});
+        } else {
+            if (seen_host_buffer_types.count(buft) == 1) {
+                continue;
             }
+            model_host   += mb.model;
+            context_host += mb.context;
+            compute_host += mb.compute;
+            seen_host_buffer_types.insert(buft);
         }
 
-        const bool is_cpu = info.name == std::string("CPU");
-        table_data[i + 1][0] = is_cpu ? template_cpu : template_default;
-        table_data[i + 1][1] = std::string("  - ") + info.name + " (" + desc + "):";
-        table_data[i + 1][2] =               std::to_string(info.device.memory_total / MiB);
-        table_data[i + 1][3] = is_cpu ? "" : std::to_string(info.device.memory_free / MiB);
-        table_data[i + 1][4] =               std::to_string(info.device.memory_used_self / MiB);
-        table_data[i + 1][5] =               std::to_string(info.device.memory_used_self_model / MiB);
-        table_data[i + 1][6] =               std::to_string(info.device.memory_used_self_context / MiB);
-        table_data[i + 1][7] =               std::to_string(info.device.memory_used_self_compute / MiB);
-        table_data[i + 1][8] = is_cpu ? "" : std::to_string(info.device.memory_used_unaccounted / MiB);
+        ggml_backend_buffer_type_t buft_host = ggml_backend_dev_host_buffer_type(dev);
+        if (!buft_host) {
+            continue;
+        }
+        if (seen_host_buffer_types.count(buft_host) == 1) {
+            continue;
+        }
+        const llama_memory_breakdown_data & mb_host = memory_breakdown[buft_host];
+        model_host   += mb_host.model;
+        context_host += mb_host.context;
+        compute_host += mb_host.compute;
+        seen_host_buffer_types.insert(buft_host);
     }
+    const size_t self_host = model_host + context_host + compute_host;
+    table_data.push_back({
+        template_host,
+        "  - Host",
+        "", // total
+        "", // free
+        std::to_string(self_host / MiB),
+        std::to_string(model_host / MiB),
+        std::to_string(context_host / MiB),
+        std::to_string(compute_host / MiB),
+        ""}); // unaccounted
+
     for (size_t j = 1; j < table_data[0].size(); j++) {
         size_t max_len = 0;
         for (const auto & td : table_data) {
             max_len = std::max(max_len, td[j].length());
         }
-        for (size_t i = 0; i < backend_count + 1; i++) {
-            auto & td = table_data[i];
+        for (auto & td : table_data) {
             td[j].insert(j == 1 ? td[j].length() : 0, max_len - td[j].length(), ' ');
         }
     }
-    for (size_t i = 0; i < backend_count + 1; i++) {
-        const auto & td = table_data[i];
+    for (const auto & td : table_data) {
         LLAMA_LOG_INFO(td[0].c_str(),
             __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
             td[6].c_str(), td[7].c_str(), td[8].c_str());

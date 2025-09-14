@@ -5903,13 +5903,10 @@ size_t llama_model::n_devices() const {
     return devices.size();
 }
 
-size_t llama_model::memory_use(ggml_backend_dev_t dev) const {
-    ggml_backend_buffer_type_t buft_dev = ggml_backend_dev_buffer_type(dev);
-
+size_t llama_model::memory_use(ggml_backend_buffer_type_t buft) const {
     size_t n_bytes = 0;
     for (const ggml_backend_buffer_ptr & buf_ptr : pimpl->bufs) {
-        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf_ptr.get());
-        if (buft != buft_dev) {
+        if (ggml_backend_buffer_get_type(buf_ptr.get()) != buft) {
             continue;
         }
         n_bytes += ggml_backend_buffer_get_size(buf_ptr.get());

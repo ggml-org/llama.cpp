@@ -1334,7 +1334,7 @@ extern "C" {
 
     struct llama_perf_context_data {
         // ms == milliseconds
-        double t_start_ms;  // time needed for startup
+        double t_start_ms;  // absolute start time
         double t_load_ms;   // time needed for loading the model
         double t_p_eval_ms; // time needed for processing the prompt
         double t_eval_ms;   // time needed for generating tokens
@@ -1359,33 +1359,8 @@ extern "C" {
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
-    //
-    // backend utils
-    //
-
-    LLAMA_API size_t llama_backend_count(const struct llama_context * ctx);
-
-    struct llama_backend_info_data {
-        const char * name;
-
-        struct {
-            const char * name;
-            const char * description;
-
-            // device memory is in bytes
-            size_t memory_total;             // total memory as reported by the device
-            size_t memory_free;              // free memory as reported by the device
-            size_t memory_used_self;         // sum of model, context, and compute
-            size_t memory_used_self_model;   // memory allocated for the model
-            size_t memory_used_self_context; // memory allocated for the context
-            size_t memory_used_self_compute; // memory allocated for temporary compute buffers
-            size_t memory_used_unaccounted;  // memory with unknown use, e.g. drivers or other programs, total - (free + self)
-        } device;
-    };
-
-    LLAMA_API struct llama_backend_info_data llama_backend_info(const struct llama_context * ctx, size_t index);
-
-    LLAMA_API void llama_print_memory_breakdown(const struct llama_context * ctx);
+    // print a breakdown of per-device memory use via LLAMA_LOG:
+    LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
 
     //
     // training

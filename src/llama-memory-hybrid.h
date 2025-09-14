@@ -68,7 +68,7 @@ public:
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    size_t memory_use(ggml_backend_dev_t dev) const override;
+    size_t memory_use(ggml_backend_buffer_type_t buft) const override;
 
     // state write/load
 
