@@ -2116,6 +2116,64 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
+    // Deterministic mode: compute per (token, slot) sequentially to guarantee batch invariance
+    if (ggml_is_deterministic() && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        // ids is on device; copy to host once
+        cudaStream_t stream = ctx.stream();
+        std::vector<int32_t> ids_h(ids->ne[0]*ids->ne[1]);
+        CUDA_CHECK(cudaMemcpyAsync(ids_h.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        for (int64_t t = 0; t < ne12; ++t) {             // tokens
+            for (int64_t e = 0; e < ids->ne[0]; ++e) {    // expert slot
+                const int32_t ex = ids_h[t*ids->ne[0] + e];
+                GGML_ASSERT(ex >= 0 && ex < ne02);
+
+                // Slice expert matrix: src0_slice = as[:,:,ex]
+                ggml_tensor src0_slice = *src0;
+                src0_slice.ne[2]    = 1;
+                src0_slice.nb[3]    = src0_slice.nb[2];
+                src0_slice.op       = GGML_OP_VIEW;
+                src0_slice.view_src = dst->src[0]; // non-const pointer to src0
+                src0_slice.data     = (char *) src0->data + ex*nb02;
+
+                // Slice single input column b[:, e, t]
+                ggml_tensor src1_slice;
+                memset(&src1_slice, 0, sizeof(src1_slice));
+                src1_slice.buffer = src1->buffer;
+                src1_slice.type   = GGML_TYPE_F32;
+                src1_slice.ne[0]  = ne10; // K
+                src1_slice.ne[1]  = 1;
+                src1_slice.ne[2]  = 1;
+                src1_slice.ne[3]  = 1;
+                src1_slice.nb[0]  = sizeof(float);
+                src1_slice.nb[1]  = src1_slice.ne[0] * src1_slice.nb[0];
+                src1_slice.nb[2]  = src1_slice.ne[1] * src1_slice.nb[1];
+                src1_slice.nb[3]  = src1_slice.ne[2] * src1_slice.nb[2];
+                src1_slice.data   = (char *) src1->data + t*nb12 + e*nb11;
+
+                // Destination slice c[:, e, t]
+                ggml_tensor dst_slice;
+                memset(&dst_slice, 0, sizeof(dst_slice));
+                dst_slice.buffer = dst->buffer;
+                dst_slice.type   = GGML_TYPE_F32;
+                dst_slice.ne[0]  = ne0;  // M
+                dst_slice.ne[1]  = 1;
+                dst_slice.ne[2]  = 1;
+                dst_slice.ne[3]  = 1;
+                dst_slice.nb[0]  = sizeof(float);
+                dst_slice.nb[1]  = dst_slice.ne[0] * dst_slice.nb[0];
+                dst_slice.nb[2]  = dst_slice.ne[1] * dst_slice.nb[1];
+                dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
+                dst_slice.data   = (char *) dst->data + t*nb2 + e*nb1;
+
+                ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
+                CUDA_CHECK(cudaGetLastError());
+            }
+        }
+        return;
+    }
+
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
