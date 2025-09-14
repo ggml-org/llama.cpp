@@ -4621,6 +4621,29 @@ static void ggml_vk_instance_init() {
             }
         }
 
+        // Remove any unsupported devices
+        size_t num_unsupported = 0;
+        for (size_t i = 0; i < vk_instance.device_indices.size();) {
+            vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
+
+            VkPhysicalDeviceFeatures2 device_features2;
+            device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+            VkPhysicalDeviceVulkan11Features vk11_features;
+            vk11_features.pNext = nullptr;
+            vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+            device_features2.pNext = &vk11_features;
+
+            vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+            if (!vk11_features.storageBuffer16BitAccess) {
+                vk_instance.device_indices.erase(vk_instance.device_indices.begin() + i);
+                num_unsupported++;
+            } else
+                i++;
+        }
+        if (num_unsupported > 0)
+            GGML_LOG_DEBUG("ggml_vulkan: Removed %zu unsupported Vulkan devices.\n", vk_instance.device_indices.size());
+
         if (vk_instance.device_indices.empty()) {
             GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
             return;
