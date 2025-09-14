@@ -4,7 +4,7 @@ ARG UBUNTU_VERSION=24.04
 ARG ROCM_VERSION=6.4
 ARG AMDGPU_VERSION=6.4
 
-# Target the CUDA build image
+# Target the ROCM build image
 ARG BASE_ROCM_DEV_CONTAINER=rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-complete
 
 ### Build image
@@ -15,7 +15,7 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 # This is mostly tied to rocBLAS supported archs.
 # gfx803, gfx900, gfx1032, gfx1101, gfx1102,not officialy supported
 # gfx906 is deprecated
-#check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-6.2.4/reference/system-requirements.html
+#check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-6.4.1/reference/system-requirements.html
 
 ARG ROCM_DOCKER_ARCH='gfx803,gfx900,gfx906,gfx908,gfx90a,gfx942,gfx1010,gfx1030,gfx1032,gfx1100,gfx1101,gfx1102,gfx1200,gfx1201'
 #ARG ROCM_DOCKER_ARCH=gfx1100
