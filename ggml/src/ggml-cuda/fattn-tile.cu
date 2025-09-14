@@ -188,9 +188,12 @@ static __global__ void flash_attn_tile_generic_f16_singlecol(
     const float2 * Q_f2 = (const float2 *) (Q + nb03*sequence + nb02*head + nb01*ic0);
     const half2  * K_h2 = (const half2  *) (K + nb13*sequence + nb12*(head / gqa_ratio));
     const half2  * V_h2 = (const half2  *) (V + nb13*sequence + nb12*(head / gqa_ratio));
+    const half   * maskh  = (const half   *) (mask  + nb33*(sequence % ne33) + nb31*ic0);
     const float  * sinksf = (const float  *) sinks;
 
     const int stride_KV2 = nb11 / sizeof(half2);
+
+    const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
     __shared__ half2 Q_h2[D/2];
     for (int i2 = lane; i2 < D/2; i2 += WARP_SIZE) {
@@ -217,6 +220,10 @@ static __global__ void flash_attn_tile_generic_f16_singlecol(
             sum_lane += q.x*kk.x + q.y*kk.y;
         }
         float sum = warp_reduce_sum<WARP_SIZE>(sum_lane);
+        // Apply ALiBi/mask if provided. Mask contains per-(k,j) values; here j=ic0 (single column).
+        if (mask) {
+            sum += slope * __half2float(maskh[k]);
+        }
 
         // streaming softmax update
         const float kqmax_new = fmaxf(kqmax, sum);

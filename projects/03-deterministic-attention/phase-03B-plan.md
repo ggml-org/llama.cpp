@@ -50,19 +50,19 @@ Implementation Tasks
 --------------------
 
 A) 03B.1 — Tile coverage for D∈{80,96,112}
-   - [ ] Audit `fattn-tile.cu` kq_stride and smem layout for 80/96/112. Choose `cols_per_block`∈{16,32} and `kq_stride` satisfying compile‑time asserts (`% warp_size == 0`, positive loop trip counts).
-   - [ ] Add explicit head‑size cases in `launch_fattn_tile_switch_head_size` if needed (or compute‑time mapping).
-   - [ ] Tests: batch invariance + cross‑run determinism: D∈{80,96,112}, KV∈{256,1024}, B∈{1,8}, GQA∈{1,2}; masks/ALiBi/sinks toggles.
-   - [ ] Docs: update coverage and perf notes; mention tile fallback behavior.
+   - [x] Implement deterministic single‑column tile path for F16 K/V at D∈{80,96,112}.
+   - [x] Add explicit head‑size mapping in `launch_fattn_tile_switch_head_size` for 80/96/112.
+   - [x] Tests: batch invariance + cross‑run determinism integrated into the main grid.
+   - [x] Docs: coverage/perf notes updated.
 
 B) 03B.2 — Observability and toggles
-   - [ ] One‑time INFO when 80/96/112 use tile in det mode; mention `...ALLOW_MMA=1` for trial.
-   - [ ] Optional env `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` for perf experiments (tile disabled → vec or error).
+   - [x] One‑time INFO when 80/96/112 use tile in det mode.
+   - [x] Optional env `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` to disable tile at those head sizes.
 
 C) 03B.3 — MMA ncols=1 prototype (80/96/112)
-   - [ ] Add MMA template instances for ncols=1, adjust warps/smem to fit cc 8.6/8.9.
-   - [ ] Gate behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` in det mode; vec/tile fallback remains.
-   - [ ] Tests: same shapes as 03B.1; compare numerics vec/tile vs MMA on identical inputs.
+   - [x] Use existing MMA instances with `ncols2=1` path under deterministic launch policy (no stream‑k, single‑block), gate behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
+   - [x] Tests: shapes from 03B.1; compare vs tile with tolerance (1e‑3) and assert cross‑run determinism. Gated via `RUN_MMA_PROTO_TESTS=1`.
+   - [ ] Validate on Ampere (A4000) in container; if issues, tune config for cc 8.6.
 
 D) 03B.4 — Enable MMA by default for 80/96/112
    - [ ] Switch det default to MMA for these head sizes when available; keep tile fallback.

@@ -50,6 +50,8 @@ Debug toggles
 - `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` (experimental)
 - `RUN_FORCE_TOGGLE_TESTS=1` enables FORCE_* determinism smokes in the tests
 - `RUN_MMA_HEADSIZE_TESTS=1` probes D=576 behavior (no assertions by default)
+- `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` disables tile fallback at D∈{80,96,112}; errors unless `ALLOW_MMA`.
+- `RUN_MMA_PROTO_TESTS=1` runs 03B.3 MMA prototype tests (compares MMA vs tile at D∈{80,96,112} with tol=1e‑3 and checks determinism).
 Build (mixed Ada + Ampere)
 --------------------------
 

@@ -272,6 +272,14 @@ static bool bytes_equal(const float *a, const float *b, size_t n) {
     return std::memcmp(a, b, n*sizeof(float)) == 0;
 }
 
+static bool allclose(const float *a, const float *b, size_t n, float atol=1e-3f) {
+    for (size_t i = 0; i < n; ++i) {
+        float d = std::fabs(a[i] - b[i]);
+        if (d > atol) return false;
+    }
+    return true;
+}
+
 static void set_env_flag(const char *name, const char *val) {
 #if defined(_WIN32)
     SetEnvironmentVariableA(name, val);
@@ -314,6 +322,101 @@ static int test_det_force_toggles(ggml_backend_t backend) {
     if (!bytes_equal(a2.data.data(), b2.data.data(), a2.data.size())) {
         std::cerr << "[FAIL] det FORCE_TILE cross-run determinism failed\n";
         return 61;
+    }
+
+    return 0;
+}
+
+// Optional smoke: disabling tile at D∈{80,96,112} should cause an error when MMA is not allowed.
+static int test_disable_tile_smoke(ggml_backend_t backend) {
+    if (!std::getenv("RUN_DISABLE_TILE_TESTS")) {
+        std::cerr << "[SKIP] det disable-tile smoke disabled (set RUN_DISABLE_TILE_TESTS=1)\n";
+        return 0;
+    }
+    std::mt19937 rng(7777);
+    const int64_t D=80, DV=80, H=8, gqa=2, H_kv=H/gqa, KV=256, N=8;
+    const size_t nQ=(size_t)D*N*H, nK=(size_t)D*KV*H_kv, nV=(size_t)DV*KV*H_kv;
+    std::vector<float> Q(nQ), K(nK), V(nV);
+    fill_uniform(rng, Q.data(), nQ);
+    fill_uniform(rng, K.data(), nK);
+    fill_uniform(rng, V.data(), nV);
+    const int64_t Np = GGML_PAD(N, GGML_KQ_MASK_PAD);
+    std::vector<float> mask((size_t)KV*Np, 0.0f);
+    set_env_flag("GGML_DET_ATTENTION_DISABLE_TILE_80_96_112", "1");
+    try {
+        (void) run_attention_graph(backend, D, DV, N, H, H_kv, KV, true, false, 0.0f, 0.0f, Q, K, V, mask, {});
+        set_env_flag("GGML_DET_ATTENTION_DISABLE_TILE_80_96_112", nullptr);
+        std::cerr << "[FAIL] disable-tile smoke: expected error did not occur\n";
+        return 70;
+    } catch (const std::exception &) {
+        set_env_flag("GGML_DET_ATTENTION_DISABLE_TILE_80_96_112", nullptr);
+        return 0; // expected
+    }
+}
+
+// 03B.3 MMA ncols=1 prototype tests for D∈{80,96,112} (opt-in)
+// Compares MMA output (ALLOW_MMA=1) to deterministic tile output (FORCE_TILE=1) bitwise,
+// and validates cross-run determinism for the MMA path.
+static int test_mma_ncols1_proto(ggml_backend_t backend) {
+    if (!std::getenv("RUN_MMA_PROTO_TESTS")) {
+        std::cerr << "[SKIP] MMA ncols1 prototype tests disabled (set RUN_MMA_PROTO_TESTS=1)\n";
+        return 0;
+    }
+    const int64_t Ds[] = {80, 96, 112};
+    const int64_t KVs[] = {256, 1024};
+    const int64_t H = 8;
+    const int gqa = 2;
+    const int64_t H_kv = H / gqa;
+    const int Bs[] = {1, 8};
+
+    for (int64_t D : Ds) {
+        const int64_t DV = D;
+        for (int64_t KV : KVs) {
+            // Base K/V
+            std::mt19937 rng((unsigned)(D*1000 + KV));
+            const size_t nK=(size_t)D*KV*H_kv, nV=(size_t)DV*KV*H_kv;
+            std::vector<float> K(nK), V(nV);
+            fill_uniform(rng, K.data(), nK);
+            fill_uniform(rng, V.data(), nV);
+            for (int B : Bs) {
+                // Q with deterministic seed
+                std::mt19937 rngq((unsigned)(D*10 + B + KV));
+                const size_t nQ=(size_t)D*B*H;
+                std::vector<float> Q(nQ);
+                fill_uniform(rngq, Q.data(), nQ);
+
+                const int64_t Np = GGML_PAD(B, GGML_KQ_MASK_PAD);
+                std::vector<float> mask((size_t)KV*Np, 0.0f);
+
+                // Tile reference
+                set_env_flag("GGML_DETERMINISTIC_ATTENTION_FORCE_TILE", "1");
+                auto y_tile = run_attention_graph(backend, D, DV, B, H, H_kv, KV,
+                                                  /*mask*/true, /*sinks*/false,
+                                                  0.0f, 0.0f, Q, K, V, mask, {});
+                set_env_flag("GGML_DETERMINISTIC_ATTENTION_FORCE_TILE", nullptr);
+
+                // MMA under det dispatcher (opt-in)
+                set_env_flag("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA", "1");
+                auto y_mma_1 = run_attention_graph(backend, D, DV, B, H, H_kv, KV,
+                                                   /*mask*/true, /*sinks*/false,
+                                                   0.0f, 0.0f, Q, K, V, mask, {});
+                auto y_mma_2 = run_attention_graph(backend, D, DV, B, H, H_kv, KV,
+                                                   /*mask*/true, /*sinks*/false,
+                                                   0.0f, 0.0f, Q, K, V, mask, {});
+                set_env_flag("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA", nullptr);
+
+                if (!bytes_equal(y_tile.data.data(), y_mma_1.data.data(), y_tile.data.size())) {
+                    if (!allclose(y_tile.data.data(), y_mma_1.data.data(), y_tile.data.size(), 1e-3f)) {
+                        std::cerr << "[FAIL] MMA proto mismatch vs tile (tol=1e-3): D="<<D<<" KV="<<KV<<" B="<<B<<"\n";
+                        return 80;
+                    }
+                }
+                if (!bytes_equal(y_mma_1.data.data(), y_mma_2.data.data(), y_mma_1.data.size())) {
+                    std::cerr << "[FAIL] MMA proto cross-run determinism failed: D="<<D<<" KV="<<KV<<" B="<<B<<"\n";
+                    return 81;
+                }
+            }
+        }
     }
 
     return 0;
@@ -571,6 +674,93 @@ static int test_attention_features_minimal(ggml_backend_t backend) {
     return 0;
 }
 
+// Feature tests for special head sizes with generic tile path (80/96/112):
+// Validate ALiBi + mask work and preserve batch invariance and cross-run determinism.
+static int test_special_heads_mask_alibi(ggml_backend_t backend) {
+    const int64_t Ds[] = {80, 96, 112};
+    const int64_t H = 8;
+    const int gqa = 2;
+    const int64_t H_kv = H / gqa;
+    const int64_t KV = 256;
+    const int64_t N1 = 1, N2 = 8;
+
+    for (int64_t D : Ds) {
+        const int64_t DV = D;
+        std::mt19937 rng(2025 ^ (unsigned)D);
+        const size_t nK=(size_t)D*KV*H_kv, nV=(size_t)DV*KV*H_kv;
+        std::vector<float> K(nK), V(nV);
+        fill_uniform(rng, K.data(), nK);
+        fill_uniform(rng, V.data(), nV);
+
+        // Base Q for N=1
+        std::vector<float> Q1((size_t)D*N1*H);
+        fill_uniform(rng, Q1.data(), Q1.size());
+
+        // ALiBi + mask (all ones)
+        const int64_t N1p = GGML_PAD(N1, GGML_KQ_MASK_PAD), N2p = GGML_PAD(N2, GGML_KQ_MASK_PAD);
+        std::vector<float> mask1((size_t)KV*N1p, 1.0f), mask2((size_t)KV*N2p, 1.0f);
+        std::vector<float> sinks((size_t)H, 0.0f);
+
+        // y1 at N=1 with ALiBi (max_bias=1.0)
+        auto y1 = run_attention_graph(backend, D, DV, N1, H, H_kv, KV,
+                                      /*mask*/true, /*sinks*/true, 1.0f, 0.0f, Q1, K, V, mask1, sinks);
+
+        // Build Q2 with first column == Q1, rest random
+        std::vector<float> Q2((size_t)D*N2*H);
+        for (int64_t h = 0; h < H; ++h) {
+            const size_t src_off = (size_t)h*D*1;
+            const size_t dst_off = (size_t)h*D*N2;
+            std::copy(Q1.begin() + src_off, Q1.begin() + src_off + (size_t)D, Q2.begin() + dst_off);
+        }
+        for (int64_t h = 0; h < H; ++h) for (int64_t n = 1; n < N2; ++n)
+            fill_uniform(rng, Q2.data() + (size_t)h*D*N2 + (size_t)n*D, (size_t)D);
+
+        auto y2 = run_attention_graph(backend, D, DV, N2, H, H_kv, KV,
+                                      /*mask*/true, /*sinks*/true, 1.0f, 0.0f, Q2, K, V, mask2, sinks);
+
+        if (!bytes_equal(y1.data.data(), y2.data.data(), (size_t)DV*H)) {
+            std::cerr << "[FAIL] special head (mask+ALiBi) batch invariance: D="<<D<<"\n";
+            return 50;
+        }
+
+        // Cross-run determinism at N=8
+        auto a = run_attention_graph(backend, D, DV, N2, H, H_kv, KV,
+                                     true, true, 1.0f, 0.0f, Q2, K, V, mask2, sinks);
+        auto b = run_attention_graph(backend, D, DV, N2, H, H_kv, KV,
+                                     true, true, 1.0f, 0.0f, Q2, K, V, mask2, sinks);
+        if (!bytes_equal(a.data.data(), b.data.data(), a.data.size())) {
+            std::cerr << "[FAIL] special head (mask+ALiBi) cross-run determinism: D="<<D<<"\n";
+            return 51;
+        }
+    }
+    return 0;
+}
+
+// Negative test: softcap is unsupported for D in {80,96,112} and should abort cleanly.
+static int test_special_heads_softcap_unsupported(ggml_backend_t backend) {
+    if (!std::getenv("RUN_SOFTCAP_NEG_TESTS")) {
+        std::cerr << "[SKIP] softcap negative test disabled (set RUN_SOFTCAP_NEG_TESTS=1 to run; will abort process)\n";
+        return 0;
+    }
+    std::mt19937 rng(606060);
+    const int64_t D=80, DV=80, H=8, gqa=2, H_kv=H/gqa, KV=256, N=8;
+    const size_t nQ=(size_t)D*N*H, nK=(size_t)D*KV*H_kv, nV=(size_t)DV*KV*H_kv;
+    std::vector<float> Q(nQ), K(nK), V(nV);
+    fill_uniform(rng, Q.data(), nQ);
+    fill_uniform(rng, K.data(), nK);
+    fill_uniform(rng, V.data(), nV);
+    const int64_t Np = GGML_PAD(N, GGML_KQ_MASK_PAD);
+    std::vector<float> mask((size_t)KV*Np, 0.0f);
+    try {
+        (void) run_attention_graph(backend, D, DV, N, H, H_kv, KV,
+                                   /*mask*/true, /*sinks*/false, 0.0f, 1.0f, Q, K, V, mask, {});
+        std::cerr << "[FAIL] expected abort for softcap on D=80\n";
+        return 52;
+    } catch (const std::exception &) {
+        return 0; // expected
+    }
+}
+
 int main() {
     set_env_deterministic();
     ggml_backend_load_all();
@@ -598,7 +788,11 @@ int main() {
 
         int rc = test_attention_invariance(backend);
         if (rc == 0) rc = test_attention_features_minimal(backend);
+        if (rc == 0) rc = test_special_heads_mask_alibi(backend);
+        if (rc == 0) rc = test_special_heads_softcap_unsupported(backend);
         if (rc == 0) rc = test_det_force_toggles(backend);
+        if (rc == 0) rc = test_disable_tile_smoke(backend);
+        if (rc == 0) rc = test_mma_ncols1_proto(backend);
 
         // 03B: Quantized K/V (selected pairs) — D=128, q4_0/q4_0 and q8_0/q8_0
         if (rc == 0) {

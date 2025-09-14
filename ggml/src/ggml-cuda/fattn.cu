@@ -492,10 +492,17 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     if (ggml_is_deterministic()) {
         // Helpers
         static bool logged_tile_once = false;
+        static bool logged_tile_special_once = false;
         auto log_tile_once = [&]() {
             if (!logged_tile_once) {
                 GGML_LOG_INFO("[det] attention falling back to tile kernel; expect lower throughput.\n");
                 logged_tile_once = true;
+            }
+        };
+        auto log_tile_special_once = [&](int Dspec) {
+            if (!logged_tile_special_once) {
+                GGML_LOG_INFO("[det] D=%d using deterministic single-column tile path (F16); throughput will be lower. Set GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1 to disable this path.\n", Dspec);
+                logged_tile_special_once = true;
             }
         };
 
@@ -524,13 +531,23 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         const bool force_vec   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_VEC");
         const bool force_tile  = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_TILE");
         const bool allow_mma   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA");
+        const bool disable_tile_80_96_112 = env_flag_true("GGML_DET_ATTENTION_DISABLE_TILE_80_96_112");
 
         // 1) Special head sizes (80/96/112/576): attempt MMA only if explicitly allowed and supported; otherwise
         // fall back to vec if available, else F16 tile, else abort with instructions.
         if (kv_is_f16 && (D == 80 || D == 96 || D == 112 || D == 576) && !force_vec) {
+            // Guard unsupported features for special head sizes
+            float logit_softcap = 0.0f;
+            memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
+            if ((D == 80 || D == 96 || D == 112) && logit_softcap != 0.0f) {
+                GGML_ABORT("deterministic attention: D in {80,96,112} does not support logit_softcap; use D in {128,256} or disable softcap.");
+            }
             if (allow_mma && det_mma_supported(dst)) {
                 ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
                 return;
+            }
+            if ((D == 80 || D == 96 || D == 112) && disable_tile_80_96_112) {
+                GGML_ABORT("deterministic attention: tile path for D in {80,96,112} disabled by GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1 and MMA not allowed/available. Unset the env or set GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1.");
             }
             // Prefer vec (if compiled), otherwise deterministic tile for F16.
             if (det_vec_supported(dst, /*want_fp16=*/(ggml_flash_attn_ext_get_prec(dst) == GGML_PREC_DEFAULT))) {
@@ -538,7 +555,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
                 else                                                      ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
                 return;
             }
-            log_tile_once();
+            if (D == 80 || D == 96 || D == 112) log_tile_special_once(D); else log_tile_once();
             ggml_cuda_flash_attn_ext_tile(ctx, dst);
             return;
         }
