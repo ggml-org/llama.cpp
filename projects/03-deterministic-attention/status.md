@@ -9,10 +9,14 @@ Status — Project 03 Deterministic Attention
 
 03B (Coverage & Quantized K/V)
 ------------------------------
-- [x] Dispatcher: deterministic vec path for quantized K/V (D=128, q4_0/q4_0 and q8_0/q8_0). Special head sizes via MMA are gated OFF in det mode pending single-column MMA.
-- [x] Tests: quantized K/V determinism + batch invariance; head-size tests disabled by default (enable with RUN_MMA_HEADSIZE_TESTS=1).
-- [x] Docs: quantized K/V coverage; clarified that special head sizes are not yet supported in det mode.
-- [x] Runbook added (Ada/Ampere via container).
+- [x] 03B.0 dispatcher: quantized vec-only (D=128 q4_0/q4_0, q8_0/q8_0) + probes + fallbacks; special head sizes gated OFF by default.
+- [x] Tests: quantized determinism + batch invariance; optional FORCE_* smokes; head-size probe tests gated by env.
+- [x] Docs/runbook updated.
+- [x] 03B.1 tile coverage for D∈{80,96,112} + tests (CUDA Ada/Ampere; single‑column tile path; no logit softcap).
+- [ ] 03B.2 observability and toggles.
+- [ ] 03B.3 ncols=1 MMA for 80/96/112 (opt-in) + tests.
+- [ ] 03B.4 enable MMA by default for 80/96/112 after soak.
+- [ ] 03B.5 576/512 ncols=1 MMA + tests.
 
 03C (KV-Cache + Other Backends)
 -------------------------------

@@ -120,14 +120,14 @@ Attention (CUDA)
     - F16 K/V: preferred path is vec‑f16 (or vec‑f32 if precision is forced to F32); tile fallback remains deterministic but slower.
     - Quantized K/V: supported via vec kernels for selected shapes. Minimal guaranteed coverage: D=128 with pairs q4_0/q4_0 and q8_0/q8_0. Unsupported quantized shapes will error in det mode (no tile fallback for quantized K/V).
     - Note: F16 K/V may automatically fall back to the deterministic tile path; quantized K/V does not have a tile fallback.
-  - Special head sizes: D ∈ {80, 96, 112, 576} are not yet supported in deterministic mode because current MMA kernels process multiple columns per block (not batch‑invariant). Use D∈{64,128,256} or disable determinism. This is planned follow‑up work.
+  - Special head sizes: D ∈ {80, 96, 112} are supported in deterministic mode via a single‑column F16 tile path (correctness‑first; slower than vec for 64/128/256). D=576 remains experimental and is gated behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
 - Supported shapes (03A):
   - Head sizes D ∈ {64, 128, 256}; KV length must be a multiple of 256.
   - Typical LLaMA head counts and GQA ratios (e.g., 8 heads; GQA {1,2,4}).
   - Mask must be padded to `GGML_KQ_MASK_PAD` (64) and be at least `N` (queries) in length.
   - 03B additions:
     - Quantized K/V: D=128 with q4_0/q4_0 and q8_0/q8_0, KV ∈ {256, 1024}, B ∈ {1,2,8,33}. Additional pairs may be available when built with `GGML_CUDA_FA_ALL_QUANTS`.
-    - Special head sizes: not supported in deterministic mode; experimental via `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` only.
+    - Additional head sizes: D ∈ {80, 96, 112} via tile; D=576 experimental (ALLOW_MMA).
 - Caveats:
   - Throughput is lower than default (no multi‑block combine and no stream‑k).
   - Some shapes may fall back to deterministic tile with additional slowdown.

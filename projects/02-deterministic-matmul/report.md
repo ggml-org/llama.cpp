@@ -18,3 +18,7 @@ Tests & Docs
 
 Status
 - Built and ran in container with GPU passthrough on mixed Ampere (A4000) and Ada (RTX 2000E Ada) GPUs. All CUDA matmul determinism tests passed; RMSNorm determinism tests pass on CPU and CUDA.
+
+ Next steps (coordination with Project 03/03C)
+ - Keep matmul determism policy aligned with attention: no split reductions, single variant per shape when det is ON.
+ - As we extend deterministic attention to other backends (03C), mirror matmul gating (disable backend BLAS planners) and reuse fixed-order kernels.

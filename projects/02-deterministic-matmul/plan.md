@@ -1,9 +1,9 @@
-**Deterministic MatMul (CUDA) — Plan & TODOs**
+**Deterministic MatMul (CUDA) — Plan & TODOs (updated)**
 
 **Scope**
-- Make GGML CUDA matmul deterministic and batch-invariant for `GGML_OP_MUL_MAT` and `GGML_OP_MUL_MAT_ID`.
-- Cover `F32`, `F16`, and `BF16` on CUDA; quantized (`mmq`) is a stretch goal.
-- Deterministic is opt-in via `ggml_is_deterministic()` (already implemented in project 01).
+- Deterministic, batch-invariant matmul for `GGML_OP_MUL_MAT` and `GGML_OP_MUL_MAT_ID` on CUDA.
+- Dtypes: `F32`, `F16`, and `BF16`; quantized (`mmq`) remains a stretch goal.
+- Determinism is opt-in via `ggml_is_deterministic()`.
 
 **Definition Of Deterministic**
 - Cross-run determinism: identical bitwise output for the same inputs on the same device/driver.
@@ -33,7 +33,7 @@
   4) For `MUL_MAT_ID`, route to the same deterministic kernels after the expert/tokens reordering phase (no split-K).
 - Both `mmf` and `mmvf` choose block sizes based on K and warp size only; this does not depend on batch size, so batch invariance holds.
 
-**Implementation Steps**
+**Implementation Steps (status)**
 1) Dispatcher gating (deterministic):
    - In `ggml_cuda_mul_mat(...)` and `ggml_cuda_mul_mat_id(...)`, when `ggml_is_deterministic()` is true:
      - Force `use_batched_cublas_* = false`.
@@ -67,10 +67,14 @@
 
 **TODO Checklist**
 - [x] Gate cuBLAS in `ggml_cuda_mul_mat(...)` when deterministic.
-- [x] Gate cuBLAS in `ggml_cuda_mul_mat_id(...)` when deterministic. (covered by deterministic early-return in `ggml_cuda_mul_mat` invoked by the ID path)
+- [x] Gate cuBLAS in `ggml_cuda_mul_mat_id(...)` when deterministic.
 - [x] Implement deterministic column-tiling fallback helper.
 - [x] Route dispatcher to fallback when `mmf` not eligible and det mode on.
-- [x] Add `tests/test-matmul-determinism.cpp` (expanded: multiple M,K,B; F32/F16/BF16).
-- [~] Add `MUL_MAT_ID` deterministic test. (added optional; enable with `TEST_MATMUL_ID=1`; follow-up to enable by default)
-- [x] Update `docs/DETERMINISM.md` (MatMul section).
+- [x] Add `tests/test-matmul-determinism.cpp` (F32/F16/BF16; multiple shapes and batch sizes).
+- [~] Add `MUL_MAT_ID` deterministic test (optional via `TEST_MATMUL_ID=1`; flip on after broader CI soak).
+- [x] Update `docs/DETERMINISM.md` (MatMul).
 - [x] Wire CTest target and conditional CUDA skip.
+
+**Follow-ups & Interlocks with Project 03/03C**
+- Ensure end-to-end determinism in attention blocks that embed small matmul variants; reuse mmvf tiling where applicable.
+- When porting determinism to other backends (03C), mirror matmul policy: forbid backend BLAS planners and split‑K, prefer fixed-order kernels.

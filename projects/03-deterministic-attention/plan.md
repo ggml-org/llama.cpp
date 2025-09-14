@@ -1,43 +1,47 @@
-Project 03 — Deterministic Attention (CUDA, Phase 03A)
-=====================================================
+Project 03 — Deterministic Attention (CUDA)
+===========================================
 
-Goal
-----
+Goals
+-----
 
-- When `ggml_is_deterministic()` is true, FlashAttention forward on CUDA is bitwise deterministic and batch‑invariant across runs and batch sizes for common LLaMA shapes.
-- Deterministic mode remains opt‑in. Default builds keep current fast behavior.
+- Deterministic mode (via `ggml_is_deterministic()`) yields bitwise‑identical, batch‑invariant attention forward on CUDA for covered shapes.
+- Coverage grows in small, safe increments: prioritize correctness/coverage first (tile, vec), add MMA later for performance, then flip defaults.
+- Deterministic mode remains opt‑in; default fast behavior and kernel pickers are unchanged when determinism is OFF.
 
-Non‑Goals (03A)
-----------------
+Non‑Goals (current phase)
+-------------------------
 
-- Backward pass; multi‑GPU tensor parallelism; other backends (Metal/Vulkan/OpenCL/HIP); quantized K/V correctness across all shapes; cross‑device parity.
+- Backward pass; multi‑GPU tensor/pipeline parallel determinism; cross‑device bitwise parity; full coverage for all quantized K/V combos; non‑CUDA backends (handled in 03C).
 
 Policy (Deterministic Mode)
 --------------------------
 
-- Dispatcher: bypass heuristic kernel chooser and route to deterministic path.
-- Kernel selection: prefer vector kernels with `cols_per_block=1` (one query column per block). Use vec‑F16 when available; otherwise vec‑F32. As a last resort, use the tile kernel with `cols_per_block=1`.
-- Reduction order: force `parallel_blocks=1` and `stream_k=false` so no cross‑block combine or stream‑k fixup runs.
-- Softmax/ALiBi/sinks/GQA: supported; accumulation order remains fixed.
+- Dispatcher: bypass the heuristic kernel chooser; route to a deterministic path.
+- Kernel selection:
+  - Prefer vector kernels with one query column per block (NVIDIA vec paths). Use vec‑F16 when available at default precision; otherwise vec‑F32.
+  - F16 K/V has a deterministic tile fallback (single‑column, no cross‑block combine) when vec isn’t available.
+  - Quantized K/V has no tile fallback (tile expects F16 K/V) — if vec is unavailable for the pair, we error with guidance.
+- Reduction order: force `parallel_blocks=1` and `stream_k=false` in `launch_fattn()` to fix accumulation order.
+- Features: masks, ALiBi, sinks, and GQA are supported on covered shapes.
 
-Acceptance Criteria
--------------------
+Acceptance Criteria (always‑on checks for covered shapes)
+--------------------------------------------------------
 
 1) Cross‑run determinism: identical bytes for the same inputs across two executions.
 2) Batch invariance: for the same token column, `B=1` output equals `B∈{2,8,33}` outputs bitwise.
-3) Shapes: D∈{64,128,256}, KV∈{256,1024,4096} (KV must be a multiple of 256), B∈{1,2,8,33}, GQA∈{1,2,4}; mask on/off; ALiBi on/off; sinks on/off.
-4) Deterministic mode only; default fast path unchanged.
+3) Shape grid (03A baseline): D∈{64,128,256}, KV∈{256,1024,4096} (KV multiple of 256), B∈{1,2,8,33}, GQA∈{1,2,4}; mask/ALiBi/sinks toggles.
+4) Deterministic mode only; default non‑det path unchanged.
 
-Implementation Tasks
---------------------
+Implementation Tasks (03A — landed)
+-----------------------------------
 
-1) Deterministic Dispatcher (CUDA) — implemented in 03A
+1) Deterministic Dispatcher (CUDA) — implemented
    - File: `ggml/src/ggml-cuda/fattn.cu`
    - `ggml_cuda_flash_attn_ext(...)` contains an early deterministic branch (no new function) that prefers vec‑F16 → vec‑F32 → tile; bypasses the heuristic picker.
    - All paths pass through `launch_fattn`, which enforces `parallel_blocks=1` and `stream_k=false` in deterministic mode.
    - Optional future: one‑time log when tile fallback is used.
 
-2) Launch Policy: force single‑block accumulation
+2) Launch Policy: force single‑block accumulation — implemented
    - File: `ggml/src/ggml-cuda/fattn-common.cuh`
    - In `launch_fattn<...>(...)`:
      - Early in the function, detect `const bool det = ggml_is_deterministic();`
@@ -47,17 +51,17 @@ Implementation Tasks
        - Keep `stream_k=false` for deterministic calls (the det dispatcher must only call variants that pass `stream_k=false`).
      - Rationale: guarantees fixed accumulation order and avoids cross‑block nondeterminism.
 
-3) Deterministic vec/tile invocation (one column per block)
+3) Deterministic vec/tile invocation (one column per block) — implemented
    - Files: `ggml/src/ggml-cuda/fattn-vec-f16.cuh`, `ggml/src/ggml-cuda/fattn-vec-f32.cuh`, `ggml/src/ggml-cuda/fattn-tile.cu`
    - The vec `..._case` helpers already pick `cols_per_block=1` for NVIDIA when `Q->ne[1] == 1` or generically on NVIDIA; verify this behavior remains and is used by the deterministic dispatcher.
    - For the tile kernel, invoke via existing helper but ensure the call chain passes `cols_per_block=1` (through the `launch_fattn` head‑size/ncols ladder) and `stream_k=false`.
 
-4) Logging (optional, single‑shot)
+4) Logging (optional, single‑shot) — implemented
    - File: `ggml/src/ggml-cuda/fattn.cu`
    - Add a static flag and a guarded log to note when tile fallback is used in deterministic mode:
      - Example: `GGML_LOG_INFO("[det] attention falling back to tile kernel; expect lower throughput.\n");`
 
-5) Tests — Determinism and Batch Invariance
+5) Tests — Determinism and Batch Invariance — implemented
    - File: `tests/test-attention-determinism.cpp`
    - Harness:
      - Set `GGML_DETERMINISTIC=1` (Windows and POSIX branches as done in existing tests).
@@ -75,7 +79,7 @@ Implementation Tasks
    - Skips:
      - If CUDA backend not present; keep runtime under a few minutes by selecting a subset grid for CI.
 
-6) Docs — Deterministic Attention (CUDA)
+6) Docs — Deterministic Attention (CUDA) — implemented
    - File: `docs/DETERMINISM.md`
    - Add a new section “Attention (CUDA)” describing:
      - Deterministic dispatch policy (one‑column vec preferred; tile fallback), `parallel_blocks=1`, `stream_k=false`.
@@ -83,7 +87,7 @@ Implementation Tasks
      - Caveats: performance trade‑offs; unsupported shapes may fall back to deterministic tile with lower throughput.
      - Usage examples with `--deterministic` and CUDA build flags.
 
-7) Container: build + run
+7) Container: build + run — implemented
    - Script: `scripts/build-in-container.sh` (no code change required if already supports `--gpus all`).
    - Add README snippet to run `test-attention-determinism` inside the container with GPUs passed through.
 
@@ -94,35 +98,55 @@ Design Notes / Constraints
 - We explicitly avoid `stream_k` and multi‑tile combine to keep reduction order fixed.
 - We do not change KV‑cache layout in 03A; tests must validate batch invariance with realistic cache views.
 
-Backlog (03B / 03C)
--------------------
+03B — Coverage & Fallbacks (tile‑first, then MMA)
+------------------------------------------------
 
-- 03B Coverage & Fallbacks
-  - Broaden support for quantized K/V in deterministic mode; ensure vec or tile fallback is deterministic and reasonably fast.
-  - Add debug envs: `GGML_DETERMINISTIC_ATTENTION_FORCE_VEC=1`, `..._FORCE_TILE=1` for triage.
-  - Expand tests to quantized KV types and more head sizes (80/96/112; Deepseek 576/512).
+- 03B.0 (landed)
+  - Deterministic dispatcher with probes: F16 vec → vec‑F32 → tile fallback; quantized K/V vec‑only; logging and debug envs in place.
+  - Quantized K/V minimal coverage (D=128, q4_0/q4_0 and q8_0/q8_0). Optional expansion when `GGML_CUDA_FA_ALL_QUANTS=ON`.
 
-- 03C Other Backends & KV Cache Invariance
-  - Mirror deterministic launch policy in Metal/Vulkan/OpenCL/HIP (single‑column, no cross‑block combine), where feasible.
-  - Validate end‑to‑end determinism with incremental decode and cache growth.
+- 03B.1 Tile coverage for D∈{80,96,112}
+  - Extend tile to support D=80/96/112 with valid `kq_stride` and shared‑mem shapes; keep single‑column, no stream‑k/combine.
+  - Acceptance: determinism and batch invariance across KV∈{256,1024} and B∈{1,8}, GQA∈{1,2} on Ada/Ampere.
+  - Docs: add a caution on throughput; env to opt‑out if needed for perf trials.
+
+- 03B.2 Observability & perf toggles
+  - One‑time INFO when 80/96/112 take tile in det mode; note optional MMA opt‑in flag.
+  - Optional: `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` for perf testing only.
+
+- 03B.3 MMA single‑column (ncols=1) for 80/96/112 (opt‑in)
+  - Add ncols=1 MMA instances; ensure determinism with `parallel_blocks=1`, `stream_k=false`.
+  - Gate with `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` initially; compare numerics vs vec/tile.
+
+- 03B.4 MMA default enable for 80/96/112
+  - After soak, switch det default to MMA for these head sizes when supported; keep tile fallback.
+
+- 03B.5 DeepSeek D=576/DV=512 support (MMA ncols=1 only)
+  - Add ncols=1 MMA instance; require GQA multiple of 16; determinism and batch invariance across B∈{1,8}.
+
+03C — Other Backends & KV‑Cache Invariance
+-----------------------------------------
+
+- Mirror deterministic launch policy in Metal/Vulkan/OpenCL/HIP: single‑column per workgroup, no multi‑block combines.
+- KV‑cache invariance: normalize KV views; fixed split size along KV; add integration test comparing multi‑step decode vs single‑shot.
 
 Checklist Summary (for PR review)
 ---------------------------------
 
-- [x] Deterministic dispatcher (inline early branch in `ggml_cuda_flash_attn_ext`) and wiring.
-- [x] `launch_fattn` forces `parallel_blocks=1` when deterministic; `stream_k=false` used by deterministic path.
-- [ ] (Optional) One‑time log if tile fallback is used.
-- [x] Tests: `tests/test-attention-determinism.cpp` cover cross‑run and batch invariance; CUDA‑only skip otherwise.
-- [x] Docs updated: `docs/DETERMINISM.md` attention section and quick test run.
-- [x] Container instructions in runbook.
+- [x] Deterministic dispatcher and wiring (vec/tile, quant vec‑only, probes, errors with guidance).
+- [x] `launch_fattn` forces `parallel_blocks=1`; no `stream_k` in det mode.
+- [x] One‑time log for tile fallback.
+- [x] Tests: attention determinism (cross‑run, batch invariance), softcap, GQA; quantized minimal set; optional FORCE_* smokes.
+- [x] Docs updated; runbook in place.
+- [ ] 03B.1: tile for 80/96/112 + tests (to do).
+- [ ] 03B.3–03B.5: ncols=1 MMA for 80/96/112 and 576 (to do; opt‑in first).
 
 Status
 ------
 
-- 03A implemented and validated:
-  - Deterministic dispatcher and single‑block launch policy landed.
-  - Tests `test-attention-determinism` pass on NVIDIA Ada (compute 8.9) with `CUDA_VISIBLE_DEVICES` scoping.
-  - Docs updated with Attention (CUDA) section.
+- 03A implemented and validated.
+- 03B.0 landed: dispatcher probes, quant vec‑only minimal coverage, logging and debug envs.
+- Next: 03B.1 tile coverage for 80/96/112.
 
 Next Phases
 -----------

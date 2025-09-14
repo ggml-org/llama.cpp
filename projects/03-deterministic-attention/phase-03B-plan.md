@@ -30,15 +30,14 @@ Non-Goals
 - Other backends (Metal, Vulkan, HIP, OpenCL) — Project 03C.
 - Multi-GPU determinism (NCCL/collectives) — separate project.
 
-Design Decisions (Deterministic Dispatcher v2)
-----------------------------------------------
+Design Decisions (03B: tile‑first, then MMA)
+-------------------------------------------
 
-1) Shape→Kernel selection in deterministic mode (building on 03A dispatcher):
-   - Try to choose a vec kernel if supported for the (D, type_K, type_V) triple.
-   - For quantized K/V (e.g., Q4_0/Q8_0 at D=128), prefer vec-f16 when `prec==default` else vec-f32.
-   - For head sizes without vec/tile support (80/96/112/576), plan to allow MMA path while keeping `parallel_blocks=1` and `stream_k=false` (deterministic). If MMA is not compiled/supported, fail with a clear error. Note: MMA is not used by the current deterministic branch (03A); enabling it is part of 03B work.
-   - For F16 K/V, keep current order: vec-f16 → vec-f32 → tile.
-   - For quantized K/V, do not fall back to tile (tile expects F16 K/V). If vec support is missing, error out with clear message.
+1) Deterministic dispatcher (landed) chooses vec when supported; F16 tiles as fallback; quantized is vec‑only with clear error otherwise.
+2) Special head sizes (80/96/112/576):
+   - 03B.1: extend tile to cover D∈{80,96,112}. This path is batch‑invariant and simple to validate. Enabled by default in det mode once it compiles on Ada/Ampere.
+   - 03B.3: prototype MMA ncols=1 (single column per block) for 80/96/112 as an optional path, gated by `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`. Keep tile as fallback.
+   - 03B.5: add MMA ncols=1 for 576/512; no tile fallback targeted for 576.
 
 2) Support probing (internal):
    - Use `ggml_cuda_get_best_fattn_kernel(device, dst)` to probe vec-f16/vec-f32/MMA availability for a constructed `dst`. Do not use its result for non-deterministic dispatching — only to avoid calling unsupported vec variants that would abort.
@@ -50,21 +49,28 @@ Design Decisions (Deterministic Dispatcher v2)
 Implementation Tasks
 --------------------
 
-A) Dispatcher updates (ggml/src/ggml-cuda/fattn.cu)
-   - [ ] Add support-probe helpers:
-     - `static best_fattn_kernel best_kernel_for(const ggml_tensor *dst)` (wraps `ggml_cuda_get_best_fattn_kernel`).
-     - `static bool det_vec_supported(ggml_tensor *dst, bool want_fp16)` – true if best kernel is vec-f16 or vec-f32 accordingly.
-     - `static bool det_mma_supported(ggml_tensor *dst)` – true if best kernel is mma.
-   - [ ] Extend existing deterministic branch in `ggml_cuda_flash_attn_ext(...)`:
-     - If `K/V` are quantized:
-       - If `prec==GGML_PREC_DEFAULT` and `det_vec_supported(dst, /*want_fp16=*/true)`: call `ggml_cuda_flash_attn_ext_vec_f16`.
-       - Else if `det_vec_supported(dst, /*want_fp16=*/false)`: call `ggml_cuda_flash_attn_ext_vec_f32`.
-       - Else: `GGML_ABORT` with message: quantized K/V not supported in deterministic mode for this shape; advise F16 K/V or D=128 with q4_0/q8_0.
-     - Else if `K/V` are F16:
-       - Keep current order vec-f16 → vec-f32 → tile.
-     - Else (future types): fall back to existing logic (tile if possible; else error).
-     - Head-size exception: if D∈{80,96,112,576} and `det_mma_supported(dst)`: call `ggml_cuda_flash_attn_ext_mma_f16`.
-   - [ ] Ensure all calls flow through `launch_fattn`, which already enforces `parallel_blocks=1` and no `stream_k` in deterministic mode.
+A) 03B.1 — Tile coverage for D∈{80,96,112}
+   - [ ] Audit `fattn-tile.cu` kq_stride and smem layout for 80/96/112. Choose `cols_per_block`∈{16,32} and `kq_stride` satisfying compile‑time asserts (`% warp_size == 0`, positive loop trip counts).
+   - [ ] Add explicit head‑size cases in `launch_fattn_tile_switch_head_size` if needed (or compute‑time mapping).
+   - [ ] Tests: batch invariance + cross‑run determinism: D∈{80,96,112}, KV∈{256,1024}, B∈{1,8}, GQA∈{1,2}; masks/ALiBi/sinks toggles.
+   - [ ] Docs: update coverage and perf notes; mention tile fallback behavior.
+
+B) 03B.2 — Observability and toggles
+   - [ ] One‑time INFO when 80/96/112 use tile in det mode; mention `...ALLOW_MMA=1` for trial.
+   - [ ] Optional env `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` for perf experiments (tile disabled → vec or error).
+
+C) 03B.3 — MMA ncols=1 prototype (80/96/112)
+   - [ ] Add MMA template instances for ncols=1, adjust warps/smem to fit cc 8.6/8.9.
+   - [ ] Gate behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` in det mode; vec/tile fallback remains.
+   - [ ] Tests: same shapes as 03B.1; compare numerics vec/tile vs MMA on identical inputs.
+
+D) 03B.4 — Enable MMA by default for 80/96/112
+   - [ ] Switch det default to MMA for these head sizes when available; keep tile fallback.
+   - [ ] Perf note/update docs.
+
+E) 03B.5 — 576/512 support (MMA ncols=1 only)
+   - [ ] Add DKQ=576, DV=512 ncols=1 MMA; enforce GQA multiple‑of‑16; no tile fallback planned.
+   - [ ] Tests: batch invariance + cross‑run, B∈{1,8}, KV∈{256,1024}.
 
 B) Tests (tests/test-attention-determinism.cpp)
    - Add 2 new groups and gate runtime to CUDA only.
@@ -107,24 +113,25 @@ D) Runbook & CI Hooks (projects/03-deterministic-attention)
 Acceptance Criteria
 -------------------
 
-- Deterministic mode produces bitwise-identical outputs for the following:
-  - F16 K/V: D∈{64,128,256} (03A), plus D∈{80,96,112,576} (03B), with masks, GQA, and sinks/ALiBi toggles.
-  - Quantized K/V: D=128 with K/V in {Q4_0/Q4_0, Q8_0/Q8_0} across KV∈{256,1024}, B∈{1,2,8,33}.
-- Tests pass on Ada (compute 8.9) and Ampere (8.6) in the CUDA 12.4 container using `build-in-container.sh`.
-- KV length always a multiple of 256.
-- Documentation updated to reflect coverage and caveats.
+- Tile coverage (03B.1): Bitwise‑identical outputs for D∈{80,96,112}, KV∈{256,1024}, B∈{1,8}, GQA∈{1,2}; masks/ALiBi/sinks toggles.
+- Quantized K/V: D=128 with {q4_0/q4_0, q8_0/q8_0}; additional pairs when `GGML_CUDA_FA_ALL_QUANTS=ON`, all with determinism and batch invariance.
+- MMA ncols=1 (opt‑in) matched numerics on covered shapes; no regressions; gate can remain OFF until soak completes.
+- KV multiple of 256 enforced; mask padding per kernel requirements.
+- Tests pass on Ada (8.9) and Ampere (8.6) in the CUDA 12.4 container.
 
 Risk & Mitigations
 ------------------
 
-- Vec support matrix is compile-time dependent: we mitigate by probing best kernel to avoid calling unsupported specializations; tests print [SKIP] per unsupported pair.
-- MMA determinism: we rely on single-block accumulation to fix reduction order; add targeted tests; if any flakiness surfaces, gate D∈{80,96,112,576} to vec/tile where possible or document unsupported.
-- Tile does not support quantized K/V (expects F16) — dispatcher avoids tile for quantized K/V.
-- Deterministic mode will be slower (cols_per_block=1, no stream-k, parallel_blocks=1). Document expected slowdowns and how to restore performance (disable determinism).
+- Vec support matrix varies with build: probe before dispatch; tests cover minimal and expanded sets; error with guidance.
+- Tile compile‑time asserts for 80/96/112: pick safe `kq_stride`/`cols_per_block` combos; keep explicit mapping per D.
+- MMA determinism: single‑column path only; keep opt‑in until burn‑in; tile fallback always available for F16 K/V.
+- Deterministic mode slowdown: document and provide toggles to opt‑out (disable determinism) or switch paths (FORCE_*).
 
-Timeline
---------
+Timeline (targeted)
+-------------------
 
-1) Dispatcher support probing + path selection (1 day) — Ada first.
-2) Quantized K/V tests & helpers (0.5–1 day), head-size tests (0.5 day).
-3) Docs + runbook (0.5 day). Bench/notes (optional: 0.5 day).
+1) 03B.1 tile coverage for 80/96/112 (1–2 days including compile/layout tuning) — Ada first, then Ampere.
+2) 03B.2 observability + toggles (0.25 day).
+3) 03B.3 MMA ncols=1 prototype for 80 (1 day), then 96/112 (0.5 day each); opt‑in.
+4) 03B.4 flip default to MMA after soak (0.25 day).
+5) 03B.5 576/512 MMA ncols=1 (1 day) + tests.

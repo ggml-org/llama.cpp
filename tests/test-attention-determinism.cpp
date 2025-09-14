@@ -323,7 +323,7 @@ static int test_attention_invariance(ggml_backend_t backend) {
     std::mt19937 rng(4242);
 
     // Shapes
-    const int64_t Ds[]  = {64, 128, 256};
+    const int64_t Ds[]  = {64, 80, 96, 112, 128, 256};
     const int64_t KVv[] = {256, 1024};      // must be multiples of FATTN_KQ_STRIDE
     const int      Bs[] = {2, 8, 33};
     const int      gqas[] = {1, 2, 4};     // H/H_kv
@@ -698,58 +698,11 @@ int main() {
             }
         }
 
-        // 03B: Additional head sizes — disabled by default (det mode does not support 80/96/112/576).
-        // Enable with RUN_MMA_HEADSIZE_TESTS=1 to probe behavior.
+        // 03B: DeepSeek-like head size 576 remains experimental; probe only when enabled.
         if (rc == 0 && std::getenv("RUN_MMA_HEADSIZE_TESTS")) {
             try {
-                // Common params
-                const int64_t H = 8; // for 80/96/112
-                const int64_t KVs[] = {256, 1024};
-                const int     Bs[]  = {1, 8};
-                for (int64_t D : {80LL, 96LL, 112LL}) {
-                    const int64_t DV = D;
-                    const int64_t gqa = 2; // H/H_kv
-                    const int64_t H_kv = H / gqa;
-                    for (int64_t KV : KVs) {
-                        // Build K/V
-                        const size_t nK=(size_t)D*KV*H_kv, nV=(size_t)DV*KV*H_kv;
-                        std::vector<float> K(nK), V(nV);
-                        std::mt19937 rngm((unsigned)(D*KV));
-                        fill_uniform(rngm, K.data(), nK);
-                        fill_uniform(rngm, V.data(), nV);
-                        // Q for B=1
-                        const size_t nQ1=(size_t)D*1*H;
-                        std::vector<float> Q1(nQ1);
-                        fill_uniform(rngm, Q1.data(), nQ1);
-                        const int64_t N1_pad = GGML_PAD(1, GGML_KQ_MASK_PAD);
-                        std::vector<float> mask1((size_t)KV*N1_pad, 0.0f);
-                        (void) run_attention_graph_types(backend, D, DV, 1, H, H_kv, KV,
-                                                         true, false, 0.0f, 0.0f, GGML_TYPE_F16, GGML_TYPE_F16,
-                                                         Q1, K, V, mask1, {});
-                        for (int B : Bs) {
-                            const size_t nQb=(size_t)D*B*H;
-                            std::vector<float> Qb(nQb);
-                            for (int64_t h = 0; h < H; ++h) {
-                                const size_t src_off = (size_t)h * (size_t)D * (size_t)1;
-                                const size_t dst_off = (size_t)h * (size_t)D * (size_t)B;
-                                std::copy(Q1.begin() + src_off, Q1.begin() + src_off + (size_t)D,
-                                          Qb.begin() + dst_off);
-                            }
-                            std::mt19937 rngb(rngm());
-                            for (int64_t h = 0; h < H; ++h) for (int64_t n = 1; n < B; ++n)
-                                fill_uniform(rngb, Qb.data() + (size_t)h*(size_t)D*(size_t)B + (size_t)n*(size_t)D, (size_t)D);
-                            const int64_t Np = GGML_PAD(B, GGML_KQ_MASK_PAD);
-                            std::vector<float> maskb((size_t)KV*Np, 0.0f);
-                            (void) run_attention_graph_types(backend, D, DV, B, H, H_kv, KV,
-                                                           true, false, 0.0f, 0.0f, GGML_TYPE_F16, GGML_TYPE_F16,
-                                                           Qb, K, V, maskb, {});
-                        }
-                        if (rc) break;
-                    }
-                    if (rc) break;
-                }
-
                 // DeepSeek-like: D=576, DV=512, require gqa multiple of 16; use H=16, gqa=16 => H_kv=1
+                const int64_t KVs[] = {256, 1024};
                 if (rc == 0) {
                     const int64_t D=576, DV=512, H=16, gqa=16, H_kv=H/gqa; // 1
                     for (int64_t KV : KVs) {
