@@ -1345,6 +1345,7 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
     return res;
 }
 
+// tokens per expert
 static size_t ggml_metal_mul_mat_id_extra_tpe(const struct ggml_tensor * op) {
     assert(op->op == GGML_OP_MUL_MAT_ID);
 
@@ -1353,6 +1354,7 @@ static size_t ggml_metal_mul_mat_id_extra_tpe(const struct ggml_tensor * op) {
     return ggml_type_size(GGML_TYPE_I32)*ne02;
 }
 
+// id map [n_tokens, n_expert]
 static size_t ggml_metal_mul_mat_id_extra_ids(const struct ggml_tensor * op) {
     assert(op->op == GGML_OP_MUL_MAT_ID);
 
@@ -6161,6 +6163,31 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
     return ggml_backend_buffer_init(buft, buf_i, ctx, size);
 }
 
+static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
+    size_t res = ggml_nbytes(tensor);
+
+    // some operations require additional memory for fleeting data:
+    switch (tensor->op) {
+        case GGML_OP_MUL_MAT_ID:
+            {
+                res += ggml_metal_mul_mat_id_extra_tpe(tensor);
+                res += ggml_metal_mul_mat_id_extra_ids(tensor);
+            } break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            {
+                if (ggml_metal_flash_attn_ext_use_vec(tensor)) {
+                    res += ggml_metal_flash_attn_ext_extra_tmp(tensor);
+                }
+            } break;
+        default:
+            break;
+    }
+
+    return res;
+
+    GGML_UNUSED(buft);
+}
+
 // default (shared) buffer type
 
 static const char * ggml_backend_metal_buffer_type_shared_get_name(ggml_backend_buffer_type_t buft) {
@@ -6186,28 +6213,7 @@ static size_t ggml_backend_metal_buffer_type_shared_get_max_size(ggml_backend_bu
 }
 
 static size_t ggml_backend_metal_buffer_type_shared_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
-    size_t res = ggml_nbytes(tensor);
-
-    // some operations require additional memory for fleeting data:
-    switch (tensor->op) {
-        case GGML_OP_MUL_MAT_ID:
-            {
-                res += ggml_metal_mul_mat_id_extra_tpe(tensor);
-                res += ggml_metal_mul_mat_id_extra_ids(tensor);
-            } break;
-        case GGML_OP_FLASH_ATTN_EXT:
-            {
-                if (ggml_metal_flash_attn_ext_use_vec(tensor)) {
-                    res += ggml_metal_flash_attn_ext_extra_tmp(tensor);
-                }
-            } break;
-        default:
-            break;
-    }
-
-    return res;
-
-    GGML_UNUSED(buft);
+    return ggml_backend_metal_buffer_type_get_alloc_size(buft, tensor);
 }
 
 static bool ggml_backend_metal_buffer_type_shared_is_host(ggml_backend_buffer_type_t buft) {
@@ -6257,6 +6263,10 @@ static size_t ggml_backend_metal_buffer_type_private_get_max_size(ggml_backend_b
     return max_size;
 }
 
+static size_t ggml_backend_metal_buffer_type_private_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
+    return ggml_backend_metal_buffer_type_get_alloc_size(buft, tensor);
+}
+
 static bool ggml_backend_metal_buffer_type_private_is_host(ggml_backend_buffer_type_t buft) {
     return false;
 
@@ -6270,7 +6280,7 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_private(void) {
             /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_private_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_metal_buffer_type_private_get_alignment,
             /* .get_max_size     = */ ggml_backend_metal_buffer_type_private_get_max_size,
-            /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+            /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_private_get_alloc_size,
             /* .is_host          = */ ggml_backend_metal_buffer_type_private_is_host,
         },
         /* .device  = */ &g_ggml_backend_metal_device,
@@ -6305,6 +6315,10 @@ static size_t ggml_backend_metal_buffer_type_mapped_get_max_size(ggml_backend_bu
     return max_size;
 }
 
+static size_t ggml_backend_metal_buffer_type_mapped_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
+    return ggml_backend_metal_buffer_type_get_alloc_size(buft, tensor);
+}
+
 static bool ggml_backend_metal_buffer_type_mapped_is_host(ggml_backend_buffer_type_t buft) {
     return false;
 
@@ -6320,7 +6334,7 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_mapped(void) {
             /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_mapped_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_metal_buffer_type_mapped_get_alignment,
             /* .get_max_size     = */ ggml_backend_metal_buffer_type_mapped_get_max_size,
-            /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+            /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_mapped_get_alloc_size,
             /* .is_host          = */ ggml_backend_metal_buffer_type_mapped_is_host,
         },
         /* .device  = */ &g_ggml_backend_metal_device,
