@@ -683,9 +683,14 @@ extern "C" {
     extern __thread int ggml_current_numa_node;
     
     static inline void * tensor_data(const struct ggml_tensor * tensor) {
-        int numa_node = ggml_current_numa_node;
+        // Fast path: if no NUMA mirrors exist, avoid thread-local access entirely
+        if (tensor->__data[1] == NULL) {
+            return tensor->__data[0];
+        }
         
-        if (numa_node >= 0 && numa_node < GGML_NUMA_MAX_NODES 
+        // NUMA path: only read thread-local variable when NUMA mirrors exist
+        int numa_node = ggml_current_numa_node;
+        if (numa_node > 0 && numa_node < GGML_NUMA_MAX_NODES 
             && tensor->__data[numa_node] != NULL) {
             return tensor->__data[numa_node];
         }
