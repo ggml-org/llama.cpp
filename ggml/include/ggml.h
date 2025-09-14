@@ -559,6 +559,7 @@ extern "C" {
 
     enum ggml_unary_op {
         GGML_UNARY_OP_ABS,
+        GGML_UNARY_OP_FLOOR,
         GGML_UNARY_OP_SGN,
         GGML_UNARY_OP_NEG,
         GGML_UNARY_OP_STEP,
@@ -1028,6 +1029,15 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_floor(
+            struct ggml_context * ctx,
+            struct ggml_tensor * a);
+
+    GGML_API struct ggml_tensor * ggml_floor_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a);
+
+    
     GGML_API struct ggml_tensor * ggml_sgn(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
