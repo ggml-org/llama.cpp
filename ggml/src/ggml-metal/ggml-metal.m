@@ -541,6 +541,7 @@ struct ggml_metal_command_buffer {
 
 struct ggml_backend_metal_context {
     id<MTLDevice>       device;
+    id<MTLLibrary>      library;
     id<MTLCommandQueue> queue; // currently a pointer to the device queue, but might become separate queue [TAG_QUEUE_PER_BACKEND]
 
     dispatch_queue_t d_queue;
@@ -581,11 +582,6 @@ struct ggml_backend_metal_context {
     ggml_abort_callback abort_callback;
     void *              abort_callback_data;
 };
-
-// MSL code
-// TODO: move the contents here when ready
-//       for now it is easier to work in a separate file
-// static NSString * const msl_library_source = @"see metal.metal";
 
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
@@ -647,31 +643,34 @@ static id<MTLLibrary> ggml_metal_load_library(id<MTLDevice> device, bool use_bfl
     NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
     if (path_lib == nil) {
         // Try to find the resource in the directory where the current binary located.
-        NSString * current_binary = [[NSProcessInfo processInfo] arguments][0];
-        NSString * bin_dir = [current_binary stringByDeletingLastPathComponent];
-        NSString * default_metallib_path = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
-        if ([[NSFileManager defaultManager] isReadableFileAtPath:default_metallib_path]) {
-            GGML_LOG_INFO("%s: found '%s'\n", __func__, [default_metallib_path UTF8String]);
-            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:default_metallib_path error:&error];
+        NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+        NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+
+        NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+            GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+
+            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
             if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
                 // Optionally, if this is a symlink, try to resolve it.
-                default_metallib_path = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:default_metallib_path error:&error];
-                if (default_metallib_path && [default_metallib_path length] > 0 && ![[default_metallib_path substringToIndex:1] isEqualToString:@"/"]) {
+                path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+                if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
                     // It is a relative path, adding the binary directory as directory prefix.
-                    default_metallib_path = [NSString pathWithComponents:@[bin_dir, default_metallib_path]];
+                    path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
                 }
-                if (!default_metallib_path || ![[NSFileManager defaultManager] isReadableFileAtPath:default_metallib_path]) {
+                if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
                     // Link to the resource could not be resolved.
-                    default_metallib_path = nil;
+                    path_lib_default = nil;
                 } else {
-                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [default_metallib_path UTF8String]);
+                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
                 }
             }
         } else {
             // The resource couldn't be found in the binary's directory.
-            default_metallib_path = nil;
+            path_lib_default = nil;
         }
-        path_lib = default_metallib_path;
+
+        path_lib = path_lib_default;
     }
 
     if (path_lib != nil) {
@@ -774,17 +773,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 
     ctx->device = device;
 
-    // TODO: question - would it be better to have one queue for the backend and one queue for the device?
-    //                  the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
-    //ctx->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
-    ctx->queue = ctx_dev->mtl_queue;
-    if (ctx->queue == nil) {
-        GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
-        return NULL;
-    }
-
-    ctx->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
-
     // load library
     {
         [ctx_dev->mtl_lock lock];
@@ -796,11 +784,22 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         [ctx_dev->mtl_lock unlock];
     }
 
-    id<MTLLibrary> metal_library = ctx_dev->mtl_library;
-    if (metal_library == nil) {
+    ctx->library = ctx_dev->mtl_library;
+    if (ctx->library == nil) {
         GGML_LOG_ERROR("%s: error: metal library is nil\n", __func__);
         return NULL;
     }
+
+    // TODO: would it be better to have one queue for the backend and one queue for the device?
+    //       the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
+    //ctx->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
+    ctx->queue = ctx_dev->mtl_queue;
+    if (ctx->queue == nil) {
+        GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+        return NULL;
+    }
+
+    ctx->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
     // print MTL GPU family:
     GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, [[device name] UTF8String]);
@@ -877,7 +876,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 #define GGML_METAL_ADD_KERNEL(e, name, supported) \
         if (supported) { \
             struct ggml_metal_kernel * kernel = &ctx->kernels[e]; \
-            id<MTLFunction> metal_function = [metal_library newFunctionWithName:@"kernel_"#name]; \
+            id<MTLFunction> metal_function = [ctx->library newFunctionWithName:@"kernel_"#name]; \
             kernel->pipeline = [device newComputePipelineStateWithFunction:metal_function error:&error]; \
             GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, "kernel_"#name, (void *) kernel->pipeline, \
                     (int) kernel->pipeline.maxTotalThreadsPerThreadgroup, \
@@ -1211,10 +1210,7 @@ static id<MTLComputePipelineState> ggml_metal_get_kernel(struct ggml_backend_met
     return nil;
 }
 
-static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t backend, const char * base, const char * name, MTLFunctionConstantValues * cv) {
-    struct ggml_backend_metal_context        * ctx     = backend->context;
-    struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
-
+static id<MTLComputePipelineState> ggml_metal_compile_kernel(struct ggml_backend_metal_context * ctx, const char * base, const char * name, MTLFunctionConstantValues * cv) {
     id<MTLComputePipelineState> res = nil;
 
     @autoreleasepool {
@@ -1225,15 +1221,15 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
         GGML_LOG_DEBUG("%s: compiling kernel: base = '%s', name = '%s'\n", __func__, base, name);
 
         // TODO: make sure it is thread-safe to compile kernels in parallel
-        id<MTLFunction> metal_function = [ctx_dev->mtl_library newFunctionWithName:base_func constantValues:cv error:&error];
-        if (!metal_function) {
+        id<MTLFunction> mtl_function = [ctx->library newFunctionWithName:base_func constantValues:cv error:&error];
+        if (!mtl_function) {
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
 
             return nil;
         }
 
         struct ggml_metal_kernel kernel = {
-            /*.pipeline =*/ [ctx_dev->mtl_device newComputePipelineStateWithFunction:metal_function error:&error],
+            /*.pipeline =*/ [ctx->device newComputePipelineStateWithFunction:mtl_function error:&error],
         };
 
         ggml_metal_kernel_wrapper * obj = [[ggml_metal_kernel_wrapper alloc] init];
@@ -1244,7 +1240,7 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
         NSString * key = [NSString stringWithUTF8String:name];
         [ctx->kernels_ext setObject:obj forKey:key];
 
-        [metal_function release];
+        [mtl_function release];
         [obj release];
 
         GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name, (void *) kernel.pipeline,
@@ -1301,231 +1297,217 @@ static size_t ggml_metal_flash_attn_ext_extra_tmp(const struct ggml_tensor * op)
     return ggml_type_size(GGML_TYPE_F32)*(ne01*ne02*ne03*nwg*(ne20 + 2));
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(
-        ggml_backend_t backend, struct ggml_tensor * op,
+static id<MTLComputePipelineState> ggml_metal_flash_attn_ext_get_pipeline(
+        struct ggml_backend_metal_context * ctx,
+        struct ggml_tensor * op,
         bool    has_mask,
         bool    has_sinks,
         bool    has_bias,
         bool    has_scap,
         int32_t nsg) {
-    struct ggml_backend_metal_context * ctx = backend->context;
-
     char base[256];
     char name[256];
 
-    @autoreleasepool {
-        const int32_t dk = (int32_t) op->src[1]->ne[0];
-        const int32_t dv = (int32_t) op->src[2]->ne[0];
+    const int32_t dk = (int32_t) op->src[1]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-        const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-        const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
+    const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
+    const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
-        snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
-                "flash_attn_ext",
-                ggml_type_name(op->src[1]->type),
-                dk,
-                dv);
+    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
+            "flash_attn_ext",
+            ggml_type_name(op->src[1]->type),
+            dk,
+            dv);
 
-        snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sinks=%d_bias=%d_scap=%d_ns10=%d_ns20=%d_nsg=%d",
-                "flash_attn_ext",
-                ggml_type_name(op->src[1]->type),
-                dk,
-                dv,
-                has_mask,
-                has_sinks,
-                has_bias,
-                has_scap,
-                ns10,
-                ns20,
-                nsg);
+    snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sinks=%d_bias=%d_scap=%d_ns10=%d_ns20=%d_nsg=%d",
+            "flash_attn_ext",
+            ggml_type_name(op->src[1]->type),
+            dk,
+            dv,
+            has_mask,
+            has_sinks,
+            has_bias,
+            has_scap,
+            ns10,
+            ns20,
+            nsg);
 
-        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
-        if (res) {
-            // kernel found
-            return res;
-        }
-
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
-        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 0];
-        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 1];
-        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 2];
-        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 3];
-
-        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 20];
-        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 21];
-        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 22];
-
-        res = ggml_metal_compile_kernel(backend, base, name, cv);
-
-        [cv release];
-
+    id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+    if (res) {
+        // kernel found
         return res;
     }
+
+    MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
+
+    [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 0];
+    [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 1];
+    [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 2];
+    [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT + 3];
+
+    [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 20];
+    [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 21];
+    [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT + 22];
+
+    res = ggml_metal_compile_kernel(ctx, base, name, cv);
+
+    [cv release];
+
+    return res;
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec(
-        ggml_backend_t backend, struct ggml_tensor * op,
+static id<MTLComputePipelineState> ggml_metal_flash_attn_ext_vec_get_pipeline(
+        struct ggml_backend_metal_context * ctx,
+        struct ggml_tensor * op,
         bool    has_mask,
         bool    has_sinks,
         bool    has_bias,
         bool    has_scap,
         int32_t nsg,
         int32_t nwg) {
-    struct ggml_backend_metal_context * ctx = backend->context;
-
     char base[256];
     char name[256];
 
-    @autoreleasepool {
-        const int32_t dk = (int32_t) op->src[1]->ne[0];
-        const int32_t dv = (int32_t) op->src[2]->ne[0];
+    const int32_t dk = (int32_t) op->src[1]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-        const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-        const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
+    const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
+    const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
-        snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
-                "flash_attn_ext_vec",
-                ggml_type_name(op->src[1]->type),
-                dk,
-                dv);
+    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
+            "flash_attn_ext_vec",
+            ggml_type_name(op->src[1]->type),
+            dk,
+            dv);
 
-        snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
-                "flash_attn_ext_vec",
-                ggml_type_name(op->src[1]->type),
-                dk,
-                dv,
-                has_mask,
-                has_sinks,
-                has_bias,
-                has_scap,
-                ns10,
-                ns20,
-                nsg, nwg);
+    snprintf(name, 256, "kernel_%s_%s_dk%d_dv%d_mask=%d_sink=%d_bias=%d_softcap=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
+            "flash_attn_ext_vec",
+            ggml_type_name(op->src[1]->type),
+            dk,
+            dv,
+            has_mask,
+            has_sinks,
+            has_bias,
+            has_scap,
+            ns10,
+            ns20,
+            nsg, nwg);
 
-        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
-        if (res) {
-            // kernel found
-            return res;
-        }
-
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
-        [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 0];
-        [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 1];
-        [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 2];
-        [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 3];
-
-        [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 20];
-        [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 21];
-        [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 22];
-        [cv setConstantValue:&nwg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 23];
-
-        res = ggml_metal_compile_kernel(backend, base, name, cv);
-
-        [cv release];
-
+    id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+    if (res) {
+        // kernel found
         return res;
     }
+
+    MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
+
+    [cv setConstantValue:&has_mask  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 0];
+    [cv setConstantValue:&has_sinks type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 1];
+    [cv setConstantValue:&has_bias  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 2];
+    [cv setConstantValue:&has_scap  type:MTLDataTypeBool atIndex:FC_FLASH_ATTN_EXT_VEC + 3];
+
+    [cv setConstantValue:&ns10 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 20];
+    [cv setConstantValue:&ns20 type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 21];
+    [cv setConstantValue:&nsg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 22];
+    [cv setConstantValue:&nwg  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC + 23];
+
+    res = ggml_metal_compile_kernel(ctx, base, name, cv);
+
+    [cv release];
+
+    return res;
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(
-        ggml_backend_t backend, struct ggml_tensor * op,
+static id<MTLComputePipelineState> ggml_metal_flash_attn_ext_vec_reduce_get_pipeline(
+        struct ggml_backend_metal_context * ctx,
+        struct ggml_tensor * op,
         int32_t dv,
         int32_t nwg) {
-    struct ggml_backend_metal_context * ctx = backend->context;
-
     char base[256];
     char name[256];
 
-    @autoreleasepool {
-        snprintf(base, 256, "kernel_flash_attn_ext_vec_reduce");
-        snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv=%d_nwg=%d", dv, nwg);
+    snprintf(base, 256, "kernel_flash_attn_ext_vec_reduce");
+    snprintf(name, 256, "kernel_flash_attn_ext_vec_reduce_dv=%d_nwg=%d", dv, nwg);
 
-        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
-        if (res) {
-            // kernel found
-            return res;
-        }
-
-        MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
-
-        [cv setConstantValue:&dv  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 0];
-        [cv setConstantValue:&nwg type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 1];
-
-        res = ggml_metal_compile_kernel(backend, base, name, cv);
-
-        [cv release];
-
+    id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+    if (res) {
+        // kernel found
         return res;
     }
+
+    MTLFunctionConstantValues * cv = [[MTLFunctionConstantValues alloc] init];
+
+    [cv setConstantValue:&dv  type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 0];
+    [cv setConstantValue:&nwg type:MTLDataTypeInt atIndex:FC_FLASH_ATTN_EXT_VEC_REDUCE + 1];
+
+    res = ggml_metal_compile_kernel(ctx, base, name, cv);
+
+    [cv release];
+
+    return res;
 
     GGML_UNUSED(op);
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_bin(
-        ggml_backend_t backend, enum ggml_op op,
+static id<MTLComputePipelineState> ggml_metal_bin_get_pipeline(
+        struct ggml_backend_metal_context * ctx,
+        enum ggml_op op,
         int32_t n_fuse,
         bool row) {
-    struct ggml_backend_metal_context * ctx = backend->context;
-
     char base[256];
     char name[256];
 
-    @autoreleasepool {
-        const char * op_str = "undefined";
-        switch (op) {
-            case GGML_OP_ADD:   op_str = "add";   break;
-            case GGML_OP_SUB:   op_str = "sub";   break;
-            case GGML_OP_MUL:   op_str = "mul";   break;
-            case GGML_OP_DIV:   op_str = "div";   break;
-            default: GGML_ABORT("fatal error");
-        };
+    const char * op_str = "undefined";
+    switch (op) {
+        case GGML_OP_ADD:   op_str = "add";   break;
+        case GGML_OP_SUB:   op_str = "sub";   break;
+        case GGML_OP_MUL:   op_str = "mul";   break;
+        case GGML_OP_DIV:   op_str = "div";   break;
+        default: GGML_ABORT("fatal error");
+    };
 
-        if (row) {
-            snprintf(base, 256, "kernel_%s_row_c4_fuse_%d", op_str, n_fuse);
-        } else {
-            snprintf(base, 256, "kernel_%s_fuse_%d", op_str, n_fuse);
-        }
-
-        snprintf(name, 256, "%s", base);
-
-        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
-        if (res) {
-            // kernel found
-            return res;
-        }
-
-        return ggml_metal_compile_kernel(backend, base, name, nil);
+    if (row) {
+        snprintf(base, 256, "kernel_%s_row_c4_fuse_%d", op_str, n_fuse);
+    } else {
+        snprintf(base, 256, "kernel_%s_fuse_%d", op_str, n_fuse);
     }
+
+    snprintf(name, 256, "%s", base);
+
+    id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+    if (res) {
+        // kernel found
+        return res;
+    }
+
+    return ggml_metal_compile_kernel(ctx, base, name, nil);
 }
 
-static id<MTLComputePipelineState> ggml_metal_get_pipeline_rms_norm(
-        ggml_backend_t backend, struct ggml_tensor * op,
+static id<MTLComputePipelineState> ggml_metal_rms_norm_get_pipeline(
+        struct ggml_backend_metal_context * ctx,
+        struct ggml_tensor * op,
         int32_t n_fuse) {
-    struct ggml_backend_metal_context * ctx = backend->context;
 
     char base[256];
     char name[256];
 
-    @autoreleasepool {
-        switch (n_fuse) {
-            case 1: snprintf(base, 256, "kernel_rms_norm");              break;
-            case 2: snprintf(base, 256, "kernel_rms_norm_mul");     break;
-            case 3: snprintf(base, 256, "kernel_rms_norm_mul_add"); break;
-            default: GGML_ABORT("fatal error");
-        }
-
-        snprintf(name, 256, "%s", base);
-
-        id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
-        if (res) {
-            // kernel found
-            return res;
-        }
-
-        return ggml_metal_compile_kernel(backend, base, name, nil);
+    switch (n_fuse) {
+        case 1: snprintf(base, 256, "kernel_rms_norm");         break;
+        case 2: snprintf(base, 256, "kernel_rms_norm_mul");     break;
+        case 3: snprintf(base, 256, "kernel_rms_norm_mul_add"); break;
+        default: GGML_ABORT("fatal error");
     }
+
+    snprintf(name, 256, "%s", base);
+
+    id<MTLComputePipelineState> res = ggml_metal_get_kernel(ctx, name);
+    if (res) {
+        // kernel found
+        return res;
+    }
+
+    return ggml_metal_compile_kernel(ctx, base, name, nil);
 
     GGML_UNUSED(op);
 }
@@ -2248,11 +2230,11 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     // src1 is a row
                     GGML_ASSERT(ne11 == 1);
 
-                    pipeline = ggml_metal_get_pipeline_bin(backend, dst->op, n_fuse, true);
+                    pipeline = ggml_metal_bin_get_pipeline(ctx, dst->op, n_fuse, true);
 
                     bcast_row = true;
                 } else {
-                    pipeline = ggml_metal_get_pipeline_bin(backend, dst->op, n_fuse, false);
+                    pipeline = ggml_metal_bin_get_pipeline(ctx, dst->op, n_fuse, false);
                 }
 
                 if (n_fuse > 1) {
@@ -2442,7 +2424,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 };
 
                 //const id<MTLComputePipelineState> pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD].pipeline;
-                const id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_bin(backend, GGML_OP_ADD, 1, false);
+                const id<MTLComputePipelineState> pipeline = ggml_metal_bin_get_pipeline(ctx, GGML_OP_ADD, 1, false);
 
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBytes:&args length:sizeof(args) atIndex:0];
@@ -4357,7 +4339,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     }
                 }
 
-                const id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_rms_norm(backend, node, n_fuse);
+                const id<MTLComputePipelineState> pipeline = ggml_metal_rms_norm_get_pipeline(ctx, node, n_fuse);
 
                 int nth = 32; // SIMD width
 
@@ -5097,7 +5079,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext(backend, node, has_mask, has_sinks, has_bias, has_scap, nsg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_flash_attn_ext_get_pipeline(ctx, node, has_mask, has_sinks, has_bias, has_scap, nsg);
 
                     [encoder setComputePipelineState:pipeline];
                     [encoder setBytes:&args length:sizeof(args)     atIndex:0];
@@ -5212,7 +5194,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_get_pipeline_flash_attn_ext_vec(backend, node, has_mask, has_sinks, has_bias, has_scap, nsg, nwg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_flash_attn_ext_vec_get_pipeline(ctx, node, has_mask, has_sinks, has_bias, has_scap, nsg, nwg);
 
                     GGML_ASSERT(nsg*32 <= (int) pipeline.maxTotalThreadsPerThreadgroup);
 
@@ -5266,7 +5248,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                                 nrows,
                             };
 
-                            id<MTLComputePipelineState> pipeline0 = ggml_metal_get_pipeline_flash_attn_ext_vec_reduce(backend, node, ne20, nwg);
+                            id<MTLComputePipelineState> pipeline0 = ggml_metal_flash_attn_ext_vec_reduce_get_pipeline(ctx, node, ne20, nwg);
 
                             [encoder setComputePipelineState:pipeline0];
                             [encoder setBytes:&args0   length:sizeof(args0) atIndex:0];
