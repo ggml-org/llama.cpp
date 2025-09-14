@@ -530,8 +530,6 @@ jobs:
     runs-on: windows-2022
 
     env:
-      # The ROCm version must correspond to the version used in the HIP SDK.
-      ROCM_VERSION: "6.4.2"
       HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     strategy:
