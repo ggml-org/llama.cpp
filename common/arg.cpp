@@ -2552,17 +2552,54 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(
-        {"--n-cpu-moe", "-ncmoe"}, "N",
-        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
-        [](common_params & params, int value) {
-            if (value < 0) {
-                throw std::invalid_argument("invalid value");
+        {"--n-cpu-moe", "-ncmoe"}, "N|N1-N2|N1,N2,...",
+        "keep the Mixture of Experts (MoE) weights of specified layers in the CPU\n"
+        "- N: keep layers 0 to N-1 in CPU\n"
+        "- N1-N2: keep layers N1 to N2 (inclusive) in CPU\n"
+        "- N1,N2,...: keep specific layers in CPU (comma-separated)",
+        [](common_params & params, const std::string & value) {
+            std::vector<int> layers_to_override;
+            
+            std::stringstream ss(value);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                if (item.find('-') != std::string::npos) {
+                    // Range: N1-N2
+                    size_t dash_pos = item.find('-');
+                    int start = std::stoi(item.substr(0, dash_pos));
+                    int end = std::stoi(item.substr(dash_pos + 1));
+                    if (start < 0 || end < 0 || start > end) {
+                        throw std::invalid_argument("invalid range");
+                    }
+                    for (int i = start; i <= end; ++i) {
+                        layers_to_override.push_back(i);
+                    }
+                } else {
+                    int n = std::stoi(item);
+                    if (n < 0) {
+                        throw std::invalid_argument("invalid value");
+                    }
+                    // Single value: treat as range 0 to N-1
+                    if (value.find(',') == std::string::npos) {
+                        for (int i = 0; i < n; ++i) {
+                            layers_to_override.push_back(i);
+                        }
+                    } else {
+                        // Value in a list: specific layer index
+                        layers_to_override.push_back(n);
+                    }
+                }
             }
-            for (int i = 0; i < value; ++i) {
+            
+            for (int layer_idx : layers_to_override) {
                 // keep strings alive and avoid leaking memory by storing them in a static vector
                 static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(llm_ffn_exps_block_regex(i));
+                buft_overrides.push_back(llm_ffn_exps_block_regex(layer_idx));
                 params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+            }
+
+            if (!layers_to_override.empty()) {
+                LOG_INF("args: --n-cpu-moe overriding %zu layers\n", layers_to_override.size());
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
