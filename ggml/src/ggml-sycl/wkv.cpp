@@ -181,13 +181,13 @@ static void rwkv_wkv7_f32_kernel(
 
 void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/6);
-    const float* k_d = (const float*)dst->src[0]->data;
-    const float* v_d = (const float*)dst->src[1]->data;
-    const float* r_d = (const float*)dst->src[2]->data;
-    const float* tf_d = (const float*)dst->src[3]->data;
-    const float* td_d = (const float*)dst->src[4]->data;
-    const float* s_d = (const float*)dst->src[5]->data;
-    float* dst_d = (float*)dst->data;
+    const float* k_d = (const float*)tensor_data(dst->src[0]);
+    const float* v_d = (const float*)tensor_data(dst->src[1]);
+    const float* r_d = (const float*)tensor_data(dst->src[2]);
+    const float* tf_d = (const float*)tensor_data(dst->src[3]);
+    const float* td_d = (const float*)tensor_data(dst->src[4]);
+    const float* s_d = (const float*)tensor_data(dst->src[5]);
+    float* dst_d = (float*)tensor_data(dst);
 
     const int64_t B = dst->src[5]->ne[1];
     const int64_t T = dst->src[0]->ne[2];
@@ -237,14 +237,14 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
 void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/7);
-    const float* r_d = (const float*)dst->src[0]->data;
-    const float* w_d = (const float*)dst->src[1]->data;
-    const float* k_d = (const float*)dst->src[2]->data;
-    const float* v_d = (const float*)dst->src[3]->data;
-    const float* a_d = (const float*)dst->src[4]->data;
-    const float* b_d = (const float*)dst->src[5]->data;
-    const float* s_d = (const float*)dst->src[6]->data;
-    float* dst_d = (float*)dst->data;
+    const float* r_d = (const float*)tensor_data(dst->src[0]);
+    const float* w_d = (const float*)tensor_data(dst->src[1]);
+    const float* k_d = (const float*)tensor_data(dst->src[2]);
+    const float* v_d = (const float*)tensor_data(dst->src[3]);
+    const float* a_d = (const float*)tensor_data(dst->src[4]);
+    const float* b_d = (const float*)tensor_data(dst->src[5]);
+    const float* s_d = (const float*)tensor_data(dst->src[6]);
+    float* dst_d = (float*)tensor_data(dst);
 
     const int64_t B = dst->src[6]->ne[1];
     const int64_t T = dst->src[0]->ne[2];

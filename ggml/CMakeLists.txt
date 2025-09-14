@@ -198,6 +198,8 @@ set   (GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING
                                             "ggml: metal minimum macOS version")
 set   (GGML_METAL_STD "" CACHE STRING       "ggml: metal standard version (-std flag)")
 option(GGML_OPENMP                          "ggml: use OpenMP"                                ON)
+option(GGML_NUMA_MIRROR                     "ggml: support numa aware tensor data"           OFF)
+option(GGML_NUMA                            "ggml: support numa aware tensor data (synonym for GGML_NUMA_MIRROR)" OFF)
 option(GGML_RPC                             "ggml: use RPC"                                   OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
@@ -377,6 +379,35 @@ message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
+
+# Make GGML_NUMA and GGML_NUMA_MIRROR synonyms
+if (GGML_NUMA AND NOT GGML_NUMA_MIRROR)
+    set(GGML_NUMA_MIRROR ON)
+endif()
+if (GGML_NUMA_MIRROR AND NOT GGML_NUMA)
+    set(GGML_NUMA ON)
+endif()
+
+if (GGML_NUMA_MIRROR)
+    find_library(NUMA_LIBRARY NAMES numa)
+    if (NOT NUMA_LIBRARY)
+        message(FATAL_ERROR "libnuma is not found")
+    endif()
+    message(STATUS "libnuma: ${NUMA_LIBRARY}")
+
+    message(STATUS
+            "-----------------\n"
+            "Enabling GGML_NUMA_MIRROR (GGML_NUMA compatibility enabled)\n"
+            "Uses numa_alloc_onnode() for reliable NUMA-aware memory allocation")
+    message(STATUS
+            "-----------------")
+
+    foreach(lib "ggml" "ggml-base")
+        target_compile_definitions(${lib} PUBLIC GGML_NUMA_MIRROR)
+        target_compile_definitions(${lib} PUBLIC GGML_NUMA)
+        target_link_libraries(${lib} PUBLIC ${NUMA_LIBRARY})
+    endforeach()
+endif()
 
 if (MSVC)
     set(MSVC_WARNING_FLAGS

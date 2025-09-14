@@ -127,10 +127,10 @@ void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     queue_ptr stream = ctx.stream();
 
     if (dst->type == GGML_TYPE_F16) {
-        im2col_sycl_f16((const float *) src1->data, (sycl::half *) dst->data, IW, IH, OW, OH, KW, KH, IC, batch,
+        im2col_sycl_f16((const float *) tensor_data(src1), (sycl::half *) tensor_data(dst), IW, IH, OW, OH, KW, KH, IC, batch,
                         batch_offset, delta_offset, s0, s1, p0, p1, d0, d1, stream);
     } else {
-        im2col_sycl_f32((const float *) src1->data, (float *) dst->data, IW, IH, OW, OH, KW, KH, IC, batch,
+        im2col_sycl_f32((const float *) tensor_data(src1), (float *) tensor_data(dst), IW, IH, OW, OH, KW, KH, IC, batch,
                         batch_offset, delta_offset, s0, s1, p0, p1, d0, d1, stream);
     }
 }

@@ -59,7 +59,7 @@ static enum ggml_status ggml_backend_amx_buffer_init_tensor(ggml_backend_buffer_
 
 static void ggml_backend_amx_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
                                                   uint8_t value, size_t offset, size_t size) {
-    memset((char *) tensor->data + offset, value, size);
+    memset((char *) tensor_data(tensor) + offset, value, size);
 
     GGML_UNUSED(buffer);
 }
@@ -70,7 +70,7 @@ static void ggml_backend_amx_buffer_set_tensor(ggml_backend_buffer_t buffer, str
         GGML_LOG_DEBUG("%s: amx repack tensor %s of type %s\n", __func__, tensor->name, ggml_type_name(tensor->type));
         ggml_backend_amx_convert_weight(tensor, data, offset, size);
     } else {
-        memcpy((char *) tensor->data + offset, data, size);
+        memcpy((char *) tensor_data(tensor) + offset, data, size);
     }
 
     GGML_UNUSED(buffer);
@@ -80,7 +80,7 @@ static void ggml_backend_amx_buffer_set_tensor(ggml_backend_buffer_t buffer, str
 // need to figure what we need to do with buffer->extra.
 static void ggml_backend_amx_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_ASSERT(!qtype_has_amx_kernels(tensor->type));
-    memcpy(data, (const char *)tensor->data + offset, size);
+    memcpy(data, (const char *)tensor_data(tensor) + offset, size);
 
     GGML_UNUSED(buffer);
 }
@@ -88,9 +88,9 @@ static void ggml_backend_amx_buffer_get_tensor(ggml_backend_buffer_t buffer, con
 static bool ggml_backend_amx_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     if (ggml_backend_buffer_is_host(src->buffer)) {
         if (qtype_has_amx_kernels(src->type)) {
-            ggml_backend_amx_convert_weight(dst, src->data, 0, ggml_nbytes(dst));
+            ggml_backend_amx_convert_weight(dst, tensor_data(src), 0, ggml_nbytes(dst));
         } else {
-            memcpy(dst->data, src->data, ggml_nbytes(src));
+            memcpy(tensor_data(dst), tensor_data(src), ggml_nbytes(src));
         }
         return true;
     }

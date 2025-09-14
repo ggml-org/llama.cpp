@@ -20,6 +20,11 @@
 #include <alloca.h>
 #endif
 
+#ifdef GGML_NUMA_MIRROR
+// Thread-local variable for NUMA node binding (used by tensor_data())
+__thread int ggml_current_numa_node = 0;
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
@@ -95,6 +100,8 @@ static _Unwind_Reason_Code unwind_callback(struct _Unwind_Context* context, void
     }
     return _URC_NO_REASON;
 }
+
+// NUMA support for tensor mirroring - handled by static thread-local in header
 
 static void ggml_print_backtrace_symbols(void) {
     const int max = 100;
@@ -1647,7 +1654,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     GGML_ASSERT(view_src == NULL || data_size == 0 || data_size + view_offs <= ggml_nbytes(view_src));
 
-    void * data = view_src != NULL ? view_src->data : NULL;
+    void * data = view_src != NULL ? tensor_data(view_src) : NULL;
     if (data != NULL) {
         data = (char *) data + view_offs;
     }
@@ -1675,14 +1682,18 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.src          =*/ { NULL },
         /*.view_src     =*/ view_src,
         /*.view_offs    =*/ view_offs,
-        /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
+    #ifdef GGML_NUMA_MIRROR
+        /*.data         =*/ { .__data = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL } },
+#else
+        /*.data         =*/ NULL,
+#endif
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
         /*.padding      =*/ { 0 },
     };
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
-    //GGML_ASSERT_ALIGNED(result->data);
+    //GGML_ASSERT_ALIGNED(tensor_data(result));
 
     for (int i = 0; i < n_dims; i++) {
         result->ne[i] = ne[i];
@@ -1692,6 +1703,19 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
     for (int i = 2; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = result->nb[i - 1]*result->ne[i - 1];
+    }
+
+    // Set up data pointers for tensors
+    if (view_src == NULL && obj_alloc_size > 0) {
+        // Data is allocated right after the tensor struct
+        void * tensor_data_ptr = (char *)result + GGML_TENSOR_SIZE;
+        tensor_set_data(result, tensor_data_ptr);
+    } else if (view_src != NULL) {
+        // For view tensors, copy data pointers from source
+        tensor_set_data(result, tensor_data(view_src));
+    } else if (data != NULL) {
+        // External data provided
+        tensor_set_data(result, data);
     }
 
     ctx->n_objects++;
@@ -1779,12 +1803,12 @@ void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * 
 }
 
 void * ggml_get_data(const struct ggml_tensor * tensor) {
-    return tensor->data;
+    return tensor_data(tensor);
 }
 
 float * ggml_get_data_f32(const struct ggml_tensor * tensor) {
     assert(tensor->type == GGML_TYPE_F32);
-    return (float *)(tensor->data);
+    return (float *)(tensor_data(tensor));
 }
 
 enum ggml_unary_op ggml_get_unary_op(const struct ggml_tensor * tensor) {
@@ -6741,8 +6765,8 @@ struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor) {
     if (tensor->buffer) {
         ggml_backend_tensor_memset(tensor, 0, 0, ggml_nbytes(tensor));
     } else {
-        GGML_ASSERT(tensor->data);
-        memset(tensor->data, 0, ggml_nbytes(tensor));
+        GGML_ASSERT(tensor_data(tensor));
+        memset(tensor_data(tensor), 0, ggml_nbytes(tensor));
     }
     return tensor;
 }
@@ -6773,8 +6797,8 @@ void ggml_graph_reset(struct ggml_cgraph * cgraph) {
                 if (grad_acc->buffer) {
                     ggml_backend_tensor_set(grad_acc, &onef, 0, sizeof(float));
                 } else {
-                    GGML_ASSERT(grad_acc->data);
-                    *((float *) grad_acc->data) = onef;
+                    GGML_ASSERT(tensor_data(grad_acc));
+                    *((float *) tensor_data(grad_acc)) = onef;
                 }
             } else {
                 ggml_set_zero(grad_acc);
@@ -6992,7 +7016,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         }
 
         fprintf(fp, "CONST %d [%" PRId64 ", %" PRId64 "]", i, node->ne[0], node->ne[1]);
-        if (ggml_nelements(node) < 5 && node->data != NULL) {
+        if (ggml_nelements(node) < 5 && tensor_data(node) != NULL) {
             fprintf(fp, " | (");
             for (int j = 0; j < ggml_nelements(node); j++) {
                 // FIXME: use ggml-backend to obtain the tensor data
@@ -7210,4 +7234,16 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->poll           != p1->poll       )    return false;
     if (p0->strict_cpu     != p1->strict_cpu )    return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
+}
+
+// NUMA functions
+int ggml_numa_node_count(void) {
+#ifdef GGML_NUMA_MIRROR
+    // For now, return the value used elsewhere in the NUMA mirror system
+    // This function is primarily used to populate tensor __data arrays
+    // TODO: Implement proper NUMA node detection if needed
+    return GGML_NUMA_MAX_NODES;
+#else
+    return 1;  // NUMA mirror disabled, return single node
+#endif
 }

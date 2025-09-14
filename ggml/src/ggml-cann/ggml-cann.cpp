@@ -1127,7 +1127,7 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
 
         if (padded_size > original_size && tensor->view_src == nullptr) {
             size_t memset_size = padded_size - original_size;
-            ACL_CHECK(aclrtMemset((char*)tensor->data + original_size,
+            ACL_CHECK(aclrtMemset((char*)tensor_data(tensor) + original_size,
                                   memset_size, 0, memset_size));
         }
     }
@@ -1253,7 +1253,7 @@ static void ggml_backend_cann_buffer_set_tensor(
     // Only check env once.
     static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
+        ACL_CHECK(aclrtMemcpy((char *)tensor_data(tensor) + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
@@ -1264,7 +1264,7 @@ static void ggml_backend_cann_buffer_set_tensor(
         void *transform_buffer = malloc(size);
         ggml_backend_cann_transform(tensor, data, transform_buffer);
 
-        ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size,
+        ACL_CHECK(aclrtMemcpy((char *)tensor_data(tensor) + offset, size,
                               transform_buffer, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
         free(transform_buffer);
@@ -1293,12 +1293,12 @@ static void ggml_backend_cann_buffer_get_tensor(
     ggml_cann_set_device(ctx->device);
 
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpy(data, size, (char*)tensor->data + offset, size,
+        ACL_CHECK(aclrtMemcpy(data, size, (char*)tensor_data(tensor) + offset, size,
                               ACL_MEMCPY_DEVICE_TO_HOST));
     } else {
         void* transform_buffer = malloc(size);
         ACL_CHECK(aclrtMemcpy(transform_buffer, size,
-                              (char*)tensor->data + offset, size,
+                              (char*)tensor_data(tensor) + offset, size,
                               ACL_MEMCPY_DEVICE_TO_HOST));
         ggml_backend_cann_transform_back(tensor, transform_buffer, data);
         free(transform_buffer);
@@ -1329,8 +1329,8 @@ static bool ggml_backend_cann_buffer_cpy_tensor(
         size_t memcpy_size = ggml_nbytes(src);
         // Same device.
         if (src_ctx->device == dst_ctx->device) {
-            ACL_CHECK(aclrtMemcpy((char*)dst->data, memcpy_size,
-                                  (const char*)src->data, memcpy_size,
+            ACL_CHECK(aclrtMemcpy((char*)tensor_data(dst), memcpy_size,
+                                  (const char*)tensor_data(src), memcpy_size,
                                   ACL_MEMCPY_DEVICE_TO_DEVICE));
             return true;
         } else {
@@ -1345,8 +1345,8 @@ static bool ggml_backend_cann_buffer_cpy_tensor(
             if (canAccessPeer) {
                 ggml_cann_set_device(src_ctx->device);
                 ACL_CHECK(aclrtDeviceEnablePeerAccess(dst_ctx->device, 0));
-                ACL_CHECK(aclrtMemcpy((char*)dst->data, memcpy_size,
-                                      (const char*)src->data, memcpy_size,
+                ACL_CHECK(aclrtMemcpy((char*)tensor_data(dst), memcpy_size,
+                                      (const char*)tensor_data(src), memcpy_size,
                                       ACL_MEMCPY_DEVICE_TO_DEVICE));
                 return true;
             }
@@ -2008,7 +2008,7 @@ static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
         "unsupported buffer type");
     GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-    ggml_cann_async_memcpy(cann_ctx, (char *)tensor->data + offset, data, size,
+    ggml_cann_async_memcpy(cann_ctx, (char *)tensor_data(tensor) + offset, data, size,
         ACL_MEMCPY_HOST_TO_DEVICE);
 }
 
@@ -2035,7 +2035,7 @@ static void ggml_backend_cann_get_tensor_async(
                 "unsupported buffer type");
     GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-    ggml_cann_async_memcpy(cann_ctx, data, (char *)tensor->data + offset, size,
+    ggml_cann_async_memcpy(cann_ctx, data, (char *)tensor_data(tensor) + offset, size,
         ACL_MEMCPY_DEVICE_TO_HOST);
 
 }
@@ -2107,7 +2107,7 @@ static bool ggml_backend_cann_cpy_tensor_async(
 
         // wait for task_queue empty to keep task order.
         cann_ctx_src->task_queue.wait();
-        ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
+        ACL_CHECK(aclrtMemcpyAsync(tensor_data(dst), copy_size, tensor_data(src), copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
         // record event on src stream after the copy
@@ -2123,7 +2123,7 @@ static bool ggml_backend_cann_cpy_tensor_async(
         ACL_CHECK(aclrtSynchronizeStream(cann_ctx_src->stream()));
     } else {
         // src and dst are on the same backend
-        ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
+        ACL_CHECK(aclrtMemcpyAsync(tensor_data(dst), copy_size, tensor_data(src), copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_dst->stream()));
     }
@@ -2180,7 +2180,7 @@ static void add_lru_matched_graph_node_properties(
         ggml_tensor * node = cgraph->nodes[node_idx];
         auto & prop = new_graph->ggml_graph_properties[node_idx];
 
-        prop.node_address = node->data;
+        prop.node_address = tensor_data(node);
         prop.node_op      = node->op;
 
         std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
@@ -2208,7 +2208,7 @@ static void add_lru_matched_graph_node_properties(
  * @return true if all fields match (excluding GGML_OP_VIEW); false otherwise.
  */
 static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
-    if (node->data != graph_node_properties->node_address &&
+    if (tensor_data(node) != graph_node_properties->node_address &&
            node->op != GGML_OP_VIEW) {
         return false;
     }

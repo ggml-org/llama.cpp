@@ -494,11 +494,11 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
     GGML_ASSERT(ggml_is_contiguous_1(dst->src[0]));
     GGML_ASSERT(ggml_is_contiguous(dst));
     const int32_t swapped = ((const int32_t *) dst->op_params)[1];
-    void * src0_d = src0->data;
-    void * src1_d = src1 ? src1->data : src0->data;
+    void * src0_d = tensor_data(src0);
+    void * src1_d = src1 ? tensor_data(src1) : tensor_data(src0);
     const int64_t src0_o = src0->nb[1];
     const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
-    void * dst_d = dst->data;
+    void * dst_d = tensor_data(dst);
     if (src1) {
         GGML_ASSERT(ggml_is_contiguous_1(src1));
         GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
@@ -951,9 +951,9 @@ static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor
     GGML_ASSERT(dst->ne[3] == 1); // just 3D tensors supported
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    const float * src1_dd = static_cast<const float*>(dst->src[1]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    const float * src1_dd = static_cast<const float*>(tensor_data(dst->src[1]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     int nb1 = dst->op_params[0] / 4; // 4 bytes of float32
     int nb2 = dst->op_params[1] / 4; // 4 bytes of float32

@@ -216,9 +216,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         uint8_t * bias       = rhs_kxn + kxn_size;
 
         for (int64_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-            const uint8_t * lhs_batch = static_cast<const uint8_t *>(src1->data) + batch_idx * m * lhs_stride;
-            const uint8_t * rhs_batch = static_cast<const uint8_t *>(src0->data) + batch_idx * n * rhs_stride;
-            uint8_t * dst_batch       = static_cast<uint8_t *>(dst->data) + batch_idx * m * dst_stride;
+            const uint8_t * lhs_batch = static_cast<const uint8_t *>(tensor_data(src1)) + batch_idx * m * lhs_stride;
+            const uint8_t * rhs_batch = static_cast<const uint8_t *>(tensor_data(src0)) + batch_idx * n * rhs_stride;
+            uint8_t * dst_batch       = static_cast<uint8_t *>(tensor_data(dst)) + batch_idx * m * dst_stride;
 
             // LHS packing
             {
@@ -328,9 +328,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         size_t kr = kernel->get_kr();
         size_t sr = kernel->get_sr();
 
-        const uint8_t * lhs        = static_cast<const uint8_t *>(src1->data);
+        const uint8_t * lhs        = static_cast<const uint8_t *>(tensor_data(src1));
         uint8_t * lhs_packed       = (uint8_t*)params->wdata;
-        const uint8_t * rhs_packed = static_cast<const uint8_t *>(src0->data);
+        const uint8_t * rhs_packed = static_cast<const uint8_t *>(tensor_data(src0));
 
         const size_t n_step = kernel->get_n_step();
         const size_t num_n_per_thread = kai_roundup(kai_roundup(n, nth) / nth, n_step);
@@ -371,7 +371,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
         const void * rhs_ptr           = static_cast<const void *>(rhs_packed + rhs_packed_offset);
         const void* lhs_ptr            = (const void*)((const char *)lhs_packed + lhs_packed_offset);
-        float *dst_ptr                 = reinterpret_cast<float *>(static_cast<uint8_t *>(dst->data) + dst_offset);
+        float *dst_ptr                 = reinterpret_cast<float *>(static_cast<uint8_t *>(tensor_data(dst)) + dst_offset);
 
         if (n_to_process > 0) {
             variant_call<void>(kernel->run_kernel, m, n_to_process, k, QK4_0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
@@ -411,11 +411,11 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         for (int64_t i = ir0; i < ir1; ++i) {
             GGML_ASSERT(src1->type == GGML_TYPE_I32);
-            int64_t row_idx = ((const int32_t *)src1->data)[i];
+            int64_t row_idx = ((const int32_t *)tensor_data(src1))[i];
             GGML_ASSERT(row_idx >= 0 && row_idx < src0->ne[1]);
 
-            float *out = (float *)((char *)dst->data + i * nb1);
-            rhs_info->to_float(src0->data, row_idx, nc, out, block_rows, packed_stride, kr, QK4_0, num_bytes_multiplier);
+            float *out = (float *)((char *)tensor_data(dst) + i * nb1);
+            rhs_info->to_float(tensor_data(src0), row_idx, nc, out, block_rows, packed_stride, kr, QK4_0, num_bytes_multiplier);
         }
 
         return true;
@@ -434,7 +434,7 @@ public:
         struct kai_rhs_pack_qs4cxs1s0_param params;
         params.lhs_zero_point = 1;
         params.rhs_zero_point = 8;
-        variant_call<void>(ctx.kernels->rhs_info.pack_func, 1, n, k, nr, kr, sr, QK4_0, (const uint8_t*)data, nullptr, tensor->data, 0, &params);
+        variant_call<void>(ctx.kernels->rhs_info.pack_func, 1, n, k, nr, kr, sr, QK4_0, (const uint8_t*)data, nullptr, tensor_data(tensor), 0, &params);
 
         return 0;
         GGML_UNUSED(data_size);

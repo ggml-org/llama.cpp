@@ -422,8 +422,8 @@ void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_TENSOR_UNARY_OP_LOCALS
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -446,8 +446,8 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     float eps;
     memcpy(&eps, dst->op_params + 1, sizeof(float));
@@ -465,8 +465,8 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -490,8 +490,8 @@ void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     const int64_t ne00 = dst->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(dst->src[0]);
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float * dst_dd = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float * dst_dd = static_cast<float *>(tensor_data(dst));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));

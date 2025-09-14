@@ -181,14 +181,14 @@ void ggml_opt_dataset_get_batch(ggml_opt_dataset_t dataset, struct ggml_tensor *
     for (int64_t ishard_batch = 0; ishard_batch < shards_per_batch; ++ishard_batch) {
         const int64_t ishard = dataset->permutation[ibatch*shards_per_batch + ishard_batch];
 
-        const char * ptr_data = (const char *) dataset->data->data + ishard*dataset->nbs_data;
+        const char * ptr_data = (const char *) tensor_data(dataset->data) + ishard*dataset->nbs_data;
         ggml_backend_tensor_set(data_batch, ptr_data, ishard_batch*dataset->nbs_data, dataset->nbs_data);
 
         if (!labels_batch) {
             continue;
         }
 
-        const char * ptr_labels = (const char *) dataset->labels->data + ishard*dataset->nbs_labels;
+        const char * ptr_labels = (const char *) tensor_data(dataset->labels) + ishard*dataset->nbs_labels;
         ggml_backend_tensor_set(labels_batch, ptr_labels, ishard_batch*dataset->nbs_labels, dataset->nbs_labels);
     }
 }
@@ -204,7 +204,7 @@ void ggml_opt_dataset_get_batch_host(ggml_opt_dataset_t dataset, void * data_bat
     for (int64_t ishard_batch = 0; ishard_batch < shards_per_batch; ++ishard_batch) {
         const int64_t ishard = dataset->permutation[ibatch*shards_per_batch + ishard_batch];
 
-        const char * ptr_data       = (const char *) dataset->data->data + ishard      *dataset->nbs_data;
+        const char * ptr_data       = (const char *) tensor_data(dataset->data) + ishard      *dataset->nbs_data;
         char       * ptr_data_batch = (char       *) data_batch          + ishard_batch*dataset->nbs_data;
         memcpy(ptr_data_batch, ptr_data, dataset->nbs_data);
 
@@ -212,7 +212,7 @@ void ggml_opt_dataset_get_batch_host(ggml_opt_dataset_t dataset, void * data_bat
             continue;
         }
 
-        const char * ptr_labels       = (const char *) dataset->labels->data + ishard      *dataset->nbs_labels;
+        const char * ptr_labels       = (const char *) tensor_data(dataset->labels) + ishard      *dataset->nbs_labels;
         char       * ptr_labels_batch = (char       *) labels_batch          + ishard_batch*dataset->nbs_labels;
         memcpy(ptr_labels_batch, ptr_labels, dataset->nbs_labels);
     }
@@ -278,7 +278,7 @@ static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_
     new_tensor->flags = tensor->flags;
     memcpy(new_tensor->op_params, tensor->op_params, sizeof(tensor->op_params));
     strcpy(new_tensor->name, tensor->name);
-    new_tensor->data = tensor->data;
+    tensor_set_data(new_tensor, tensor_data(tensor));
     new_tensor->buffer = tensor->buffer;
     new_tensor->extra = tensor->extra;
     new_tensor->view_offs = tensor->view_offs;
@@ -321,7 +321,7 @@ static ggml_cgraph * dup_graph(ggml_context * ctx, ggml_cgraph * src) {
 
 static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     GGML_ASSERT(opt_ctx->ctx_compute && "no compute context set, either use static graphs or set one with ggml_opt_prepare_alloc");
-    GGML_ASSERT((!opt_ctx->static_graphs || opt_ctx->inputs->data) && "when using static graphs the inputs must be allocated statically");
+    GGML_ASSERT((!opt_ctx->static_graphs || tensor_data(opt_ctx->inputs)) && "when using static graphs the inputs must be allocated statically");
 
     const enum ggml_opt_optimizer_type optimizer = opt_ctx->optimizer;
 

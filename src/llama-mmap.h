@@ -42,6 +42,9 @@ struct llama_mmap {
     size_t size() const;
     void * addr() const;
 
+    // NUMA-aware memory access - return address for specific NUMA node
+    void * addr_numa_node(int node) const;
+
     void unmap_fragment(size_t first, size_t last);
 
     static const bool SUPPORTED;

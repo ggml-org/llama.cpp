@@ -312,7 +312,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help\n");
-    printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
+    printf("  --numa <distribute|isolate|numactl|mirror>       numa mode (default: disabled)\n");
     printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
            cmd_params_defaults.reps);
     printf("  --prio <-1|0|1|2|3>                          process/thread priority (default: %d)\n",
@@ -621,6 +621,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     params.numa = GGML_NUMA_STRATEGY_ISOLATE;
                 } else if (value == "numactl") {
                     params.numa = GGML_NUMA_STRATEGY_NUMACTL;
+                } else if (value == "mirror") {
+                    params.numa = GGML_NUMA_STRATEGY_MIRROR;
                 } else {
                     invalid_param = true;
                     break;

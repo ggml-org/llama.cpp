@@ -54,8 +54,8 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
         // when the tensor is allocated, use the actual memory address range of the buffer
         mrp = {
             /*.pb =*/ (uint64_t) tensor->buffer,
-            /*.p0 =*/ (uint64_t) tensor->data,
-            /*.p1 =*/ (uint64_t) tensor->data + ggml_nbytes(tensor),
+            /*.p0 =*/ (uint64_t) tensor_data(tensor),
+            /*.p1 =*/ (uint64_t) tensor_data(tensor) + ggml_nbytes(tensor),
             /*.pt =*/ pt,
         };
     } else {

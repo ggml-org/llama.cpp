@@ -1489,7 +1489,7 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         // extend if necessary - do not store data for layer 0 (it's not used)
         result.data.resize(std::max(result.data.size(), static_cast<size_t>(result.n_embd * layer_idx)), 0.0f);
 
-        const float * src = (const float *) tensor->data;
+        const float * src = (const float *) tensor_data(tensor);
         float * dst = result.data.data() + result.n_embd * (layer_idx - 1);  // layer 1 at [0]
         for (int j = 0; j < result.n_embd; j++) {
             dst[j] += src[j] * load_info.strength;  // allows multiple directions for same layer in same file
@@ -1548,8 +1548,8 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
     ggml_opt_dataset_t result = ggml_opt_dataset_init(
         GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
 
-    llama_token * data   = (llama_token *) ggml_opt_dataset_data(result)->data;
-    llama_token * labels = (llama_token *) ggml_opt_dataset_labels(result)->data;
+    llama_token * data   = (llama_token *) tensor_data(ggml_opt_dataset_data(result));
+    llama_token * labels = (llama_token *) tensor_data(ggml_opt_dataset_labels(result));
 
     for (int64_t idata = 0; idata < ndata; ++idata) {
         memcpy(data   + idata*ne_datapoint, tokens.data() + idata*stride + 0, ne_datapoint*sizeof(llama_token));

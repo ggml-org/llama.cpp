@@ -7,6 +7,11 @@
 #include <cstring>
 #include <future>
 
+#ifdef GGML_NUMA_MIRROR
+#include <numaif.h>
+#include <errno.h>
+#endif
+
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -899,20 +904,108 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
 
     if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
-        if (cur->data == nullptr) {
-            cur->data = (uint8_t *)mapping->addr() + w.offs;
+        
+        // NUMA MIRROR FIX: Always set up NUMA tensor data for model weights
+#ifdef GGML_NUMA_MIRROR
+        // Check if this tensor needs NUMA setup (hasn't been set up yet)
+        // Only check NUMA mirror nodes (1+), not primary node 0 which may be set by tensor_set_data()
+        bool needs_numa_setup = true;
+        int numa_nodes = ggml_numa_node_count();
+        printf("🔍 NUMA SETUP CHECK: tensor=%s numa_nodes=%d\n", ggml_get_name(cur), numa_nodes);
+        fflush(stdout);
+        if (numa_nodes > 1) {
+            for (int node = 1; node < GGML_NUMA_MAX_NODES && node < numa_nodes; node++) {
+                if (cur->__data[node] != nullptr) {
+                    needs_numa_setup = false;
+                    printf("🔍 NUMA: Tensor %s already has setup at node %d\n", ggml_get_name(cur), node);
+                    fflush(stdout);
+                    break;
+                }
+            }
         } else {
-            memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
+            // Single node system - no NUMA setup needed
+            needs_numa_setup = false;
+            printf("🔍 NUMA: Single node system, skipping setup for %s\n", ggml_get_name(cur));
+            fflush(stdout);
         }
+        
+        printf("🔍 NUMA: Tensor %s needs_numa_setup=%s\n", ggml_get_name(cur), needs_numa_setup ? "YES" : "NO");
+        fflush(stdout);
+        
+        if (needs_numa_setup) {
+            // First, set all pointers to NULL
+            for (int node = 0; node < GGML_NUMA_MAX_NODES; node++) {
+                cur->__data[node] = nullptr;
+            }
+            
+            LLAMA_LOG_DEBUG("NUMA: Populating tensor %s __data arrays\n", ggml_get_name(cur));
+            
+            // Check if we have NUMA mirrors available
+            int numa_nodes = ggml_numa_node_count();
+            LLAMA_LOG_DEBUG("NUMA: ggml_numa_node_count() returned %d nodes\n", numa_nodes);
+            
+            if (numa_nodes > 1) {
+                LLAMA_LOG_DEBUG("NUMA: Setting up tensor %s with %d nodes\n", ggml_get_name(cur), numa_nodes);
+                // Populate each NUMA node with its corresponding mirror
+                for (int node = 0; node < numa_nodes && node < GGML_NUMA_MAX_NODES; node++) {
+                    void * numa_addr = mapping->addr_numa_node(node);
+                    LLAMA_LOG_DEBUG("NUMA: Node %d addr_numa_node() returned %p\n", node, numa_addr);
+                    if (numa_addr) {
+                        cur->__data[node] = (uint8_t *)numa_addr + w.offs;
+                        LLAMA_LOG_DEBUG("NUMA: Tensor %s node %d -> %p (offset %zu)\n", 
+                                       ggml_get_name(cur), node, cur->__data[node], w.offs);
+                        
+                        // VERIFICATION: Check that the tensor data is on the expected NUMA node
+                        int actual_node = -1;
+                        if (get_mempolicy(&actual_node, NULL, 0, cur->__data[node], MPOL_F_NODE | MPOL_F_ADDR) == 0) {
+                            if (actual_node != node) {
+                                LLAMA_LOG_WARN("NUMA: WARNING: Tensor %s node %d data at %p is actually on node %d!\n",
+                                               ggml_get_name(cur), node, cur->__data[node], actual_node);
+                            } else {
+                                LLAMA_LOG_DEBUG("NUMA: ✅ Tensor %s node %d data at %p verified on correct node\n",
+                                               ggml_get_name(cur), node, cur->__data[node]);
+                            }
+                        } else {
+                            LLAMA_LOG_WARN("NUMA: Could not verify node for tensor %s data at %p: %s\n",
+                                           ggml_get_name(cur), cur->__data[node], strerror(errno));
+                        }
+                    }
+                }
+            } else {
+                LLAMA_LOG_DEBUG("NUMA: Single node (%d), using primary mapping only\n", numa_nodes);
+            }
+            
+            // If no NUMA mirrors or single node, fall back to primary address
+            if (cur->__data[0] == nullptr) {
+                cur->__data[0] = (uint8_t *)mapping->addr() + w.offs;
+                LLAMA_LOG_DEBUG("NUMA: Fallback to primary address for node 0: %p\n", cur->__data[0]);
+            }
+            
+            // Final verification - print the complete __data array for this tensor
+            LLAMA_LOG_DEBUG("NUMA SETUP COMPLETE for tensor %s:\n", ggml_get_name(cur));
+            for (int node = 0; node < GGML_NUMA_MAX_NODES; node++) {
+                LLAMA_LOG_DEBUG("  Node %d: %p%s\n", node, cur->__data[node], 
+                       (cur->__data[node] == nullptr) ? " (NULL)" : "");
+            }
+        } else {
+            LLAMA_LOG_DEBUG("NUMA: Tensor %s already has NUMA setup, skipping\n", ggml_get_name(cur));
+        }
+#else
+        if (tensor_data(cur) == nullptr) {
+            tensor_set_data(cur, (uint8_t *)mapping->addr() + w.offs);
+        } else {
+            memcpy(tensor_data(cur), (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
+        }
+#endif
     } else {
-        GGML_ASSERT(cur->data != nullptr);
+        GGML_ASSERT(tensor_data(cur) != nullptr);
         GGML_ASSERT(w.idx < files.size());
         const auto & file = files.at(w.idx);
         file->seek(w.offs, SEEK_SET);
-        file->read_raw(cur->data, ggml_nbytes(cur));
+        file->read_raw(tensor_data(cur), ggml_nbytes(cur));
     }
 
-    if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
+    if (check_tensors && !ggml_validate_row_data(cur->type, tensor_data(cur), ggml_nbytes(cur))) {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
 }
@@ -1046,9 +1139,58 @@ bool llama_model_loader::load_all_data(
                 }));
             }
 
-            GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
-            if (buf_mmap && cur->data == nullptr) {
+            GGML_ASSERT(buf_mmap || tensor_data(cur)); // either we have a buffer to allocate the tensor in, or it is already allocated
+            if (buf_mmap && tensor_data(cur) == nullptr) {
+                
+#ifdef GGML_NUMA_MIRROR
+                // Check if this is a model weight tensor that needs NUMA setup
+                bool is_model_weight = (ggml_get_name(cur)[0] != '\0' && 
+                                       (strstr(ggml_get_name(cur), "weight") != NULL || 
+                                        strstr(ggml_get_name(cur), "bias") != NULL));
+                
+                if (is_model_weight) {
+                    // Model weight: Set up NUMA mirrors properly from the start
+                    const auto & mapping = mappings.at(weight->idx);
+                    int numa_nodes = ggml_numa_node_count();
+                    
+#ifdef GGML_NUMA_DEBUG_VERBOSE
+                    printf("🏗️  NUMA MODEL LOAD: Setting up %s with %d nodes\n", ggml_get_name(cur), numa_nodes);
+                    fflush(stdout);
+#endif
+                    
+                    if (numa_nodes > 1) {
+                        // Prepare NUMA mirror addresses
+                        void * numa_addresses[GGML_NUMA_MAX_NODES] = {NULL};
+                        for (int node = 0; node < numa_nodes && node < GGML_NUMA_MAX_NODES; node++) {
+                            void * numa_addr = mapping->addr_numa_node(node);
+                            if (numa_addr) {
+                                numa_addresses[node] = (uint8_t *)numa_addr + weight->offs;
+#ifdef GGML_NUMA_DEBUG_VERBOSE
+                                printf("  Node %d: %p\n", node, numa_addresses[node]);
+#endif
+                            }
+                        }
+#ifdef GGML_NUMA_DEBUG_VERBOSE
+                        fflush(stdout);
+#endif
+                        
+                        // Set up tensor with proper NUMA mirroring
+                        cur->buffer = buf_mmap;
+                        tensor_set_data_with_numa_mirrors(cur, numa_addresses[0], numa_addresses, numa_nodes);
+                        ggml_backend_buffer_init_tensor(buf_mmap, cur);
+                    } else {
+                        // Single node: use standard allocation
+                        ggml_backend_tensor_alloc(buf_mmap, cur, data);
+                    }
+                } else {
+                    // Non-weight tensor: use standard allocation
+                    ggml_backend_tensor_alloc(buf_mmap, cur, data);
+                }
+#else
+                // No NUMA support: use standard allocation
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
+#endif
+                
                 if (lmlocks) {
                     const auto & lmlock = lmlocks->at(weight->idx);
                     lmlock->grow_to(weight->offs + n_size);
@@ -1064,10 +1206,10 @@ bool llama_model_loader::load_all_data(
             const auto & file = files.at(weight->idx);
             if (ggml_backend_buffer_is_host(cur->buffer)) {
                 file->seek(weight->offs, SEEK_SET);
-                file->read_raw(cur->data, n_size);
+                file->read_raw(tensor_data(cur), n_size);
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
-                        return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+                        return std::make_pair(cur, ggml_validate_row_data(cur->type, tensor_data(cur), n_size));
                     }));
                 }
             } else {

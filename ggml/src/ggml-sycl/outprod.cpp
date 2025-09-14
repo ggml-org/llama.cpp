@@ -22,9 +22,9 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(ne1 == ne10);   // Output cols match src1 cols
 
     // Get data pointers
-    const float* src0_d = (const float*)src0->data;
-    const float* src1_d = (const float*)src1->data;
-    float* dst_d = (float*)dst->data;
+    const float* src0_d = (const float*)tensor_data(src0);
+    const float* src1_d = (const float*)tensor_data(src1);
+    float* dst_d = (float*)tensor_data(dst);
 
     // GEMM parameters
     const float alpha = 1.0f;

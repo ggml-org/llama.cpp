@@ -28,12 +28,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+#ifdef GGML_NUMA_MIRROR
+// External thread-local variable for NUMA node binding
+extern __thread int ggml_current_numa_node;
+#endif
 #include <inttypes.h>
 #include <stdio.h>
 #include <float.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <signal.h>
+
+#ifdef GGML_NUMA_MIRROR
+#include <numa.h>
+#include <numaif.h>
+#include <sched.h>
+#include <sys/types.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
+#ifdef GGML_USE_OPENMP
+#include <omp.h>
+
+// Thread-local NUMA node assignment for OpenMP threads  
+// Using static initialization to avoid syscalls in hot paths
+static __thread int ggml_thread_numa_node = -1;
+static __thread bool ggml_thread_numa_initialized = false;
+#endif
+
 #if defined(__gnu_linux__)
 #include <syscall.h>
 #endif
@@ -590,9 +614,80 @@ static uint32_t ggml_get_numa_affinity(void) {
 }
 #endif
 
+#ifdef GGML_NUMA_MIRROR
+// Static caching for NUMA thread binding to avoid syscalls in hot OpenMP paths
+static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
+    // Cache strategy check to avoid repeated calls
+    static bool strategy_checked = false;
+    static bool is_numa_mirror = false;
+    static int num_numa_nodes = 0;
+    
+    if (!strategy_checked) {
+        is_numa_mirror = (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR);
+        if (is_numa_mirror) {
+            num_numa_nodes = numa_max_node() + 1;
+        }
+        strategy_checked = true;
+    }
+    
+    // Only apply binding in NUMA mirror mode with multiple nodes
+    if (!is_numa_mirror || num_numa_nodes <= 1) {
+        return;
+    }
+
+    // Check if this thread is already initialized to avoid repeated binding
+    if (ggml_thread_numa_initialized) {
+        return;
+    }
+
+    // Round-robin assignment of threads to NUMA nodes
+    int target_numa_node = thread_id % num_numa_nodes;
+    
+    // Cache CPU masks statically to avoid repeated numa_allocate_cpumask() calls
+    static struct bitmask *node_cpumasks[GGML_NUMA_MAX_NODES] = {0};
+    static bool cpumasks_initialized = false;
+    static cpu_set_t node_cpusets[GGML_NUMA_MAX_NODES];
+    static bool cpusets_valid[GGML_NUMA_MAX_NODES] = {0};
+    
+    if (!cpumasks_initialized) {
+        for (int node = 0; node < num_numa_nodes && node < GGML_NUMA_MAX_NODES; node++) {
+            node_cpumasks[node] = numa_allocate_cpumask();
+            if (node_cpumasks[node] && numa_node_to_cpus(node, node_cpumasks[node]) == 0) {
+                // Convert NUMA bitmask to cpu_set_t for faster thread binding
+                CPU_ZERO(&node_cpusets[node]);
+                for (int cpu = 0; cpu < numa_num_possible_cpus(); cpu++) {
+                    if (numa_bitmask_isbitset(node_cpumasks[node], cpu)) {
+                        CPU_SET(cpu, &node_cpusets[node]);
+                    }
+                }
+                cpusets_valid[node] = true;
+            }
+        }
+        cpumasks_initialized = true;
+    }
+
+    // Bind thread if we have a valid CPU set for the target node
+    if (target_numa_node < GGML_NUMA_MAX_NODES && cpusets_valid[target_numa_node]) {
+        if (sched_setaffinity(0, sizeof(cpu_set_t), &node_cpusets[target_numa_node]) == 0) {
+            // Set memory allocation preference and thread-local node assignment
+            numa_set_preferred(target_numa_node);
+            ggml_thread_numa_node = target_numa_node;
+            ggml_thread_numa_initialized = true;
+            
+            // Update the global thread-local variable for tensor data access
+            ggml_current_numa_node = target_numa_node;
+            
+            // Debug output using standard GGML logging
+            GGML_LOG_DEBUG("NUMA: Bound OpenMP thread %d to NUMA node %d (total threads: %d)\n", 
+                           thread_id, target_numa_node, n_threads);
+        }
+    }
+}
+#endif // GGML_NUMA_MIRROR
+
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {
-        fprintf(stderr, "ggml_numa_init: NUMA already initialized\n");
+        GGML_LOG_DEBUG("ggml_numa_init: NUMA already initialized\n");
 
         return;
     }
@@ -628,7 +723,7 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     GGML_PRINT_DEBUG("found %u numa nodes, %u CPUs\n", g_state.numa.n_nodes, g_state.numa.total_cpus);
 
     // figure out which node we're on
-    uint current_cpu;
+    unsigned int current_cpu;
     int getcpu_ret = 0;
 #if __GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ > 33) || defined(__COSMOPOLITAN__)
     getcpu_ret = getcpu(&current_cpu, &g_state.numa.current_node);
@@ -679,7 +774,11 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 }
 
 bool ggml_is_numa(void) {
-    return g_state.numa.n_nodes > 1;
+    // Return true if:
+    // 1. Multiple physical NUMA nodes are present, OR
+    // 2. User explicitly requested NUMA mirror strategy (--numa mirror)
+    return g_state.numa.n_nodes > 1 || 
+           g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR;
 }
 
 #if defined(__ARM_ARCH)
@@ -721,7 +820,7 @@ struct ggml_tensor * ggml_set_i32 (struct ggml_tensor * tensor, int32_t value) {
     const int nc    = tensor->ne[0];
     const size_t n1 = tensor->nb[1];
 
-    char * const data = tensor->data;
+    char * const data = (char *)tensor_data(tensor);
 
     switch (tensor->type) {
         case GGML_TYPE_I8:
@@ -780,7 +879,7 @@ struct ggml_tensor * ggml_set_f32(struct ggml_tensor * tensor, float value) {
     const int nc    = tensor->ne[0];
     const size_t n1 = tensor->nb[1];
 
-    char * const data = tensor->data;
+    char * const data = (char *)tensor_data(tensor);
 
     switch (tensor->type) {
         case GGML_TYPE_I8:
@@ -844,32 +943,32 @@ int32_t ggml_get_i32_1d(const struct ggml_tensor * tensor, int i) {
         case GGML_TYPE_I8:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int8_t));
-                return ((int8_t *)(tensor->data))[i];
+                return ((int8_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_I16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int16_t));
-                return ((int16_t *)(tensor->data))[i];
+                return ((int16_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_I32:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int32_t));
-                return ((int32_t *)(tensor->data))[i];
+                return ((int32_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_F16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(ggml_fp16_t));
-                return GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)(tensor->data))[i]);
+                return GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)(tensor_data(tensor)))[i]);
             }
         case GGML_TYPE_BF16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(ggml_bf16_t));
-                return GGML_BF16_TO_FP32(((ggml_bf16_t *)(tensor->data))[i]);
+                return GGML_BF16_TO_FP32(((ggml_bf16_t *)(tensor_data(tensor)))[i]);
             }
         case GGML_TYPE_F32:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(float));
-                return ((float *)(tensor->data))[i];
+                return ((float *)(tensor_data(tensor)))[i];
             }
         default:
             {
@@ -889,32 +988,32 @@ void ggml_set_i32_1d(const struct ggml_tensor * tensor, int i, int32_t value) {
         case GGML_TYPE_I8:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int8_t));
-                ((int8_t *)(tensor->data))[i] = value;
+                ((int8_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_I16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int16_t));
-                ((int16_t *)(tensor->data))[i] = value;
+                ((int16_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_I32:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(int32_t));
-                ((int32_t *)(tensor->data))[i] = value;
+                ((int32_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_F16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(ggml_fp16_t));
-                ((ggml_fp16_t *)(tensor->data))[i] = GGML_CPU_FP32_TO_FP16(value);
+                ((ggml_fp16_t *)(tensor_data(tensor)))[i] = GGML_CPU_FP32_TO_FP16(value);
             } break;
         case GGML_TYPE_BF16:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(ggml_bf16_t));
-                ((ggml_bf16_t *)(tensor->data))[i] = GGML_FP32_TO_BF16(value);
+                ((ggml_bf16_t *)(tensor_data(tensor)))[i] = GGML_FP32_TO_BF16(value);
             } break;
         case GGML_TYPE_F32:
             {
                 GGML_ASSERT(tensor->nb[0] == sizeof(float));
-                ((float *)(tensor->data))[i] = value;
+                ((float *)(tensor_data(tensor)))[i] = value;
             } break;
         default:
             {
@@ -924,7 +1023,7 @@ void ggml_set_i32_1d(const struct ggml_tensor * tensor, int i, int32_t value) {
 }
 
 int32_t ggml_get_i32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3) {
-    void * data   = (char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
+    void * data   = (char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
     switch (tensor->type) {
         case GGML_TYPE_I8:
             return ((int8_t *) data)[0];
@@ -944,7 +1043,7 @@ int32_t ggml_get_i32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i
 }
 
 void ggml_set_i32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3, int32_t value) {
-    void * data   = (char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
+    void * data   = (char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
     switch (tensor->type) {
         case GGML_TYPE_I8:
             {
@@ -986,27 +1085,27 @@ float ggml_get_f32_1d(const struct ggml_tensor * tensor, int i) {
     switch (tensor->type) {
         case GGML_TYPE_I8:
             {
-                return ((int8_t *)(tensor->data))[i];
+                return ((int8_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_I16:
             {
-                return ((int16_t *)(tensor->data))[i];
+                return ((int16_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_I32:
             {
-                return ((int32_t *)(tensor->data))[i];
+                return ((int32_t *)(tensor_data(tensor)))[i];
             }
         case GGML_TYPE_F16:
             {
-                return GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)(tensor->data))[i]);
+                return GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)(tensor_data(tensor)))[i]);
             }
         case GGML_TYPE_BF16:
             {
-                return GGML_BF16_TO_FP32(((ggml_bf16_t *)(tensor->data))[i]);
+                return GGML_BF16_TO_FP32(((ggml_bf16_t *)(tensor_data(tensor)))[i]);
             }
         case GGML_TYPE_F32:
             {
-                return ((float *)(tensor->data))[i];
+                return ((float *)(tensor_data(tensor)))[i];
             }
         default:
             {
@@ -1025,27 +1124,27 @@ void ggml_set_f32_1d(const struct ggml_tensor * tensor, int i, float value) {
     switch (tensor->type) {
         case GGML_TYPE_I8:
             {
-                ((int8_t *)(tensor->data))[i] = value;
+                ((int8_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_I16:
             {
-                ((int16_t *)(tensor->data))[i] = value;
+                ((int16_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_I32:
             {
-                ((int32_t *)(tensor->data))[i] = value;
+                ((int32_t *)(tensor_data(tensor)))[i] = value;
             } break;
         case GGML_TYPE_F16:
             {
-                ((ggml_fp16_t *)(tensor->data))[i] = GGML_CPU_FP32_TO_FP16(value);
+                ((ggml_fp16_t *)(tensor_data(tensor)))[i] = GGML_CPU_FP32_TO_FP16(value);
             } break;
         case GGML_TYPE_BF16:
             {
-                ((ggml_bf16_t *)(tensor->data))[i] = GGML_FP32_TO_BF16(value);
+                ((ggml_bf16_t *)(tensor_data(tensor)))[i] = GGML_FP32_TO_BF16(value);
             } break;
         case GGML_TYPE_F32:
             {
-                ((float *)(tensor->data))[i] = value;
+                ((float *)(tensor_data(tensor)))[i] = value;
             } break;
         default:
             {
@@ -1055,7 +1154,7 @@ void ggml_set_f32_1d(const struct ggml_tensor * tensor, int i, float value) {
 }
 
 float ggml_get_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3) {
-    void * data   = (char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
+    void * data   = (char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
     switch (tensor->type) {
         case GGML_TYPE_I8:
             return ((int8_t *) data)[0];
@@ -1075,7 +1174,7 @@ float ggml_get_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2,
 }
 
 void ggml_set_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, int i3, float value) {
-    void * data   = (char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
+    void * data   = (char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1] + i2*tensor->nb[2] + i3*tensor->nb[3];
     switch (tensor->type) {
         case GGML_TYPE_I8:
             {
@@ -1143,7 +1242,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         return;
     }
 
-    const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const void * wdata = (src1->type == vec_dot_type) ? tensor_data(src1) : params->wdata;
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     assert(ne12 % ne02 == 0);
@@ -1174,7 +1273,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 const int64_t i2 = i12;
                 const int64_t i3 = i13;
 
-                const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
+                const char * src0_row = (const char*)tensor_data(src0) + (0 + i02 * nb02 + i03 * nb03);
 
                 // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
                 //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
@@ -1184,7 +1283,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     (src1_cont || src1->type != vec_dot_type
                         ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
                         : (i11 * nb11 + i12 * nb12 + i13 * nb13));
-                float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
+                float * dst_col = (float*)((char*)tensor_data(dst) + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
                 //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                 //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
@@ -1249,11 +1348,11 @@ void ggml_compute_forward_mul_mat(
             for (int64_t i12 = 0; i12 < ne12; i12++)
                 if (!llamafile_sgemm(params,
                                      ne01, ne11, ne00/ggml_blck_size(src0->type),
-                                     (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
+                                     (const char *)tensor_data(src0) + i12/r2*nb02 + i13/r3*nb03,
                                      nb01/ggml_type_size(src0->type),
-                                     (const char *)src1->data + i12*nb12 + i13*nb13,
+                                     (const char *)tensor_data(src1) + i12*nb12 + i13*nb13,
                                      nb11/ggml_type_size(src1->type),
-                                     (char *)dst->data + i12*nb2 + i13*nb3,
+                                     (char *)tensor_data(dst) + i12*nb2 + i13*nb3,
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      src1->type,
@@ -1279,7 +1378,7 @@ UseGgmlGemm1:;
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    from_float((float *)((char *) tensor_data(src1) + i13*nb13 + i12*nb12 + i11*nb11),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
                                 ne10);
                 }
@@ -1292,7 +1391,7 @@ UseGgmlGemm1:;
                     size_t bs = ggml_blck_size(vec_dot_type);
                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
+                    from_float((float *)((char *) tensor_data(src1) + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
                 }
@@ -1310,18 +1409,18 @@ UseGgmlGemm1:;
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
-        const void* wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const void* wdata = (src1->type == vec_dot_type) ? tensor_data(src1) : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
                 if (!llamafile_sgemm(params,
                                      ne01, ne11, ne00/ggml_blck_size(src0->type),
-                                     (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
+                                     (const char *)tensor_data(src0) + i12/r2*nb02 + i13/r3*nb03,
                                      nb01/ggml_type_size(src0->type),
                                      (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size,
                                      row_size/ggml_type_size(vec_dot_type),
-                                     (char *)dst->data + i12*nb2 + i13*nb3,
+                                     (char *)tensor_data(dst) + i12*nb2 + i13*nb3,
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      vec_dot_type,
@@ -1456,7 +1555,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                     ? (i11      + i12*ne11)*row_size
                     : (i11*nb11 + i12*nb12));
 
-                float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
+                float * dst_col = (float *) ((char *) tensor_data(dst) + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
@@ -1542,7 +1641,7 @@ static void ggml_compute_forward_mul_mat_id(
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = ith; i12 < ne12; i12 += nth) {
                 for (int64_t i11 = 0; i11 < ne11; ++i11) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    from_float((float *)((char *) tensor_data(src1) + i13*nb13 + i12*nb12 + i11*nb11),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
                                ne10);
                 }
@@ -1555,7 +1654,7 @@ static void ggml_compute_forward_mul_mat_id(
                     size_t bs = ggml_blck_size(vec_dot_type);
                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
+                    from_float((float *)((char *) tensor_data(src1) + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
                 }
@@ -1571,7 +1670,7 @@ static void ggml_compute_forward_mul_mat_id(
         // group rows by src0 matrix
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
             for (int id = 0; id < n_ids; ++id) {
-                const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+                const int32_t i02 = *(const int32_t *) ((const char *) tensor_data(ids) + iid1*ids->nb[1] + id*ids->nb[0]);
 
                 assert(i02 >= 0 && i02 < n_as);
 
@@ -1596,8 +1695,8 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        const char * src0_cur = (const char *) src0->data + cur_a * nb02;
-        const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const char * src0_cur = (const char *) tensor_data(src0) + cur_a * nb02;
+        const void * wdata = (src1->type == vec_dot_type) ? tensor_data(src1) : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         const int64_t nr0 = ne01;
@@ -3147,6 +3246,12 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     if (n_threads > 1) {
         #pragma omp parallel num_threads(n_threads)
         {
+#ifdef GGML_NUMA_MIRROR
+            // Bind OpenMP threads to NUMA nodes in round-robin fashion
+            // This must be done early in the parallel region before any work
+            ggml_openmp_bind_thread_to_numa_node(omp_get_thread_num(), omp_get_num_threads());
+#endif
+            
             #pragma omp single
             {
                 // update the number of threads from the actual number of threads that we got from OpenMP

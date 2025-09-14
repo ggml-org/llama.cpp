@@ -523,8 +523,8 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();
 
-    char * src0_ddc = (char *) src0->data;
-    char * src1_ddc = (char *) src1->data;
+    char * src0_ddc = (char *) tensor_data(src0);
+    char * src1_ddc = (char *) tensor_data(src1);
     if ((src0->type == src1->type) && (ggml_is_contiguous(src0) && ggml_is_contiguous(src1))) {
         GGML_SYCL_DEBUG("%s: memcpy path\n", __func__);
         main_stream->memcpy(src1_ddc, src0_ddc, ggml_nbytes(src0));

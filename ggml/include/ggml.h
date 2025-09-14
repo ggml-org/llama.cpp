@@ -221,6 +221,13 @@
 #define GGML_MAX_N_THREADS      512
 #define GGML_MAX_OP_PARAMS      64
 
+#ifdef GGML_NUMA_MIRROR
+    // maximum number of NUMA nodes for tensor data mirroring
+    #define GGML_NUMA_MAX_NODES     8
+    #include <numaif.h>
+    #include <string.h>
+#endif
+
 #ifndef GGML_MAX_NAME
 #   define GGML_MAX_NAME        64
 #endif
@@ -645,16 +652,85 @@ extern "C" {
         struct ggml_tensor * view_src;
         size_t               view_offs;
 
+#ifdef GGML_NUMA_MIRROR
+        union {
+        #ifdef __NVCC__
+            void * data;
+        #endif
+            void * __data[GGML_NUMA_MAX_NODES];
+        };
+#else
         void * data;
+#endif
 
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
+#ifdef GGML_NUMA_MIRROR
+        char padding[12]; // Adjusted for expanded __data array
+#else
         char padding[8];
+#endif
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
+
+    // Tensor data accessor functions for NUMA compatibility
+    
+#ifdef GGML_NUMA_MIRROR
+    // External thread-local variable set by NUMA coordinator
+    extern __thread int ggml_current_numa_node;
+    
+    static inline void * tensor_data(const struct ggml_tensor * tensor) {
+        int numa_node = ggml_current_numa_node;
+        
+        if (numa_node >= 0 && numa_node < GGML_NUMA_MAX_NODES 
+            && tensor->__data[numa_node] != NULL) {
+            return tensor->__data[numa_node];
+        }
+        
+        return tensor->__data[0];
+    }
+
+    static inline void tensor_set_data(struct ggml_tensor * tensor, void * data) {
+        tensor->__data[0] = data;
+    }
+
+#ifdef GGML_NUMA_MIRROR
+    // Model loading specific function - bypasses normal tensor_set_data logic
+    static inline void tensor_set_data_with_numa_mirrors(struct ggml_tensor * tensor, 
+                                                        void * primary_data,
+                                                        void ** numa_node_data,
+                                                        int numa_node_count) {
+        // Set primary data (node 0)
+        tensor->__data[0] = primary_data;
+        
+        // Set NUMA mirrors for other nodes
+        for (int node = 1; node < numa_node_count && node < GGML_NUMA_MAX_NODES; node++) {
+            tensor->__data[node] = numa_node_data[node];
+        }
+        
+        // Clear remaining slots
+        for (int node = numa_node_count; node < GGML_NUMA_MAX_NODES; node++) {
+            tensor->__data[node] = NULL;
+        }
+        
+#ifdef GGML_NUMA_DEBUG_VERBOSE
+        printf("✅ NUMA SETUP COMPLETE: %s with %d mirrors\n", tensor->name, numa_node_count - 1);
+        fflush(stdout);
+#endif
+    }
+#endif
+#else
+    static inline void * tensor_data(const struct ggml_tensor * tensor) {
+        return tensor->data;
+    }
+
+    static inline void tensor_set_data(struct ggml_tensor * tensor, void * data) {
+        tensor->data = data;
+    }
+#endif
 
     // Abort callback
     // If not NULL, called before ggml computation
@@ -2540,6 +2616,9 @@ extern "C" {
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default(int n_threads);
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+
+    // NUMA functions
+    GGML_API int                           ggml_numa_node_count(void);
 
 #ifdef  __cplusplus
 }

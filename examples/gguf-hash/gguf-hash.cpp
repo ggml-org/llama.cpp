@@ -336,7 +336,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
         const char * name = gguf_get_tensor_name(ctx, i);
         struct ggml_tensor * cur = ggml_get_tensor(ctx_data, name);
         auto n_bytes = ggml_nbytes(cur);
-        auto *raw_data = cur->data;
+        auto *raw_data = tensor_data(cur);
         const std::string tensor_layer_name = fname + ":" + name;
 
         if (hash_params.xxh64) {
