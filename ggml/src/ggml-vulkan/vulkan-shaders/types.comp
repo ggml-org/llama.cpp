@@ -13,13 +13,10 @@
 
 #if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
 #define A_TYPE float
-#define A_TYPE32 float
 #elif LOAD_VEC_A == 4
 #define A_TYPE vec4
-#define A_TYPE32 vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE mat2x4
-#define A_TYPE32 mat2x4
 #endif
 #endif
 
@@ -29,13 +26,10 @@
 
 #if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
 #define A_TYPE float16_t
-#define A_TYPE32 float
 #elif LOAD_VEC_A == 4
 #define A_TYPE f16vec4
-#define A_TYPE32 vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE f16mat2x4
-#define A_TYPE32 mat2x4
 #endif
 #endif
 
