@@ -234,7 +234,7 @@ static int test_backend_matmul_invariance(ggml_backend_t backend) {
     // Shapes to probe (all even K to satisfy MMVF requirements)
     const int64_t Ms[] = {256, 512};
     const int64_t Ks[] = {1024, 4096};
-    const int     Bs[] = {2, 4, 7, 8, 16, 33, 64}; // include non-multiples of 8 and large batches
+    const int     Bs[] = {2, 4, 7, 8, 16, 17, 33, 64}; // add 17 to straddle mmf N<=16 threshold
 
     // Dtypes to test
     const DType dtypes[] = { DType::F32, DType::F16, DType::BF16 };
@@ -289,6 +289,76 @@ static int test_backend_matmul_invariance(ggml_backend_t backend) {
     return 0;
 }
 
+// Additional light-weight probes exercising odd-K and unsorted expert IDs for MUL_MAT_ID.
+static int test_edge_probes_minimal(ggml_backend_t backend) {
+    std::mt19937 rng(9001);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    // Near-odd K case (use even K to satisfy MMVF requirement) to exercise non-ideal alignment in deterministic fallback
+    {
+        const int64_t M = 256, K = 1538, B = 17; // even K required by MMVF
+        std::vector<float> W((size_t)M*K), X((size_t)K*B);
+        for (float &v : W) v = dist(rng);
+        for (float &v : X) v = dist(rng);
+        // Compare first column for B=1 vs B=17
+        std::vector<float> X1((size_t)K);
+        std::copy(X.begin(), X.begin()+K, X1.begin());
+        auto y1 = run_matmul_graph(backend, DType::F32, M, K, 1, W, X1);
+        auto yb = run_matmul_graph(backend, DType::F32, M, K, B, W, X);
+        if (!bytes_equal(y1.data.data(), yb.data.data(), (size_t)M)) {
+            std::cerr << "[FAIL] odd-K batch invariance: M=256 K=1537 B=17 differ on col0\n";
+            return 20;
+        }
+        // Cross-run determinism on the same odd-K input
+        auto a = run_matmul_graph(backend, DType::F32, M, K, B, W, X);
+        auto b = run_matmul_graph(backend, DType::F32, M, K, B, W, X);
+        if (!bytes_equal(a.data.data(), b.data.data(), a.data.size())) {
+            std::cerr << "[FAIL] odd-K cross-run determinism differs\n";
+            return 21;
+        }
+    }
+
+    // Unsorted expert IDs for MUL_MAT_ID
+    {
+        const int64_t M = 128, K = 1024, E = 4, EU = 2;
+        std::vector<float> W((size_t)E*M*K);
+        for (float &v : W) v = dist(rng);
+
+        // token0 ids unsorted [2,0]
+        std::vector<int32_t> ids1 = {2, 0};
+        std::vector<float> xb0((size_t)K*EU);
+        for (float &v : xb0) v = dist(rng);
+        auto y1 = run_matmul_id_graph(backend, DType::F32, M, K, E, /*T=*/1, EU, W, xb0, ids1);
+
+        const int Ts[] = {4, 9};
+        for (int T : Ts) {
+            std::vector<float> Xb((size_t)K*EU*T);
+            // token0 copy
+            std::copy(xb0.begin(), xb0.end(), Xb.begin());
+            // other tokens random
+            for (int t = 1; t < T; ++t) {
+                for (int64_t eu = 0; eu < EU; ++eu) {
+                    for (int64_t r = 0; r < K; ++r) Xb[(size_t)t*K*EU + eu*K + r] = dist(rng);
+                }
+            }
+            std::vector<int32_t> ids((size_t)EU*T);
+            // token0 fixed unsorted
+            ids[0] = 2; ids[1] = 0;
+            for (int t = 1; t < T; ++t) {
+                ids[t*EU + 0] = rng()%E;
+                ids[t*EU + 1] = rng()%E;
+            }
+            auto yb = run_matmul_id_graph(backend, DType::F32, M, K, E, T, EU, W, Xb, ids);
+            if (!bytes_equal(y1.data.data(), yb.data.data(), (size_t)M*EU)) {
+                std::cerr << "[FAIL] mul_mat_id unsorted ids batch invariance: T=" << T << "\n";
+                return 22;
+            }
+        }
+    }
+
+    return 0;
+}
+
 int main() {
     set_env_deterministic();
     ggml_backend_load_all();
@@ -318,6 +388,9 @@ int main() {
         int rc = test_backend_matmul_invariance(backend);
         if (rc == 0) {
             rc = test_backend_matmul_id_invariance(backend);
+        }
+        if (rc == 0) {
+            rc = test_edge_probes_minimal(backend);
         }
         if (rc == 0) {
             std::cout << "[OK] " << name << std::endl;

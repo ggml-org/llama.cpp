@@ -838,12 +838,16 @@ void launch_fattn(
 
     int parallel_blocks = 1;
 
+    // Deterministic mode disables stream-K and multi-block accumulation to
+    // guarantee a fixed reduction order independent of batch/shape.
+    const bool det = ggml_is_deterministic();
+
     const dim3 block_dim(warp_size, nwarps, 1);
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
 
     dim3 blocks_num;
-    if (stream_k) {
+    if (stream_k && !det) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
         const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
@@ -861,40 +865,43 @@ void launch_fattn(
     } else {
         GGML_ASSERT(K->ne[1] % KQ_row_granularity == 0);
         const int ntiles_KQ = K->ne[1] / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.
+        if (!det) {
+            // parallel_blocks should be at least large enough to achieve max. occupancy for a single wave:
+            parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_total, 1);
 
-        // parallel_blocks should be at least large enough to achieve max. occupancy for a single wave:
-        parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_total, 1);
+            // parallel_blocks must not be larger than what the tensor size allows:
+            parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
 
-        // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
+            // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
+            // Test whether parallel_blocks can be set to a higher value for better efficiency.
+            const int blocks_per_wave = nsm * max_blocks_per_sm;
+            int nwaves_best = 0;
+            int efficiency_percent_best = 0;
+            for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+                const int nblocks_total = ntiles_total * parallel_blocks_test;
+                const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
+                const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
 
-        // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
-        // Test whether parallel_blocks can be set to a higher value for better efficiency.
-        const int blocks_per_wave = nsm * max_blocks_per_sm;
-        int nwaves_best = 0;
-        int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
-            const int nblocks_total = ntiles_total * parallel_blocks_test;
-            const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
-            const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
+                // Stop trying configurations with more waves if we already have good efficiency to avoid excessive overhead.
+                if (efficiency_percent_best >= 90 && nwaves > nwaves_best) {
+                    break;
+                }
 
-            // Stop trying configurations with more waves if we already have good efficiency to avoid excessive overhead.
-            if (efficiency_percent_best >= 90 && nwaves > nwaves_best) {
-                break;
+                if (efficiency_percent > efficiency_percent_best) {
+                    nwaves_best = nwaves;
+                    efficiency_percent_best = efficiency_percent;
+                    parallel_blocks = parallel_blocks_test;
+                }
             }
-
-            if (efficiency_percent > efficiency_percent_best) {
-                nwaves_best = nwaves;
-                efficiency_percent_best = efficiency_percent;
-                parallel_blocks = parallel_blocks_test;
-            }
+        } else {
+            parallel_blocks = 1; // deterministic: single block per tile
         }
 
         blocks_num.x = ntiles_x;
         blocks_num.y = parallel_blocks;
         blocks_num.z = Q->ne[2]*Q->ne[3];
 
-        if (parallel_blocks > 1) {
+        if (!det && parallel_blocks > 1) {
             dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
             dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
         }
@@ -936,7 +943,7 @@ void launch_fattn(
     );
     CUDA_CHECK(cudaGetLastError());
 
-    if (stream_k) {
+    if (stream_k && !det) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
@@ -945,7 +952,7 @@ void launch_fattn(
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
                 ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
         }
-    } else if (parallel_blocks > 1) {
+    } else if (!det && parallel_blocks > 1) {
         const dim3 block_dim_combine(DV, 1, 1);
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);

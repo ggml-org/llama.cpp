@@ -205,6 +205,9 @@ llama_build_and_test(test-rmsnorm-determinism.cpp)
 # Deterministic MatMul invariance (CUDA only; program skips if CUDA not present)
 llama_build_and_test(test-matmul-determinism.cpp)
 
+# Deterministic Attention invariance (CUDA only; program skips if CUDA not present)
+llama_build_and_test(test-attention-determinism.cpp)
+
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 

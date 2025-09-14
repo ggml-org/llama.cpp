@@ -1,4 +1,4 @@
-Deterministic Numerics (RMSNorm, MatMul)
+Deterministic Numerics (RMSNorm, MatMul, Attention)
 ========================================
 
 This document describes the deterministic mode added for ggml/llama.cpp and the guarantees we currently make for RMSNorm.
@@ -8,7 +8,7 @@ Overview
 
 - Run‑to‑run determinism means: same inputs, same software stack → bitwise‑identical outputs.
 - Batch invariance means: the result for a given row does not change when other rows are present in the batch (i.e., reduction order per row is fixed and independent of batch size).
-- User‑visible determinism at the API requires both, plus a scheduler that doesn’t alter numeric paths. In this project we scope to the RMSNorm kernel.
+- Current scope: RMSNorm (all backends), MatMul (CUDA), and Attention forward (CUDA) under `GGML_DETERMINISTIC`.
 
 What We Guarantee (Current Scope)
 ---------------------------------
@@ -20,7 +20,7 @@ What We Do Not Guarantee (Yet)
 ------------------------------
 
 - Cross‑device or cross‑driver bitwise parity. Different GPU models/driver versions or CPU instruction sets may produce different bit patterns. For parity across hosts, pin container image, drivers, compiler versions, and disable/align fast‑math or codegen heuristics as needed.
-- Determinism for attention. MatMul is now covered on CUDA (see below).
+- Determinism for attention on non‑CUDA backends (Metal/Vulkan/OpenCL/HIP) and for quantized K/V in all cases (planned in 03B/03C).
 
 How To Enable Deterministic Mode
 --------------------------------
@@ -104,12 +104,48 @@ ENGINE=${ENGINE:-podman} IMAGE=${IMAGE:-docker.io/library/fedora:41} \
 Notes & Caveats
 ---------------
 
-- Determinism currently covers RMSNorm and MatMul (CUDA). End‑to‑end inference also depends on attention behavior, scheduler choices, and fused kernels.
+- Determinism currently covers RMSNorm, MatMul (CUDA), and Attention forward (CUDA) when enabled. End‑to‑end inference also depends on scheduler choices and fused kernels.
 - Performance: deterministic RMSNorm uses the existing per‑row reduction tree, which is already efficient. We do not change performance characteristics in this scope.
 - Performance (MatMul/CUDA): avoiding cuBLAS may reduce throughput for some shapes; disable determinism to restore peak speed.
 - If you add new RMSNorm variants, keep reductions per row within a single block/workgroup and avoid batch‑size‑dependent split strategies. In deterministic mode, prefer a single reduction policy per row.
 
+Attention (CUDA)
+----------------
+
+- Policy in deterministic mode:
+  - Dispatch avoids algorithm switching and uses kernels with one query column per block (vector paths) when available; otherwise a tile variant.
+  - `launch_fattn` enforces `parallel_blocks = 1` and disables `stream_k`, so no cross‑block combination occurs. This fixes the reduction order and batch invariance.
+  - Masks, ALiBi, sinks, and GQA are supported; K/V are expected as F16 in this phase.
+- Supported shapes (03A):
+  - Head sizes D ∈ {64, 128, 256}; KV length must be a multiple of 256.
+  - Typical LLaMA head counts and GQA ratios (e.g., 8 heads; GQA {1,2,4}).
+  - Mask must be padded to `GGML_KQ_MASK_PAD` (64) and be at least `N` (queries) in length.
+- Caveats:
+  - Throughput is lower than default (no multi‑block combine and no stream‑k).
+  - Some shapes may fall back to deterministic tile with additional slowdown.
+
+Quick test run (CUDA)
+---------------------
+
+Build with CUDA (choose correct arch id, e.g., 86=Ampere, 89=Ada):
+
+```
+ENGINE=docker IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04 \
+CMAKE_ARGS='-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86' \
+scripts/build-in-container.sh
+```
+
+Run the attention determinism test on a specific GPU (index 2 in this example):
+
+```
+ENGINE=docker IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04 \
+$ENGINE run --rm --gpus all -e CUDA_VISIBLE_DEVICES=2 \
+  -v "$(pwd):/src" -w /src/build-container/bin "$IMAGE" \
+  bash -lc './test-attention-determinism'
+```
+
+
 Roadmap
 -------
 
-- Extend determinism and batch invariance to attention (fixed KV split size, unified cache layout) behind the same flag.
+- Broaden deterministic attention coverage (quantized K/V; additional head sizes) and extend to other backends (HIP/Metal/Vulkan/OpenCL).

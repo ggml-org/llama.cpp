@@ -414,6 +414,38 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
+    // Deterministic mode: bypass heuristic kernel picker and route to
+    // stable, batch-invariant paths. Kernel math stays unchanged; we
+    // rely on launch_fattn() to enforce single-block accumulation.
+    if (ggml_is_deterministic()) {
+        // Prefer vector kernels. If FP16 precision is requested (default)
+        // and K/V are F16, use the vec-f16 path; otherwise use vec-f32.
+        const ggml_tensor * Q = dst->src[0];
+        const ggml_tensor * K = dst->src[1];
+        const ggml_tensor * V = dst->src[2];
+
+        const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(dst);
+
+        const bool kv_is_f16 = (K && K->type == GGML_TYPE_F16) && (V && V->type == GGML_TYPE_F16);
+
+        // Attempt vec kernels first (cols_per_block=1 on NVIDIA).
+        if (kv_is_f16 && prec == GGML_PREC_DEFAULT) {
+            ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+            return;
+        }
+
+        // Use vec-f32 when precision is F32 or when kv is F16 but we want F32 math.
+        if (kv_is_f16) {
+            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+            return;
+        }
+
+        // Fallback: tile kernel (still deterministic because we will force
+        // single-block accumulation and disable stream_k in launch_fattn()).
+        ggml_cuda_flash_attn_ext_tile(ctx, dst);
+        return;
+    }
+
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
