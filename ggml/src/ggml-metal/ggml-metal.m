@@ -371,6 +371,8 @@ struct ggml_backend_metal_context {
     id<MTLLibrary>      library;
     id<MTLCommandQueue> queue; // currently a pointer to the device queue, but might become separate queue [TAG_QUEUE_PER_BACKEND]
 
+    struct ggml_backend_metal_device_props props_dev;
+
     dispatch_queue_t d_queue;
 
     // the set of pre-compiled kernels for this context
@@ -481,6 +483,8 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         return NULL;
     }
 
+    ctx->props_dev = ggml_backend_metal_device_get_props(dev->context);
+
     ctx->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
     ctx->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
@@ -495,8 +499,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         const char * val = getenv("GGML_METAL_FUSION_DEBUG");
         ctx->debug_fusion = val ? atoi(val) : 0;
     }
-
-    struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(dev->context);
 
     ctx->use_graph_optimize = true;
 
@@ -553,9 +555,9 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
             GGML_LOG_WARN("%s: skipping %-40s (not supported)\n", __func__, "kernel_"#name); \
         }
 
-        const bool has_simdgroup_mm        = props.has_simdgroup_mm;
-        const bool has_simdgroup_reduction = props.has_simdgroup_reduction;
-        const bool use_bfloat              = props.use_bfloat;
+        const bool has_simdgroup_mm        = ctx->props_dev.has_simdgroup_mm;
+        const bool has_simdgroup_reduction = ctx->props_dev.has_simdgroup_reduction;
+        const bool use_bfloat              = ctx->props_dev.use_bfloat;
 
         // simd_sum and simd_max requires MTLGPUFamilyApple7
 
@@ -1213,6 +1215,12 @@ static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
         }
     }
 
+    for (int i = 0; i < (int) ctx->cmd_bufs_ext.count; ++i) {
+        if (ctx->cmd_bufs_ext[i]) {
+            [ctx->cmd_bufs_ext[i] release];
+        }
+    }
+
     [ctx->cmd_bufs_ext removeAllObjects];
     [ctx->cmd_bufs_ext release];
 
@@ -1337,12 +1345,10 @@ static id<MTLBuffer> ggml_metal_get_buffer(const struct ggml_tensor * t, size_t 
     return nil;
 }
 
-static bool ggml_metal_supports_op(ggml_backend_metal_device_t ctx_dev, const struct ggml_tensor * op) {
-    const struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(ctx_dev);
-
-    const bool has_simdgroup_mm        = props.has_simdgroup_mm;
-    const bool has_simdgroup_reduction = props.has_simdgroup_reduction;
-    const bool use_bfloat              = props.use_bfloat;
+static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_props * props_dev, const struct ggml_tensor * op) {
+    const bool has_simdgroup_mm        = props_dev->has_simdgroup_mm;
+    const bool has_simdgroup_reduction = props_dev->has_simdgroup_reduction;
+    const bool use_bfloat              = props_dev->use_bfloat;
 
     if (!use_bfloat) {
         if (op->type == GGML_TYPE_BF16) {
@@ -1607,8 +1613,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
     id<MTLComputeCommandEncoder> encoder = ctx_enc->encoder;
 
-    struct ggml_backend_metal_context        * ctx     = backend->context;
-    struct ggml_backend_metal_device * ctx_dev = backend->device->context;
+    struct ggml_backend_metal_context * ctx = backend->context;
 
     struct ggml_cgraph * gf = ctx->gf;
 
@@ -1642,7 +1647,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
             } break;
     }
 
-    if (!ggml_metal_supports_op(ctx_dev, dst)) {
+    if (!ggml_metal_supports_op(&ctx->props_dev, dst)) {
         GGML_LOG_ERROR("%s: error: unsupported op '%s'\n", __func__, ggml_op_desc(dst));
         GGML_ABORT("unsupported op");
     }
@@ -1752,8 +1757,6 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
             }
         }
     }
-
-    const struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(ctx_dev);
 
     switch (dst->op) {
         case GGML_OP_CONCAT:
@@ -3132,7 +3135,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 } else
                 // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
                 // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-                if (props.supports_gpu_family_apple7 &&
+                if (ctx->props_dev.supports_gpu_family_apple7 &&
                     !ggml_is_transposed(src0) &&
                     !ggml_is_transposed(src1) &&
                     src1t == GGML_TYPE_F32 &&
@@ -3470,7 +3473,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                 // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
                 // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-                if (props.supports_gpu_family_apple7 &&
+                if (ctx->props_dev.supports_gpu_family_apple7 &&
                     ne00 % 32 == 0 && ne00 >= 64 &&
                     (ne21 >= ne21_mm_id_min)) {
                     GGML_ASSERT(ne00 % 4 == 0);
@@ -3519,7 +3522,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                         const size_t smem = ne02*ne20*sizeof(uint16_t);
 
-                        GGML_ASSERT(smem <= props.max_theadgroup_memory_size);
+                        GGML_ASSERT(smem <= ctx->props_dev.max_theadgroup_memory_size);
 
                         [encoder setComputePipelineState:pipeline];
                         [encoder setBytes:&args    length:sizeof(args) atIndex:0];
@@ -4704,7 +4707,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     //    nsgmax = 2;
                     //    while (true) {
                     //        const size_t smem = FATTN_SMEM(nsgmax);
-                    //        if (smem > props.max_theadgroup_memory_size) {
+                    //        if (smem > ctx->props_dev.max_theadgroup_memory_size) {
                     //            break;
                     //        }
                     //        nsgmax *= 2;
@@ -4772,8 +4775,8 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                     [encoder setBuffer:id_dst offset:offs_dst atIndex:6];
 
-                    //printf("smem: %zu, max: %zu, nsg = %d, ne02 = %d, ne12 = %d\n", smem, props.max_theadgroup_memory_size, (int) nsg, ne02, ne12);
-                    GGML_ASSERT(smem <= props.max_theadgroup_memory_size);
+                    //printf("smem: %zu, max: %zu, nsg = %d, ne02 = %d, ne12 = %d\n", smem, ctx->props_dev.max_theadgroup_memory_size, (int) nsg, ne02, ne12);
+                    GGML_ASSERT(smem <= ctx->props_dev.max_theadgroup_memory_size);
                     [encoder setThreadgroupMemoryLength:smem atIndex:0];
                     [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
 #undef FATTN_SMEM
@@ -4800,7 +4803,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     while (true) {
                         const size_t smem = FATTN_SMEM(nsgmax);
                         // avoid using more than half of the threadgroup memory - can cause slow downs especially for large head sizes
-                        if (smem > props.max_theadgroup_memory_size/2) {
+                        if (smem > ctx->props_dev.max_theadgroup_memory_size/2) {
                             break;
                         }
                         nsgmax *= 2;
@@ -4889,8 +4892,8 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                     const size_t smem = FATTN_SMEM(nsg);
 
-                    //printf("smem: %zu, max: %zu, nsg = %d, nsgmax = %d\n", smem, props.max_theadgroup_memory_size, (int) nsg, (int) nsgmax);
-                    GGML_ASSERT(smem <= props.max_theadgroup_memory_size);
+                    //printf("smem: %zu, max: %zu, nsg = %d, nsgmax = %d\n", smem, ctx->props_dev.max_theadgroup_memory_size, (int) nsg, (int) nsgmax);
+                    GGML_ASSERT(smem <= ctx->props_dev.max_theadgroup_memory_size);
 
                     if (nwg == 1) {
                         // using 1 workgroup -> write the result directly into dst
@@ -5666,12 +5669,12 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    struct ggml_backend_metal_device * ctx_dev = (struct ggml_backend_metal_device *)buft->device->context;
+    ggml_backend_metal_device_t ctx_dev = buft->device->context;
 
-    const struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(ctx_dev);
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(ctx_dev);
 
     // allocate shared buffer if the device supports it and it is required by the buffer type
-    if (props.use_shared_buffers && shared) {
+    if (props_dev.use_shared_buffers && shared) {
         ctx->all_data = ggml_metal_host_malloc(size_aligned);
         ctx->is_shared = true;
     } else {
@@ -5682,7 +5685,7 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
     ctx->all_size = size_aligned;
 
     ctx->device = ggml_backend_metal_device_get_device(ctx_dev);
-    ctx->queue  = ggml_backend_metal_device_get_queue(ctx_dev);
+    ctx->queue  = ggml_backend_metal_device_get_queue (ctx_dev);
 
     ctx->n_buffers = 1;
 
@@ -5691,7 +5694,7 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         ctx->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (props.use_shared_buffers) {
+            if (props_dev.use_shared_buffers) {
                 ctx->buffers[0].metal = [ctx->device newBufferWithBytesNoCopy:ctx->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
@@ -5712,7 +5715,7 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         return NULL;
     }
 
-    ctx->use_residency_sets = props.use_residency_sets;
+    ctx->use_residency_sets = props_dev.use_residency_sets;
 
     if (!ggml_backend_metal_buffer_rset_init(ctx)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
@@ -5771,7 +5774,7 @@ static size_t ggml_backend_metal_buffer_type_shared_get_alignment(ggml_backend_b
 }
 
 static size_t ggml_backend_metal_buffer_type_shared_get_max_size(ggml_backend_buffer_type_t buft) {
-    return ggml_backend_metal_device_get_props(((struct ggml_backend_metal_device *)buft->device->context)).max_buffer_size;
+    return ggml_backend_metal_device_get_props(buft->device->context).max_buffer_size;
 }
 
 static size_t ggml_backend_metal_buffer_type_shared_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
@@ -5820,7 +5823,7 @@ static size_t ggml_backend_metal_buffer_type_private_get_alignment(ggml_backend_
 }
 
 static size_t ggml_backend_metal_buffer_type_private_get_max_size(ggml_backend_buffer_type_t buft) {
-    return ggml_backend_metal_device_get_props(((struct ggml_backend_metal_device *)buft->device->context)).max_buffer_size;
+    return ggml_backend_metal_device_get_props(buft->device->context).max_buffer_size;
 }
 
 static size_t ggml_backend_metal_buffer_type_private_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
@@ -5870,7 +5873,7 @@ static size_t ggml_backend_metal_buffer_type_mapped_get_alignment(ggml_backend_b
 }
 
 static size_t ggml_backend_metal_buffer_type_mapped_get_max_size(ggml_backend_buffer_type_t buft) {
-    return ggml_backend_metal_device_get_props(((struct ggml_backend_metal_device *)buft->device->context)).max_buffer_size;
+    return ggml_backend_metal_device_get_props(buft->device->context).max_buffer_size;
 }
 
 static size_t ggml_backend_metal_buffer_type_mapped_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
@@ -6235,15 +6238,11 @@ static const char * ggml_backend_metal_device_get_name(ggml_backend_dev_t dev) {
 }
 
 static const char * ggml_backend_metal_device_get_description(ggml_backend_dev_t dev) {
-    struct ggml_backend_metal_device * ctx_dev = (struct ggml_backend_metal_device *)dev->context;
-
-    return ggml_backend_metal_device_get_props(ctx_dev).name;
+    return ggml_backend_metal_device_get_props(dev->context).name;
 }
 
 static void ggml_backend_metal_device_get_memory_ext(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    struct ggml_backend_metal_device * ctx_dev = (struct ggml_backend_metal_device *)dev->context;
-
-    ggml_backend_metal_device_get_memory(ctx_dev, free, total);
+    ggml_backend_metal_device_get_memory(dev->context, free, total);
 }
 
 static enum ggml_backend_dev_type ggml_backend_metal_device_get_type(ggml_backend_dev_t dev) {
@@ -6291,11 +6290,9 @@ static ggml_backend_t ggml_backend_metal_device_init_ext(ggml_backend_dev_t dev,
 }
 
 static ggml_backend_buffer_type_t ggml_backend_metal_device_get_buffer_type(ggml_backend_dev_t dev) {
-    struct ggml_backend_metal_device * ctx_dev = dev->context;
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(dev->context);
 
-    const struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(ctx_dev);
-
-    return props.use_shared_buffers ? ggml_backend_metal_buffer_type_shared() : ggml_backend_metal_buffer_type_private();
+    return props_dev.use_shared_buffers ? ggml_backend_metal_buffer_type_shared() : ggml_backend_metal_buffer_type_private();
 }
 
 static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
@@ -6322,15 +6319,13 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    struct ggml_backend_metal_device * ctx_dev = (struct ggml_backend_metal_device *)dev->context;
+    ctx->device = ggml_backend_metal_device_get_device(dev->context);
+    ctx->queue  = ggml_backend_metal_device_get_queue (dev->context);
 
-    ctx->device = ggml_backend_metal_device_get_device(ctx_dev);
-    ctx->queue = ggml_backend_metal_device_get_queue(ctx_dev);
-
-    const struct ggml_backend_metal_device_props props = ggml_backend_metal_device_get_props(ctx_dev);
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(dev->context);
 
     // the buffer fits into the max buffer size allowed by the device
-    if (size_aligned <= props.max_buffer_size) {
+    if (size_aligned <= props_dev.max_buffer_size) {
         ctx->buffers[ctx->n_buffers].data  = ptr;
         ctx->buffers[ctx->n_buffers].size  = size;
         ctx->buffers[ctx->n_buffers].metal = nil;
@@ -6351,8 +6346,8 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
         // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
         // one of the views
         const size_t size_ovlp = ((max_tensor_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
-        const size_t size_step = props.max_buffer_size - size_ovlp;
-        const size_t size_view = props.max_buffer_size;
+        const size_t size_step = props_dev.max_buffer_size - size_ovlp;
+        const size_t size_view = props_dev.max_buffer_size;
 
         for (size_t i = 0; i < size; i += size_step) {
             const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
@@ -6380,7 +6375,7 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
         }
     }
 
-    ctx->use_residency_sets = props.use_residency_sets;
+    ctx->use_residency_sets = props_dev.use_residency_sets;
 
     if (!ggml_backend_metal_buffer_rset_init(ctx)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
@@ -6392,9 +6387,9 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
 }
 
 static bool ggml_backend_metal_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
-    struct ggml_backend_metal_device * ctx_dev = dev->context;
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(dev->context);
 
-    return ggml_metal_supports_op(ctx_dev, op);
+    return ggml_metal_supports_op(&props_dev, op);
 }
 
 static bool ggml_backend_metal_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
