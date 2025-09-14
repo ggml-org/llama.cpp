@@ -127,7 +127,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -1051,8 +1052,12 @@ jobs:
         run:  examples/sycl/win-build-sycl.bat
 
   windows-latest-cmake-hip:
-    if: ${{ github.event.inputs.create_release != 'true' }}
     runs-on: windows-2022
+
+    env:
+      # The ROCm version must correspond to the version used in the HIP SDK.
+      ROCM_VERSION: "6.4.2"
+      HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     steps:
       - name: Clone
@@ -1062,16 +1067,14 @@ jobs:
       - name: Clone rocWMMA repository
         id: clone_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
 
       - name: Cache ROCm Installation
         id: cache-rocm
         uses: actions/cache@v4
         with:
           path: C:\Program Files\AMD\ROCm
-          key: rocm-6.1-${{ runner.os }}-v1
-          restore-keys: |
-            rocm-6.1-${{ runner.os }}-
+          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: Install ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
@@ -1079,7 +1082,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
           $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
           $completed = $proc.WaitForExit(600000)
