@@ -373,7 +373,7 @@ class File {
         return out;
     }
 
-    ~File() {
+    void close() {
         if (fd >= 0) {
 #    ifdef _WIN32
             if (hFile != INVALID_HANDLE_VALUE) {
@@ -388,6 +388,13 @@ class File {
         if (file) {
             fclose(file);
         }
+
+        fd = -1;
+        file = nullptr;
+    }
+
+    ~File() {
+        close();
     }
 
   private:
@@ -439,6 +446,8 @@ class HttpClient {
             return 1;
         }
         if (!output_file.empty()) {
+            // Explicitly close file in order to release lock
+            out.close();
             std::filesystem::rename(output_file_partial, output_file);
         }
 
@@ -507,6 +516,9 @@ class HttpClient {
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+#ifdef _WIN32
+        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
         return curl_easy_perform(curl);
     }
 
