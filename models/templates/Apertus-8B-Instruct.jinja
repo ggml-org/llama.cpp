@@ -218,7 +218,7 @@
             {{ assistant_token }}
             {%- set ns.in_assistant = true -%}
         {%- endif -%}
-        {%- if "content" in message -%}
+        {%- if "content" in message and message.content is not none -%}
             {%- if message.content is string and (ns.assistant_format is none or ns.assistant_format == "string") -%}
                 {%- if ns.in_tool -%}
                     {{ ']' }}
@@ -284,10 +284,10 @@
                     {%- endif -%}
                 {%- endfor -%}
             {%- else -%}
-                {{- raise_exception("Invalid assistant content") -}}
+                {{- raise_exception("Invalid assistant content '" + message.content + "', expected " + ns.assistant_format) -}}
             {%- endif -%}
-        {%- else -%}
-            {{- raise_exception("Invalid assistant message") -}}
+        {%- elif "tool_calls" not in message -%}
+            {{- raise_exception("Invalid assistant message " + message) -}}
         {%- endif -%}
         {%- if "tool_calls" in message and message.tool_calls -%}
             {{ tool_calls_token + '[' }}
