@@ -363,7 +363,7 @@ struct ggml_metal_command_buffer {
     id<MTLCommandBuffer> obj;
 
     // used to enable concurrent execution of ops in the command buffers
-    struct ggml_mem_ranges * mem_ranges;
+    ggml_mem_ranges_t mem_ranges;
 };
 
 struct ggml_backend_metal_context {
@@ -1577,7 +1577,7 @@ struct ggml_metal_encode_context {
 
     id<MTLComputeCommandEncoder> encoder;
 
-    struct ggml_mem_ranges * mem_ranges;
+    ggml_mem_ranges_t mem_ranges;
 };
 
 static bool ggml_metal_encode_concurrency_reset(struct ggml_metal_encode_context * ctx) {

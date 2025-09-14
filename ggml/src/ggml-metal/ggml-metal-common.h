@@ -25,21 +25,21 @@ enum ggml_mem_range_type {
 //   can be added to the set without violating the constraints (i.e. if it can be executed concurrently with the
 //   tasks already in the set)
 //
-struct ggml_mem_ranges;
+typedef struct ggml_mem_ranges * ggml_mem_ranges_t;
 
-struct ggml_mem_ranges * ggml_mem_ranges_init(int debug);
-void ggml_mem_ranges_free(struct ggml_mem_ranges * mrs);
+ggml_mem_ranges_t ggml_mem_ranges_init(int debug);
+void ggml_mem_ranges_free(ggml_mem_ranges_t mrs);
 
 // remove all ranges from the set
-void ggml_mem_ranges_reset(struct ggml_mem_ranges * mrs);
+void ggml_mem_ranges_reset(ggml_mem_ranges_t mrs);
 
 // add src or dst ranges to track
-bool ggml_mem_ranges_add(struct ggml_mem_ranges * mrs, const struct ggml_tensor * tensor);
+bool ggml_mem_ranges_add(ggml_mem_ranges_t mrs, const struct ggml_tensor * tensor);
 
 // return false if:
 // - new src range overlaps with any existing dst range
 // - new dst range overlaps with any existing range (src or dst)
-bool ggml_mem_ranges_check(const struct ggml_mem_ranges * mrs, const struct ggml_tensor * tensor);
+bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const struct ggml_tensor * tensor);
 
 // reorder the nodes in the graph to improve concurrency, while respecting fusion
 //
