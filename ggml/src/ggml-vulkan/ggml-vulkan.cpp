@@ -4423,8 +4423,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
 static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
-
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice vkdev);
 
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
@@ -4540,7 +4540,7 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
+            if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_vk_device_is_supported(devices[i])) {
                 // Check if there are two physical devices corresponding to the same GPU
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
@@ -4620,29 +4620,6 @@ static void ggml_vk_instance_init() {
                 }
             }
         }
-
-        // Remove any unsupported devices
-        size_t num_unsupported = 0;
-        for (size_t i = 0; i < vk_instance.device_indices.size();) {
-            vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
-
-            VkPhysicalDeviceFeatures2 device_features2;
-            device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-
-            VkPhysicalDeviceVulkan11Features vk11_features;
-            vk11_features.pNext = nullptr;
-            vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-            device_features2.pNext = &vk11_features;
-
-            vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
-            if (!vk11_features.storageBuffer16BitAccess) {
-                vk_instance.device_indices.erase(vk_instance.device_indices.begin() + i);
-                num_unsupported++;
-            } else
-                i++;
-        }
-        if (num_unsupported > 0)
-            GGML_LOG_DEBUG("ggml_vulkan: Removed %zu unsupported Vulkan devices.\n", vk_instance.device_indices.size());
 
         if (vk_instance.device_indices.empty()) {
             GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
@@ -12759,6 +12736,20 @@ static bool ggml_vk_instance_debug_utils_ext_available(
     return false;
 
     UNUSED(instance_extensions);
+}
+
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice vkdev) {
+    VkPhysicalDeviceFeatures2 device_features2;
+    device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    VkPhysicalDeviceVulkan11Features vk11_features;
+    vk11_features.pNext = nullptr;
+    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    device_features2.pNext = &vk11_features;
+
+    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+
+    return vk11_features.storageBuffer16BitAccess;
 }
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
