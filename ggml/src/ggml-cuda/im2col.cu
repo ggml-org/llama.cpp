@@ -246,11 +246,11 @@ void ggml_cuda_op_im2col_3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t OH = ne2;
     const int64_t OW = ne1;
 
-    // true strides in elements (src is F32)
-    const int64_t stride_x = src1->nb[0] / 4;
-    const int64_t stride_y = src1->nb[1] / 4;
-    const int64_t stride_z = src1->nb[2] / 4;
-    const int64_t stride_q = src1->nb[3] / 4;
+    const size_t  es       = ggml_element_size(src1);
+    const int64_t stride_x = src1->nb[0] / es;
+    const int64_t stride_y = src1->nb[1] / es;
+    const int64_t stride_z = src1->nb[2] / es;
+    const int64_t stride_q = src1->nb[3] / es;
 
     if(dst->type == GGML_TYPE_F16) {
         im2col_3d_cuda_f16(src1_d, (half *) dst_d, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
