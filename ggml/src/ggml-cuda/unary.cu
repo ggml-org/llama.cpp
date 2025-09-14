@@ -38,148 +38,168 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst, cons
     }
 }
 
+static __device__ __forceinline__ float op_abs(float x) {
+    return fabsf(x);
+}
+
 void ggml_cuda_op_abs(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return fabsf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_abs);
+}
+
+static __device__ __forceinline__ float op_sgn(float x) {
+    return (x > 0.f ? 1.f : ((x < 0.f ? -1.f : 0.f)));
 }
 
 void ggml_cuda_op_sgn(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return (x > 0.f ? 1.f : ((x < 0.f ? -1.f : 0.f)));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_sgn);
+}
+
+static __device__ __forceinline__ float op_neg(float x) {
+    return -x;
 }
 
 void ggml_cuda_op_neg(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return -x;
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_neg);
+}
+
+static __device__ __forceinline__ float op_step(float x) {
+    return x > 0.0f;
 }
 
 void ggml_cuda_op_step(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return x > 0.0f;
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_step);
+}
+
+static __device__ __forceinline__ float op_gelu(float x) {
+    const float GELU_COEF_A    = 0.044715f;
+    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+    return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
 }
 
 void ggml_cuda_op_gelu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float GELU_COEF_A    = 0.044715f;
-        const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
-        return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_gelu);
+}
+
+static __device__ __forceinline__ float op_gelu_erf(float x) {
+    const float SQRT_2_INV = 0.70710678118654752440084436210484f;
+    return 0.5f*x*(1.0f + erff(x*SQRT_2_INV));
 }
 
 void ggml_cuda_op_gelu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float SQRT_2_INV = 0.70710678118654752440084436210484f;
-        return 0.5f*x*(1.0f + erff(x*SQRT_2_INV));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_gelu_erf);
+}
+
+static __device__ __forceinline__ float op_gelu_quick(float x) {
+    const float GELU_QUICK_COEF = -1.702f;
+    return x * (1.0f / (1.0f + expf(GELU_QUICK_COEF * x)));
 }
 
 void ggml_cuda_op_gelu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float GELU_QUICK_COEF = -1.702f;
-        return x * (1.0f / (1.0f + expf(GELU_QUICK_COEF * x)));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_gelu_quick);
+}
+
+static __device__ __forceinline__ float op_silu(float x) {
+    return x / (1.0f + expf(-x));
 }
 
 void ggml_cuda_op_silu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return x / (1.0f + expf(-x));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_silu);
+}
+
+static __device__ __forceinline__ float op_tanh(float x) {
+    return tanhf(x);
 }
 
 void ggml_cuda_op_tanh(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return tanhf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_tanh);
+}
+
+static __device__ __forceinline__ float op_relu(float x) {
+    return fmaxf(x, 0);
 }
 
 void ggml_cuda_op_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return fmaxf(x, 0);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_relu);
+}
+
+static __device__ __forceinline__ float op_sigmoid(float x) {
+    return 1.0f / (1.0f + expf(-x));
 }
 
 void ggml_cuda_op_sigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return 1.0f / (1.0f + expf(-x));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_sigmoid);
+}
+
+static __device__ __forceinline__ float op_hardsigmoid(float x) {
+    return fminf(1.0f, fmaxf(0.0f, (x + 3.0f) / 6.0f));
 }
 
 void ggml_cuda_op_hardsigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return fminf(1.0f, fmaxf(0.0f, (x + 3.0f) / 6.0f));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_hardsigmoid);
+}
+
+static __device__ __forceinline__ float op_hardswish(float x) {
+    return x * fminf(1.0f, fmaxf(0.0f, (x + 3.0f) / 6.0f));
 }
 
 void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return x * fminf(1.0f, fmaxf(0.0f, (x + 3.0f) / 6.0f));
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_hardswish);
+}
+
+static __device__ __forceinline__ float op_exp(float x) {
+    return expf(x);
 }
 
 void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return expf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_exp);
+}
+
+static __device__ __forceinline__ float op_sqr(float x) {
+    return x * x;
 }
 
 void ggml_cuda_op_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return x * x;
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_sqr);
+}
+
+static __device__ __forceinline__ float op_sqrt(float x) {
+    return sqrtf(x);
 }
 
 void ggml_cuda_op_sqrt(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return sqrtf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_sqrt);
+}
+
+static __device__ __forceinline__ float op_sin(float x) {
+    return sinf(x);
 }
 
 void ggml_cuda_op_sin(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return sinf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_sin);
+}
+
+static __device__ __forceinline__ float op_cos(float x) {
+    return cosf(x);
 }
 
 void ggml_cuda_op_cos(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return cosf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_cos);
+}
+
+static __device__ __forceinline__ float op_log(float x) {
+    return logf(x);
 }
 
 void ggml_cuda_op_log(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return logf(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_log);
+}
+
+static __device__ __forceinline__ float op_elu(float x) {
+    return (x > 0.f) ? x : expm1f(x);
 }
 
 void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return (x > 0.f) ? x : expm1f(x);
-    };
-    ggml_cuda_op_unary(ctx, dst, op);
+    ggml_cuda_op_unary(ctx, dst, op_elu);
 }
 /* gated ops */
 
@@ -258,44 +278,71 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 }
 
+static __device__ __forceinline__ float op_reglu(float x) {
+    return fmaxf(x, 0);
+}
+
 void ggml_cuda_op_reglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return fmaxf(x, 0);
-    };
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    ggml_cuda_op_unary_gated(ctx, dst, op_reglu);
+}
+
+static __device__ __forceinline__ float op_geglu(float x) {
+    const float GELU_COEF_A    = 0.044715f;
+    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+    return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
 }
 
 void ggml_cuda_op_geglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float GELU_COEF_A    = 0.044715f;
-        const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
-        return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
-    };
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    ggml_cuda_op_unary_gated(ctx, dst, op_geglu);
+}
+
+static __device__ __forceinline__ float op_swiglu(float x) {
+    return x / (1.0f + expf(-x));
 }
 
 void ggml_cuda_op_swiglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        return x / (1.0f + expf(-x));
-    };
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    ggml_cuda_op_unary_gated(ctx, dst, op_swiglu);
+}
+
+static __device__ __forceinline__ float op_geglu_erf(float x) {
+    const float SQRT_2_INV = 0.70710678118654752440084436210484f;
+    return 0.5f*x*(1.0f + erff(x*SQRT_2_INV));
 }
 
 void ggml_cuda_op_geglu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float SQRT_2_INV = 0.70710678118654752440084436210484f;
-        return 0.5f*x*(1.0f + erff(x*SQRT_2_INV));
-    };
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    ggml_cuda_op_unary_gated(ctx, dst, op_geglu_erf);
+}
+
+static __device__ __forceinline__ float op_geglu_quick(float x) {
+    const float GELU_QUICK_COEF = -1.702f;
+    return x * (1.0f / (1.0f + expf(GELU_QUICK_COEF * x)));
 }
 
 void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    auto op = [] __device__ (float x) -> float {
-        const float GELU_QUICK_COEF = -1.702f;
-        return x * (1.0f / (1.0f + expf(GELU_QUICK_COEF * x)));
-    };
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    ggml_cuda_op_unary_gated(ctx, dst, op_geglu_quick);
 }
+
+// Functor for XIELU operation with parameters
+struct op_xielu_functor {
+    float alpha_n, alpha_p, beta, eps;
+    
+    __host__ __device__ __forceinline__ op_xielu_functor(float a_n, float a_p, float b, float e)
+        : alpha_n(a_n), alpha_p(a_p), beta(b), eps(e) {}
+    
+    __device__ __forceinline__ float operator()(float x) const {
+        float gate_pos = (x > 0.0f);        // positive branch gate
+
+        // Positive branch: alpha_p * v^2 + beta * v
+        float y_pos = alpha_p * x * x + beta * x;
+
+        // Negative branch:
+        float min_v_eps = fminf(x, eps);  // works fine even if eps < 0
+        float y_neg = (expm1f(min_v_eps) - x) * alpha_n + beta * x;
+
+        // Select the appropriate branch based on the gate
+        return gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
+    }
+};
 
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
@@ -305,23 +352,8 @@ void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float beta = op_params[2];
     const float eps = op_params[3];
 
-    const auto op = [alpha_n, alpha_p, beta, eps] __device__ (float x) -> float {
-        float out;
-        float gate_pos = (x > 0.0f);        // positive branch gate
-        float gate_neg = 1.0f - gate_pos;   // negative branch gate
-
-        // Positive branch: alpha_p * v^2 + beta * v
-        float y_pos = alpha_p * x * x + beta * x;
-
-        // Negative branch:
-        float min_v_eps = fminf(x, eps);  // works fine even if eps < 0
-        float y_neg = (expm1f(min_v_eps) - x) * alpha_n + beta * x;
-        out = y_pos * gate_pos + y_neg * gate_neg;
-
-        return out;
-    };
-
-    ggml_cuda_op_unary_gated(ctx, dst, op);
+    op_xielu_functor op(alpha_n, alpha_p, beta, eps);
+    ggml_cuda_op_unary(ctx, dst, op);
 }
 
 // swiglu_oai
