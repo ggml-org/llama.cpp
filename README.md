@@ -17,6 +17,8 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- Deterministic numerics: see `docs/DETERMINISM.md` for how to enable deterministic mode and the current guarantees (RMSNorm batch‑invariance and bitwise stability).
+
 - **[guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)**
 - **[[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)**
 - Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)

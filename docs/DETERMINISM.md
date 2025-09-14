@@ -1,0 +1,115 @@
+Deterministic Numerics (RMSNorm, MatMul)
+========================================
+
+This document describes the deterministic mode added for ggml/llama.cpp and the guarantees we currently make for RMSNorm.
+
+Overview
+--------
+
+- Run‑to‑run determinism means: same inputs, same software stack → bitwise‑identical outputs.
+- Batch invariance means: the result for a given row does not change when other rows are present in the batch (i.e., reduction order per row is fixed and independent of batch size).
+- User‑visible determinism at the API requires both, plus a scheduler that doesn’t alter numeric paths. In this project we scope to the RMSNorm kernel.
+
+What We Guarantee (Current Scope)
+---------------------------------
+
+- RMSNorm forward (and its common fused variants RMSNorm+MUL[+ADD]) are batch‑invariant and bitwise deterministic on supported backends (CPU, CUDA, Vulkan, Metal, SYCL/OpenCL) for a fixed model shape.
+- Within a given backend on a given machine and build, re‑running the same RMSNorm invocation yields identical bits.
+
+What We Do Not Guarantee (Yet)
+------------------------------
+
+- Cross‑device or cross‑driver bitwise parity. Different GPU models/driver versions or CPU instruction sets may produce different bit patterns. For parity across hosts, pin container image, drivers, compiler versions, and disable/align fast‑math or codegen heuristics as needed.
+- Determinism for attention. MatMul is now covered on CUDA (see below).
+
+How To Enable Deterministic Mode
+--------------------------------
+
+You can enable determinism at runtime or build time.
+
+- Runtime (recommended):
+  - CLI: add `--deterministic` to `llama-cli` or `llama-server`. This sets `GGML_DETERMINISTIC=1` in the process.
+  - Environment variable: `GGML_DETERMINISTIC=1` before running any tool using ggml.
+
+- Build time (forces it across the library):
+  - `-DGGML_DETERMINISTIC=ON` to CMake.
+
+Examples
+--------
+
+- Default CPU build with runtime determinism:
+
+```
+scripts/build-in-container.sh
+build-container/bin/llama-cli --deterministic -m <model.gguf> -p "Hello" -n 32
+```
+
+- Enable at build time:
+
+```
+CMAKE_ARGS='-DGGML_DETERMINISTIC=ON' scripts/build-in-container.sh
+```
+
+- With CUDA (example arch=86):
+
+```
+CMAKE_ARGS='-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86' scripts/build-in-container.sh
+GGML_DETERMINISTIC=1 build-container/bin/test-rmsnorm-determinism
+```
+
+What Changes Under The Hood
+---------------------------
+
+- A new helper `ggml_is_deterministic()` returns true if either the library was built with `GGML_DETERMINISTIC` or the `GGML_DETERMINISTIC` environment variable is set to a truthy value.
+- RMSNorm: implementations are already batch‑invariant: per‑row reductions are kept within a single block/workgroup or a serial loop, avoiding atomics or split‑reductions that would change reduction order with batch size.
+- The CLI adds `--deterministic` which sets the environment flag.
+
+MatMul (CUDA)
+--------------
+
+- Policy: when `ggml_is_deterministic()` is true, CUDA matmul never uses cuBLAS GEMM (including strided/batched). This avoids split‑K and algorithmic variance in accumulation order.
+- Dispatcher changes:
+  - Prefer `mmf` when eligible (N ≤ 16, alignment holds). This path is already batch‑invariant.
+  - Otherwise, use a deterministic `mmvf` fallback that tiles output columns in fixed 8‑wide groups left→right, calling a stable reduction kernel per tile.
+  - Quantized matmul is unchanged for now (stretch goal).
+- Supported dtypes: F32, F16, BF16 for `mul_mat`; `src1` is promoted/handled as F32.
+
+Testing
+-------
+
+- Unit tests:
+  - `tests/test-rmsnorm-determinism.cpp` (RMSNorm invariance).
+  - `tests/test-matmul-determinism.cpp` (CUDA only; program skips if CUDA not present):
+    - Batch‑size invariance: compare first output column for B=1 vs B∈{4,16,33}.
+    - Cross‑run determinism: same inputs twice → identical bits.
+    - Dtypes: F32, F16, BF16; shapes chosen to exercise both `mmf` and wide `mmvf` tiling.
+
+Testing
+-------
+
+- Unit test: `tests/test-rmsnorm-determinism.cpp`.
+  - Batch‑size invariance: compares the first row of outputs for `B=1` and `B∈{3,8,32}` bitwise.
+  - Cross‑run determinism: repeats the same call and compares outputs bitwise.
+  - Enumerates all available backends; prints `[OK] BACKEND_NAME` on success.
+
+Run the test in the container after building:
+
+```
+scripts/build-in-container.sh
+ENGINE=${ENGINE:-podman} IMAGE=${IMAGE:-docker.io/library/fedora:41} \
+  $ENGINE run --rm -v "$(pwd):/src:Z" -w /src/build-container/bin "$IMAGE" \
+  bash -lc "./test-rmsnorm-determinism"
+```
+
+Notes & Caveats
+---------------
+
+- Determinism currently covers RMSNorm and MatMul (CUDA). End‑to‑end inference also depends on attention behavior, scheduler choices, and fused kernels.
+- Performance: deterministic RMSNorm uses the existing per‑row reduction tree, which is already efficient. We do not change performance characteristics in this scope.
+- Performance (MatMul/CUDA): avoiding cuBLAS may reduce throughput for some shapes; disable determinism to restore peak speed.
+- If you add new RMSNorm variants, keep reductions per row within a single block/workgroup and avoid batch‑size‑dependent split strategies. In deterministic mode, prefer a single reduction policy per row.
+
+Roadmap
+-------
+
+- Extend determinism and batch invariance to attention (fixed KV split size, unified cache layout) behind the same flag.

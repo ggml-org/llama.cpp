@@ -2,6 +2,7 @@
 #include "common.cuh"
 #include "convert.cuh"
 #include "mmvf.cuh"
+#include <algorithm>
 
 template <typename T, typename type_acc, int ncols_dst, int block_size>
 static __global__ void mul_mat_vec_f(
@@ -503,4 +504,36 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0
         default:
             return false;
     }
+}
+
+// Deterministic, column-tiled matmul wrapper using MMVF for arbitrary src1_ncols.
+// Tiles columns in stable left-to-right order with groups of up to 8.
+void ggml_cuda_op_mul_mat_mmvf_det(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream) {
+
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne0  =  dst->ne[0];
+    const int64_t row_diff = row_high - row_low;
+
+    const int id = ggml_cuda_get_device();
+
+    // Step columns in fixed 8-wide tiles; last tile may be smaller
+    const int64_t stride_col_dst = (id == ctx.device) ? ne0 : row_diff;
+    for (int64_t c0 = 0; c0 < src1_ncols; c0 += 8) {
+        const int64_t cols = std::min<int64_t>(8, src1_ncols - c0);
+        const float * src1_block = src1_ddf_i + c0 * ne10;
+        float       * dst_block  = dst_dd_i  + c0 * stride_col_dst;
+        ggml_cuda_op_mul_mat_vec_f(ctx, src0, src1, dst, src0_dd_i, src1_block,
+                                   /*src1_ddq_i*/ nullptr, dst_block, row_low, row_high, cols,
+                                   src1_padded_row_size, stream);
+    }
+
+    GGML_UNUSED_VARS(src1_ddq_i);
 }
