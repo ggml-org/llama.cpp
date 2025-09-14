@@ -75,6 +75,8 @@ void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+void ggml_sycl_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);

@@ -64,6 +64,10 @@ static inline float op_log(float x) {
     return logf(x);
 }
 
+static inline float op_ceil(float x) {
+    return ceilf(x); 
+} 
+
 template <float (*op)(float), typename src0_t, typename dst_t>
 static inline void vec_unary_op(int64_t n, dst_t * y, const src0_t * x) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
@@ -184,3 +188,8 @@ void ggml_compute_forward_cos(const ggml_compute_params * params, ggml_tensor * 
 void ggml_compute_forward_log(const ggml_compute_params * params, ggml_tensor * dst) {
     unary_op<op_log>(params, dst);
 }
+
+void ggml_compute_forward_ceil(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<op_ceil>(params, dst);
+}
+
