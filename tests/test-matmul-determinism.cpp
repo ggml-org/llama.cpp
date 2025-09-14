@@ -317,10 +317,7 @@ int main() {
 
         int rc = test_backend_matmul_invariance(backend);
         if (rc == 0) {
-            const char * env = getenv("TEST_MATMUL_ID");
-            if (env && std::string(env) == "1") {
-                rc = test_backend_matmul_id_invariance(backend);
-            }
+            rc = test_backend_matmul_id_invariance(backend);
         }
         if (rc == 0) {
             std::cout << "[OK] " << name << std::endl;

@@ -2117,12 +2117,24 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     // Deterministic mode: compute per (token, slot) sequentially to guarantee batch invariance
-    if (ggml_is_deterministic() && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (ggml_is_deterministic() && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32) {
         // ids is on device; copy to host once
         cudaStream_t stream = ctx.stream();
         std::vector<int32_t> ids_h(ids->ne[0]*ids->ne[1]);
         CUDA_CHECK(cudaMemcpyAsync(ids_h.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        // temporary column buffers when src1 is not F32
+        ggml_cuda_pool_alloc<char>  col_typed(ctx.pool());
+        ggml_cuda_pool_alloc<float> col_f32(ctx.pool());
+        if (src1->type == GGML_TYPE_F16) {
+            col_typed.alloc(ne10*sizeof(half));
+        } else if (src1->type == GGML_TYPE_BF16) {
+            col_typed.alloc(ne10*sizeof(nv_bfloat16));
+        }
+        if (src1->type != GGML_TYPE_F32) {
+            col_f32.alloc(ne10);
+        }
 
         for (int64_t t = 0; t < ne12; ++t) {             // tokens
             for (int64_t e = 0; e < ids->ne[0]; ++e) {    // expert slot
@@ -2150,7 +2162,18 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 src1_slice.nb[1]  = src1_slice.ne[0] * src1_slice.nb[0];
                 src1_slice.nb[2]  = src1_slice.ne[1] * src1_slice.nb[1];
                 src1_slice.nb[3]  = src1_slice.ne[2] * src1_slice.nb[2];
-                src1_slice.data   = (char *) src1->data + t*nb12 + e*nb11;
+                if (src1->type == GGML_TYPE_F32) {
+                    src1_slice.data = (char *) src1->data + t*nb12 + e*nb11;
+                } else {
+                    // copy typed column to contiguous and convert to F32
+                    const size_t ts = ggml_type_size(src1->type);
+                    const char * src_col = (const char *) src1->data + t*nb12 + e*nb11;
+                    CUDA_CHECK(cudaMemcpyAsync(col_typed.get(), src_col, ne10*ts, cudaMemcpyDeviceToDevice, stream));
+                    const to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(src1->type);
+                    GGML_ASSERT(to_fp32 != nullptr);
+                    to_fp32(col_typed.get(), col_f32.get(), ne10, stream);
+                    src1_slice.data = (char *) col_f32.get();
+                }
 
                 // Destination slice c[:, e, t]
                 ggml_tensor dst_slice;
@@ -2169,6 +2192,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
                 ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
                 CUDA_CHECK(cudaGetLastError());
+                // ensure sequential use of temporary column buffers
+                CUDA_CHECK(cudaStreamSynchronize(stream));
             }
         }
         return;
