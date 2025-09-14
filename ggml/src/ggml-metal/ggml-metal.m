@@ -1345,6 +1345,23 @@ static id<MTLComputePipelineState> ggml_metal_compile_kernel(ggml_backend_t back
     return res;
 }
 
+static size_t ggml_metal_mul_mat_id_extra_tpe(const struct ggml_tensor * op) {
+    assert(op->op == GGML_OP_MUL_MAT_ID);
+
+    const int64_t ne02 = op->src[0]->ne[2]; // n_expert
+
+    return ggml_type_size(GGML_TYPE_I32)*ne02;
+}
+
+static size_t ggml_metal_mul_mat_id_extra_ids(const struct ggml_tensor * op) {
+    assert(op->op == GGML_OP_MUL_MAT_ID);
+
+    const int64_t ne02 = op->src[0]->ne[2]; // n_expert
+    const int64_t ne21 = op->src[2]->ne[1]; // n_token
+
+    return ggml_type_size(GGML_TYPE_I32)*ne02*ne21;
+}
+
 // return true if we should use the FA vector kernel for this op
 static bool ggml_metal_flash_attn_ext_use_vec(const struct ggml_tensor * op) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
@@ -1354,6 +1371,22 @@ static bool ggml_metal_flash_attn_ext_use_vec(const struct ggml_tensor * op) {
 
     // use vec kernel if the batch size is small and if the head size is supported
     return (ne01 < 20) && (ne00 % 32 == 0);
+}
+
+static size_t ggml_metal_flash_attn_ext_extra_tmp(const struct ggml_tensor * op) {
+    assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const int64_t nwg = 32;
+
+    const int64_t ne01 = op->src[0]->ne[1];
+    const int64_t ne02 = op->src[0]->ne[2];
+    const int64_t ne03 = op->src[0]->ne[3];
+    const int64_t ne20 = op->src[2]->ne[0];
+
+    // temp buffer for writing the results from each workgroup
+    // - ne20: the size of the Value head
+    // -  + 2: the S and M values for each intermediate result
+    return ggml_type_size(GGML_TYPE_F32)*(ne01*ne02*ne03*nwg*(ne20 + 2));
 }
 
 static id<MTLComputePipelineState> ggml_metal_get_pipeline_flash_attn_ext(
@@ -3884,9 +3917,9 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         default: break;
                     }
 
-                    // [TAG_METAL_EXTRA_SIZE_OP_MUL_MAT_ID]
+                    // extra buffers for intermediate id mapping
                     size_t offs_tpe = offs_dst + ggml_nbytes(dst);
-                    size_t offs_ids = offs_tpe + ggml_type_size(GGML_TYPE_I32)*ne02;
+                    size_t offs_ids = offs_tpe + ggml_metal_mul_mat_id_extra_tpe(dst);
 
                     {
                         ggml_metal_kargs_mul_mm_id_map0 args = {
@@ -5303,9 +5336,8 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         GGML_ASSERT(ne01*ne02*ne03 == ne1*ne2*ne3);
                         GGML_ASSERT(ne1*ne2*ne3 <= (1u << 31));
 
-                        // [TAG_METAL_EXTRA_SIZE_OP_FLASH_ATTN_EXT]
+                        // write the results from each workgroup into a temp buffer
                         const size_t offs_tmp = offs_dst + ggml_nbytes(dst);
-
                         [encoder setBuffer:id_dst offset:offs_tmp atIndex:6];
 
                         [encoder setThreadgroupMemoryLength:smem atIndex:0];
@@ -6160,28 +6192,13 @@ static size_t ggml_backend_metal_buffer_type_shared_get_alloc_size(ggml_backend_
     switch (tensor->op) {
         case GGML_OP_MUL_MAT_ID:
             {
-                const int64_t ne02 = tensor->src[0]->ne[2]; // n_expert
-                const int64_t ne21 = tensor->src[2]->ne[1]; // n_token
-
-                // [TAG_METAL_EXTRA_SIZE_OP_MUL_MAT_ID]
-                res += ggml_type_size(GGML_TYPE_I32)*ne02;
-                res += ggml_type_size(GGML_TYPE_I32)*ne02*ne21;
+                res += ggml_metal_mul_mat_id_extra_tpe(tensor);
+                res += ggml_metal_mul_mat_id_extra_ids(tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 if (ggml_metal_flash_attn_ext_use_vec(tensor)) {
-                    const int64_t nwg = 32;
-
-                    const int64_t ne01 = tensor->src[0]->ne[1];
-                    const int64_t ne02 = tensor->src[0]->ne[2];
-                    const int64_t ne03 = tensor->src[0]->ne[3];
-                    const int64_t ne20 = tensor->src[2]->ne[0];
-
-                    // temp buffer for writing the results from each workgroup
-                    // - ne20: the size of the Value head
-                    // -  + 2: the S and M values for each intermediate result
-                    // [TAG_METAL_EXTRA_SIZE_OP_FLASH_ATTN_EXT]
-                    res += ggml_type_size(GGML_TYPE_F32)*(ne01*ne02*ne03*nwg*(ne20 + 2));
+                    res += ggml_metal_flash_attn_ext_extra_tmp(tensor);
                 }
             } break;
         default:
