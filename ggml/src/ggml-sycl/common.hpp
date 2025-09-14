@@ -22,6 +22,84 @@
 #include "ggml-sycl.h"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
+#include "ggml-sycl/dpct/helper.hpp"   
+
+// ----- SYCL shims (C++17-safe) -----
+// ----- SYCL shims (C++17-safe) -----
+namespace ggml_sycl {
+
+// handler-based
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::handler &cgh, sycl::range<Dim> rng, Kernel &&kernel) {
+#if defined(SYCL_EXT_ONEAPI_UNNAMED_LAMBDA) || defined(__SYCL_UNNAMED_LAMBDA__)
+    cgh.parallel_for(rng, std::forward<Kernel>(kernel));
+#else
+    cgh.parallel_for<class kernel_tag_rng>(rng, std::forward<Kernel>(kernel));
+#endif
+}
+
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::handler &cgh, sycl::nd_range<Dim> ndr, Kernel &&kernel) {
+#if defined(SYCL_EXT_ONEAPI_UNNAMED_LAMBDA) || defined(__SYCL_UNNAMED_LAMBDA__)
+    cgh.parallel_for(ndr, std::forward<Kernel>(kernel));
+#else
+    cgh.parallel_for<class kernel_tag_ndr>(ndr, std::forward<Kernel>(kernel));
+#endif
+}
+
+// submit wrapper (avoid 'auto' param -> C++17)
+template <typename Submitter>
+inline void sycl_launch(sycl::queue &q, Submitter &&submitter) {
+    q.submit(std::forward<Submitter>(submitter));
+}
+
+// queue-based helpers (by reference)
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::queue &q, sycl::range<Dim> rng, Kernel &&kernel) {
+    sycl_launch(q, [&](sycl::handler &cgh) {
+        sycl_parallel_for(cgh, rng, std::forward<Kernel>(kernel));
+    });
+}
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::queue &q, sycl::nd_range<Dim> ndr, Kernel &&kernel) {
+    sycl_launch(q, [&](sycl::handler &cgh) {
+        sycl_parallel_for(cgh, ndr, std::forward<Kernel>(kernel));
+    });
+}
+
+// ---- pointer-friendly overloads (NO dpct::queue_ptr overloads!) ----
+template <typename Submitter>
+inline void sycl_launch(sycl::queue * stream, Submitter&& submitter) {
+    sycl_launch(*stream, std::forward<Submitter>(submitter));
+}
+template <typename Submitter>
+inline void sycl_launch(const sycl::queue * stream, Submitter&& submitter) {
+    sycl_launch(*const_cast<sycl::queue*>(stream), std::forward<Submitter>(submitter));
+}
+
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::queue * stream, sycl::range<Dim> rng, Kernel &&kernel) {
+    sycl_parallel_for(*stream, rng, std::forward<Kernel>(kernel));
+}
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(const sycl::queue * stream, sycl::range<Dim> rng, Kernel &&kernel) {
+    sycl_parallel_for(*const_cast<sycl::queue*>(stream), rng, std::forward<Kernel>(kernel));
+}
+
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(sycl::queue * stream, sycl::nd_range<Dim> ndr, Kernel &&kernel) {
+    sycl_parallel_for(*stream, ndr, std::forward<Kernel>(kernel));
+}
+template<int Dim, typename Kernel>
+inline void sycl_parallel_for(const sycl::queue * stream, sycl::nd_range<Dim> ndr, Kernel &&kernel) {
+    sycl_parallel_for(*const_cast<sycl::queue*>(stream), ndr, std::forward<Kernel>(kernel));
+}
+
+} // namespace ggml_sycl
+
+// allow unqualified calls in the .cpp files that use sycl_parallel_for/sycl_launch
+using ggml_sycl::sycl_parallel_for;
+using ggml_sycl::sycl_launch;
 
 
 #if GGML_SYCL_DNNL

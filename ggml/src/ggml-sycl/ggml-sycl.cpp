@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <regex>
+#include "common.hpp"
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
