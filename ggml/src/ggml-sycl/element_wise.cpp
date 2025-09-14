@@ -6,7 +6,6 @@
 #include <sycl/sycl.hpp>
 #include <cmath> 
 #include <vector>  
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -1177,10 +1176,6 @@ void ggml_sycl_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_geglu_quick(ctx, dst);
 }
 
-
-
-
-
 static inline int8_t clamp_to_i8(long v) {
     if (v < std::numeric_limits<int8_t>::min()) return std::numeric_limits<int8_t>::min();
     if (v > std::numeric_limits<int8_t>::max()) return std::numeric_limits<int8_t>::max();
@@ -1188,36 +1183,45 @@ static inline int8_t clamp_to_i8(long v) {
 }
 
 void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+
     GGML_ASSERT(dst && dst->data);
-
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/0);
     const ggml_type t = dst->type;
-    GGML_ASSERT(
-        t == GGML_TYPE_F32 ||
-        t == GGML_TYPE_F64 ||
-        t == GGML_TYPE_F16 ||
-        t == GGML_TYPE_I8
-    && "SYCL ARANGE: unsupported dtype");
+    GGML_ASSERT((t == GGML_TYPE_F32 ||
+                 t == GGML_TYPE_F64 ||
+                 t == GGML_TYPE_F16 ||
+                 t == GGML_TYPE_I8) &&
+                "SYCL ARANGE: unsupported dtype");
 
-    // op params are stored as float; compute steps in double for more robust ceil
-    const float  start_f = ggml_get_op_params_f32(dst, 0);
-    const float  stop_f  = ggml_get_op_params_f32(dst, 1);
-    const float  step_f  = ggml_get_op_params_f32(dst, 2);
-    GGML_ASSERT(step_f != 0.0f && "ARANGE: step must be non-zero");
+    const double start = (double) ggml_get_op_params_f32(dst, 0);
+    const double stop  = (double) ggml_get_op_params_f32(dst, 1);
+    const double step  = (double) ggml_get_op_params_f32(dst, 2);
 
-    const double start = (double) start_f;
-    const double stop  = (double) stop_f;
-    const double step  = (double) step_f;
+    GGML_ASSERT(step != 0.0 && "ARANGE: step must be non-zero");
+    if (step > 0) GGML_ASSERT(stop >= start && "ARANGE: for positive step, require stop>start");
+    else          GGML_ASSERT(stop <= start && "ARANGE: for negative step, require stop<start");
 
-    const int64_t n     = ggml_nelements(dst);
-    const int64_t steps = (int64_t) std::ceil((stop - start) / step);
-    GGML_ASSERT(n == steps && "ARANGE: dst nelements must equal ceil((stop-start)/step)");
+    double span  = (stop - start) / step;          
+    int64_t steps = (int64_t) std::ceil(span - 1e-12); 
+    if (steps < 0) steps = 0;
+
+    const size_t n_sz = (size_t) ggml_nelements(dst);
+    GGML_ASSERT((int64_t)n_sz == steps && "ARANGE: dst nelements must equal ceil((stop-start)/step)");
 
     sycl::queue * q = ctx.stream();
-    const size_t n_sz = (size_t) n;
-    const size_t wg   = 256;
-    const size_t ng   = ((n_sz + wg - 1) / wg) * wg;
+    const size_t wg = 256;
+    const size_t ng = ((n_sz + wg - 1) / wg) * wg;
 
-    // --- Fast GPU path: F32 ---
+    const auto ptype_any = sycl::get_pointer_type(dst->data, q->get_context());
+
+    auto do_copy = [&](const void* src, size_t bytes) {
+        if (ptype_any == sycl::usm::alloc::device) {
+            q->memcpy(dst->data, src, bytes).wait(); 
+        } else {
+            std::memcpy(dst->data, src, bytes);
+        }
+    };
+
     if (t == GGML_TYPE_F32) {
         float * out = static_cast<float *>(dst->data);
         const auto ptype = sycl::get_pointer_type(out, q->get_context());
@@ -1225,83 +1229,67 @@ void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             const float start32 = (float) start;
             const float step32  = (float) step;
 
-            sycl_parallel_for(
-                q,
-                sycl::nd_range<1>(ng, wg),
-                [=](sycl::nd_item<1> it) {
-                    size_t i = it.get_global_linear_id();
-                    if (i < n_sz) {
-                        out[i] = start32 + step32 * (float) i;
-                    }
+            q->parallel_for(sycl::nd_range<1>(ng, wg), [=](sycl::nd_item<1> it) {
+                const size_t i = it.get_global_linear_id();
+                if (i < n_sz) {
+                    out[i] = start32 + step32 * (float)i;
                 }
-            );
+            });
             return;
         }
-        // else: fall through to CPU fallback below
     }
 
-    // --- Optional fast GPU path: F64 (enable if your device supports double) ---
-#if 1
     if (t == GGML_TYPE_F64) {
         double * out = static_cast<double *>(dst->data);
         const auto ptype = sycl::get_pointer_type(out, q->get_context());
-        if (ptype == sycl::usm::alloc::device || ptype == sycl::usm::alloc::shared) {
+        if ((ptype == sycl::usm::alloc::device || ptype == sycl::usm::alloc::shared) &&
+            q->get_device().has(sycl::aspect::fp64)) {
+
             const double start64 = start;
             const double step64  = step;
 
-            sycl_parallel_for(
-                q,
-                sycl::nd_range<1>(ng, wg),
-                [=](sycl::nd_item<1> it) {
-                    size_t i = it.get_global_linear_id();
-                    if (i < n_sz) {
-                        out[i] = start64 + step64 * (double) i;
-                    }
+            q->parallel_for(sycl::nd_range<1>(ng, wg), [=](sycl::nd_item<1> it) {
+                const size_t i = it.get_global_linear_id();
+                if (i < n_sz) {
+                    out[i] = start64 + step64 * (double)i;
                 }
-            );
+            });
             return;
         }
-        // else: fall through to CPU fallback below
+        // CPU fallback
     }
-#endif
 
-    // --- CPU fallback for all types (also used for host USM) ---
     switch (t) {
     case GGML_TYPE_F64: {
         std::vector<double> tmp(n_sz);
-        for (size_t i = 0; i < n_sz; ++i) tmp[i] = start + step * (double) i;
-        std::memcpy(dst->data, tmp.data(), n_sz * sizeof(double));
+        for (size_t i = 0; i < n_sz; ++i) tmp[i] = start + step * (double)i;
+        do_copy(tmp.data(), n_sz * sizeof(double));
+    } break;
+
+    case GGML_TYPE_F32: {
+        std::vector<float> tmp(n_sz);
+        const float s = (float)start, st = (float)step;
+        for (size_t i = 0; i < n_sz; ++i) tmp[i] = s + st * (float)i;
+        do_copy(tmp.data(), n_sz * sizeof(float));
     } break;
 
     case GGML_TYPE_F16: {
-        std::vector<float> tmpf(n_sz);
-        const float start32 = (float) start;
-        const float step32  = (float) step;
-        for (size_t i = 0; i < n_sz; ++i) tmpf[i] = start32 + step32 * (float) i;
-
-        auto * out16 = static_cast<ggml_fp16_t *>(dst->data);
+        std::vector<ggml_fp16_t> tmp(n_sz);
+        const float s = (float)start, st = (float)step;
         for (size_t i = 0; i < n_sz; ++i) {
-            out16[i] = ggml_fp32_to_fp16(tmpf[i]);
+            tmp[i] = ggml_fp32_to_fp16(s + st * (float)i);
         }
+        do_copy(tmp.data(), n_sz * sizeof(ggml_fp16_t));
     } break;
 
     case GGML_TYPE_I8: {
         std::vector<int8_t> tmp(n_sz);
         for (size_t i = 0; i < n_sz; ++i) {
-            const double v = start + step * (double) i;
-            // round to nearest; change policy here if you need trunc/floor/ceil
-            const long r = lrint(v);
+            const double v = start + step * (double)i;
+            const long   r = std::lrint(v);    
             tmp[i] = clamp_to_i8(r);
         }
-        std::memcpy(dst->data, tmp.data(), n_sz * sizeof(int8_t));
-    } break;
-
-    case GGML_TYPE_F32: {
-        std::vector<float> tmp(n_sz);
-        const float start32 = (float) start;
-        const float step32  = (float) step;
-        for (size_t i = 0; i < n_sz; ++i) tmp[i] = start32 + step32 * (float) i;
-        std::memcpy(dst->data, tmp.data(), n_sz * sizeof(float));
+        do_copy(tmp.data(), n_sz * sizeof(int8_t));
     } break;
 
     default:

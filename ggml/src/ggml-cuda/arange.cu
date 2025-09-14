@@ -21,8 +21,8 @@ void ggml_cuda_op_arange(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     float start;
-    float stop;
-    float step;
+    float stop; 
+    float step; 
     memcpy(&start, (float *)dst->op_params + 0, sizeof(float));
     memcpy(&stop,  (float *)dst->op_params + 1, sizeof(float));
     memcpy(&step,  (float *)dst->op_params + 2, sizeof(float));

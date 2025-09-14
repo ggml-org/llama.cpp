@@ -6493,6 +6493,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
+    test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0, 1, 1000));
+    test_cases.emplace_back(new test_arange(GGML_TYPE_F32, -5, 0.5, 20));
+    test_cases.emplace_back(new test_arange(GGML_TYPE_F64, 0, 1e-3, 100000));
+    test_cases.emplace_back(new test_arange(GGML_TYPE_F16, 5, 1, -1));
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
 
