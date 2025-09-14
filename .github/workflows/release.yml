@@ -538,7 +538,7 @@ jobs:
       matrix:
         include:
           - name: "radeon"
-            gpu_targets: "gfx1200;gfx1201;gfx1151;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+            gpu_targets: "gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
