@@ -84,7 +84,7 @@ bool common_chat_msg_parser::add_tool_call_short_form(const json & tool_call) {
     // Get the tool name (the single key in the object)
     auto it = tool_call.begin();
     std::string name = it.key();
-    
+
     if (name.empty()) {
         return false;
     }
@@ -92,7 +92,7 @@ bool common_chat_msg_parser::add_tool_call_short_form(const json & tool_call) {
     // Get the arguments (the nested object)
     const json & args_json = it.value();
     std::string arguments = "";
-    
+
     if (args_json.is_object()) {
         arguments = args_json.dump();
     } else if (args_json.is_string()) {

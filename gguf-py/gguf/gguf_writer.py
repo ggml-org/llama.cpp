@@ -1059,7 +1059,7 @@ class GGUFWriter:
 
     def add_xielu_beta(self, value: Sequence[float]):
         self.add_array(Keys.xIELU.XIELU_BETA, value)
-    
+
     def add_xielu_eps(self, value: Sequence[float]):
         self.add_array(Keys.xIELU.XIELU_EPS, value)
 

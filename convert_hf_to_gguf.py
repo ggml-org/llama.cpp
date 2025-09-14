@@ -8613,7 +8613,7 @@ class ApertusModel(LlamaModel):
             if (len(self._eps) == n_layers):
                 self.gguf_writer.add_xielu_eps([self._eps[k] for k in sorted(self._eps)])
             return []
-                    
+
         return super().modify_tensors(data_torch, name, bid)
 
 

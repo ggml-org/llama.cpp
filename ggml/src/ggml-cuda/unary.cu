@@ -325,10 +325,10 @@ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 // Functor for XIELU operation with parameters
 struct op_xielu_functor {
     float alpha_n, alpha_p, beta, eps;
-    
+
     __host__ __device__ __forceinline__ op_xielu_functor(float a_n, float a_p, float b, float e)
         : alpha_n(a_n), alpha_p(a_p), beta(b), eps(e) {}
-    
+
     __device__ __forceinline__ float operator()(float x) const {
         float gate_pos = (x > 0.0f);        // positive branch gate
 

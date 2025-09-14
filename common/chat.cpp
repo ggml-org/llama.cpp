@@ -2375,7 +2375,7 @@ static void common_chat_parse_apertus(common_chat_msg_parser & builder) {
     static const common_regex tool_call_regex(regex_escape("<|tools_prefix|>"));
     if (auto res = builder.try_find_regex(tool_call_regex)) {
         builder.move_to(res->groups[0].end);
-               
+
         auto tool_calls_data = builder.consume_json();
         if (tool_calls_data.json.is_array()) {
             builder.consume_spaces();
