@@ -7,6 +7,70 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+#include <cstdlib>
+static inline bool env_flag_true(const char *name) {
+    const char *v = std::getenv(name);
+    if (!v) return false;
+    return v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+}
+
+// want_fp16 is intentionally unused: vec availability for the supported instances does not
+// differ by accumulation precision for our deterministic paths.
+static bool det_vec_supported(const ggml_tensor * dst, bool want_fp16) {
+    (void) want_fp16; // intentionally unused
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    const int D  = (int) Q->ne[0];
+    const ggml_type tK = K->type;
+    const ggml_type tV = V->type;
+
+    // Minimal, robust support set that matches compiled vec instances across builds.
+    // F16/F16 at D in {64,128,256} always exists.
+    if (tK == GGML_TYPE_F16 && tV == GGML_TYPE_F16) {
+        if (D == 64 || D == 128 || D == 256) return true;
+        return false;
+    }
+
+    // Quantized: keep to conservative pairs that exist without GGML_CUDA_FA_ALL_QUANTS
+    // and that are exercised by tests: D=128 with q4_0/q4_0 or q8_0/q8_0.
+    if (D == 128 && tK == tV && (tK == GGML_TYPE_Q4_0 || tK == GGML_TYPE_Q8_0)) {
+        // Both vec-f16 and vec-f32 cases are instantiated for these pairs.
+        return true;
+    }
+
+    // Expanded coverage when full quant vec instances are compiled.
+#ifdef GGML_CUDA_FA_ALL_QUANTS
+    // D=128: allow any mix of F16 and {q4_0,q4_1,q5_0,q5_1,q8_0} except both F16, which was handled above.
+    if (D == 128) {
+        auto is_q = [](ggml_type t) {
+            switch (t) {
+                case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q8_0: return true;
+                default: return false;
+            }
+        };
+        if ((is_q(tK) || tK == GGML_TYPE_F16) && (is_q(tV) || tV == GGML_TYPE_F16) && !(tK == GGML_TYPE_F16 && tV == GGML_TYPE_F16)) {
+            return true;
+        }
+    }
+    // D=64: K must be F16; V can be quantized.
+    if (D == 64 && tK == GGML_TYPE_F16) {
+        switch (tV) {
+            case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1:
+            case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
+                return true;
+            default: break;
+        }
+    }
+#endif
+
+    // Otherwise, not guaranteed available deterministically.
+    return false;
+}
+
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -412,38 +476,112 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
+static bool det_mma_supported(const ggml_tensor * dst) {
+    const int device = ggml_cuda_get_device();
+    switch (ggml_cuda_get_best_fattn_kernel(device, dst)) {
+        case BEST_FATTN_KERNEL_MMA_F16: return true;
+        default: return false;
+    }
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
     // Deterministic mode: bypass heuristic kernel picker and route to
     // stable, batch-invariant paths. Kernel math stays unchanged; we
     // rely on launch_fattn() to enforce single-block accumulation.
     if (ggml_is_deterministic()) {
-        // Prefer vector kernels. If FP16 precision is requested (default)
-        // and K/V are F16, use the vec-f16 path; otherwise use vec-f32.
+        // Helpers
+        static bool logged_tile_once = false;
+        auto log_tile_once = [&]() {
+            if (!logged_tile_once) {
+                GGML_LOG_INFO("[det] attention falling back to tile kernel; expect lower throughput.\n");
+                logged_tile_once = true;
+            }
+        };
+
         const ggml_tensor * Q = dst->src[0];
         const ggml_tensor * K = dst->src[1];
         const ggml_tensor * V = dst->src[2];
 
         const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(dst);
+        const int D  = (int)Q->ne[0];
+        const int DV = (int)V->ne[0];
 
         const bool kv_is_f16 = (K && K->type == GGML_TYPE_F16) && (V && V->type == GGML_TYPE_F16);
+        const auto is_quant = [](ggml_type t) {
+            switch (t) {
+                case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q8_0:
+                    return true;
+                default: return false;
+            }
+        };
+        const bool kv_both_quant = is_quant(K->type) && is_quant(V->type);
 
-        // Attempt vec kernels first (cols_per_block=1 on NVIDIA).
-        if (kv_is_f16 && prec == GGML_PREC_DEFAULT) {
-            ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+        const bool force_vec   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_VEC");
+        const bool force_tile  = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_TILE");
+        const bool allow_mma   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA");
+
+        // 1) Special head sizes (80/96/112/576): attempt MMA only if explicitly allowed and supported; otherwise
+        // fall back to vec if available, else F16 tile, else abort with instructions.
+        if (kv_is_f16 && (D == 80 || D == 96 || D == 112 || D == 576) && !force_vec) {
+            if (allow_mma && det_mma_supported(dst)) {
+                ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+                return;
+            }
+            // Prefer vec (if compiled), otherwise deterministic tile for F16.
+            if (det_vec_supported(dst, /*want_fp16=*/(ggml_flash_attn_ext_get_prec(dst) == GGML_PREC_DEFAULT))) {
+                if (ggml_flash_attn_ext_get_prec(dst) == GGML_PREC_DEFAULT) ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+                else                                                      ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+                return;
+            }
+            log_tile_once();
+            ggml_cuda_flash_attn_ext_tile(ctx, dst);
             return;
         }
 
-        // Use vec-f32 when precision is F32 or when kv is F16 but we want F32 math.
+        // 2) Quantized K/V: supported via vec kernels for selected shapes only
+        if (kv_both_quant) {
+            // Probe exact vec availability for the pair
+            const bool want_fp16 = (prec == GGML_PREC_DEFAULT);
+            if (force_tile) {
+                GGML_ABORT("deterministic attention: FORCE_TILE requested but tile path does not support quantized K/V. Use F16 K/V. (KV must be multiple of 256; mask padded to GGML_KQ_MASK_PAD)");
+            }
+            if (det_vec_supported(dst, want_fp16)) {
+                if (want_fp16) ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+                else           ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+                return;
+            }
+            GGML_ABORT("deterministic attention: quantized K/V unsupported in det mode for this shape (D=%d, DV=%d, K=%s, V=%s). Use F16 K/V or D=128 with q4_0/q4_0 or q8_0/q8_0. (KV must be multiple of 256; mask padded to GGML_KQ_MASK_PAD)",
+                       D, DV, ggml_type_name(K->type), ggml_type_name(V->type));
+        }
+
+        // 3) F16 K/V path
         if (kv_is_f16) {
-            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+            if (force_tile) {
+                log_tile_once();
+                ggml_cuda_flash_attn_ext_tile(ctx, dst);
+                return;
+            }
+
+            const bool want_fp16 = (prec == GGML_PREC_DEFAULT) || force_vec;
+            if (det_vec_supported(dst, want_fp16)) {
+                if (want_fp16) ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+                else           ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+                return;
+            }
+            // vec not available for this F16 case -> deterministic tile fallback
+            log_tile_once();
+            ggml_cuda_flash_attn_ext_tile(ctx, dst);
             return;
         }
 
-        // Fallback: tile kernel (still deterministic because we will force
-        // single-block accumulation and disable stream_k in launch_fattn()).
-        ggml_cuda_flash_attn_ext_tile(ctx, dst);
-        return;
+        // 4) Any other combination: not supported deterministically
+        GGML_ABORT("deterministic attention: unsupported K/V types in det mode (K=%s, V=%s). Use F16 or supported quantized pairs. (KV must be multiple of 256; mask padded to GGML_KQ_MASK_PAD)",
+                   ggml_type_name(K->type), ggml_type_name(V->type));
     }
 
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {

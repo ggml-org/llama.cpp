@@ -115,11 +115,19 @@ Attention (CUDA)
 - Policy in deterministic mode:
   - Dispatch avoids algorithm switching and uses kernels with one query column per block (vector paths) when available; otherwise a tile variant.
   - `launch_fattn` enforces `parallel_blocks = 1` and disables `stream_k`, so no cross‑block combination occurs. This fixes the reduction order and batch invariance.
-  - Masks, ALiBi, sinks, and GQA are supported; K/V are expected as F16 in this phase.
+  - Masks, ALiBi, sinks, and GQA are supported.
+  - K/V dtypes:
+    - F16 K/V: preferred path is vec‑f16 (or vec‑f32 if precision is forced to F32); tile fallback remains deterministic but slower.
+    - Quantized K/V: supported via vec kernels for selected shapes. Minimal guaranteed coverage: D=128 with pairs q4_0/q4_0 and q8_0/q8_0. Unsupported quantized shapes will error in det mode (no tile fallback for quantized K/V).
+    - Note: F16 K/V may automatically fall back to the deterministic tile path; quantized K/V does not have a tile fallback.
+  - Special head sizes: D ∈ {80, 96, 112, 576} are not yet supported in deterministic mode because current MMA kernels process multiple columns per block (not batch‑invariant). Use D∈{64,128,256} or disable determinism. This is planned follow‑up work.
 - Supported shapes (03A):
   - Head sizes D ∈ {64, 128, 256}; KV length must be a multiple of 256.
   - Typical LLaMA head counts and GQA ratios (e.g., 8 heads; GQA {1,2,4}).
   - Mask must be padded to `GGML_KQ_MASK_PAD` (64) and be at least `N` (queries) in length.
+  - 03B additions:
+    - Quantized K/V: D=128 with q4_0/q4_0 and q8_0/q8_0, KV ∈ {256, 1024}, B ∈ {1,2,8,33}. Additional pairs may be available when built with `GGML_CUDA_FA_ALL_QUANTS`.
+    - Special head sizes: not supported in deterministic mode; experimental via `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` only.
 - Caveats:
   - Throughput is lower than default (no multi‑block combine and no stream‑k).
   - Some shapes may fall back to deterministic tile with additional slowdown.
@@ -143,6 +151,13 @@ $ENGINE run --rm --gpus all -e CUDA_VISIBLE_DEVICES=2 \
   -v "$(pwd):/src" -w /src/build-container/bin "$IMAGE" \
   bash -lc './test-attention-determinism'
 ```
+
+Debug controls (optional)
+-------------------------
+
+- `GGML_DETERMINISTIC_ATTENTION_FORCE_VEC=1` forces the deterministic dispatcher to take a vec path when possible.
+- `GGML_DETERMINISTIC_ATTENTION_FORCE_TILE=1` forces the deterministic dispatcher to take the tile path (F16 K/V only) and logs an info message once.
+- `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` experimental: allows MMA path for special head sizes when available. Not guaranteed batch‑invariant yet; prefer OFF for strict determinism.
 
 
 Roadmap

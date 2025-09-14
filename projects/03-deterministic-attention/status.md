@@ -9,14 +9,13 @@ Status — Project 03 Deterministic Attention
 
 03B (Coverage & Quantized K/V)
 ------------------------------
-- [ ] Dispatcher: support-probe vec for quantized K/V; allow MMA for D∈{80,96,112,576}.
-- [ ] Tests: quantized K/V (D=128, q4_0/q8_0); additional head sizes; skips for unsupported combos.
-- [ ] Docs: quantized K/V coverage; special head sizes; caveats.
-- [ ] Runbook added (Ada/Ampere via container).
+- [x] Dispatcher: deterministic vec path for quantized K/V (D=128, q4_0/q4_0 and q8_0/q8_0). Special head sizes via MMA are gated OFF in det mode pending single-column MMA.
+- [x] Tests: quantized K/V determinism + batch invariance; head-size tests disabled by default (enable with RUN_MMA_HEADSIZE_TESTS=1).
+- [x] Docs: quantized K/V coverage; clarified that special head sizes are not yet supported in det mode.
+- [x] Runbook added (Ada/Ampere via container).
 
 03C (KV-Cache + Other Backends)
 -------------------------------
 - [ ] KV-cache invariance across incremental decode.
 - [ ] Metal/Vulkan/OpenCL/HIP deterministic attention policy + tests.
 - [ ] Softmax deterministic fallback when FlashAttention not available.
-
