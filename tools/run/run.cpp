@@ -373,7 +373,7 @@ class File {
         return out;
     }
 
-    void close() {
+    ~File() {
         if (fd >= 0) {
 #    ifdef _WIN32
             if (hFile != INVALID_HANDLE_VALUE) {
@@ -388,13 +388,6 @@ class File {
         if (file) {
             fclose(file);
         }
-
-        fd = -1;
-        file = nullptr;
-    }
-
-    ~File() {
-        close();
     }
 
   private:
@@ -414,40 +407,16 @@ class HttpClient {
         }
 
         std::string output_file_partial;
-        curl = curl_easy_init();
-        if (!curl) {
-            return 1;
-        }
 
-        progress_data data;
-        File          out;
         if (!output_file.empty()) {
             output_file_partial = output_file + ".partial";
-            if (!out.open(output_file_partial, "ab")) {
-                printe("Failed to open file for writing\n");
-
-                return 1;
-            }
-
-            if (out.lock()) {
-                printe("Failed to exclusively lock file\n");
-
-                return 1;
-            }
         }
 
-        set_write_options(response_str, out);
-        data.file_size = set_resume_point(output_file_partial);
-        set_progress_options(progress, data);
-        set_headers(headers);
-        CURLcode res = perform(url);
-        if (res != CURLE_OK){
-            printe("Fetching resource '%s' failed: %s\n", url.c_str(), curl_easy_strerror(res));
+        if (download(url, headers, output_file_partial, progress, response_str)) {
             return 1;
         }
+
         if (!output_file.empty()) {
-            // Explicitly close file in order to release lock
-            out.close();
             std::filesystem::rename(output_file_partial, output_file);
         }
 
@@ -468,6 +437,42 @@ class HttpClient {
     CURL *              curl  = nullptr;
     struct curl_slist * chunk = nullptr;
 
+    int download(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
+             const bool progress, std::string * response_str = nullptr) {
+        curl = curl_easy_init();
+        if (!curl) {
+            return 1;
+        }
+
+        progress_data data;
+        File          out;
+        if (!output_file.empty()) {
+            if (!out.open(output_file, "ab")) {
+                printe("Failed to open file for writing\n");
+
+                return 1;
+            }
+
+            if (out.lock()) {
+                printe("Failed to exclusively lock file\n");
+
+                return 1;
+            }
+        }
+
+        set_write_options(response_str, out);
+        data.file_size = set_resume_point(output_file);
+        set_progress_options(progress, data);
+        set_headers(headers);
+        CURLcode res = perform(url);
+        if (res != CURLE_OK){
+            printe("Fetching resource '%s' failed: %s\n", url.c_str(), curl_easy_strerror(res));
+            return 1;
+        }
+
+        return 0;
+    }
+    
     void set_write_options(std::string * response_str, const File & out) {
         if (response_str) {
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_data);
