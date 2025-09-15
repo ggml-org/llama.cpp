@@ -75,7 +75,7 @@
  * @param device The device ID to set.
  */
 void ggml_cann_set_device(const int32_t device) {
-    int current_device;
+    int current_device = -1;
     aclrtGetDevice(&current_device);
 
     if (device == current_device) {
@@ -1728,6 +1728,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_get_rows(ctx, dst);
             break;
         case GGML_OP_SET_ROWS:
+            std::cout << "lcg GGML_OP_SET_ROWS"<< std::endl;
             ggml_cann_set_rows(ctx, dst);
             break;
         case GGML_OP_DUP:
