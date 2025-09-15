@@ -361,44 +361,6 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
     }
 }
 
-bool cpu_mask_set_physical_cores_only(bool (&boolmask)[GGML_MAX_N_THREADS]) {
-#ifdef _WIN32
-    // Windows implementation would require different approach
-    LOG_WRN("Physical core detection is not supported on Windows\n");
-    return false;
-#else
-    std::memset(boolmask, false, sizeof(bool) * GGML_MAX_N_THREADS);
-    
-    // Use the common topology detection logic
-    std::vector<int> physical_cores;
-    if (!cpu_get_physical_cores_topology(physical_cores)) {
-        // Fallback: if we couldn't detect topology, just use all CPUs
-        int num_cpus = std::thread::hardware_concurrency();
-        for (int cpu = 0; cpu < num_cpus && cpu < GGML_MAX_N_THREADS; cpu++) {
-            boolmask[cpu] = true;
-        }
-        LOG_WRN("Could not detect CPU topology, using all CPUs\n");
-        return false;
-    }
-    
-    // Set the mask for detected physical cores
-    for (int core_id : physical_cores) {
-        if (core_id < GGML_MAX_N_THREADS) {
-            boolmask[core_id] = true;
-        }
-    }
-    
-    LOG("Detected %zu physical cores (excluding hyperthreads): ", physical_cores.size());
-    for (size_t i = 0; i < physical_cores.size(); i++) {
-        if (i > 0) LOG(", ");
-        LOG("%d", physical_cores[i]);
-    }
-    LOG("\n");
-    
-    return true;
-#endif
-}
-
 bool cpu_mask_set_physical_cores_with_hyperthreading(bool (&boolmask)[GGML_MAX_N_THREADS]) {
 #ifdef _WIN32
     // Windows implementation would require different approach
