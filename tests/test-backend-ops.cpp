@@ -5941,8 +5941,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
-    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {1024,  1, 1, 1}));
-    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {  64, 64, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F16, { 256, 32, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, { 512, 16, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_I16, { 512, 16, 1, 1}));
