@@ -466,11 +466,11 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t ctx_dev) {
 
     res->ctx_dev = ctx_dev;
 
-    struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx_dev);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-    res->use_bfloat      = props_dev.has_bfloat;
+    res->use_bfloat      = props_dev->has_bfloat;
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
     res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
@@ -540,9 +540,9 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t ctx_dev) {
             GGML_LOG_WARN("%s: skipping %-40s (not supported)\n", __func__, "kernel_"#name); \
         }
 
-        const bool has_simdgroup_mm        = props_dev.has_simdgroup_mm;
-        const bool has_simdgroup_reduction = props_dev.has_simdgroup_reduction;
-        const bool has_bfloat              = props_dev.has_bfloat;
+        const bool has_simdgroup_mm        = props_dev->has_simdgroup_mm;
+        const bool has_simdgroup_reduction = props_dev->has_simdgroup_reduction;
+        const bool has_bfloat              = props_dev->has_bfloat;
 
         // simd_sum and simd_max requires MTLGPUFamilyApple7
 
@@ -1258,7 +1258,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
         }
     }
 
-    struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx->ctx_dev);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->ctx_dev);
 
     switch (dst->op) {
         case GGML_OP_CONCAT:
@@ -2637,7 +2637,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 } else
                 // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
                 // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-                if (props_dev.supports_gpu_family_apple7 &&
+                if (props_dev->supports_gpu_family_apple7 &&
                     !ggml_is_transposed(src0) &&
                     !ggml_is_transposed(src1) &&
                     src1t == GGML_TYPE_F32 &&
@@ -2975,7 +2975,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                 // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
                 // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-                if (props_dev.supports_gpu_family_apple7 &&
+                if (props_dev->supports_gpu_family_apple7 &&
                     ne00 % 32 == 0 && ne00 >= 64 &&
                     (ne21 >= ne21_mm_id_min)) {
                     GGML_ASSERT(ne00 % 4 == 0);
@@ -3024,7 +3024,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                         const size_t smem = ne02*ne20*sizeof(uint16_t);
 
-                        GGML_ASSERT(smem <= props_dev.max_theadgroup_memory_size);
+                        GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
 
                         [encoder setComputePipelineState:pipeline];
                         [encoder setBytes:&args    length:sizeof(args) atIndex:0];
@@ -4209,7 +4209,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     //    nsgmax = 2;
                     //    while (true) {
                     //        const size_t smem = FATTN_SMEM(nsgmax);
-                    //        if (smem > props_dev.max_theadgroup_memory_size) {
+                    //        if (smem > props_dev->max_theadgroup_memory_size) {
                     //            break;
                     //        }
                     //        nsgmax *= 2;
@@ -4277,8 +4277,8 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                     [encoder setBuffer:id_dst offset:offs_dst atIndex:6];
 
-                    //printf("smem: %zu, max: %zu, nsg = %d, ne02 = %d, ne12 = %d\n", smem, props_dev.max_theadgroup_memory_size, (int) nsg, ne02, ne12);
-                    GGML_ASSERT(smem <= props_dev.max_theadgroup_memory_size);
+                    //printf("smem: %zu, max: %zu, nsg = %d, ne02 = %d, ne12 = %d\n", smem, props_dev->max_theadgroup_memory_size, (int) nsg, ne02, ne12);
+                    GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
                     [encoder setThreadgroupMemoryLength:smem atIndex:0];
                     [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
 #undef FATTN_SMEM
@@ -4305,7 +4305,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     while (true) {
                         const size_t smem = FATTN_SMEM(nsgmax);
                         // avoid using more than half of the threadgroup memory - can cause slow downs especially for large head sizes
-                        if (smem > props_dev.max_theadgroup_memory_size/2) {
+                        if (smem > props_dev->max_theadgroup_memory_size/2) {
                             break;
                         }
                         nsgmax *= 2;
@@ -4394,8 +4394,8 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
 
                     const size_t smem = FATTN_SMEM(nsg);
 
-                    //printf("smem: %zu, max: %zu, nsg = %d, nsgmax = %d\n", smem, props_dev.max_theadgroup_memory_size, (int) nsg, (int) nsgmax);
-                    GGML_ASSERT(smem <= props_dev.max_theadgroup_memory_size);
+                    //printf("smem: %zu, max: %zu, nsg = %d, nsgmax = %d\n", smem, props_dev->max_theadgroup_memory_size, (int) nsg, (int) nsgmax);
+                    GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
 
                     if (nwg == 1) {
                         // using 1 workgroup -> write the result directly into dst

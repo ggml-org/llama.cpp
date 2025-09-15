@@ -538,8 +538,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_te
     }
 }
 
-struct ggml_metal_device_props ggml_metal_device_get_props(ggml_metal_device_t ctx) {
-    return ctx->props;
+const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t ctx) {
+    return &ctx->props;
 }
 
 //
@@ -686,9 +686,9 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    const struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx);
 
-    shared = shared && props_dev.use_shared_buffers;
+    shared = shared && props_dev->use_shared_buffers;
 
     // allocate shared buffer if the device supports it and it is required by the buffer type
     if (shared) {
@@ -711,7 +711,7 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
         res->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (props_dev.use_shared_buffers &&shared) {
+            if (props_dev->use_shared_buffers &&shared) {
                 res->buffers[0].metal = [res->device newBufferWithBytesNoCopy:res->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
@@ -732,7 +732,7 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
         return NULL;
     }
 
-    res->use_residency_sets = props_dev.use_residency_sets;
+    res->use_residency_sets = props_dev->use_residency_sets;
 
     if (!ggml_metal_buffer_rset_init(res)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
@@ -772,10 +772,10 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, s
     res->device = ggml_metal_device_get_device(ctx);
     res->queue  = ggml_metal_device_get_queue (ctx);
 
-    const struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx);
 
     // the buffer fits into the max buffer size allowed by the device
-    if (size_aligned <= props_dev.max_buffer_size) {
+    if (size_aligned <= props_dev->max_buffer_size) {
         res->buffers[res->n_buffers].data  = ptr;
         res->buffers[res->n_buffers].size  = size;
         res->buffers[res->n_buffers].metal = nil;
@@ -797,8 +797,8 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, s
         // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
         // one of the views
         const size_t size_ovlp = ((max_tensor_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
-        const size_t size_step = props_dev.max_buffer_size - size_ovlp;
-        const size_t size_view = props_dev.max_buffer_size;
+        const size_t size_step = props_dev->max_buffer_size - size_ovlp;
+        const size_t size_view = props_dev->max_buffer_size;
 
         for (size_t i = 0; i < size; i += size_step) {
             const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
@@ -827,7 +827,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, s
         }
     }
 
-    res->use_residency_sets = props_dev.use_residency_sets;
+    res->use_residency_sets = props_dev->use_residency_sets;
 
     if (!ggml_metal_buffer_rset_init(res)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);

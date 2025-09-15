@@ -5,7 +5,7 @@ find_library(METALKIT_FRAMEWORK MetalKit   REQUIRED)
 message(STATUS "Metal framework found")
 
 ggml_add_backend_library(ggml-metal
-                         ggml-metal.m
+                         ggml-metal.cpp
                          ggml-metal-device.m
                          ggml-metal-device.cpp
                          ggml-metal-common.cpp

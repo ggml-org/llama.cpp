@@ -42,7 +42,7 @@ void * ggml_metal_device_get_queue  (ggml_metal_device_t ctx); // id<MTLCommandQ
 void ggml_metal_device_get_memory(ggml_metal_device_t ctx, size_t * free, size_t * total);
 bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_tensor * op);
 
-struct ggml_metal_device_props ggml_metal_device_get_props(ggml_metal_device_t ctx);
+const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t ctx);
 
 //
 // device buffers
