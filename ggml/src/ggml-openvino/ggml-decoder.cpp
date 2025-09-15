@@ -242,14 +242,17 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
 void GgmlOvDecoder::set_llm_params() {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         auto* node = m_cgraph->nodes[i];
+        std::string name = std::string(node->name);
         if (node->op == GGML_OP_VIEW && std::string(node->name) == "cache_k_l0 (view)") {
             auto* cache_k = node->src[0];
             m_context_size = cache_k->ne[1];
-        } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Qcur-0") {
+        } else if (node->op == GGML_OP_ROPE &&
+                   (name.find("Qcur-0") == 0 || std::string(node->src[0]->name).find("Qcur-0") == 0)) {
             m_head_size = node->ne[0];
             m_num_heads = node->ne[1];
             m_rope_params = node->op_params;
-        } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Kcur-0") {
+        } else if (node->op == GGML_OP_ROPE &&
+                   (name.find("Kcur-0") == 0 || std::string(node->src[0]->name).find("Kcur-0") == 0)) {
             m_num_heads_kv = node->ne[1];
         }
     }
