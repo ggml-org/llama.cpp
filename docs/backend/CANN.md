@@ -318,3 +318,7 @@ Operators are executed using ACL graph execution, rather than in op-by-op (eager
 ### GGML_CANN_GRAPH_CACHE_CAPACITY
 
 Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. When the number of cached graphs exceeds this capacity, the least recently used graph will be evicted.
+
+### GGML_CANN_PREFILL_USE_GRAPH
+
+Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.
