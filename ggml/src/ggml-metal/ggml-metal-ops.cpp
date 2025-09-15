@@ -47,7 +47,7 @@ size_t ggml_metal_op_flash_attn_ext_extra_tmp(const ggml_tensor * op) {
     return ggml_type_size(GGML_TYPE_F32)*(ne01*ne02*ne03*nwg*(ne20 + 2));
 }
 
-ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_get_pipeline(
+void * ggml_metal_op_flash_attn_ext_get_pipeline(
         ggml_tensor * op,
         ggml_metal_t ctx,
         bool    has_mask,
@@ -85,7 +85,7 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_get_pipeline(
 
     ggml_metal_pipeline_t res = ggml_metal_get_pipeline(ctx, name);
     if (res) {
-        return res;
+        return ggml_metal_pipeline_get_obj(res);
     }
 
     ggml_metal_cv_t cv = ggml_metal_cv_init();
@@ -103,10 +103,10 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_get_pipeline(
 
     ggml_metal_cv_free(cv);
 
-    return res;
+    return ggml_metal_pipeline_get_obj(res);
 }
 
-ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_get_pipeline(
+void * ggml_metal_op_flash_attn_ext_vec_get_pipeline(
         ggml_tensor * op,
         ggml_metal_t ctx,
         bool    has_mask,
@@ -145,7 +145,7 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_get_pipeline(
 
     ggml_metal_pipeline_t res = ggml_metal_get_pipeline(ctx, name);
     if (res) {
-        return res;
+        return ggml_metal_pipeline_get_obj(res);
     }
 
     ggml_metal_cv_t cv = ggml_metal_cv_init();
@@ -164,10 +164,10 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_get_pipeline(
 
     ggml_metal_cv_free(cv);
 
-    return res;
+    return ggml_metal_pipeline_get_obj(res);
 }
 
-ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(
+void * ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(
         ggml_tensor * op,
         ggml_metal_t ctx,
         int32_t dv,
@@ -180,7 +180,7 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(
 
     ggml_metal_pipeline_t res = ggml_metal_get_pipeline(ctx, name);
     if (res) {
-        return res;
+        return ggml_metal_pipeline_get_obj(res);
     }
 
     ggml_metal_cv_t cv = ggml_metal_cv_init();
@@ -192,12 +192,12 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(
 
     ggml_metal_cv_free(cv);
 
-    return res;
+    return ggml_metal_pipeline_get_obj(res);
 
     GGML_UNUSED(op);
 }
 
-ggml_metal_pipeline_t ggml_metal_op_bin_get_pipeline(
+void * ggml_metal_op_bin_get_pipeline(
         enum ggml_op op,
         ggml_metal_t ctx,
         int32_t n_fuse,
@@ -224,13 +224,15 @@ ggml_metal_pipeline_t ggml_metal_op_bin_get_pipeline(
 
     ggml_metal_pipeline_t res = ggml_metal_get_pipeline(ctx, name);
     if (res) {
-        return res;
+        return ggml_metal_pipeline_get_obj(res);
     }
 
-    return ggml_metal_compile_pipeline(ctx, base, name, nullptr);
+    res = ggml_metal_compile_pipeline(ctx, base, name, nullptr);
+
+    return ggml_metal_pipeline_get_obj(res);
 }
 
-ggml_metal_pipeline_t ggml_metal_op_rms_norm_get_pipeline(
+void * ggml_metal_op_rms_norm_get_pipeline(
         ggml_tensor * op,
         ggml_metal_t ctx,
         int32_t n_fuse) {
@@ -248,10 +250,12 @@ ggml_metal_pipeline_t ggml_metal_op_rms_norm_get_pipeline(
 
     ggml_metal_pipeline_t res = ggml_metal_get_pipeline(ctx, name);
     if (res) {
-        return res;
+        return ggml_metal_pipeline_get_obj(res);
     }
 
-    return ggml_metal_compile_pipeline(ctx, base, name, nullptr);
+    res = ggml_metal_compile_pipeline(ctx, base, name, nullptr);
+
+    return ggml_metal_pipeline_get_obj(res);
 
     GGML_UNUSED(op);
 }

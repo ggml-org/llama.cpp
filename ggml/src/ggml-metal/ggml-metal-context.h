@@ -19,6 +19,26 @@ void ggml_metal_cv_set_int32(ggml_metal_cv_t cv, int32_t value, int32_t idx);
 void ggml_metal_cv_set_bool (ggml_metal_cv_t cv, bool    value, int32_t idx);
 
 //
+// MTLComputePipelineState wrapper
+//
+
+typedef struct ggml_metal_pipeline * ggml_metal_pipeline_t;
+
+ggml_metal_pipeline_t ggml_metal_pipeline_init(void);
+void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline);
+
+void * ggml_metal_pipeline_get_obj(ggml_metal_pipeline_t pipeline);
+
+// a collection of pipelines
+typedef struct ggml_metal_pipelines * ggml_metal_pipelines_t;
+
+ggml_metal_pipelines_t ggml_metal_pipelines_init(void);
+void ggml_metal_pipelines_free(ggml_metal_pipelines_t ppls);
+
+void                  ggml_metal_pipelines_add(ggml_metal_pipelines_t ppls, const char * name, ggml_metal_pipeline_t pipeline);
+ggml_metal_pipeline_t ggml_metal_pipelines_get(ggml_metal_pipelines_t ppls, const char * name);
+
+//
 // backend
 //
 
@@ -27,10 +47,7 @@ typedef struct ggml_metal * ggml_metal_t;
 ggml_metal_t ggml_metal_init(ggml_metal_device_t ctx_dev);
 void ggml_metal_free(ggml_metal_t ctx);
 
-typedef void * ggml_metal_pipeline_t;
-
-ggml_metal_pipeline_t ggml_metal_get_pipeline(ggml_metal_t ctx, const char * name);
-
+ggml_metal_pipeline_t ggml_metal_get_pipeline    (ggml_metal_t ctx, const char * name);
 ggml_metal_pipeline_t ggml_metal_compile_pipeline(ggml_metal_t ctx, const char * base, const char * name, ggml_metal_cv_t cv);
 
 void ggml_metal_synchronize(ggml_metal_t ctx);
@@ -38,9 +55,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx);
 void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
 
-enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph * gf);
-
-void ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf);
+enum ggml_status ggml_metal_graph_compute (ggml_metal_t ctx, struct ggml_cgraph * gf);
+void             ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf);
 
 void ggml_metal_set_n_cb            (ggml_metal_t ctx, int n_cb);
 void ggml_metal_set_abort_callback  (ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data);
