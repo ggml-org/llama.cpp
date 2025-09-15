@@ -3,28 +3,41 @@
 [
   {
     "REPLS": {
+      "TYPE" : "vec4<f32>",
+      "TYPE_SUFFIX": "f32_vec",
+      "DST_TYPE": "vec4<f32>",
+      "BLOCK_SIZE": 4
+    },
+    "DECLS": ["F32_VEC"]
+  },
+  {
+    "REPLS": {
       "TYPE" : "f32",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 1
     },
-    "DECLS": ["FLOAT"]
+    "DECLS": ["F32"]
   },
   {
     "REPLS": {
       "TYPE" : "f16",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 1
     },
-    "DECLS": ["FLOAT"]
+    "DECLS": ["F16"]
   },
   {
     "REPLS": {
       "TYPE" : "i32",
+      "DST_TYPE": "i32",
       "BLOCK_SIZE": 1
     },
-    "DECLS": ["FLOAT"]
+    "DECLS": ["I32"]
   },
   {
     "REPLS": {
       "TYPE" : "q4_0",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32
     },
     "DECLS": ["BYTE_HELPERS", "Q4_0_T", "Q4_0"]
@@ -32,6 +45,7 @@
   {
     "REPLS": {
       "TYPE" : "q4_1",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32
     },
     "DECLS": ["BYTE_HELPERS", "Q4_1_T", "Q4_1"]
@@ -39,6 +53,7 @@
   {
     "REPLS": {
       "TYPE" : "q5_0",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32
     },
     "DECLS": ["BYTE_HELPERS", "Q5_0_T", "Q5_0"]
@@ -46,6 +61,7 @@
   {
     "REPLS": {
       "TYPE" : "q5_1",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32
     },
     "DECLS": ["BYTE_HELPERS", "Q5_1_T", "Q5_1"]
@@ -53,6 +69,7 @@
   {
     "REPLS": {
       "TYPE" : "q8_0",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32
     },
     "DECLS": ["BYTE_HELPERS", "Q8_0_T", "Q8_0"]
@@ -60,6 +77,7 @@
   {
     "REPLS": {
       "TYPE" : "q2_k",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "Q2_K_T", "Q2_K"]
@@ -67,6 +85,7 @@
   {
     "REPLS": {
       "TYPE" : "q3_k",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "Q3_K_T", "Q3_K"]
@@ -74,6 +93,7 @@
   {
     "REPLS": {
       "TYPE" : "q4_k",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q4_K_T", "Q4_K"]
@@ -81,6 +101,7 @@
   {
     "REPLS": {
       "TYPE" : "q5_k",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q5_K_T", "Q5_K"]
@@ -88,6 +109,7 @@
   {
     "REPLS": {
       "TYPE" : "q6_k",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "Q6_K_T", "Q6_K"]
@@ -95,6 +117,7 @@
   {
     "REPLS": {
       "TYPE" : "iq2_xxs",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XXS_GRID", "IQ2_XXS_T", "IQ2_XXS"]
@@ -102,6 +125,7 @@
   {
     "REPLS": {
       "TYPE" : "iq2_xs",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XS_GRID", "IQ2_XS_T", "IQ2_XS"]
@@ -109,6 +133,7 @@
   {
     "REPLS": {
       "TYPE": "iq2_s",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_S_GRID", "IQ2_S_T", "IQ2_S"]
@@ -116,6 +141,7 @@
   {
     "REPLS": {
       "TYPE": "iq3_xxs",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_XSS_GRID", "IQ3_XSS_T", "IQ3_XSS"]
@@ -123,6 +149,7 @@
   {
     "REPLS": {
       "TYPE": "iq3_s",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_S_GRID", "IQ3_S_T", "IQ3_S"]
@@ -130,6 +157,7 @@
   {
     "REPLS": {
       "TYPE": "iq1_s",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_S_T", "IQ1_S"]
@@ -137,6 +165,7 @@
   {
     "REPLS": {
       "TYPE": "iq1_m",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256
     },
     "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_M_T", "IQ1_M"]
@@ -144,6 +173,7 @@
   {
     "REPLS": {
       "TYPE": "iq4_nl",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 32,
     },
     "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_NL_T", "IQ4_NL"]
@@ -151,6 +181,7 @@
   {
     "REPLS": {
       "TYPE": "iq4_xs",
+      "DST_TYPE": "f32",
       "BLOCK_SIZE": 256,
     },
     "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_XS_T", "IQ4_XS"]
@@ -161,11 +192,29 @@
 
 #define(DECLS)
 
-#decl(FLOAT)
+#decl(F32_VEC)
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[(dst_base / 4) + offset] = src[(src_base / 4) + offset];
+}
+#enddecl(F32_VEC)
+
+#decl(F32)
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[dst_base + offset] = src[src_base + offset];
+}
+#enddecl(F32)
+
+#decl(F16)
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     dst[dst_base + offset] = f32(src[src_base + offset]);
 }
-#enddecl(FLOAT)
+#enddecl(F16)
+
+#decl(I32)
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[dst_base + offset] = src[src_base + offset];
+}
+#enddecl(I32)
 
 #decl(Q4_0)
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
@@ -759,7 +808,7 @@ var<storage, read_write> src: array<{{TYPE}}>;
 var<storage, read_write> idx: array<i32>;
 
 @group(0) @binding(2)
-var<storage, read_write> dst: array<f32>;
+var<storage, read_write> dst: array<{{DST_TYPE}}>;
 
 struct Params {
     offset_src: u32, // in elements

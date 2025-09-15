@@ -129,6 +129,7 @@ struct webgpu_context_struct {
     wgpu::ComputePipeline mul_mat_pipeline[30][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline get_rows_pipeline[30];
+    wgpu::ComputePipeline get_rows_f32_no_vec_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
     wgpu::ComputePipeline add_pipeline[2];
     wgpu::ComputePipeline add_ip_pipeline[2];
@@ -595,8 +596,11 @@ static void ggml_webgpu_get_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
     size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (dst->ne[1] * dst->ne[2] * dst->ne[3] + max_wg_size - 1) / max_wg_size;
 
-    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->get_rows_pipeline[src->type], params, entries, wg_x,
-                                          ggml_op_name(dst->op));
+    wgpu::ComputePipeline pipeline = ctx->get_rows_pipeline[src->type];
+    if (src->type == GGML_TYPE_F32 && dst->ne[0] < 4) {
+        pipeline = ctx->get_rows_f32_no_vec_pipeline;
+    }
+    ggml_backend_webgpu_build_and_enqueue(ctx, pipeline, params, entries, wg_x, ggml_op_name(dst->op));
 }
 
 static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
@@ -1117,7 +1121,9 @@ static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {
 
 static void ggml_webgpu_init_get_rows_pipeline(webgpu_context & webgpu_ctx) {
     std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_max_wg_size_entry(webgpu_ctx);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_F32], wgsl_get_rows_f32,
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_F32], wgsl_get_rows_f32_vec,
+                                "get_rows_f32_vec", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_f32_no_vec_pipeline, wgsl_get_rows_f32,
                                 "get_rows_f32", constants);
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_F16], wgsl_get_rows_f16,
                                 "get_rows_f16", constants);
@@ -1423,7 +1429,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     GGML_ASSERT(ctx->adapter != nullptr);
 
     ctx->adapter.GetLimits(&ctx->limits);
-    ctx->max_wg_size_x = 256;  // default value
+    ctx->max_wg_size_x = 288;  // default value
 
     wgpu::AdapterInfo info{};
     ctx->adapter.GetInfo(&info);
