@@ -2489,7 +2489,7 @@ struct ggml_tensor * ggml_floor(
 }
 
 struct ggml_tensor * ggml_floor_inplace(
-        struct ggml_context * ctx, 
+        struct ggml_context * ctx,
         struct ggml_tensor * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_FLOOR);
 }

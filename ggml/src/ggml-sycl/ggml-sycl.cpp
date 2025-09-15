@@ -3626,9 +3626,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                 case GGML_UNARY_OP_ABS:
                     ggml_sycl_abs(ctx, dst);
                     break;
-                case GGML_UNARY_OP_FLOOR:      
+                case GGML_UNARY_OP_FLOOR:
                     ggml_sycl_floor(ctx, dst);
-                    break;    
+                    break;
                 case GGML_UNARY_OP_ELU:
                     ggml_sycl_elu(ctx, dst);
                     break;
