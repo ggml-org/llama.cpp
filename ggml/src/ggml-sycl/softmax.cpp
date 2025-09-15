@@ -127,11 +127,11 @@ static void soft_max_f32_submitter(const float * x, const T * mask, float * dst,
                                    const int nrows_y, const float scale, const float max_bias, const float m0,
                                    const float m1, uint32_t n_head_log2, sycl::range<3> block_nums, sycl::range<3> block_dims,
                                    const size_t n_local_scratch, queue_ptr stream) {
-    sycl_launch(stream, [&](sycl::handler & cgh) {
+    stream->submit([&](sycl::handler &cgh) {
         sycl::local_accessor<float, 1> local_buf_acc(n_local_scratch, cgh);
 
-        sycl_parallel_for(
-            cgh, sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        cgh.parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 soft_max_f32<vals_smem, ncols_template, block_size_template>(x, mask, dst, ncols_par,
                                                                              nrows_y, scale, max_bias, m0,
