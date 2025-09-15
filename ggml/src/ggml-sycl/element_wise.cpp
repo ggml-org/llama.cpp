@@ -40,6 +40,11 @@ static __dpct_inline__ T op_abs(T x) {
 }
 
 template<typename T>
+static __dpct_inline__ T op_round(T x) {
+    return sycl::round(x);
+}
+
+template<typename T>
 static __dpct_inline__ T op_elu(T x) {
     return (x > static_cast<T>(0.f)) ? x : sycl::expm1(x);
 }
@@ -161,6 +166,13 @@ template<typename T>
 static void unary_op_abs_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_abs(x[i]);
+    }
+}
+
+template<typename T>
+static void unary_op_round_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_round(x[i]);
     }
 }
 
@@ -661,6 +673,19 @@ static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor
         });
 }
 
+static inline void ggml_sycl_op_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            sycl_parallel_for(stream,
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_round_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
 static inline void ggml_sycl_op_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
@@ -1137,6 +1162,11 @@ void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_abs(ctx, dst);
+}
+
+void ggml_sycl_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_round(ctx, dst);
 }
 
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

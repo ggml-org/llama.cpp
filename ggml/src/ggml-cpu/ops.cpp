@@ -9336,6 +9336,10 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_abs(params, dst);
             } break;
+        case GGML_UNARY_OP_ROUND:
+            {
+                ggml_compute_forward_round(params, dst);
+            } break;
         case GGML_UNARY_OP_SGN:
             {
                 ggml_compute_forward_sgn(params, dst);

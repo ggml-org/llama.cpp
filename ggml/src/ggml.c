@@ -1127,6 +1127,7 @@ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
 static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "ABS",
+    "ROUND",
     "SGN",
     "NEG",
     "STEP",
@@ -1143,7 +1144,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "GELU_ERF",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
+static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
 
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
@@ -2477,6 +2478,20 @@ struct ggml_tensor * ggml_abs_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ABS);
+}
+
+// ggml_round
+
+struct ggml_tensor * ggml_round(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_ROUND);
+}
+
+struct ggml_tensor * ggml_round_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ROUND);
 }
 
 // ggml_sgn
