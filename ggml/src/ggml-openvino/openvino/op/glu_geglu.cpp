@@ -1,7 +1,7 @@
-#include <cstdint>
 #include <memory>
 #include <openvino/core/node_output.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/gelu.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/sigmoid.hpp>
 #include <openvino/op/slice.hpp>
@@ -16,7 +16,7 @@ namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_glu_swiglu(const NodeContext& context) {
+OutputVector translate_glu_geglu(const NodeContext& context) {
     num_inputs_check(context, 1, 2);
 
     ov::Output<ov::Node> src0;
@@ -38,9 +38,8 @@ OutputVector translate_glu_swiglu(const NodeContext& context) {
         std::swap(src0, src1);
     }
 
-    auto sigmoid = std::make_shared<ov::op::v0::Sigmoid>(src0);
-    auto silu = std::make_shared<ov::op::v1::Multiply>(src0, sigmoid);
-    auto res = std::make_shared<ov::op::v1::Multiply>(silu, src1);
+    auto gelu = std::make_shared<ov::op::v7::Gelu>(src0);
+    auto res = std::make_shared<ov::op::v1::Multiply>(gelu, src1);
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }
