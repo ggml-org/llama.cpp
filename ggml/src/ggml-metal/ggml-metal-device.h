@@ -6,6 +6,10 @@
 extern "C" {
 #endif
 
+//
+// device
+//
+
 typedef struct ggml_backend_metal_device * ggml_backend_metal_device_t;
 
 struct ggml_backend_metal_device_props {
@@ -38,6 +42,36 @@ void * ggml_backend_metal_device_get_queue  (ggml_backend_metal_device_t ctx);
 void ggml_backend_metal_device_get_memory(ggml_backend_metal_device_t ctx, size_t * free, size_t * total);
 
 struct ggml_backend_metal_device_props ggml_backend_metal_device_get_props(ggml_backend_metal_device_t ctx);
+
+//
+// device buffers
+//
+
+typedef struct ggml_backend_metal_buffer * ggml_backend_metal_buffer_t;
+
+ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_device_t device, size_t size, bool shared);
+ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map (ggml_backend_metal_device_t device, void * ptr, size_t size, size_t max_tensor_size);
+
+void   ggml_backend_metal_buffer_free     (ggml_backend_metal_buffer_t buffer);
+void * ggml_backend_metal_buffer_get_base (ggml_backend_metal_buffer_t buffer);
+bool   ggml_backend_metal_buffer_is_shared(ggml_backend_metal_buffer_t buffer);
+
+void   ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
+void   ggml_backend_metal_buffer_set_tensor   (ggml_backend_metal_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+void   ggml_backend_metal_buffer_get_tensor   (ggml_backend_metal_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
+void   ggml_backend_metal_buffer_clear        (ggml_backend_metal_buffer_t buffer, uint8_t value);
+
+
+struct ggml_backend_metal_buffer_id {
+    void * metal;
+    size_t offs;
+};
+
+// finds the Metal buffer that contains the tensor data on the GPU device
+// the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
+// Metal buffer based on the host memory pointer
+//
+struct ggml_backend_metal_buffer_id ggml_backend_metal_buffer_get_id(ggml_backend_metal_buffer_t buffer, const struct ggml_tensor * t);
 
 #ifdef __cplusplus
 }
