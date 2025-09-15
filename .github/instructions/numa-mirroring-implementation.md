@@ -130,11 +130,13 @@ cmake --build build --parallel
 ## Implementation Details
 
 ### Tensor Data Access Optimization
-The `ggml_tensor` struct in `ggml.h` has been updated to no longer have a `data` field. This has been renamed to a `__data[]` array to hold pointers to multiple memory locations, with the index corresponding to the index of a local Numa node.
 
-Instead of directly addressing `tensor->data`, instead you do `tensor_data(tensor)`. And setting is done with `tensor_set_data()`. These are two new macros in `ggml.h`.
 
-The `tensor_data()` function in `ggml.h` has been optimized with a fast path:
+In `ggml.h`: 
+
+The `ggml_tensor` struct no longer has a `data` field. This has been renamed to a `__data[]` array to hold pointers to multiple memory locations, with the index corresponding to the index of a local Numa node.
+
+Instead of directly addressing `tensor->data`, there are two new macros instead: `tensor_data(tensor)` for getting, and setting is done with `tensor_set_data()`. The `tensor_data()` function in `ggml.h` has been optimized with a fast path.
 ```c
     // Tensor data accessor functions for NUMA model mirroring compatibility:
     
@@ -181,13 +183,112 @@ The `tensor_data()` function in `ggml.h` has been optimized with a fast path:
     }
 ```
 
-Thread-local variables at OMP thread-creation time in ggml-cpu.c:
+In `ggml-cpu.c`: Thread-local variables at OMP thread-creation time
 ```c
+// External thread-local variable for NUMA node binding
+extern __thread int ggml_current_numa_node;
 
+// Thread-local NUMA node assignment for OpenMP threads  
+// Using static initialization to avoid syscalls in hot paths
+static __thread int ggml_thread_numa_node = -1;
+static __thread bool ggml_thread_numa_initialized = false;
 ```
 
-First-touch allocation at model weight loading time in llama-mmap.cpp:
+In `ggml-cpu.c`: Bind an OMP thread to its Numa node at creation time
 ```c
+if (n_threads > 1) {
+        #pragma omp parallel num_threads(n_threads)
+        {
+            // Bind OpenMP threads to NUMA nodes in round-robin fashion
+            // This must be done early in the parallel region before any work
+            ggml_openmp_bind_thread_to_numa_node(omp_get_thread_num(), omp_get_num_threads());
+```
+
+In `ggml-cpu.c`: Numa detection and binding logic
+```c
+bool ggml_is_numa(void) {
+    // Return true if:
+    // 1. Multiple physical NUMA nodes are present, OR
+    // 2. User explicitly requested NUMA mirror strategy (--numa mirror)
+    return g_state.numa.n_nodes > 1 || 
+           g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR;
+}
+
+// Static caching for NUMA thread binding to avoid syscalls in hot OpenMP paths
+static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
+    // Cache strategy check to avoid repeated calls
+    static bool strategy_checked = false;
+    static bool is_numa_mirror = false;
+    static int num_numa_nodes = 0;
+    
+    if (!strategy_checked) {
+        is_numa_mirror = (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR);
+        if (is_numa_mirror) {
+            num_numa_nodes = numa_max_node() + 1;
+        }
+        strategy_checked = true;
+    }
+    
+    // Only apply binding in NUMA mirror mode with multiple nodes
+    if (!is_numa_mirror || num_numa_nodes <= 1) {
+        return;
+    }
+
+    // Check if this thread is already initialized to avoid repeated binding
+    if (ggml_thread_numa_initialized) {
+        return;
+    }
+
+    // Round-robin assignment of threads to NUMA nodes
+    int target_numa_node = thread_id % num_numa_nodes;
+    
+    // Cache CPU masks statically to avoid repeated numa_allocate_cpumask() calls
+    static struct bitmask *node_cpumasks[GGML_NUMA_MAX_NODES] = {0};
+    static bool cpumasks_initialized = false;
+    static cpu_set_t node_cpusets[GGML_NUMA_MAX_NODES];
+    static bool cpusets_valid[GGML_NUMA_MAX_NODES] = {0};
+    
+    if (!cpumasks_initialized) {
+        for (int node = 0; node < num_numa_nodes && node < GGML_NUMA_MAX_NODES; node++) {
+            node_cpumasks[node] = numa_allocate_cpumask();
+            if (node_cpumasks[node] && numa_node_to_cpus(node, node_cpumasks[node]) == 0) {
+                // Convert NUMA bitmask to cpu_set_t for faster thread binding
+                CPU_ZERO(&node_cpusets[node]);
+                for (int cpu = 0; cpu < numa_num_possible_cpus(); cpu++) {
+                    if (numa_bitmask_isbitset(node_cpumasks[node], cpu)) {
+                        CPU_SET(cpu, &node_cpusets[node]);
+                    }
+                }
+                cpusets_valid[node] = true;
+            }
+        }
+        cpumasks_initialized = true;
+    }
+
+    // Bind thread if we have a valid CPU set for the target node
+    if (target_numa_node < GGML_NUMA_MAX_NODES && cpusets_valid[target_numa_node]) {
+        if (sched_setaffinity(0, sizeof(cpu_set_t), &node_cpusets[target_numa_node]) == 0) {
+            // Set memory allocation preference and thread-local node assignment
+            numa_set_preferred(target_numa_node);
+            ggml_thread_numa_node = target_numa_node;
+            ggml_thread_numa_initialized = true;
+            
+            // Update the global thread-local variable for tensor data access
+            ggml_current_numa_node = target_numa_node;
+            
+            // Debug output using standard GGML logging
+            GGML_LOG_DEBUG("NUMA: Bound OpenMP thread %d to NUMA node %d (total threads: %d)\n", 
+                           thread_id, target_numa_node, n_threads);
+        }
+    }
+}
+```
+
+In `llama-mmap.cpp`: First-touch allocation at model weight loading time
+```c
+    struct llama_mmap::impl {
+#ifdef _POSIX_MAPPED_FILES
+    std::vector<std::pair<size_t, size_t>> mapped_fragments;
     // NUMA mirror logic: allocate and populate model weights on each NUMA node
     struct numa_mapping {
         void* addr;
@@ -207,7 +308,7 @@ First-touch allocation at model weight loading time in llama-mmap.cpp:
         // Bind current thread to the target NUMA node for first-touch
         struct bitmask* old_mask = numa_get_run_node_mask();
         if (numa_run_on_node(node) != 0) {
-            LLAMA_LOG_DEBUG("Warning: could not bind thread to NUMA node %d: %s\n", node, strerror(errno));
+            LLAMA_LOG_DEBUG("NUMA MIRRORING: Warning: could not bind thread to NUMA node %d: %s\n", node, strerror(errno));
             // Continue anyway - might still work
         }
         
@@ -215,7 +316,7 @@ First-touch allocation at model weight loading time in llama-mmap.cpp:
         void* ptr = nullptr;
         int ret = posix_memalign(&ptr, alignment, size);
         if (ret != 0) {
-            LLAMA_LOG_DEBUG("posix_memalign failed for %zu bytes with alignment %zu: %s\n", 
+            LLAMA_LOG_DEBUG("NUMA MIRRORING: posix_memalign failed for %zu bytes with alignment %zu: %s\n", 
                            size, alignment, strerror(ret));
             // Restore original thread binding
             if (old_mask) {
@@ -238,7 +339,7 @@ First-touch allocation at model weight loading time in llama-mmap.cpp:
             numa_free_nodemask(old_mask);
         }
         
-        LLAMA_LOG_DEBUG("✅ First-touch allocation: %zu bytes for node %d at %p (SIMD aligned to %zu bytes)\n", 
+        LLAMA_LOG_DEBUG("NUMA MIRRORING: First-touch allocation: %zu bytes for node %d at %p (SIMD aligned to %zu bytes)\n", 
                        size, node, ptr, alignment);
         return ptr;
     }
@@ -246,15 +347,15 @@ First-touch allocation at model weight loading time in llama-mmap.cpp:
     void mmap_numa_mirror(struct llama_file * file) {
         int num_nodes = numa_num_configured_nodes();
         if (num_nodes <= 1) {
-            throw std::runtime_error("NUMA mirror mode requires multiple NUMA nodes");
+            throw std::runtime_error("NUMA MIRRORING: NUMA mirror mode requires multiple NUMA nodes");
         }
         
-        LLAMA_LOG_DEBUG("NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
+        LLAMA_LOG_DEBUG("NUMA MIRRORING: NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
                 file->size() / (1024.0 * 1024.0), num_nodes);
         
         size_t total_size = file->size();
         for (int node = 0; node < num_nodes; ++node) {
-            LLAMA_LOG_DEBUG("NUMA: Allocating on node %d using first-touch approach\n", node);
+            LLAMA_LOG_DEBUG("NUMA MIRRORING: Allocating on node %d using first-touch approach\n", node);
             
             void* node_mem = numa_alloc_first_touch(total_size, node);
             if (!node_mem) {
@@ -267,24 +368,24 @@ First-touch allocation at model weight loading time in llama-mmap.cpp:
             // VERIFICATION: Check that memory was actually allocated on the expected NUMA node
             int actual_node = -1;
             if (get_mempolicy(&actual_node, NULL, 0, node_mem, MPOL_F_NODE | MPOL_F_ADDR) == 0) {
-                LLAMA_LOG_DEBUG("NUMA: Memory at %p allocated on node %d (expected %d)\n", 
+                LLAMA_LOG_DEBUG("NUMA MIRRORING: Memory at %p allocated on node %d (expected %d)\n", 
                                node_mem, actual_node, node);
                 if (actual_node != node) {
-                    LLAMA_LOG_WARN("NUMA: WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
+                    LLAMA_LOG_WARN("NUMA MIRRORING: WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
                                    node, actual_node);
                 } else {
-                    LLAMA_LOG_DEBUG("NUMA: ✅ First-touch succeeded - memory correctly placed on node %d\n", node);
+                    LLAMA_LOG_DEBUG("NUMA MIRRORING: First-touch succeeded - memory correctly placed on node %d\n", node);
                 }
             } else {
-                LLAMA_LOG_WARN("NUMA: Could not verify allocation node for %p: %s\n", 
+                LLAMA_LOG_WARN("NUMA MIRRORING: Could not verify allocation node for %p: %s\n", 
                                node_mem, strerror(errno));
             }
             
             file->seek(0, SEEK_SET);
             file->read_raw(node_mem, total_size);
             numa_mappings.push_back({node_mem, total_size});
-            
-            LLAMA_LOG_DEBUG("NUMA: Successfully allocated and populated %.2f MB on node %d at %p\n",
+
+            LLAMA_LOG_DEBUG("NUMA MIRRORING: Successfully allocated and populated %.2f MB on node %d at %p\n",
                            total_size / (1024.0 * 1024.0), node, node_mem);
         }
         addr = numa_mappings.empty() ? nullptr : numa_mappings[0].addr;
