@@ -1,4 +1,22 @@
-// Deterministic FlashAttention invariance and cross-run tests for CUDA backend
+// Deterministic FlashAttention test suite (03A/03B/03C)
+//
+// This suite verifies three properties when GGML_DETERMINISTIC=1:
+//  1) Cross-run determinism: two runs with identical inputs match bitwise.
+//  2) Batch invariance: the first query column’s result is identical whether
+//     evaluated with N=1 or embedded as column 0 of a larger batch N=B.
+//  3) Feature coverage bottoms: minimal ALiBi/sinks/softcap and quantized K/V
+//     shapes (where supported) remain deterministic.
+//
+// 03B notes (CUDA):
+//  - Special head sizes D ∈ {80,96,112} use a deterministic single-column F16
+//    tile path by default. logit_softcap is not supported for these Ds.
+//  - MMA is PROTOTYPE and remains opt-in via GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1.
+//    Tests here exercise MMA only when explicitly enabled and compare against
+//    the tile reference with a small tolerance, then check cross-run bytes.
+//
+// 03C notes (KV-cache invariance):
+//  - Separate test (test-kvcache-invariance.cpp) validates single-shot vs
+//    incremental decode equivalence at position P under deterministic policy.
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -9,6 +27,7 @@
 #include <cstring>
 #include <cmath>
 #include <iostream>
+#include <array>
 #include <random>
 #include <string>
 #include <vector>
@@ -357,6 +376,9 @@ static int test_disable_tile_smoke(ggml_backend_t backend) {
 // 03B.3 MMA ncols=1 prototype tests for D∈{80,96,112} (opt-in)
 // Compares MMA output (ALLOW_MMA=1) to deterministic tile output (FORCE_TILE=1) bitwise,
 // and validates cross-run determinism for the MMA path.
+// det note: MMA ncols=1 prototype is opt‑in via RUN_MMA_PROTO_TESTS and
+// ALLOW_MMA. We compare against the deterministic tile path; exact equality
+// is preferred, but a small tol (1e‑3) is accepted for prototype kernels.
 static int test_mma_ncols1_proto(ggml_backend_t backend) {
     if (!std::getenv("RUN_MMA_PROTO_TESTS")) {
         std::cerr << "[SKIP] MMA ncols1 prototype tests disabled (set RUN_MMA_PROTO_TESTS=1)\n";
@@ -696,10 +718,11 @@ static int test_special_heads_mask_alibi(ggml_backend_t backend) {
         std::vector<float> Q1((size_t)D*N1*H);
         fill_uniform(rng, Q1.data(), Q1.size());
 
-        // ALiBi + mask (all ones)
+        // ALiBi + mask (all ones) + non-zero sinks
         const int64_t N1p = GGML_PAD(N1, GGML_KQ_MASK_PAD), N2p = GGML_PAD(N2, GGML_KQ_MASK_PAD);
         std::vector<float> mask1((size_t)KV*N1p, 1.0f), mask2((size_t)KV*N2p, 1.0f);
-        std::vector<float> sinks((size_t)H, 0.0f);
+        std::vector<float> sinks((size_t)H);
+        fill_uniform(rng, sinks.data(), sinks.size(), -3.0f, 3.0f);
 
         // y1 at N=1 with ALiBi (max_bias=1.0)
         auto y1 = run_attention_graph(backend, D, DV, N1, H, H_kv, KV,

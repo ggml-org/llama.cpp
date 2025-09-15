@@ -47,6 +47,9 @@ if (CUDAToolkit_FOUND)
     file(GLOB   SRCS "template-instances/mmf*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
+    # det note: in det mode we only rely on a minimal, always‑built set of
+    # vector attention instances. FA_ALL_QUANTS expands the template matrix for
+    # experiments; tests and dispatcher probes gate usage accordingly.
     if (GGML_CUDA_FA_ALL_QUANTS)
         file(GLOB   SRCS "template-instances/fattn-vec*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})

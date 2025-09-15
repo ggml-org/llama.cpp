@@ -34,7 +34,7 @@ Notes
 - Deterministic attention relies on a single-block accumulation (no stream-k) for fixed reduction order.
 - Quantized K/V coverage is limited to supported vec kernels (e.g., D=128 with q4_0/q4_0 and q8_0/q8_0). If `GGML_CUDA_FA_ALL_QUANTS=ON`, a few more pairs are exercised. Unsupported pairs error with guidance.
 - F16 K/V may automatically fall back to the deterministic tile path; quantized K/V does not have a tile fallback.
-- Special head sizes 80/96/112 are supported in deterministic mode via a single‑column tile path (F16 K/V only). Throughput is lower than vec at 64/128/256. D=576 remains experimental and requires `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
+- Special head sizes 80/96/112: MMA is available as an opt‑in prototype in deterministic mode (set `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`); tile remains the default fallback. D=576 remains experimental and requires `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
 
 Optional builds
 ---------------
@@ -47,10 +47,10 @@ scripts/build-in-container.sh
 Debug toggles
 -------------
 - `GGML_DETERMINISTIC_ATTENTION_FORCE_VEC=1` or `GGML_DETERMINISTIC_ATTENTION_FORCE_TILE=1` (F16‑only)
-- `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` (experimental)
+- `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` explicitly enables MMA for special head sizes when available.
 - `RUN_FORCE_TOGGLE_TESTS=1` enables FORCE_* determinism smokes in the tests
 - `RUN_MMA_HEADSIZE_TESTS=1` probes D=576 behavior (no assertions by default)
-- `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` disables tile fallback at D∈{80,96,112}; errors unless `ALLOW_MMA`.
+- `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` disables tile fallback at D∈{80,96,112}`; with MMA not allowed, this causes an intentional error (smoke test).
 - `RUN_MMA_PROTO_TESTS=1` runs 03B.3 MMA prototype tests (compares MMA vs tile at D∈{80,96,112} with tol=1e‑3 and checks determinism).
 Build (mixed Ada + Ampere)
 --------------------------

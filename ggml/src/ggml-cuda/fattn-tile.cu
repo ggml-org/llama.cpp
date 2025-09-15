@@ -786,12 +786,17 @@ static void launch_fattn_tile_switch_head_size(ggml_backend_cuda_context & ctx, 
             launch_fattn_tile_switch_ncols< 64, use_logit_softcap>(ctx, dst);
         } break;
         case  80: {
+            // det note: for special head sizes we take the single‑column
+            // generic tile path to avoid cross‑block combines and keep a
+            // stable reduction order (batch‑invariant).
             launch_fattn_tile_generic_singlecol< 80, use_logit_softcap>(ctx, dst);
         } break;
         case  96: {
+            // det note: see comment above for D=80.
             launch_fattn_tile_generic_singlecol< 96, use_logit_softcap>(ctx, dst);
         } break;
         case 112: {
+            // det note: see comment above for D=80.
             launch_fattn_tile_generic_singlecol<112, use_logit_softcap>(ctx, dst);
         } break;
         case 128: {

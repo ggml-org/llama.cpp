@@ -384,6 +384,9 @@ void ggml_cuda_flash_attn_ext_vec_f32_case(ggml_backend_cuda_context & ctx, ggml
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
+    // det note: prefer single‑column execution on NVIDIA or when N==1.
+    // Deterministic dispatcher relies on this to keep accumulation order
+    // fixed across batch sizes.
     if (Q->ne[1] == 1 || GGML_CUDA_CC_IS_NVIDIA(cc)) {
         constexpr int cols_per_block = 1;
         if (logit_softcap == 0.0f) {

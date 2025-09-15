@@ -120,7 +120,7 @@ Attention (CUDA)
     - F16 K/V: preferred path is vec‑f16 (or vec‑f32 if precision is forced to F32); tile fallback remains deterministic but slower.
     - Quantized K/V: supported via vec kernels for selected shapes. Minimal guaranteed coverage: D=128 with pairs q4_0/q4_0 and q8_0/q8_0. Unsupported quantized shapes will error in det mode (no tile fallback for quantized K/V).
     - Note: F16 K/V may automatically fall back to the deterministic tile path; quantized K/V does not have a tile fallback.
-  - Special head sizes: D ∈ {80, 96, 112} are supported in deterministic mode via a single‑column F16 tile path (correctness‑first; slower than vec for 64/128/256). Mask and ALiBi are supported; logit_softcap is not supported for these head sizes. D=576 remains experimental and is gated behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
+  - Special head sizes: D ∈ {80, 96, 112} are supported in deterministic mode via a single‑column F16 tile path (correctness‑first; slower than vec for 64/128/256). Mask and ALiBi are supported; logit_softcap is not supported for these head sizes. MMA is available as an opt‑in prototype for these sizes via `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`. D=576 remains experimental and is gated behind `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1`.
 - Supported shapes (03A):
   - Head sizes D ∈ {64, 128, 256}; KV length must be a multiple of 256.
   - Typical LLaMA head counts and GQA ratios (e.g., 8 heads; GQA {1,2,4}).
@@ -131,6 +131,16 @@ Attention (CUDA)
 - Caveats:
   - Throughput is lower than default (no multi‑block combine and no stream‑k).
   - Some shapes may fall back to deterministic tile with additional slowdown.
+
+KV‑Cache Invariance (03C)
+-------------------------
+
+- Goal: logits for the same absolute position P are bitwise‑identical whether computed via single‑shot prefill to P or via incremental decode (including chunked prefill/streaming), when `GGML_DETERMINISTIC=1`.
+- Host‑side policy (enforced when determinism is ON):
+  - KV padding: use a fixed padding of 256 tokens so that the effective KV length is always a multiple of the FlashAttention stride (`FATTN_KQ_STRIDE`, currently 256). This pins the reduction tree and avoids tail‑block boundary effects between flows. A one‑time INFO log announces the setting.
+  - Mask padding: shape mask tensors as `[KV, PAD(N, GGML_KQ_MASK_PAD), 1, 1]` with `GGML_KQ_MASK_PAD=64` to keep the mask layout identical across flows.
+  - Validation: if FlashAttention is selected and either condition is not met (KV not multiple of 256, or mask N not padded to 64), the graph aborts with guidance rather than proceeding with a near‑miss configuration.
+- Tests: `tests/test-kvcache-invariance.cpp` compares single‑shot vs incremental outputs across a grid (e.g., D∈{64,128,256}, KV∈{256,1024}, GQA∈{1,2}).
 
 Quick test run (CUDA)
 ---------------------
@@ -157,7 +167,7 @@ Debug controls (optional)
 
 - `GGML_DETERMINISTIC_ATTENTION_FORCE_VEC=1` forces the deterministic dispatcher to take a vec path when possible.
 - `GGML_DETERMINISTIC_ATTENTION_FORCE_TILE=1` forces the deterministic dispatcher to take the tile path (F16 K/V only) and logs an info message once.
-- `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` experimental: allows MMA path for special head sizes when available. Not guaranteed batch‑invariant yet; prefer OFF for strict determinism.
+- `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA=1` explicitly allows MMA path for special head sizes when available (prototype; opt‑in).
 - `GGML_DET_ATTENTION_DISABLE_TILE_80_96_112=1` optional: disables the deterministic tile path for D∈{80,96,112}. If set and MMA isn’t explicitly allowed/available, attention aborts with guidance. Useful for perf trials to prevent slow fallbacks.
 
 

@@ -16,6 +16,11 @@ static inline bool env_flag_true(const char *name) {
 
 // want_fp16 is intentionally unused: vec availability for the supported instances does not
 // differ by accumulation precision for our deterministic paths.
+// det note: we keep the deterministic vec coverage intentionally conservative
+// to match template instantiations across common builds. This minimizes
+// configuration‑dependent behavior. Additional pairs are exposed only when
+// GGML_CUDA_FA_ALL_QUANTS is compiled. This mirrors TML’s advice: expand
+// coverage gradually with tests and explicit gating.
 static bool det_vec_supported(const ggml_tensor * dst, bool want_fp16) {
     (void) want_fp16; // intentionally unused
     const ggml_tensor * Q = dst->src[0];
@@ -72,6 +77,10 @@ static bool det_vec_supported(const ggml_tensor * dst, bool want_fp16) {
 
 
 template <int DKQ, int DV, int ncols2>
+// det note: the MMA prototype uses an ncols1 switcher to choose how many
+// query columns each block processes. In det mode we rely on launch_fattn()
+// to force single‑block accumulation; tests exercise ncols1=1 for special
+// head sizes to match the single‑column tile reference path.
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * Q = dst->src[0];
@@ -97,6 +106,9 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
 }
 
 template <int DKQ, int DV>
+// det note: ncols2 controls grouped Q columns per head. The deterministic
+// dispatcher keeps batch invariance by avoiding multi‑block reduction;
+// this switch remains for default perf paths and prototype exploration.
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -528,10 +540,16 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         };
         const bool kv_both_quant = is_quant(K->type) && is_quant(V->type);
 
+        // det note: env toggles for deterministic attention paths.
+        //  - FORCE_VEC/FORCE_TILE: debug forcing of kernel family
+        //  - ALLOW_MMA: opt‑in to MMA for special head sizes while we validate
+        //  - DISABLE_TILE_80_96_112: prevent slow tile fallback during perf trials
         const bool force_vec   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_VEC");
         const bool force_tile  = env_flag_true("GGML_DETERMINISTIC_ATTENTION_FORCE_TILE");
-        const bool allow_mma   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA");
+        const bool allow_mma_env   = env_flag_true("GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA");
         const bool disable_tile_80_96_112 = env_flag_true("GGML_DET_ATTENTION_DISABLE_TILE_80_96_112");
+        // det note: MMA remains opt‑in via GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA
+        // while we validate batch invariance for special head sizes.
 
         // 1) Special head sizes (80/96/112/576): attempt MMA only if explicitly allowed and supported; otherwise
         // fall back to vec if available, else F16 tile, else abort with instructions.
@@ -539,9 +557,24 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             // Guard unsupported features for special head sizes
             float logit_softcap = 0.0f;
             memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
-            if ((D == 80 || D == 96 || D == 112) && logit_softcap != 0.0f) {
-                GGML_ABORT("deterministic attention: D in {80,96,112} does not support logit_softcap; use D in {128,256} or disable softcap.");
+            if ((D == 80 || D == 96 || D == 112)) {
+                const float ls_abs = fabsf(logit_softcap);
+                const bool dbg = env_flag_true("GGML_DET_ATTENTION_DEBUG");
+                static bool logged_softcap_once = false;
+                if (dbg && !logged_softcap_once) {
+                    GGML_LOG_INFO("[det][debug] softcap param read for D=%d: %g (abs=%g)\n", D, logit_softcap, ls_abs);
+                    logged_softcap_once = true;
+                }
+                // det note: the single‑column tile kernel used for 80/96/112
+                // does not implement logit_softcap. Disallow it to avoid
+                // silent numeric mismatches; use 128/256 if softcap is needed.
+                if (ls_abs > 1e-8f) {
+                    GGML_ABORT("deterministic attention: D in {80,96,112} does not support logit_softcap; use D in {128,256} or disable softcap.");
+                }
             }
+            // Allow MMA only when explicitly enabled via env while prototype
+            // soaks. This avoids changing defaults across drivers/arches.
+            const bool allow_mma = allow_mma_env;
             if (allow_mma && det_mma_supported(dst)) {
                 ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
                 return;

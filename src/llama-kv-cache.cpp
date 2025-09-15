@@ -2007,6 +2007,19 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
 }
 
 uint32_t llama_kv_cache::get_padding(const llama_cparams & cparams) {
-    // the FA kernels require padding to avoid extra runtime boundary checks
+    // det note (03C KV-cache invariance): Prefer a fixed padding of 256 when
+    // determinism is enabled so that KV lengths are always multiples of the
+    // FlashAttention stride (aka FATTN_KQ_STRIDE), regardless of whether FA is
+    // enabled. This trades a small amount of memory for a stable reduction
+    // shape across single-shot and incremental flows.
+    if (ggml_is_deterministic()) {
+        static bool logged_once = false;
+        if (!logged_once) {
+            LLAMA_LOG_INFO("[det] KV-cache padding set to 256 to enforce invariance across flows.\n");
+            logged_once = true;
+        }
+        return 256u;
+    }
+    // Default behavior (non-det): FA kernels prefer 256 to avoid runtime tail checks.
     return cparams.flash_attn ? 256u : 32u;
 }

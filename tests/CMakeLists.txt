@@ -208,6 +208,13 @@ llama_build_and_test(test-matmul-determinism.cpp)
 # Deterministic Attention invariance (CUDA only; program skips if CUDA not present)
 llama_build_and_test(test-attention-determinism.cpp)
 
+# 03C: KV-cache invariance (backend-agnostic). Validates that, in det mode,
+# single-shot prefill and incremental decode yield identical logits at P.
+llama_build_and_test(test-kvcache-invariance.cpp)
+
+# minimal repro for IM2COL_3D CPU vs CUDA
+llama_build_and_test(test-im2col3d-repro.cpp)
+
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 

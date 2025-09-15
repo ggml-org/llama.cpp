@@ -9,7 +9,7 @@ set -euo pipefail
 #   BUILD_DIR : CMake build dir inside project. Default: build-container
 #   BUILD_TYPE: CMake build type. Default: Release
 #   JOBS      : parallel build jobs. Default: nproc
-#   CMAKE_ARGS: extra CMake args, e.g. "-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86"
+#   CMAKE_ARGS: extra CMake args, e.g. "-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86;89"
 #
 # Usage examples:
 #   scripts/build-in-container.sh
@@ -59,24 +59,41 @@ if [[ "$engine" == "docker" ]]; then
   fi
 fi
 
-"$engine" run --rm "${gpu_args[@]}" \
+# propagate optional CMAKE_ARGS into container environment (avoid inline expansion issues)
+env_args=()
+if [[ -n ${CMAKE_ARGS:-} ]]; then
+  env_args+=("-e" "CMAKE_ARGS=${CMAKE_ARGS}")
+fi
+
+"$engine" run --rm "${gpu_args[@]}" "${env_args[@]}" \
   -v "$proj_root:/src${vol_suffix}" \
+  -v "$proj_root/.ccache:/src/.ccache${vol_suffix}" \
   -w /src \
   "$image" \
   bash -lc "\
     set -euo pipefail; \
     echo '[container] installing toolchain...'; \
     if command -v dnf >/dev/null 2>&1; then \
-      dnf -y install --setopt=install_weak_deps=False gcc-c++ cmake make libcurl-devel git >/dev/null; \
+      dnf -y install --setopt=install_weak_deps=False gcc-c++ cmake make libcurl-devel git ccache >/dev/null; \
     elif command -v apt-get >/dev/null 2>&1; then \
       export DEBIAN_FRONTEND=noninteractive; \
       apt-get update -qq >/dev/null; \
-      apt-get install -y -qq build-essential cmake make git libcurl4-openssl-dev >/dev/null; \
+      apt-get install -y -qq build-essential cmake make git libcurl4-openssl-dev ccache >/dev/null; \
     else \
       echo 'Unsupported base image: no dnf or apt-get'; exit 1; \
     fi; \
+    # allow git to read metadata from bind-mounted /src repo
+    git config --global --add safe.directory /src || true; \
+    # ensure ccache is used and persisted across runs
+    export CCACHE_DIR=/src/.ccache; \
+    mkdir -p "\$CCACHE_DIR"; \
     echo '[container] configuring CMake...'; \
-    cmake -S . -B '$build_dir' -DCMAKE_BUILD_TYPE='$build_type' ${CMAKE_ARGS:-}; \
+    extra=(); \
+    if [[ -n \${CMAKE_ARGS:-} ]]; then \
+      # split on whitespace into an array; array expansion preserves tokens safely
+      read -r -a extra <<< "\$CMAKE_ARGS"; \
+    fi; \
+    cmake -S . -B '$build_dir' -DCMAKE_BUILD_TYPE='$build_type' "\${extra[@]}"; \
     echo '[container] building...'; \
     cmake --build '$build_dir' -j '$jobs'; \
     echo '[container] done. binaries in $build_dir/bin' \

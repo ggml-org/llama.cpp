@@ -2043,7 +2043,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
     }
 
-    // Deterministic mode: force a single, batch-invariant algorithm for float/bfloat matmul
+    // det note: force a single, batch‑invariant algorithm for float/bfloat matmul.
+    // We bypass cuBLAS and route to a fixed tiling (mmvf_det) to keep the
+    // accumulation order identical regardless of batch shape or runtime
+    // heuristics. This mirrors the TML guidance: pin the reduction tree.
     if (ggml_is_deterministic() && !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_mmvf_det, nullptr);
@@ -2064,7 +2067,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
     bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32;
 
-    // Deterministic mode: hard-disable cuBLAS-based GEMM paths
+    // det note: hard‑disable cuBLAS GEMM in det mode. cuBLAS may select
+    // algorithms (incl. split‑K) whose accumulation order varies by size,
+    // driver, or arch, which breaks batch invariance and cross‑run parity.
     if (ggml_is_deterministic()) {
         use_batched_cublas_f16 = false;
         use_batched_cublas_bf16 = false;
@@ -2116,7 +2121,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    // Deterministic mode: compute per (token, slot) sequentially to guarantee batch invariance
+    // det note: compute per (token,slot) sequentially to guarantee batch
+    // invariance for MoE (mul_mat_id). We also promote F16/BF16 input columns
+    // to F32 prior to matmul to fix the reduction precision. This follows the
+    // same principle as attention/matmul: keep the reduction order and dtype
+    // stable, trading some throughput for reproducibility.
     if (ggml_is_deterministic() && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32) {
         // ids is on device; copy to host once
         cudaStream_t stream = ctx.stream();

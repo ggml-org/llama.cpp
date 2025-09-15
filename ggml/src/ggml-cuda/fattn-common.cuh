@@ -838,8 +838,12 @@ void launch_fattn(
 
     int parallel_blocks = 1;
 
-    // Deterministic mode disables stream-K and multi-block accumulation to
-    // guarantee a fixed reduction order independent of batch/shape.
+    // det note: determinism requires a fixed reduction order. We therefore
+    // disable stream‑K and multi‑block accumulation and force single‑block
+    // execution per tile in det mode. This makes the output for a given query
+    // independent of batch size (batch invariance) and aligns with TML’s
+    // recommendation to avoid cross‑block combines when aiming for bitwise
+    // parity.
     const bool det = ggml_is_deterministic();
 
     const dim3 block_dim(warp_size, nwarps, 1);

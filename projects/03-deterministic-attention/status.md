@@ -15,7 +15,7 @@ Status — Project 03 Deterministic Attention
 - [x] 03B.1 tile coverage for D∈{80,96,112} + tests (CUDA Ada/Ampere; single‑column tile path; no logit softcap).
 - [x] 03B.2 observability and toggles (one‑time INFO; GGML_DET_ATTENTION_DISABLE_TILE_80_96_112).
 - [x] 03B.3 ncols=1 MMA for 80/96/112 (opt-in) + tests. (prototype landed; validated on Ada; Ampere run pending)
-- [ ] 03B.4 enable MMA by default for 80/96/112 after soak.
+- [ ] 03B.4 enable MMA by default for 80/96/112 after soak (currently opt‑in via GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA).
 - [ ] 03B.5 576/512 ncols=1 MMA + tests.
 
 03C (KV-Cache + Other Backends)

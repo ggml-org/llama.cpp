@@ -119,7 +119,9 @@ static  __global__ void im2col_3d_kernel(
         const float * src, T * dst,
         int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW, int64_t OC,
         int64_t KD, int64_t KH, int64_t KW, int64_t OD, int64_t OH, int64_t OW,
-        int64_t OH_OW, int64_t KD_KH_KW, int64_t ID_IH_IW, int64_t KH_KW, int64_t IH_IW, int64_t IC_ID_IH_IW,
+        int64_t OH_OW, int64_t KD_KH_KW, int64_t KH_KW,
+        // strides of src in elements (not bytes):
+        int64_t STRIDE_NIC, int64_t STRIDE_D, int64_t STRIDE_H, int64_t STRIDE_W,
         int64_t IC_KD_KH_KW, int64_t OW_KD_KH_KW, int64_t OD_OH_OW_IC_KD_KH_KW, int64_t OH_OW_IC_KD_KH_KW,
         int64_t OW_IC_KD_KH_KW, int64_t N_OD_OH, int64_t OD_OH,
         int s0, int s1, int s2, int p0, int p1, int p2, int d0, int d1, int d2) {
@@ -148,7 +150,9 @@ static  __global__ void im2col_3d_kernel(
         if (iih < 0 || iih >= IH || iiw < 0 || iiw >= IW || iid < 0 || iid >= ID) {
             dst[offset_dst] = 0.0f;
         } else {
-            const int64_t offset_src = in*IC_ID_IH_IW + iic*ID_IH_IW + iid*IH_IW + iih*IW + iiw;
+            // General non-contiguous layout: base plane stride for (in, iic) plus per-dim strides
+            const int64_t plane = in*IC + iic;
+            const int64_t offset_src = plane*STRIDE_NIC + iid*STRIDE_D + iih*STRIDE_H + iiw*STRIDE_W;
             dst[offset_dst] = src[offset_src];
         }
     }
@@ -159,12 +163,12 @@ template <typename T>
 static void im2col_3d_cuda(const float * src, T* dst,
     int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW, int64_t OC,
     int64_t KD, int64_t KH, int64_t KW, int64_t OD, int64_t OH, int64_t OW,
+    // src strides in elements:
+    int64_t STRIDE_NIC, int64_t STRIDE_D, int64_t STRIDE_H, int64_t STRIDE_W,
     int s0, int s1, int s2, int p0, int p1, int p2, int d0, int d1, int d2, cudaStream_t stream) {
     const int64_t OH_OW = OH*OW;
     const int64_t KD_KH_KW = KD*KH*KW;
-    const int64_t ID_IH_IW = ID*IH*IW;
     const int64_t KH_KW = KH*KW;
-    const int64_t IH_IW = IH*IW;
     const int64_t IC_KD_KH_KW = IC*KD*KH*KW;
     const int64_t OW_KD_KH_KW = OW*KD*KH*KW;
     const int64_t N_OD_OH = N*OD*OH;
@@ -176,7 +180,8 @@ static void im2col_3d_cuda(const float * src, T* dst,
     const int64_t num_blocks = (IC_KD_KH_KW + CUDA_IM2COL_BLOCK_SIZE - 1) / CUDA_IM2COL_BLOCK_SIZE;
     dim3 block_nums(num_blocks, OW, MIN(N_OD_OH, MAX_GRIDDIM_Z));
     im2col_3d_kernel<<<block_nums, MIN(IC_KD_KH_KW, CUDA_IM2COL_BLOCK_SIZE) , 0, stream>>>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
-                                                                                           OH_OW, KD_KH_KW, ID_IH_IW, KH_KW, IH_IW, IC_ID_IH_IW,
+                                                                                           OH_OW, KD_KH_KW, KH_KW,
+                                                                                           STRIDE_NIC, STRIDE_D, STRIDE_H, STRIDE_W,
                                                                                            IC_KD_KH_KW, OW_KD_KH_KW, OD_OH_OW_IC_KD_KH_KW,
                                                                                            OH_OW_IC_KD_KH_KW, OW_IC_KD_KH_KW, N_OD_OH, OD_OH,
                                                                                            s0, s1, s2, p0, p1, p2, d0, d1, d2);
@@ -185,17 +190,23 @@ static void im2col_3d_cuda(const float * src, T* dst,
 static void im2col_3d_cuda_f16(const float * src, half * dst,
     int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW, int64_t OC,
     int64_t KD, int64_t KH, int64_t KW, int64_t OD, int64_t OH, int64_t OW,
+    int64_t STRIDE_NIC, int64_t STRIDE_D, int64_t STRIDE_H, int64_t STRIDE_W,
     int s0, int s1, int s2, int p0, int p1, int p2, int d0, int d1, int d2, cudaStream_t stream) {
 
-    im2col_3d_cuda<half>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
+    im2col_3d_cuda<half>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
+                         STRIDE_NIC, STRIDE_D, STRIDE_H, STRIDE_W,
+                         s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
 }
 
 static void im2col_3d_cuda_f32(const float * src, float * dst,
     int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW, int64_t OC,
     int64_t KD, int64_t KH, int64_t KW, int64_t OD, int64_t OH, int64_t OW,
+    int64_t STRIDE_NIC, int64_t STRIDE_D, int64_t STRIDE_H, int64_t STRIDE_W,
     int s0, int s1, int s2, int p0, int p1, int p2, int d0, int d1, int d2, cudaStream_t stream) {
 
-    im2col_3d_cuda<float>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
+    im2col_3d_cuda<float>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
+                          STRIDE_NIC, STRIDE_D, STRIDE_H, STRIDE_W,
+                          s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
 }
 
 void ggml_cuda_op_im2col_3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -235,9 +246,19 @@ void ggml_cuda_op_im2col_3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t OH = ne2;
     const int64_t OW = ne1;
 
+    // compute strides in elements from src1->nb (bytes)
+    const int64_t STRIDE_W  = nb10 / sizeof(float);
+    const int64_t STRIDE_H  = nb11 / sizeof(float);
+    const int64_t STRIDE_D  = nb12 / sizeof(float);
+    const int64_t STRIDE_NC = nb13 / sizeof(float);
+
     if(dst->type == GGML_TYPE_F16) {
-        im2col_3d_cuda_f16(src1_d, (half *) dst_d, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
+        im2col_3d_cuda_f16(src1_d, (half *) dst_d, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
+                           STRIDE_NC, STRIDE_D, STRIDE_H, STRIDE_W,
+                           s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
     } else {
-        im2col_3d_cuda_f32(src1_d, (float *) dst_d, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
+        im2col_3d_cuda_f32(src1_d, (float *) dst_d, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
+                           STRIDE_NC, STRIDE_D, STRIDE_H, STRIDE_W,
+                           s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
     }
 }

@@ -138,15 +138,19 @@ Checklist Summary (for PR review)
 - [x] One‑time log for tile fallback.
 - [x] Tests: attention determinism (cross‑run, batch invariance), softcap, GQA; quantized minimal set; optional FORCE_* smokes.
 - [x] Docs updated; runbook in place.
-- [ ] 03B.1: tile for 80/96/112 + tests (to do).
-- [ ] 03B.3–03B.5: ncols=1 MMA for 80/96/112 and 576 (to do; opt‑in first).
+- [x] 03B.1: tile for 80/96/112 + tests.
+- [x] 03B.3: ncols=1 MMA for 80/96/112 (opt‑in) + tests.
+- [ ] 03B.4: default‑enable MMA for 80/96/112 after soak (currently opt‑in via `GGML_DETERMINISTIC_ATTENTION_ALLOW_MMA`).
+- [ ] 03B.5: 576/512 ncols=1 MMA + tests.
 
 Status
 ------
 
 - 03A implemented and validated.
 - 03B.0 landed: dispatcher probes, quant vec‑only minimal coverage, logging and debug envs.
-- Next: 03B.1 tile coverage for 80/96/112.
+- 03B.1 tile coverage for 80/96/112: done.
+- 03B.3 MMA ncols=1 (80/96/112): prototype validated on Ada; default enable pending soak (03B.4). MMA remains opt‑in via env.
+- Next: 03B.4 decision gate after soak; 03B.5 DeepSeek D=576/DV=512 MMA ncols=1 + tests; then 03C (KV‑cache invariance and other backends).
 
 Next Phases
 -----------

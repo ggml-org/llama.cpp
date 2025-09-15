@@ -19,10 +19,13 @@ fi
 repo=$1
 folder=$2
 
+# det note: ensure any large tokenizer artifacts are available locally. If git-lfs
+# is installed, pull LFS objects after updating/cloning; otherwise skip gracefully.
 if [ -d $folder ] && [ -d $folder/.git ]; then
-    (cd $folder; git pull)
+    (cd $folder; git pull && command -v git-lfs >/dev/null 2>&1 && git lfs pull || true)
 else
     git clone $repo $folder
+    (cd $folder; command -v git-lfs >/dev/null 2>&1 && git lfs pull || true)
 fi
 
 shopt -s globstar
@@ -33,4 +36,3 @@ for gguf in $folder/**/*.gguf; do
         printf "Found \"$gguf\" without matching inp/out files, ignoring...\n"
     fi
 done
-
