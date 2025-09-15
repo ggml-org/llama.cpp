@@ -308,7 +308,7 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
         // Bind current thread to the target NUMA node for first-touch
         struct bitmask* old_mask = numa_get_run_node_mask();
         if (numa_run_on_node(node) != 0) {
-            LLAMA_LOG_DEBUG("numa_mirroring Warning: could not bind thread to NUMA node %d: %s\n", node, strerror(errno));
+            LLAMA_LOG_DEBUG("numa_mirroring: Warning: could not bind thread to NUMA node %d: %s\n", node, strerror(errno));
             // Continue anyway - might still work
         }
         
@@ -316,7 +316,7 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
         void* ptr = nullptr;
         int ret = posix_memalign(&ptr, alignment, size);
         if (ret != 0) {
-            LLAMA_LOG_DEBUG("numa_mirroring posix_memalign failed for %zu bytes with alignment %zu: %s\n", 
+            LLAMA_LOG_DEBUG("numa_mirroring: posix_memalign failed for %zu bytes with alignment %zu: %s\n", 
                            size, alignment, strerror(ret));
             // Restore original thread binding
             if (old_mask) {
@@ -339,7 +339,7 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
             numa_free_nodemask(old_mask);
         }
         
-        LLAMA_LOG_DEBUG("numa_mirroring First-touch allocation: %zu bytes for node %d at %p (SIMD aligned to %zu bytes)\n", 
+        LLAMA_LOG_DEBUG("numa_mirroring: First-touch allocation: %zu bytes for node %d at %p (SIMD aligned to %zu bytes)\n", 
                        size, node, ptr, alignment);
         return ptr;
     }
@@ -347,15 +347,15 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
     void mmap_numa_mirror(struct llama_file * file) {
         int num_nodes = numa_num_configured_nodes();
         if (num_nodes <= 1) {
-            throw std::runtime_error("numa_mirroring NUMA mirror mode requires multiple NUMA nodes");
+            throw std::runtime_error("numa_mirroring: NUMA mirror mode requires multiple NUMA nodes");
         }
         
-        LLAMA_LOG_INFO("numa_mirroring NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
+        LLAMA_LOG_INFO("numa_mirroring: NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
                 file->size() / (1024.0 * 1024.0), num_nodes);
         
         size_t total_size = file->size();
         for (int node = 0; node < num_nodes; ++node) {
-            LLAMA_LOG_INFO("numa_mirroring Allocating on node %d \n", node);
+            LLAMA_LOG_INFO("numa_mirroring: Allocating on node %d \n", node);
             
             void* node_mem = numa_alloc_first_touch(total_size, node);
             if (!node_mem) {
@@ -368,16 +368,16 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
             // VERIFICATION: Check that memory was actually allocated on the expected NUMA node
             int actual_node = -1;
             if (get_mempolicy(&actual_node, NULL, 0, node_mem, MPOL_F_NODE | MPOL_F_ADDR) == 0) {
-                LLAMA_LOG_DEBUG("numa_mirroring Memory at %p allocated on node %d (expected %d)\n", 
+                LLAMA_LOG_DEBUG("numa_mirroring: Memory at %p allocated on node %d (expected %d)\n", 
                                node_mem, actual_node, node);
                 if (actual_node != node) {
-                    LLAMA_LOG_WARN("numa_mirroring WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
+                    LLAMA_LOG_WARN("numa_mirroring: WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
                                    node, actual_node);
                 } else {
-                    LLAMA_LOG_DEBUG("numa_mirroring First-touch succeeded - memory correctly placed on node %d\n", node);
+                    LLAMA_LOG_DEBUG("numa_mirroring: First-touch succeeded - memory correctly placed on node %d\n", node);
                 }
             } else {
-                LLAMA_LOG_WARN("numa_mirroring Could not verify allocation node for %p: %s\n", 
+                LLAMA_LOG_WARN("numa_mirroring: Could not verify allocation node for %p: %s\n", 
                                node_mem, strerror(errno));
             }
             
@@ -385,7 +385,7 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
             file->read_raw(node_mem, total_size);
             numa_mappings.push_back({node_mem, total_size});
 
-            LLAMA_LOG_DEBUG("numa_mirroring Successfully allocated and populated %.2f MB on node %d at %p\n",
+            LLAMA_LOG_DEBUG("numa_mirroring: Successfully allocated and populated %.2f MB on node %d at %p\n",
                            total_size / (1024.0 * 1024.0), node, node_mem);
         }
         addr = numa_mappings.empty() ? nullptr : numa_mappings[0].addr;
@@ -394,15 +394,15 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
     void mmap_numa_mirror(struct llama_file * file) {
         int num_nodes = numa_num_configured_nodes();
         if (num_nodes <= 1) {
-            throw std::runtime_error("numa_mirroring NUMA mirror mode requires multiple NUMA nodes");
+            throw std::runtime_error("numa_mirroring: NUMA mirror mode requires multiple NUMA nodes");
         }
         
-        LLAMA_LOG_INFO("numa_mirroring NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
+        LLAMA_LOG_INFO("numa_mirroring: NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
                 file->size() / (1024.0 * 1024.0), num_nodes);
         
         size_t total_size = file->size();
         for (int node = 0; node < num_nodes; ++node) {
-            LLAMA_LOG_INFO("numa_mirroring Allocating on node %d \n", node);
+            LLAMA_LOG_INFO("numa_mirroring: Allocating on node %d \n", node);
             
             void* node_mem = numa_alloc_first_touch(total_size, node);
             if (!node_mem) {
@@ -415,16 +415,16 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
             // VERIFICATION: Check that memory was actually allocated on the expected NUMA node
             int actual_node = -1;
             if (get_mempolicy(&actual_node, NULL, 0, node_mem, MPOL_F_NODE | MPOL_F_ADDR) == 0) {
-                LLAMA_LOG_DEBUG("numa_mirroring Memory at %p allocated on node %d (expected %d)\n", 
+                LLAMA_LOG_DEBUG("numa_mirroring: Memory at %p allocated on node %d (expected %d)\n", 
                                node_mem, actual_node, node);
                 if (actual_node != node) {
-                    LLAMA_LOG_WARN("numa_mirroring WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
+                    LLAMA_LOG_WARN("numa_mirroring: WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
                                    node, actual_node);
                 } else {
-                    LLAMA_LOG_DEBUG("numa_mirroring First-touch succeeded - memory correctly placed on node %d\n", node);
+                    LLAMA_LOG_DEBUG("numa_mirroring: First-touch succeeded - memory correctly placed on node %d\n", node);
                 }
             } else {
-                LLAMA_LOG_WARN("numa_mirroring Could not verify allocation node for %p: %s\n", 
+                LLAMA_LOG_WARN("numa_mirroring: Could not verify allocation node for %p: %s\n", 
                                node_mem, strerror(errno));
             }
             
@@ -432,7 +432,7 @@ In `llama-mmap.cpp`: First-touch allocation at model weight loading time
             file->read_raw(node_mem, total_size);
             numa_mappings.push_back({node_mem, total_size});
 
-            LLAMA_LOG_DEBUG("numa_mirroring Successfully allocated and populated %.2f MB on node %d at %p\n",
+            LLAMA_LOG_DEBUG("numa_mirroring: Successfully allocated and populated %.2f MB on node %d at %p\n",
                            total_size / (1024.0 * 1024.0), node, node_mem);
         }
         addr = numa_mappings.empty() ? nullptr : numa_mappings[0].addr;

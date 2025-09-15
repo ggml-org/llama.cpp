@@ -923,17 +923,17 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
             for (int node = 1; node < GGML_NUMA_MAX_NODES && node < numa_nodes; node++) {
                 if (cur->__data[node] != nullptr) {
                     needs_numa_setup = false;
-                    LLAMA_LOG_DEBUG("numa_mirroring Tensor %s already has setup at node %d\n", ggml_get_name(cur), node);
+                    LLAMA_LOG_DEBUG("numa_mirroring: Tensor %s already has setup at node %d\n", ggml_get_name(cur), node);
                     break;
                 }
             }
         } else {
             // NUMA mirroring disabled or single node system - no NUMA setup needed
-            LLAMA_LOG_DEBUG("numa_mirroring Skipping setup for %s (mirror_enabled=%s, numa_nodes=%d)\n", 
+            LLAMA_LOG_DEBUG("numa_mirroring: Skipping setup for %s (mirror_enabled=%s, numa_nodes=%d)\n", 
                            ggml_get_name(cur), numa_mirror_enabled ? "YES" : "NO", numa_nodes);
         }
 
-        LLAMA_LOG_DEBUG("numa_mirroring Tensor %s needs_numa_setup=%s\n", ggml_get_name(cur), needs_numa_setup ? "YES" : "NO");
+        LLAMA_LOG_DEBUG("numa_mirroring: Tensor %s needs_numa_setup=%s\n", ggml_get_name(cur), needs_numa_setup ? "YES" : "NO");
         
         if (needs_numa_setup) {
             // First, set all pointers to NULL
@@ -941,21 +941,21 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
                 cur->__data[node] = nullptr;
             }
             
-            LLAMA_LOG_DEBUG("numa_mirroring Populating tensor %s __data arrays\n", ggml_get_name(cur));
+            LLAMA_LOG_DEBUG("numa_mirroring: Populating tensor %s __data arrays\n", ggml_get_name(cur));
             
             // Check if we have NUMA nodes available to mirror to
             int numa_nodes = ggml_numa_node_count();
-            LLAMA_LOG_DEBUG("numa_mirroring ggml_numa_node_count() returned %d nodes\n", numa_nodes);
+            LLAMA_LOG_DEBUG("numa_mirroring: ggml_numa_node_count() returned %d nodes\n", numa_nodes);
 
             if (numa_nodes > 1) {
-                LLAMA_LOG_DEBUG("numa_mirroring Setting up tensor %s with %d nodes\n", ggml_get_name(cur), numa_nodes);
+                LLAMA_LOG_DEBUG("numa_mirroring: Setting up tensor %s with %d nodes\n", ggml_get_name(cur), numa_nodes);
                 // Populate each NUMA node with its corresponding mirror
                 for (int node = 0; node < numa_nodes && node < GGML_NUMA_MAX_NODES; node++) {
                     void * numa_addr = mapping->addr_numa_node(node);
-                    LLAMA_LOG_DEBUG("numa_mirroring Node %d addr_numa_node() returned %p\n", node, numa_addr);
+                    LLAMA_LOG_DEBUG("numa_mirroring: Node %d addr_numa_node() returned %p\n", node, numa_addr);
                     if (numa_addr) {
                         cur->__data[node] = (uint8_t *)numa_addr + w.offs;
-                        LLAMA_LOG_DEBUG("numa_mirroring Tensor %s node %d -> %p (offset %zu)\n", 
+                        LLAMA_LOG_DEBUG("numa_mirroring: Tensor %s node %d -> %p (offset %zu)\n", 
                                        ggml_get_name(cur), node, cur->__data[node], w.offs);
                         
                         // VERIFICATION: Check that the tensor data is on the expected NUMA node
@@ -967,33 +967,33 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
                                                ggml_get_name(cur), node, cur->__data[node], actual_node)
                                 );
                             } else {
-                                LLAMA_LOG_DEBUG("numa_mirroring Tensor %s node %d data at %p verified on correct node\n",
+                                LLAMA_LOG_DEBUG("numa_mirroring: Tensor %s node %d data at %p verified on correct node\n",
                                                ggml_get_name(cur), node, cur->__data[node]);
                             }
                         } else {
-                            LLAMA_LOG_WARN("numa_mirroring Could not verify node for tensor %s data at %p: %s\n",
+                            LLAMA_LOG_WARN("numa_mirroring: Could not verify node for tensor %s data at %p: %s\n",
                                            ggml_get_name(cur), cur->__data[node], strerror(errno));
                         }
                     }
                 }
             } else {
-                LLAMA_LOG_DEBUG("numa_mirroring Single node (%d), using primary mapping only\n", numa_nodes);
+                LLAMA_LOG_DEBUG("numa_mirroring: Single node (%d), using primary mapping only\n", numa_nodes);
             }
             
             // If no NUMA mirrors or single node, fall back to primary address
             if (cur->__data[0] == nullptr) {
                 cur->__data[0] = (uint8_t *)mapping->addr() + w.offs;
-                LLAMA_LOG_DEBUG("numa_mirroring Fallback to primary address for node 0: %p\n", cur->__data[0]);
+                LLAMA_LOG_DEBUG("numa_mirroring: Fallback to primary address for node 0: %p\n", cur->__data[0]);
             }
             
             // Final verification - print the complete __data array for this tensor
-            LLAMA_LOG_DEBUG("numa_mirroring SETUP COMPLETE for tensor %s:\n", ggml_get_name(cur));
+            LLAMA_LOG_DEBUG("numa_mirroring: SETUP COMPLETE for tensor %s:\n", ggml_get_name(cur));
             for (int node = 0; node < GGML_NUMA_MAX_NODES; node++) {
                 LLAMA_LOG_DEBUG("  Node %d: %p%s\n", node, cur->__data[node], 
                        (cur->__data[node] == nullptr) ? " (NULL)" : "");
             }
         } else {
-            LLAMA_LOG_DEBUG("numa_mirroring Tensor %s already has NUMA setup, skipping\n", ggml_get_name(cur));
+            LLAMA_LOG_DEBUG("numa_mirroring: Tensor %s already has NUMA setup, skipping\n", ggml_get_name(cur));
         }
     } else {
         GGML_ASSERT(tensor_data(cur) != nullptr);
@@ -1139,25 +1139,13 @@ bool llama_model_loader::load_all_data(
 
             GGML_ASSERT(buf_mmap || tensor_data(cur)); // either we have a buffer to allocate the tensor in, or it is already allocated
             if (buf_mmap && tensor_data(cur) == nullptr) {
-                
-                // Check if this is a model weight tensor that needs NUMA setup
-                bool is_model_weight = (ggml_get_name(cur)[0] != '\0' && 
-                                       (strstr(ggml_get_name(cur), "weight") != NULL || 
-                                        strstr(ggml_get_name(cur), "bias") != NULL));
-                
                 // Check if NUMA mirroring is actually enabled via --numa mirror
                 enum ggml_numa_strategy numa_strategy = ggml_numa_get_strategy();
                 bool numa_mirror_enabled = (numa_strategy == GGML_NUMA_STRATEGY_MIRROR);
                 
-                if (is_model_weight && numa_mirror_enabled) {
-                    // Model weight: Set up NUMA mirrors properly from the start
+                if (numa_mirror_enabled) {
                     const auto & mapping = mappings.at(weight->idx);
                     int numa_nodes = ggml_numa_node_count();
-                    
-#ifdef GGML_NUMA_DEBUG_VERBOSE
-                    printf("🏗️  NUMA MODEL LOAD: Setting up %s with %d nodes\n", ggml_get_name(cur), numa_nodes);
-                    fflush(stdout);
-#endif
                     
                     if (numa_nodes > 1) {
                         // Prepare NUMA mirror addresses
@@ -1166,15 +1154,9 @@ bool llama_model_loader::load_all_data(
                             void * numa_addr = mapping->addr_numa_node(node);
                             if (numa_addr) {
                                 numa_addresses[node] = (uint8_t *)numa_addr + weight->offs;
-#ifdef GGML_NUMA_DEBUG_VERBOSE
-                                printf("  Node %d: %p\n", node, numa_addresses[node]);
-#endif
                             }
                         }
-#ifdef GGML_NUMA_DEBUG_VERBOSE
-                        fflush(stdout);
-#endif
-                        
+
                         // Set up tensor with proper NUMA mirroring
                         cur->buffer = buf_mmap;
                         tensor_set_data_with_numa_mirrors(cur, numa_addresses[0], numa_addresses, numa_nodes);
