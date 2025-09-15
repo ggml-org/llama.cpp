@@ -6,6 +6,7 @@ static __global__ void pad_reflect_1d_kernel_f32(
     const int64_t ne0,
     const int64_t ne00,
     const int64_t ne01,
+    const uint3 ne01_packed,
     const int64_t ne02,
     const int64_t ne03,
     const int64_t nb00,
@@ -22,8 +23,9 @@ static __global__ void pad_reflect_1d_kernel_f32(
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
 
-    const int64_t tile1  = blockIdx.x % ne01;     // i1
-    const int64_t tile0  = blockIdx.x / ne01;     // nth i0 tile
+    const uint2 div_mod_packed = fast_div_modulo(blockIdx.x, ne01_packed);
+    const int64_t tile1  = div_mod_packed.y;     // i1
+    const int64_t tile0  = div_mod_packed.x;     // nth i0 tile
     const int64_t i1     = tile1;
     const int64_t i0     = threadIdx.x + tile0 * blockDim.x;
     if ( i0 >= ne0 || i1 >= ne01 || i2 >= ne02 || i3 >= ne03 ) {
@@ -31,7 +33,7 @@ static __global__ void pad_reflect_1d_kernel_f32(
     }
 
     const char * src0_ptr = (const char *)src0 + i3*nb03 + i2*nb02 + i1*nb01;
-    const char * dst_ptr = (const char *)dst + i3*nb3 + i2*nb2 + i1*nb1;
+    char * dst_ptr = (char *)dst + i3*nb3 + i2*nb2 + i1*nb1;
 
     float value;
     const int64_t j = i0 - p0;
@@ -39,7 +41,7 @@ static __global__ void pad_reflect_1d_kernel_f32(
     if ( j<0 ) {// i0<p0
         // Left padding - reflect
         value = *(const float *)(src0_ptr - j * nb00);
-    } else if (j < ne00) { //i0 < ne0 - p1
+    } else if ( j < ne00 ) { //i0 < ne0 - p1
         // Middle - copy
         value = *(const float *)(src0_ptr + j * nb00);
     } else  {
@@ -63,6 +65,7 @@ void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
+    const uint3   ne01_packed = init_fastdiv_values(ne01);
     const int64_t ne02 = src0->ne[2];
     const int64_t ne03 = src0->ne[3];
 
@@ -81,7 +84,7 @@ void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     pad_reflect_1d_kernel_f32<<<grid_dims, block_dims, 0, stream>>>(
         src0->data, dst->data,
-        ne0, ne00, ne01, ne02, ne03,
+        ne0, ne00, ne01, ne01_packed, ne02, ne03,
         src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
         dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3],
         p0, p1
