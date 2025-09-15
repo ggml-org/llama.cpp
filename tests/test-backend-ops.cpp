@@ -39,6 +39,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <unordered_map>
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -324,6 +325,7 @@ enum test_mode {
     MODE_PERF,
     MODE_GRAD,
     MODE_SUPPORT,
+    MODE_CPU_VARIANTS,
 };
 
 // Output format support similar to llama-bench
@@ -7099,18 +7101,99 @@ static void show_test_coverage() {
     printf("  Coverage: %.1f%%\n", (double)covered_ops.size() / all_ops.size() * 100.0);
 }
 
+static bool test_cpu_variant(const char * variant_name, const char * op_names_filter,
+        const char * params_filter, printer * output_printer) {
+
+    ggml_backend_t backend_ref = ggml_backend_init_by_name("CPU-ref", nullptr);
+    if (backend_ref == nullptr) {
+        printf("Error: CPU-ref backend not found. Make sure it's built and available.\n");
+        return false;
+    }
+
+    ggml_backend_t backend_variant = ggml_backend_init_by_name(variant_name, nullptr);
+    if (backend_variant == nullptr) {
+        printf("Error: CPU variant '%s' not found or failed to initialize.\n", variant_name);
+        printf("Use --list to see available variants.\n");
+        ggml_backend_free(backend_ref);
+        return false;
+    }
+
+    printf("Testing CPU variant '%s' against cpu-ref backend...\n\n", variant_name);
+
+    auto test_cases = make_test_cases_eval();
+
+    if (params_filter != nullptr) {
+        std::regex regex(params_filter);
+        auto it = test_cases.begin();
+        while (it != test_cases.end()) {
+            std::string test_params = (*it)->vars();
+            if (!std::regex_search(test_params, regex)) {
+                it = test_cases.erase(it);
+            } else {
+                it++;
+            }
+        }
+    }
+
+    size_t n_ok = 0;
+    for (auto & test : test_cases) {
+        if (test->eval(backend_variant, backend_ref, op_names_filter, output_printer)) {
+            n_ok++;
+        }
+    }
+
+    output_printer->print_summary(test_summary_info(n_ok, test_cases.size(), false));
+
+    ggml_backend_free(backend_variant);
+    ggml_backend_free(backend_ref);
+
+    return n_ok == test_cases.size();
+}
+
+static void list_cpu_variants() {
+    std::unordered_map<std::string, std::string> variant_names;
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        if (strstr(ggml_backend_reg_name(reg), "CPU") != nullptr) {
+            for (size_t j = 0; j < ggml_backend_reg_dev_count(reg); j++) {
+                ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, j);
+                const char * name = ggml_backend_dev_name(dev);
+                if (strcmp(name, "CPU-ref") != 0) {
+                    variant_names.emplace(name, ggml_backend_dev_description(dev));
+                }
+            }
+        }
+    }
+
+    if (variant_names.size() == 0) {
+        printf("No CPU backend variants found. To enable CPU variants, rebuild with:\n");
+        printf("    cmake -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON\n");
+        return;
+    }
+
+    printf("CPU variants:\n");
+    for (const auto & it : variant_names) {
+        printf("  %-15s - %s\n", it.first.c_str(), it.second.c_str());
+    }
+}
+
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--show-coverage]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--list-cpu-variants] [--show-coverage]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("      - support (probe backend operation support)\n");
+    printf("      - cpu-variants (test CPU variants against cpu-ref backend)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc),\n");
     printf("        optionally including the full test case string (e.g. \"ADD(type=f16,ne=[1,1,8,1],nr=[1,1,1,1],nf=1)\")\n");
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
+    printf("    --list-cpu-variants lists all available CPU backend variants\n");
     printf("    --show-coverage shows test coverage\n");
+    printf("    cpu-variants mode options:\n");
+    printf("      --list lists available CPU variants on this system\n");
+    printf("      --variant <name> test specific CPU variant against cpu-ref backend\n");
 }
 
 int main(int argc, char ** argv) {
@@ -7119,6 +7202,8 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
+    const char * cpu_variant_name = nullptr;
+    bool list_variants_flag = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -7129,6 +7214,8 @@ int main(int argc, char ** argv) {
             mode = MODE_GRAD;
         } else if (strcmp(argv[i], "support") == 0) {
             mode = MODE_SUPPORT;
+        } else if (strcmp(argv[i], "cpu-variants") == 0) {
+            mode = MODE_CPU_VARIANTS;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_names_filter = argv[++i];
@@ -7163,6 +7250,15 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--list-ops") == 0) {
             list_all_ops();
             return 0;
+        } else if (strcmp(argv[i], "--list") == 0) {
+            list_variants_flag = true;
+        } else if (strcmp(argv[i], "--variant") == 0) {
+            if (i + 1 < argc) {
+                cpu_variant_name = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--show-coverage") == 0) {
             show_test_coverage();
             return 0;
@@ -7179,6 +7275,21 @@ int main(int argc, char ** argv) {
     std::unique_ptr<printer> output_printer = create_printer(output_format);
     if (output_printer) {
         output_printer->print_header();
+    }
+
+    if (mode == MODE_CPU_VARIANTS) {
+        if (list_variants_flag) {
+            list_cpu_variants();
+            return 0;
+        }
+
+        if (cpu_variant_name == nullptr) {
+            printf("Error: cpu-variants mode requires --variant <name> or --list\n");
+            usage(argv);
+            return 1;
+        }
+
+        return test_cpu_variant(cpu_variant_name, op_names_filter, params_filter, output_printer.get()) ? 0 : 1;
     }
 
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));

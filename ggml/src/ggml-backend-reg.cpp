@@ -605,4 +605,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     if (backend_path) {
         ggml_backend_load(backend_path);
     }
+#ifdef GGML_USE_CPU_REF
+    ggml_backend_load_best("cpu-ref", silent, dir_path);
+#endif
 }

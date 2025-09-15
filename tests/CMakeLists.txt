@@ -203,6 +203,15 @@ endif()
 llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
+if (GGML_CPU_REF_BACKEND)
+    if (WIN32)
+        set(GGML_CPU_REF_BACKEND_PATH "${CMAKE_BINARY_DIR}/bin/ggml-cpu-ref.dll")
+    else()
+        set(GGML_CPU_REF_BACKEND_PATH "${CMAKE_BINARY_DIR}/bin/libggml-cpu-ref.so")
+    endif()
+    target_compile_definitions(test-backend-ops PRIVATE GGML_CPU_REF_BACKEND_PATH="${GGML_CPU_REF_BACKEND_PATH}")
+endif()
+
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 
