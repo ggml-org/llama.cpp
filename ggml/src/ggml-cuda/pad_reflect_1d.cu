@@ -36,20 +36,20 @@ static __global__ __launch_bounds__(CUDA_PAD_REFLECT_1D_BLOCK_SIZE, 1) void
     const char * src0_ptr = (const char *) src0 + i3 * nb03 + i2 * nb02 + i1 * nb01;
     char *       dst_ptr  = (char *) dst + i3 * nb3 + i2 * nb2 + i1 * nb1;
 
-    float         value;
-    const int64_t j = i0 - p0;
+    const int64_t rel_i0 = i0 - p0;
+    int64_t src_idx;
 
-    if (j < 0) {  // i0<p0
+    if (rel_i0 < 0) {
         // Left padding - reflect
-        value = *(const float *) (src0_ptr - j * nb00);
-    } else if (j < ne00) {  //i0 < ne0 - p1
+        src_idx = -rel_i0;
+    } else if (rel_i0 < ne00) {
         // Middle - copy
-        value = *(const float *) (src0_ptr + j * nb00);
+        src_idx = rel_i0;
     } else {
         // Right padding - reflect
-        const int64_t src_idx = (ne0 - p1 - p0) - (p1 + 1 - (ne0 - i0)) - 1;
-        value                 = *(const float *) (src0_ptr + src_idx * nb00);
+        src_idx = 2 * ne00 - 2 - rel_i0;
     }
+    const float value               = *(const float *) (src0_ptr + src_idx * nb00);
     *(float *) (dst_ptr + i0 * nb0) = value;
 }
 
