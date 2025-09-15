@@ -29,10 +29,8 @@
 #include <string.h>
 #include <stdint.h>
 
-#ifdef GGML_NUMA_MIRROR
 // External thread-local variable for NUMA node binding
 extern __thread int ggml_current_numa_node;
-#endif
 #include <inttypes.h>
 #include <stdio.h>
 #include <float.h>
@@ -40,14 +38,12 @@ extern __thread int ggml_current_numa_node;
 #include <stdarg.h>
 #include <signal.h>
 
-#ifdef GGML_NUMA_MIRROR
 #include <numa.h>
 #include <numaif.h>
 #include <sched.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-#endif
 
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
@@ -614,7 +610,6 @@ static uint32_t ggml_get_numa_affinity(void) {
 }
 #endif
 
-#ifdef GGML_NUMA_MIRROR
 // Static caching for NUMA thread binding to avoid syscalls in hot OpenMP paths
 static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
     // Cache strategy check to avoid repeated calls
@@ -683,7 +678,6 @@ static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
         }
     }
 }
-#endif // GGML_NUMA_MIRROR
 
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {
@@ -3246,11 +3240,9 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     if (n_threads > 1) {
         #pragma omp parallel num_threads(n_threads)
         {
-#ifdef GGML_NUMA_MIRROR
             // Bind OpenMP threads to NUMA nodes in round-robin fashion
             // This must be done early in the parallel region before any work
             ggml_openmp_bind_thread_to_numa_node(omp_get_thread_num(), omp_get_num_threads());
-#endif
             
             #pragma omp single
             {

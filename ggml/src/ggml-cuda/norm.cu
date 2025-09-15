@@ -551,7 +551,7 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
         GGML_ASSERT(false);
     }
 
-    float * dst_d = (float *) mul_tensor->data;
+    float * dst_d = (float *) tensor_data(mul_tensor);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
@@ -627,7 +627,7 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
         GGML_ASSERT(false);
     }
 
-    float *      dst_d  = (float *) add_tensor->data;
+    float *      dst_d  = (float *) tensor_data(add_tensor);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);

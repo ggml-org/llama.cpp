@@ -148,3 +148,9 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 .ccache/
+.devcontainer/devcontainer.json
+.devcontainer/Dockerfile
+.devcontainer/launch.json
+.devcontainer/README.md
+.devcontainer/tasks.json
+.devcontainer/zscaler.crt

@@ -22,6 +22,7 @@
 #include <iostream>
 #include <iterator>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -116,8 +117,90 @@ int32_t cpu_get_num_physical_cores() {
 
     return num_physical_cores > 0 ? num_physical_cores : default_threads;
 #endif
+    // Try to use accurate topology detection first
+    int32_t topology_cores = cpu_detect_physical_cores_topology();
+    if (topology_cores > 0) {
+        return topology_cores;
+    }
+    
+    // Fallback to heuristic if topology detection failed
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+int32_t cpu_detect_physical_cores_topology() {
+    std::vector<int> physical_cores;
+    if (cpu_get_physical_cores_topology(physical_cores)) {
+        return static_cast<int32_t>(physical_cores.size());
+    }
+    return 0; // Indicate detection failed
+}
+
+bool cpu_get_physical_cores_topology(std::vector<int> & physical_cores) {
+    physical_cores.clear();
+    
+#if defined(__linux__) && !defined(__ANDROID__)
+    // Use Linux sysfs topology detection for accurate physical core detection
+    int num_cpus = std::thread::hardware_concurrency();
+    if (num_cpus <= 0) {
+        return false;
+    }
+    
+    std::set<int> processed_cpus;
+    
+    for (int cpu = 0; cpu < num_cpus; cpu++) {
+        // Skip if we've already processed this CPU as part of another core's siblings
+        if (processed_cpus.count(cpu) > 0) {
+            continue;
+        }
+        
+        std::string thread_siblings_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list";
+        std::ifstream siblings_file(thread_siblings_path);
+        
+        if (!siblings_file.is_open()) {
+            // If we can't read topology for this CPU, skip it but don't mark as physical
+            continue;
+        }
+        
+        std::string siblings_str;
+        if (std::getline(siblings_file, siblings_str)) {
+            // Parse the comma-separated list of sibling threads
+            std::vector<int> siblings;
+            std::stringstream ss(siblings_str);
+            std::string cpu_str;
+            
+            while (std::getline(ss, cpu_str, ',')) {
+                try {
+                    int sibling_cpu = std::stoi(cpu_str);
+                    siblings.push_back(sibling_cpu);
+                } catch (const std::exception &) {
+                    // Skip invalid entries
+                }
+            }
+            
+            if (!siblings.empty()) {
+                // Sort siblings to ensure we always pick the lowest-numbered one as primary
+                std::sort(siblings.begin(), siblings.end());
+                int primary_cpu = siblings[0];
+                
+                // Only count this as a physical core if it's the current CPU (the lowest-numbered sibling)
+                if (primary_cpu == cpu) {
+                    physical_cores.push_back(primary_cpu);
+                }
+                
+                // Mark all siblings as processed so we don't consider them again
+                for (int sibling : siblings) {
+                    processed_cpus.insert(sibling);
+                }
+            }
+        }
+    }
+    
+    return !physical_cores.empty();
+#else
+    // Not supported on this platform
+    return false;
+#endif
 }
 
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
@@ -269,10 +352,146 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
         }
     }
 
-    if (n_set && n_set < cpuparams.n_threads) {
+    // If a CPU mask is set, use the number of set CPUs as the thread count
+    if (cpuparams.mask_valid && n_set > 0) {
+        cpuparams.n_threads = n_set;
+    } else if (n_set && n_set < cpuparams.n_threads) {
         // Not enough set bits, may experience performance issues.
         LOG_WRN("Not enough set bits in CPU mask (%d) to satisfy requested thread count: %d\n", n_set, cpuparams.n_threads);
     }
+}
+
+bool cpu_mask_set_physical_cores_only(bool (&boolmask)[GGML_MAX_N_THREADS]) {
+#ifdef _WIN32
+    // Windows implementation would require different approach
+    LOG_WRN("Physical core detection is not supported on Windows\n");
+    return false;
+#else
+    std::memset(boolmask, false, sizeof(bool) * GGML_MAX_N_THREADS);
+    
+    // Use the common topology detection logic
+    std::vector<int> physical_cores;
+    if (!cpu_get_physical_cores_topology(physical_cores)) {
+        // Fallback: if we couldn't detect topology, just use all CPUs
+        int num_cpus = std::thread::hardware_concurrency();
+        for (int cpu = 0; cpu < num_cpus && cpu < GGML_MAX_N_THREADS; cpu++) {
+            boolmask[cpu] = true;
+        }
+        LOG_WRN("Could not detect CPU topology, using all CPUs\n");
+        return false;
+    }
+    
+    // Set the mask for detected physical cores
+    for (int core_id : physical_cores) {
+        if (core_id < GGML_MAX_N_THREADS) {
+            boolmask[core_id] = true;
+        }
+    }
+    
+    LOG("Detected %zu physical cores (excluding hyperthreads): ", physical_cores.size());
+    for (size_t i = 0; i < physical_cores.size(); i++) {
+        if (i > 0) LOG(", ");
+        LOG("%d", physical_cores[i]);
+    }
+    LOG("\n");
+    
+    return true;
+#endif
+}
+
+bool cpu_mask_set_physical_cores_with_hyperthreading(bool (&boolmask)[GGML_MAX_N_THREADS]) {
+#ifdef _WIN32
+    // Windows implementation would require different approach
+    LOG_WRN("--cpu-use-hyperthreading is not supported on Windows\n");
+    return false;
+#else
+    std::memset(boolmask, false, sizeof(bool) * GGML_MAX_N_THREADS);
+    
+    int num_cpus = std::thread::hardware_concurrency();
+    if (num_cpus <= 0) {
+        return false;
+    }
+    
+    // Use the common topology detection logic to get all CPU sibling relationships
+    std::set<int> processed_cpus;
+    std::vector<int> all_cores_and_siblings;
+    
+    for (int cpu = 0; cpu < num_cpus; cpu++) {
+        // Skip if we've already processed this CPU as part of another core's siblings
+        if (processed_cpus.count(cpu) > 0) {
+            continue;
+        }
+        
+        std::string thread_siblings_path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list";
+        std::ifstream siblings_file(thread_siblings_path);
+        
+        if (!siblings_file.is_open()) {
+            // If we can't read topology for this CPU, include it anyway
+            all_cores_and_siblings.push_back(cpu);
+            processed_cpus.insert(cpu);
+            continue;
+        }
+        
+        std::string siblings_str;
+        if (std::getline(siblings_file, siblings_str)) {
+            // Parse the comma-separated list of sibling threads
+            std::vector<int> siblings;
+            std::stringstream ss(siblings_str);
+            std::string cpu_str;
+            
+            while (std::getline(ss, cpu_str, ',')) {
+                try {
+                    int sibling_cpu = std::stoi(cpu_str);
+                    siblings.push_back(sibling_cpu);
+                } catch (const std::exception &) {
+                    // Skip invalid entries
+                }
+            }
+            
+            if (!siblings.empty()) {
+                // Include ALL siblings (both physical core and hyperthreads)
+                for (int sibling : siblings) {
+                    all_cores_and_siblings.push_back(sibling);
+                    processed_cpus.insert(sibling);
+                }
+            } else {
+                // Fallback: include this CPU if no siblings found
+                all_cores_and_siblings.push_back(cpu);
+                processed_cpus.insert(cpu);
+            }
+        } else {
+            // Fallback: include this CPU if we can't read the file
+            all_cores_and_siblings.push_back(cpu);
+            processed_cpus.insert(cpu);
+        }
+    }
+    
+    if (all_cores_and_siblings.empty()) {
+        // Fallback: if we couldn't detect topology, just use all CPUs
+        for (int cpu = 0; cpu < num_cpus && cpu < GGML_MAX_N_THREADS; cpu++) {
+            boolmask[cpu] = true;
+        }
+        LOG_WRN("Could not detect CPU topology, using all CPUs\n");
+        return false;
+    }
+    
+    // Set the mask for all detected cores and their hyperthread siblings
+    for (int cpu_id : all_cores_and_siblings) {
+        if (cpu_id < GGML_MAX_N_THREADS) {
+            boolmask[cpu_id] = true;
+        }
+    }
+    
+    LOG("Using %zu CPU cores including hyperthreads: ", all_cores_and_siblings.size());
+    std::sort(all_cores_and_siblings.begin(), all_cores_and_siblings.end());
+    for (size_t i = 0; i < all_cores_and_siblings.size(); i++) {
+        if (i > 0) LOG(", ");
+        LOG("%d", all_cores_and_siblings[i]);
+    }
+    LOG("\n");
+    
+    return true;
+#endif
 }
 
 bool parse_cpu_range(const std::string & range, bool (&boolmask)[GGML_MAX_N_THREADS]) {

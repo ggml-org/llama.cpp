@@ -221,12 +221,10 @@
 #define GGML_MAX_N_THREADS      512
 #define GGML_MAX_OP_PARAMS      64
 
-#ifdef GGML_NUMA_MIRROR
-    // maximum number of NUMA nodes for tensor data mirroring
-    #define GGML_NUMA_MAX_NODES     8
-    #include <numaif.h>
-    #include <string.h>
-#endif
+// maximum number of NUMA nodes for tensor data mirroring
+#define GGML_NUMA_MAX_NODES     8
+#include <numaif.h>
+#include <string.h>
 
 #ifndef GGML_MAX_NAME
 #   define GGML_MAX_NAME        64
@@ -652,33 +650,24 @@ extern "C" {
         struct ggml_tensor * view_src;
         size_t               view_offs;
 
-#ifdef GGML_NUMA_MIRROR
         union {
         #ifdef __NVCC__
             void * data;
         #endif
             void * __data[GGML_NUMA_MAX_NODES];
         };
-#else
-        void * data;
-#endif
 
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-#ifdef GGML_NUMA_MIRROR
         char padding[12]; // Adjusted for expanded __data array
-#else
-        char padding[8];
-#endif
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
 
     // Tensor data accessor functions for NUMA compatibility
     
-#ifdef GGML_NUMA_MIRROR
     // External thread-local variable set by NUMA coordinator
     extern __thread int ggml_current_numa_node;
     
@@ -702,7 +691,6 @@ extern "C" {
         tensor->__data[0] = data;
     }
 
-#ifdef GGML_NUMA_MIRROR
     // Model loading specific function - bypasses normal tensor_set_data logic
     static inline void tensor_set_data_with_numa_mirrors(struct ggml_tensor * tensor, 
                                                         void * primary_data,
@@ -726,16 +714,6 @@ extern "C" {
         fflush(stdout);
 #endif
     }
-#endif
-#else
-    static inline void * tensor_data(const struct ggml_tensor * tensor) {
-        return tensor->data;
-    }
-
-    static inline void tensor_set_data(struct ggml_tensor * tensor, void * data) {
-        tensor->data = data;
-    }
-#endif
 
     // Abort callback
     // If not NULL, called before ggml computation

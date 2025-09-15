@@ -48,7 +48,6 @@ Clean integration point during model loading where NUMA mirrors are established 
 #### `ggml/include/ggml.h`
 **Purpose**: Core tensor data access with NUMA-aware routing
 **Key additions**:
-- `#ifdef GGML_NUMA_MIRROR` conditional compilation blocks
 - NUMA mirror data structures in `ggml_tensor`
 - `tensor_set_data_with_numa_mirrors()` function declaration
 - Optimized `tensor_data()` function with fast path for non-NUMA tensors
@@ -94,9 +93,14 @@ Clean integration point during model loading where NUMA mirrors are established 
 ## Build Configuration
 
 ### CMake Configuration
-Enable NUMA mirroring during build:
+Enable OpenMP during build:
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NUMA_MIRROR=ON -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native"
+# Debug config (for debugging, obviously)
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DGGML_OPENMP=ON
+
+# Release config (for performance testing)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native" -DGGML_OPENMP=ON
+
 cmake --build build --parallel
 ```
 
@@ -106,7 +110,6 @@ cmake --build build --parallel
 - **C++17 compiler**: Modern C++ standard support
 
 ### Compilation Flags
-- `GGML_NUMA_MIRROR=ON`: Enables NUMA mirroring functionality
 - `-march=native`: CPU-specific optimizations (recommended for maximum performance)
 - `CMAKE_BUILD_TYPE=Release`: Optimized release build
 
@@ -127,17 +130,17 @@ cmake --build build --parallel
 ## Implementation Details
 
 ### Tensor Data Access Optimization
+The `ggml_tensor` struct in `ggml.h` has been updated to no longer have a `data` field. This has been renamed to a `__data[]` array to hold pointers to multiple memory locations, with the index corresponding to the index of a local Numa node.
+
+Instead of directly addressing `tensor->data`, instead you do `tensor_data(tensor)`. And setting is done with `tensor_set_data()`. These are two new macros in `ggml.h`.
+
 The `tensor_data()` function in `ggml.h` has been optimized with a fast path:
 ```c
 static inline void * tensor_data(const struct ggml_tensor * tensor) {
-#ifdef GGML_NUMA_MIRROR
     if (tensor->numa_mirror_data == NULL) {
         return tensor->data;  // Fast path: no NUMA mirrors
     }
     return ggml_numa_get_tensor_data(tensor);  // NUMA-aware routing
-#else
-    return tensor->data;
-#endif
 }
 ```
 
@@ -163,6 +166,19 @@ Use `llama-bench` to measure NUMA benefits:
 ./llama-bench -m model.gguf --numa mirror
 ```
 
+There are models you can use for testing in our .devcontainer folder:
+
+.devcontainer/DeepSeek-R1-0528-UD-IQ3_XXS.gguf
+.devcontainer/gpt-oss-20b-UD-Q4_K_XL.gguf
+.devcontainer/qwen2.5-0.5b-instruct-q8_0.gguf
+.devcontainer/Qwen3-30B-A3B-UD-Q4_K_XL.gguf
+.devcontainer/Qwen3-32B-Q6_K.gguf
+
+Use qwen2.5-0.5b-instruct-q8_0.gguf for a quick verification run, while a bigger, dense model like Qwen3-32B-Q6_K.gguf will be good to test relative speed gains.
+
+If testing with `llama-cli`, always be sure to use the `--no-cnv` switch to prevent it from starting an interactive conversation.
+
+
 ### System Requirements Check
 Verify NUMA topology:
 ```bash
@@ -175,6 +191,7 @@ numactl --hardware
 Future versions may include:
 - Selective tensor mirroring policies
 - Custom NUMA node mapping
+- Limiting GGML threadpools to non-hyperthreaded cores
 
 ## Technical Notes
 
@@ -202,10 +219,9 @@ Future versions may include:
 
 ### Verification
 Confirm NUMA mirroring is working:
-1. Build with `GGML_NUMA_MIRROR=ON`
-2. Run `numactl --hardware` to verify multiple NUMA nodes
-3. Test with `GGML_NUMA_DEBUG=1` for debug output
-4. Compare performance with and without `--numa mirror`
+1. Run `numactl --hardware` to verify multiple NUMA nodes
+2. Test with `--verbose` for debug output
+3. Compare performance with and without `--numa mirror`
 
 ## Conclusion
 

@@ -1518,6 +1518,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--cpu-use-hyperthreading"},
+        "use both physical CPU cores and their hyperthread siblings (default: physical cores only)",
+        [](common_params & params) {
+            params.cpuparams.mask_valid = true;
+            if (!cpu_mask_set_physical_cores_with_hyperthreading(params.cpuparams.cpumask)) {
+                LOG_WRN("Failed to detect CPU topology, using all available CPUs\n");
+            }
+        }
+    ));
+    add_opt(common_arg(
         {"--prio"}, "N",
         string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {

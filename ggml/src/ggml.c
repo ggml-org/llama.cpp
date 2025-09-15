@@ -20,10 +20,8 @@
 #include <alloca.h>
 #endif
 
-#ifdef GGML_NUMA_MIRROR
 // Thread-local variable for NUMA node binding (used by tensor_data())
 __thread int ggml_current_numa_node = 0;
-#endif
 
 #include <assert.h>
 #include <errno.h>
@@ -1682,11 +1680,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.src          =*/ { NULL },
         /*.view_src     =*/ view_src,
         /*.view_offs    =*/ view_offs,
-    #ifdef GGML_NUMA_MIRROR
         /*.data         =*/ { .__data = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL } },
-#else
-        /*.data         =*/ NULL,
-#endif
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
         /*.padding      =*/ { 0 },
@@ -7238,12 +7232,8 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
 
 // NUMA functions
 int ggml_numa_node_count(void) {
-#ifdef GGML_NUMA_MIRROR
     // For now, return the value used elsewhere in the NUMA mirror system
     // This function is primarily used to populate tensor __data arrays
     // TODO: Implement proper NUMA node detection if needed
     return GGML_NUMA_MAX_NODES;
-#else
-    return 1;  // NUMA mirror disabled, return single node
-#endif
 }

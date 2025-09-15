@@ -267,6 +267,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    std::vector<bool>                cpu_use_hyperthreading;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -303,6 +304,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* cpu_use_hyperthreading */ { false },
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -350,6 +352,8 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.cpu_mask, ",").c_str());
     printf("  --cpu-strict <0|1>                        (default: %s)\n",
            join(cmd_params_defaults.cpu_strict, ",").c_str());
+    printf("  --cpu-use-hyperthreading <0|1>            (default: %s)\n",
+           join(cmd_params_defaults.cpu_use_hyperthreading, ",").c_str());
     printf("  --poll <0...100>                          (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                  (default: %s)\n",
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
@@ -550,6 +554,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.cpu_strict.insert(params.cpu_strict.end(), p.begin(), p.end());
+            } else if (arg == "--cpu-use-hyperthreading") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.cpu_use_hyperthreading.insert(params.cpu_use_hyperthreading.end(), p.begin(), p.end());
             } else if (arg == "--poll") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -882,6 +893,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.cpu_strict.empty()) {
         params.cpu_strict = cmd_params_defaults.cpu_strict;
     }
+    if (params.cpu_use_hyperthreading.empty()) {
+        params.cpu_use_hyperthreading = cmd_params_defaults.cpu_use_hyperthreading;
+    }
     if (params.poll.empty()) {
         params.poll = cmd_params_defaults.poll;
     }
@@ -901,6 +915,7 @@ struct cmd_params_instance {
     int                n_threads;
     std::string        cpu_mask;
     bool               cpu_strict;
+    bool               cpu_use_hyperthreading;
     int                poll;
     int                n_gpu_layers;
     std::string        rpc_servers_str;
@@ -1033,6 +1048,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nt : params.n_threads)
     for (const auto & cm : params.cpu_mask)
     for (const auto & cs : params.cpu_strict)
+    for (const auto & cuht : params.cpu_use_hyperthreading)
     for (const auto & nd : params.n_depth)
     for (const auto & pl : params.poll) {
         for (const auto & n_prompt : params.n_prompt) {
@@ -1051,6 +1067,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
+                /* .cpu_use_hyperthreading = */ cuht,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
@@ -1083,6 +1100,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
+                /* .cpu_use_hyperthreading = */ cuht,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
@@ -1115,6 +1133,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
+                /* .cpu_use_hyperthreading = */ cuht,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .rpc_servers  = */ rpc,
@@ -1150,6 +1169,7 @@ struct test {
     int                      n_threads;
     std::string              cpu_mask;
     bool                     cpu_strict;
+    bool                     cpu_use_hyperthreading;
     int                      poll;
     ggml_type                type_k;
     ggml_type                type_v;
@@ -1184,6 +1204,7 @@ struct test {
         n_threads      = inst.n_threads;
         cpu_mask       = inst.cpu_mask;
         cpu_strict     = inst.cpu_strict;
+        cpu_use_hyperthreading = inst.cpu_use_hyperthreading;
         poll           = inst.poll;
         type_k         = inst.type_k;
         type_v         = inst.type_v;
@@ -1240,7 +1261,7 @@ struct test {
         static const std::vector<std::string> fields = {
             "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
+            "cpu_mask",     "cpu_strict",   "cpu_use_hyperthreading", "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
             "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
             "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
@@ -1257,7 +1278,7 @@ struct test {
             field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
             return INT;
         }
-        if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
+        if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "cpu_use_hyperthreading" || field == "flash_attn" ||
             field == "use_mmap" || field == "embeddings") {
             return BOOL;
         }
@@ -1318,6 +1339,7 @@ struct test {
                                             std::to_string(n_threads),
                                             cpu_mask,
                                             std::to_string(cpu_strict),
+                                            std::to_string(cpu_use_hyperthreading),
                                             std::to_string(poll),
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
@@ -1578,6 +1600,9 @@ struct markdown_printer : public printer {
         }
         if (params.cpu_strict.size() > 1 || params.cpu_strict != cmd_params_defaults.cpu_strict) {
             fields.emplace_back("cpu_strict");
+        }
+        if (params.cpu_use_hyperthreading.size() > 1 || params.cpu_use_hyperthreading != cmd_params_defaults.cpu_use_hyperthreading) {
+            fields.emplace_back("cpu_use_hyperthreading");
         }
         if (params.poll.size() > 1 || params.poll != cmd_params_defaults.poll) {
             fields.emplace_back("poll");
@@ -1909,9 +1934,19 @@ int main(int argc, char ** argv) {
         }
 
         struct ggml_threadpool_params tpp = ggml_threadpool_params_default(t.n_threads);
-        if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
-            fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
-            exit(1);
+        
+        // Apply hyperthreading mask if enabled and no specific mask is set
+        if (t.cpu_use_hyperthreading && t.cpu_mask == "0x0") {
+            // Set mask to include physical cores + hyperthreads
+            if (!cpu_mask_set_physical_cores_with_hyperthreading(tpp.cpumask)) {
+                fprintf(stderr, "%s: failed to set hyperthreading mask, using default\n", __func__);
+            }
+        } else {
+            // Use the provided mask
+            if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
+                fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
+                exit(1);
+            }
         }
         tpp.strict_cpu = t.cpu_strict;
         tpp.poll       = t.poll;

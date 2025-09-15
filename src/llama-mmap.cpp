@@ -10,14 +10,27 @@
 #include <cerrno>
 #include <algorithm>
 
-#ifdef GGML_NUMA_MIRROR
 #include <numa.h>
 #include <numaif.h>
 #include <atomic>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#endif
+
+#include "ggml.h"
+
+#include <cstring>
+#include <climits>
+#include <stdexcept>
+#include <cerrno>
+#include <algorithm>
+
+#include <numa.h>
+#include <numaif.h>
+#include <atomic>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -281,8 +294,7 @@ void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
 struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
-    // Minimal NUMA mirror logic: allocate and populate model weights on each NUMA node
-#ifdef GGML_NUMA_MIRROR
+    // NUMA mirror logic: allocate and populate model weights on each NUMA node
     struct numa_mapping {
         void* addr;
         size_t size;
@@ -295,7 +307,7 @@ struct llama_mmap::impl {
 #if defined(__s390x__)
         const size_t alignment = 256;
 #else
-        const size_t alignment = 64;  // 64-byte alignment for AVX-512
+        const size_t alignment = 64; 
 #endif
         
         // Bind current thread to the target NUMA node for first-touch
@@ -383,16 +395,13 @@ struct llama_mmap::impl {
         }
         addr = numa_mappings.empty() ? nullptr : numa_mappings[0].addr;
     }
-#endif
 
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         size = file->size();
-#ifdef GGML_NUMA_MIRROR
         if (numa) {
             mmap_numa_mirror(file);
             return;
         }
-#endif
 
         // Regular mmap implementation
         int fd = file->file_id();
@@ -475,7 +484,6 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
-#ifdef GGML_NUMA_MIRROR
         // Clean up NUMA mappings first
         for (const auto& mapping : numa_mappings) {
             free(mapping.addr);  // Use free() for posix_memalign allocated memory
@@ -485,7 +493,6 @@ struct llama_mmap::impl {
         if (!numa_mappings.empty()) {
             return;
         }
-#endif
         
         // Clean up regular mmap fragments
         for (const auto & frag : mapped_fragments) {
@@ -578,7 +585,6 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void * llama_mmap::addr_numa_node(int node) const {
-#ifdef GGML_NUMA_MIRROR
     if (node >= 0 && node < (int)pimpl->numa_mappings.size()) {
         void * addr = pimpl->numa_mappings[node].addr;
         LLAMA_LOG_DEBUG("NUMA: addr_numa_node(%d) returning %p (mappings size: %zu)\n", 
@@ -588,9 +594,6 @@ void * llama_mmap::addr_numa_node(int node) const {
         LLAMA_LOG_DEBUG("NUMA: addr_numa_node(%d) invalid node (mappings size: %zu), falling back to primary\n", 
                        node, pimpl->numa_mappings.size());
     }
-#else
-    (void)node;
-#endif
     LLAMA_LOG_DEBUG("NUMA: addr_numa_node(%d) falling back to primary address %p\n", node, pimpl->addr);
     return pimpl->addr; // Fall back to primary address
 }

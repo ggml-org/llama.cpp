@@ -65,6 +65,10 @@ struct cpu_params {
 
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
+int32_t cpu_detect_physical_cores_topology(); // Detect actual physical cores using CPU topology
+bool cpu_get_physical_cores_topology(std::vector<int> & physical_cores); // Get list of physical core IDs
+bool cpu_mask_set_physical_cores_only(bool(&boolmask)[GGML_MAX_N_THREADS]);
+bool cpu_mask_set_physical_cores_with_hyperthreading(bool(&boolmask)[GGML_MAX_N_THREADS]); // Set mask to include physical cores + hyperthread siblings
 
 //
 // Common params
@@ -513,6 +517,7 @@ std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);
 bool parse_cpu_mask(const std::string & mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
+bool cpu_mask_set_physical_cores_only(bool(&boolmask)[GGML_MAX_N_THREADS]);
 void postprocess_cpu_params(cpu_params & cpuparams, const cpu_params * role_model = nullptr);
 bool set_process_priority(enum ggml_sched_priority prio);
 

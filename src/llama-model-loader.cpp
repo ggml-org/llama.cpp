@@ -7,10 +7,8 @@
 #include <cstring>
 #include <future>
 
-#ifdef GGML_NUMA_MIRROR
 #include <numaif.h>
 #include <errno.h>
-#endif
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -906,7 +904,6 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         const auto & mapping = mappings.at(w.idx);
         
         // NUMA MIRROR FIX: Always set up NUMA tensor data for model weights
-#ifdef GGML_NUMA_MIRROR
         // Check if this tensor needs NUMA setup (hasn't been set up yet)
         // Only check NUMA mirror nodes (1+), not primary node 0 which may be set by tensor_set_data()
         bool needs_numa_setup = true;
@@ -990,13 +987,6 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         } else {
             LLAMA_LOG_DEBUG("NUMA: Tensor %s already has NUMA setup, skipping\n", ggml_get_name(cur));
         }
-#else
-        if (tensor_data(cur) == nullptr) {
-            tensor_set_data(cur, (uint8_t *)mapping->addr() + w.offs);
-        } else {
-            memcpy(tensor_data(cur), (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
-        }
-#endif
     } else {
         GGML_ASSERT(tensor_data(cur) != nullptr);
         GGML_ASSERT(w.idx < files.size());
@@ -1142,7 +1132,6 @@ bool llama_model_loader::load_all_data(
             GGML_ASSERT(buf_mmap || tensor_data(cur)); // either we have a buffer to allocate the tensor in, or it is already allocated
             if (buf_mmap && tensor_data(cur) == nullptr) {
                 
-#ifdef GGML_NUMA_MIRROR
                 // Check if this is a model weight tensor that needs NUMA setup
                 bool is_model_weight = (ggml_get_name(cur)[0] != '\0' && 
                                        (strstr(ggml_get_name(cur), "weight") != NULL || 
@@ -1186,10 +1175,6 @@ bool llama_model_loader::load_all_data(
                     // Non-weight tensor: use standard allocation
                     ggml_backend_tensor_alloc(buf_mmap, cur, data);
                 }
-#else
-                // No NUMA support: use standard allocation
-                ggml_backend_tensor_alloc(buf_mmap, cur, data);
-#endif
                 
                 if (lmlocks) {
                     const auto & lmlock = lmlocks->at(weight->idx);
