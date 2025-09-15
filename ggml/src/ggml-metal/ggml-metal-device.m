@@ -449,7 +449,7 @@ static void * ggml_metal_host_malloc(size_t n) {
     return data;
 }
 
-ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_device_t device, size_t size, bool shared) {
+ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_device_t ctx, size_t size, bool shared) {
     ggml_backend_metal_buffer_t res = calloc(1, sizeof(struct ggml_backend_metal_buffer));
 
     const size_t size_page = sysconf(_SC_PAGESIZE);
@@ -459,7 +459,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(device);
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(ctx);
 
     shared = shared && props_dev.use_shared_buffers;
 
@@ -474,8 +474,8 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
     }
     res->all_size = size_aligned;
 
-    res->device = ggml_backend_metal_device_get_device(device);
-    res->queue  = ggml_backend_metal_device_get_queue (device);
+    res->device = ggml_backend_metal_device_get_device(ctx);
+    res->queue  = ggml_backend_metal_device_get_queue (ctx);
 
     res->n_buffers = 1;
 
@@ -518,7 +518,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
     return res;
 }
 
-ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_device_t device, void * ptr, size_t size, size_t max_tensor_size) {
+ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_device_t ctx, void * ptr, size_t size, size_t max_tensor_size) {
     ggml_backend_metal_buffer_t res = calloc(1, sizeof(struct ggml_backend_metal_buffer));
 
     res->all_data = ptr;
@@ -542,10 +542,10 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    res->device = ggml_backend_metal_device_get_device(device);
-    res->queue  = ggml_backend_metal_device_get_queue (device);
+    res->device = ggml_backend_metal_device_get_device(ctx);
+    res->queue  = ggml_backend_metal_device_get_queue (ctx);
 
-    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(device);
+    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(ctx);
 
     // the buffer fits into the max buffer size allowed by the device
     if (size_aligned <= props_dev.max_buffer_size) {
@@ -611,44 +611,44 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
     return res;
 }
 
-void ggml_backend_metal_buffer_free(ggml_backend_metal_buffer_t buffer) {
-    for (int i = 0; i < buffer->n_buffers; i++) {
-        [buffer->buffers[i].metal release];
+void ggml_backend_metal_buffer_free(ggml_backend_metal_buffer_t ctx) {
+    for (int i = 0; i < ctx->n_buffers; i++) {
+        [ctx->buffers[i].metal release];
     }
 
-    ggml_backend_metal_buffer_rset_free(buffer);
+    ggml_backend_metal_buffer_rset_free(ctx);
 
-    if (buffer->is_shared) {
+    if (ctx->is_shared) {
 #if TARGET_OS_OSX
-        vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)buffer->all_data, buffer->all_size);
+        vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ctx->all_data, ctx->all_size);
 #else
-        free(buffer->all_data);
+        free(ctx->all_data);
 #endif
     }
 
-    free(buffer);
+    free(ctx);
 }
 
-void * ggml_backend_metal_buffer_get_base(ggml_backend_metal_buffer_t buffer) {
-    return buffer->all_data;
+void * ggml_backend_metal_buffer_get_base(ggml_backend_metal_buffer_t ctx) {
+    return ctx->all_data;
 }
 
-bool ggml_backend_metal_buffer_is_shared(ggml_backend_metal_buffer_t buffer) {
-    return buffer->is_shared;
+bool ggml_backend_metal_buffer_is_shared(ggml_backend_metal_buffer_t ctx) {
+    return ctx->is_shared;
 }
 
-void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-    if (buffer->is_shared) {
+void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t ctx, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    if (ctx->is_shared) {
         memset((char *)tensor->data + offset, value, size);
         return;
     }
 
     @autoreleasepool {
         // dst
-        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(buffer, tensor);
+        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(ctx, tensor);
         buf_dst.offs += offset;
 
-        id<MTLCommandQueue>  queue   = buffer->queue;
+        id<MTLCommandQueue>  queue   = ctx->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -666,8 +666,8 @@ void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t buffer,
     }
 }
 
-void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    if (buffer->is_shared) {
+void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    if (ctx->is_shared) {
         memcpy((char *)tensor->data + offset, data, size);
         return;
     }
@@ -675,20 +675,20 @@ void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t buffer, st
     @autoreleasepool {
         // src
         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-        id<MTLBuffer> buf_src = [buffer->device newBufferWithBytesNoCopy:data_ptr
+        id<MTLBuffer> buf_src = [ctx->device newBufferWithBytesNoCopy:data_ptr
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
         // dst
-        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(buffer, tensor);
+        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(ctx, tensor);
         buf_dst.offs += offset;
 
         // note: for experimentation purposes, here we use a semaphore to wait for the copy to complete
         //       this is alternative to waitUntilCompleted, which should be faster, but don't seem to make much difference
         dispatch_semaphore_t completion_semaphore = dispatch_semaphore_create(0);
 
-        id<MTLCommandQueue>  queue   = buffer->queue;
+        id<MTLCommandQueue>  queue   = ctx->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -717,24 +717,24 @@ void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t buffer, st
     }
 }
 
-void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    if (buffer->is_shared) {
+void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (ctx->is_shared) {
         memcpy(data, (const char *)tensor->data + offset, size);
         return;
     }
 
     @autoreleasepool {
         // src
-        struct ggml_backend_metal_buffer_id buf_src = ggml_backend_metal_buffer_get_id(buffer, tensor);
+        struct ggml_backend_metal_buffer_id buf_src = ggml_backend_metal_buffer_get_id(ctx, tensor);
         buf_src.offs += offset;
 
         // dst
-        id<MTLBuffer> buf_dst = [buffer->device newBufferWithBytesNoCopy:data
-                                                                  length:size
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
+        id<MTLBuffer> buf_dst = [ctx->device newBufferWithBytesNoCopy:data
+                                                               length:size
+                                                              options:MTLResourceStorageModeShared
+                                                          deallocator:nil];
 
-        id<MTLCommandQueue>  queue   = buffer->queue;
+        id<MTLCommandQueue>  queue   = ctx->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -754,21 +754,21 @@ void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t buffer, co
     }
 }
 
-void ggml_backend_metal_buffer_clear(ggml_backend_metal_buffer_t buffer, uint8_t value) {
-    if (buffer->is_shared) {
-        memset(buffer->all_data, value, buffer->all_size);
+void ggml_backend_metal_buffer_clear(ggml_backend_metal_buffer_t ctx, uint8_t value) {
+    if (ctx->is_shared) {
+        memset(ctx->all_data, value, ctx->all_size);
         return;
     }
 
     @autoreleasepool {
-        id<MTLCommandQueue>  queue   = buffer->queue;
+        id<MTLCommandQueue>  queue   = ctx->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            [encoder fillBuffer:buffer->buffers[0].metal
-                          range:NSMakeRange(0, buffer->buffers[0].size)
+            [encoder fillBuffer:ctx->buffers[0].metal
+                          range:NSMakeRange(0, ctx->buffers[0].size)
                           value:value];
 
             [encoder endEncoding];
@@ -779,18 +779,18 @@ void ggml_backend_metal_buffer_clear(ggml_backend_metal_buffer_t buffer, uint8_t
     }
 }
 
-struct ggml_backend_metal_buffer_id ggml_backend_metal_buffer_get_id(ggml_backend_metal_buffer_t buf, const struct ggml_tensor * t) {
+struct ggml_backend_metal_buffer_id ggml_backend_metal_buffer_get_id(ggml_backend_metal_buffer_t ctx, const struct ggml_tensor * t) {
     struct ggml_backend_metal_buffer_id res = { nil, 0 };
 
     const int64_t tsize = ggml_nbytes(t);
 
     // find the view that contains the tensor fully
-    for (int i = 0; i < buf->n_buffers; ++i) {
-        const int64_t ioffs = (int64_t) t->data - (int64_t) buf->buffers[i].data;
+    for (int i = 0; i < ctx->n_buffers; ++i) {
+        const int64_t ioffs = (int64_t) t->data - (int64_t) ctx->buffers[i].data;
 
-        //GGML_LOG_INFO("ioffs = %10ld, tsize = %10ld, sum = %10ld, buf->buffers[%d].size = %10ld\n", ioffs, tsize, ioffs + tsize, i, buf->buffers[i].size);
-        if (ioffs >= 0 && ioffs + tsize <= (int64_t) buf->buffers[i].size) {
-            res.metal = buf->buffers[i].metal;
+        //GGML_LOG_INFO("ioffs = %10ld, tsize = %10ld, sum = %10ld, ctx->buffers[%d].size = %10ld\n", ioffs, tsize, ioffs + tsize, i, ctx->buffers[i].size);
+        if (ioffs >= 0 && ioffs + tsize <= (int64_t) ctx->buffers[i].size) {
+            res.metal = ctx->buffers[i].metal;
             res.offs  = (size_t) ioffs;
 
             //GGML_LOG_INFO("%s: tensor '%16s', offs = %8ld\n", __func__, t->name, *offs);
