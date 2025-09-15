@@ -36,7 +36,7 @@ static __global__ __launch_bounds__(CUDA_PAD_REFLECT_1D_BLOCK_SIZE, 1) void
     const char * src0_ptr = (const char *) src0 + i3 * nb03 + i2 * nb02 + i1 * nb01;
     char *       dst_ptr  = (char *) dst + i3 * nb3 + i2 * nb2 + i1 * nb1;
 
-    const int64_t rel_i0 = i0 - p0;
+    const int64_t rel_i0 = i0 - p0;  // relative i0 in src0
     int64_t src_idx;
 
     if (rel_i0 < 0) {
