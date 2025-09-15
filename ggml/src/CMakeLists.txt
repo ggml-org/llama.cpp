@@ -385,6 +385,15 @@ ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 
+if (GGML_CPU_REF_BACKEND)
+    if (NOT GGML_BACKEND_DL)
+        message(FATAL_ERROR "GGML_CPU_REF_BACKEND requires GGML_BACKEND_DL")
+    endif()
+    set(DGGML_CPU_GENERIC ON)
+    ggml_add_cpu_backend_variant_impl(ref)
+    target_compile_definitions(ggml PRIVATE GGML_USE_CPU_REF)
+endif()
+
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)
     target_compile_features   (${target} PRIVATE c_std_11 cxx_std_17) # don't bump
