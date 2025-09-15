@@ -889,7 +889,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/JetBrains/Mellum-4b-base
             res = "mellum"
         if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
-            # ref: https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Instruct
+            # ref: https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Base
             res = "llada-moe"
 
         if res is None:
