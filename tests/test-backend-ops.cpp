@@ -6050,6 +6050,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 2, 2, 2});
         add_test_bin_bcast(type, {10, 5, 4, 3}, {2, 2, 2, 2});
 
+        // test case for k_bin_bcast_unravel in CUDA backend
+        add_test_bin_bcast(type, {1, 1, 65536, 1}, {256, 1, 1, 1});
+
         // stable diffusion
         add_test_bin_bcast(type, {1280, 1, 1, 1}, {1, 1, 1, 1});
         add_test_bin_bcast(type, {1280, 1, 1, 1}, {1, 16, 16, 1});
@@ -6261,7 +6264,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (int n_mats : {4, 8}) {
                 for (int n_used : {1, 2, 4}) {
                     for (bool b : {false, true}) {
-                        for (int n : {1, 32, 129}) {
+                        for (int n : {1, 4, 5, 32, 129}) {
                             int m = 512;
                             int k = 256;
                             test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k));
@@ -6391,6 +6394,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 for (int64_t ne1 : {16, 1024}) {
                     test_cases.emplace_back(new test_soft_max_back(GGML_TYPE_F32, {ne0,   ne1,   1, 1}, scale, max_bias));
                     test_cases.emplace_back(new test_soft_max_back(GGML_TYPE_F32, {ne0-1, ne1-1, 1, 1}, scale, max_bias));
+                    test_cases.emplace_back(new test_soft_max_back(GGML_TYPE_F32, {ne0,   ne1,   2, 3}, scale, max_bias));
                 }
             }
         }
@@ -6806,7 +6810,17 @@ static void list_all_ops() {
 static void show_test_coverage() {
     std::set<std::string> all_ops;
     for (int i = 1; i < GGML_OP_COUNT; i++) {
-        all_ops.insert(ggml_op_name((enum ggml_op)i));
+        auto op = (enum ggml_op)i;
+        if (op == GGML_OP_VIEW      ||
+            op == GGML_OP_RESHAPE   ||
+            op == GGML_OP_PERMUTE   ||
+            op == GGML_OP_TRANSPOSE ||
+            op == GGML_OP_CONT      ||
+            op == GGML_OP_GLU       ||
+            op == GGML_OP_UNARY) {
+            continue;
+        }
+        all_ops.insert(ggml_op_name(op));
     }
     for (int i = 0; i < GGML_UNARY_OP_COUNT; i++) {
         all_ops.insert(ggml_unary_op_name((enum ggml_unary_op)i));

@@ -2313,7 +2313,7 @@ struct server_context {
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
-        const bool enable_thinking = params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
         SRV_INF("Enable thinking? %d\n", enable_thinking);
 
         oai_parser_opt = {
@@ -2372,7 +2372,7 @@ struct server_context {
             }
 
             if (ret != nullptr) {
-                SLT_DBG(*ret, "selected slot by lcs similarity, lcs_len = %d, similarity = %f\n", lcs_len, similarity);
+                SLT_INF(*ret, "selected slot by lcs similarity, lcs_len = %d, similarity = %.3f (> %.3f thold)\n", lcs_len, similarity, slot_prompt_similarity);
             }
         }
 
@@ -2394,7 +2394,7 @@ struct server_context {
             }
 
             if (ret != nullptr) {
-                SLT_DBG(*ret, "selected slot by lru, t_last = %" PRId64 "\n", t_last);
+                SLT_INF(*ret, "selected slot by LRU, t_last = %" PRId64 "\n", t_last);
             }
         }
 

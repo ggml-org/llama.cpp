@@ -1273,7 +1273,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
 
-    q = ggml_reshape_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream);
+    q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
 
     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
@@ -1335,14 +1335,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         if (arch == LLM_ARCH_GROK) {
             // need to do the following:
-            // multiply by attn_output_multiplyer of 0.08838834764831845
+            // multiply by attn_output_multiplier
             // and then :
             // kq = 30 * tanh(kq / 30)
             // before the softmax below
 
-            kq = ggml_tanh(ctx0, ggml_scale(ctx0, kq, 0.08838834764831845f/30.0f));
+            kq = ggml_tanh(ctx0, ggml_scale(ctx0, kq, hparams.f_attn_out_scale / hparams.f_attn_logit_softcapping));
             cb(kq, "kq_tanh", il);
-            kq = ggml_scale(ctx0, kq, 30);
+            kq = ggml_scale(ctx0, kq, hparams.f_attn_logit_softcapping);
             cb(kq, "kq_scaled", il);
         }
 

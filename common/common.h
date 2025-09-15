@@ -193,10 +193,11 @@ struct common_params_sampling {
 };
 
 struct common_params_model {
-    std::string path    = ""; // model local path                                           // NOLINT
-    std::string url     = ""; // model url to download                                      // NOLINT
-    std::string hf_repo = ""; // HF repo                                                    // NOLINT
-    std::string hf_file = ""; // HF file                                                    // NOLINT
+    std::string path        = ""; // model local path                                       // NOLINT
+    std::string url         = ""; // model url to download                                  // NOLINT
+    std::string hf_repo     = ""; // HF repo                                                // NOLINT
+    std::string hf_file     = ""; // HF file                                                // NOLINT
+    std::string docker_repo = ""; // Docker repo                                            // NOLINT
 };
 
 struct common_params_speculative {
@@ -287,9 +288,9 @@ struct common_params {
     float   rope_freq_base        =  0.0f; // RoPE base frequency
     float   rope_freq_scale       =  0.0f; // RoPE frequency scaling factor
     float   yarn_ext_factor       = -1.0f; // YaRN extrapolation mix factor
-    float   yarn_attn_factor      =  1.0f; // YaRN magnitude scaling factor
-    float   yarn_beta_fast        = 32.0f; // YaRN low correction dim
-    float   yarn_beta_slow        =  1.0f; // YaRN high correction dim
+    float   yarn_attn_factor      = -1.0f; // YaRN magnitude scaling factor
+    float   yarn_beta_fast        = -1.0f; // YaRN low correction dim
+    float   yarn_beta_slow        = -1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
 
     // offload params
@@ -452,7 +453,7 @@ struct common_params {
 
     std::string slot_save_path;
 
-    float slot_prompt_similarity = 0.5f;
+    float slot_prompt_similarity = 0.1f;
 
     // batched-bench params
     bool is_pp_shared = false;
