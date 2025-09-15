@@ -227,7 +227,9 @@ static ggml_backend_t create_backend(const rpc_server_params & params) {
         }
     }
 
-    backend = ggml_backend_init_best();
+    if (!backend) {
+        backend = ggml_backend_init_best();
+    }
 
     if (backend) {
         fprintf(stderr, "%s: using %s backend\n", __func__, ggml_backend_name(backend));
