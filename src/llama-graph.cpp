@@ -1270,6 +1270,35 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
+    // det note (03C KV-cache invariance): When deterministic mode is ON and
+    // FlashAttention is used, we enforce two host-side shape policies that make
+    // single-shot prefill vs incremental decode produce bitwise-identical logits
+    // at the same absolute position P:
+    //  1) KV length must be a multiple of the kernel stride (currently 256).
+    //     This keeps the reduction tree identical across flows and avoids a
+    //     boundary case at the tail.
+    //  2) The KQ mask N dimension must be padded to GGML_KQ_MASK_PAD (64).
+    //     This fixes the mask layout so kernels see identical shapes.
+    // If either condition is not met, we abort early with guidance instead of
+    // running a near-miss shape that could hide determinism gaps.
+    {
+        const bool det = ggml_is_deterministic();
+        if (det && cparams.flash_attn) {
+            // Enforce KV multiple-of-256 and mask padded to GGML_KQ_MASK_PAD
+            const int64_t n_kv_expect_stride = 256;
+            const int64_t n_kv_cur = k->ne[1];
+            if (n_kv_cur % n_kv_expect_stride != 0) {
+                GGML_ABORT("deterministic attention: KV length (%lld) must be a multiple of 256; increase/pad context under determinism.", (long long) n_kv_cur);
+            }
+            if (kq_mask) {
+                const int64_t n_batch_pad = kq_mask->ne[1];
+                if (n_batch_pad % GGML_KQ_MASK_PAD != 0) {
+                    GGML_ABORT("deterministic attention: mask N dimension (%lld) must be padded to GGML_KQ_MASK_PAD=%d.", (long long) n_batch_pad, GGML_KQ_MASK_PAD);
+                }
+            }
+        }
+    }
+
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
 

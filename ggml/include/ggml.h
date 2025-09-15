@@ -683,6 +683,10 @@ extern "C" {
     GGML_API int64_t ggml_cycles(void);
     GGML_API int64_t ggml_cycles_per_ms(void);
 
+    // Deterministic numerics – returns true if either built with GGML_DETERMINISTIC
+    // or the environment variable GGML_DETERMINISTIC is set to a truthy value.
+    GGML_API bool    ggml_is_deterministic(void);
+
     // accepts a UTF-8 path, even on Windows
     GGML_API FILE *  ggml_fopen(const char * fname, const char * mode);
 

@@ -17,8 +17,11 @@ static int fattn_tile_get_kq_stride_host(const int D, const int ncols, const int
                     return 64;
                 }
             default:
-                GGML_ABORT("fatal error");
-                return -1;
+                // For head sizes not handled by the fast tile path, return a
+                // conservative granularity. The generic single-column kernel
+                // added for 03B.1 does not depend on this value except that
+                // it must be positive and divide the KV length.
+                return FATTN_KQ_STRIDE;
         }
     }
     if (fast_fp16_available(cc)) {
@@ -29,8 +32,7 @@ static int fattn_tile_get_kq_stride_host(const int D, const int ncols, const int
             case 256:
                 return ncols <= 16 ? 128 : 64;
             default:
-                GGML_ABORT("fatal error");
-                return -1;
+                return FATTN_KQ_STRIDE;
         }
     }
     switch (D) {
@@ -41,8 +43,7 @@ static int fattn_tile_get_kq_stride_host(const int D, const int ncols, const int
         case 256:
             return 32;
         default:
-            GGML_ABORT("fatal error");
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
     GGML_UNUSED(warp_size);
 }
@@ -65,7 +66,7 @@ static constexpr __device__ int fattn_tile_get_kq_stride_device(int D, int ncols
             return 64;
 #endif // defined(GCN) || defined(CDNA)
         default:
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
 #else
 #ifdef FAST_FP16_AVAILABLE
@@ -76,7 +77,7 @@ static constexpr __device__ int fattn_tile_get_kq_stride_device(int D, int ncols
         case 256:
             return ncols <= 16 ? 128 : 64;
         default:
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
 #else
     switch (D) {
@@ -87,7 +88,7 @@ static constexpr __device__ int fattn_tile_get_kq_stride_device(int D, int ncols
         case 256:
             return 32;
         default:
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
 #endif // FAST_FP16_AVAILABLE
 #endif // GGML_USE_HIP
@@ -112,7 +113,7 @@ static constexpr __device__ int fattn_tile_get_kq_nbatch_device(int D, int ncols
             return ncols <= 16 ? 64 : 256;
 #endif // defined(GCN) || defined(CDNA)
         default:
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
 #else
 #ifdef FAST_FP16_AVAILABLE
@@ -124,7 +125,7 @@ static constexpr __device__ int fattn_tile_get_kq_nbatch_device(int D, int ncols
         case 256:
             return ncols <= 16 ? 64 : 128;
         default:
-            return -1;
+            return FATTN_KQ_STRIDE;
     }
 #else
     switch (D) {
@@ -135,11 +136,163 @@ static constexpr __device__ int fattn_tile_get_kq_nbatch_device(int D, int ncols
         case 256:
             return ncols <= 16 ? 128 : 64;
         default:
-            return -1;
+            return 64;
     }
 #endif // FAST_FP16_AVAILABLE
 #endif // GGML_USE_HIP
     GGML_UNUSED_VARS(ncols, warp_size);
+}
+
+// -----------------------------------------------------------------------------
+// 03B.1 generic deterministic tile kernel for head sizes not divisible by 64
+// Single-column, F16-only, no logit softcap. Intended for D in {80, 96, 112}.
+// -----------------------------------------------------------------------------
+
+template<int D, bool use_logit_softcap>
+#ifndef GGML_USE_HIP
+__launch_bounds__(WARP_SIZE, 1)
+#endif // GGML_USE_HIP
+static __global__ void flash_attn_tile_generic_f16_singlecol(
+        const char * __restrict__ Q,
+        const char * __restrict__ K,
+        const char * __restrict__ V,
+        const char * __restrict__ mask,
+        const char * __restrict__ sinks,
+        const int  * __restrict__ KV_max,
+        float      * __restrict__ dst,
+        float2     * __restrict__ dst_meta,
+        const float scale,
+        const float max_bias,
+        const float m0,
+        const float m1,
+        const uint32_t n_head_log2,
+        const float logit_softcap,
+        const int32_t ne00, const int32_t ne01, const int32_t ne02, const int32_t ne03,
+                            const int32_t nb01, const int32_t nb02, const int32_t nb03,
+        const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
+                            const int32_t nb11, const int32_t nb12, const int64_t nb13,
+                            const int32_t nb21, const int32_t nb22, const int64_t nb23,
+                            const int32_t ne31, const int32_t ne32, const int32_t ne33,
+                            const int32_t nb31, const int32_t nb32, const int64_t nb33) {
+#if defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
+    if (use_logit_softcap) { NO_DEVICE_CODE; return; }
+
+    const int lane = threadIdx.x;           // 0..31
+    if (threadIdx.y != 0) return;           // single warp per block
+
+    const int ic0      = blockIdx.x;        // one column per block
+    const int sequence = blockIdx.z / ne02;
+    const int head     = blockIdx.z - sequence*ne02;
+    const int gqa_ratio = ne02 / ne12;
+
+    const float2 * Q_f2 = (const float2 *) (Q + nb03*sequence + nb02*head + nb01*ic0);
+    const half2  * K_h2 = (const half2  *) (K + nb13*sequence + nb12*(head / gqa_ratio));
+    const half2  * V_h2 = (const half2  *) (V + nb13*sequence + nb12*(head / gqa_ratio));
+    const half   * maskh  = (const half   *) (mask  + nb33*(sequence % ne33) + nb31*ic0);
+    const float  * sinksf = (const float  *) sinks;
+
+    const int stride_KV2 = nb11 / sizeof(half2);
+
+    const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
+
+    __shared__ half2 Q_h2[D/2];
+    for (int i2 = lane; i2 < D/2; i2 += WARP_SIZE) {
+        const float2 q = (ic0 < ne01) ? Q_f2[i2] : make_float2(0.0f, 0.0f);
+        Q_h2[i2] = make_half2(q.x * scale, q.y * scale);
+    }
+    __syncthreads();
+
+    float kqmax = -FLT_MAX/2.0f;
+    float kqsum = 0.0f;
+
+    constexpr int CH = (D/2 + WARP_SIZE - 1) / WARP_SIZE;
+    half2 VKQ[CH];
+#pragma unroll
+    for (int c = 0; c < CH; ++c) VKQ[c] = make_half2(0.0f, 0.0f);
+
+    const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
+
+    for (int k = 0; k < k_VKQ_max; ++k) {
+        float sum_lane = 0.0f;
+        for (int i2 = lane, c = 0; i2 < D/2; i2 += WARP_SIZE, ++c) {
+            const float2 q = __half22float2(Q_h2[i2]);
+            const float2 kk= __half22float2(K_h2[int64_t(k)*stride_KV2 + i2]);
+            sum_lane += q.x*kk.x + q.y*kk.y;
+        }
+        float sum = warp_reduce_sum<WARP_SIZE>(sum_lane);
+        // Apply ALiBi/mask if provided. Mask contains per-(k,j) values; here j=ic0 (single column).
+        if (mask) {
+            sum += slope * __half2float(maskh[k]);
+        }
+
+        // streaming softmax update
+        const float kqmax_new = fmaxf(kqmax, sum);
+        const float diff_prev = kqmax - kqmax_new;
+        const float diff_cur  = sum   - kqmax_new;
+        const float KQ_max_scale = diff_prev >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_prev) : 0.0f;
+        const float phi          = diff_cur  >= SOFTMAX_FTZ_THRESHOLD ? expf(diff_cur)  : 0.0f;
+
+        const half2 phi_h2 = __float2half2_rn(phi);
+        for (int i2 = lane, c = 0; i2 < D/2; i2 += WARP_SIZE, ++c) {
+            const half2 v = V_h2[int64_t(k)*stride_KV2 + i2];
+            half2 acc_scaled;
+            reinterpret_cast<half&>(acc_scaled.x) = __hmul(__float2half(KQ_max_scale), __low2half(VKQ[c]));
+            reinterpret_cast<half&>(acc_scaled.y) = __hmul(__float2half(KQ_max_scale), __high2half(VKQ[c]));
+            VKQ[c] = __hadd2(acc_scaled, __hmul2(v, phi_h2));
+        }
+
+        kqsum = KQ_max_scale*kqsum + phi;
+        kqmax = kqmax_new;
+    }
+
+    if (sinksf && blockIdx.y == 0) {
+        const float sink = sinksf[head];
+        const float kqmax_new = fmaxf(kqmax, sink);
+        const float KQ_max_scale = expf(kqmax - kqmax_new);
+        kqsum = kqsum*KQ_max_scale + expf(sink - kqmax_new);
+        for (int c = 0; c < CH; ++c) {
+            reinterpret_cast<half&>(VKQ[c].x) = __hmul(__float2half(KQ_max_scale), __low2half(VKQ[c]));
+            reinterpret_cast<half&>(VKQ[c].y) = __hmul(__float2half(KQ_max_scale), __high2half(VKQ[c]));
+        }
+        kqmax = kqmax_new;
+    }
+
+    const int j_dst_unrolled = ((sequence*ne01 + ic0)*ne02 + head)*gridDim.y + blockIdx.y;
+    float2 * dst2 = (float2 *) dst;
+    const float kqsum_all = __shfl_sync(0xFFFFFFFF, kqsum, 0);
+    for (int i2 = lane, c = 0; i2 < D/2; i2 += WARP_SIZE, ++c) {
+        float2 out = __half22float2(VKQ[c]);
+        if (gridDim.y == 1) {
+            out.x /= kqsum_all;
+            out.y /= kqsum_all;
+        }
+        dst2[j_dst_unrolled*(D/2) + i2] = out;
+    }
+
+    if (gridDim.y != 1 && lane == 0) {
+        dst_meta[j_dst_unrolled] = make_float2(kqmax, kqsum_all);
+    }
+#else
+    GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale, max_bias, m0, m1,
+                     n_head_log2, logit_softcap,
+                     ne00, ne01, ne02, ne03, nb01, nb02, nb03,
+                     ne10, ne11, ne12, ne13, nb11, nb12, nb13,
+                     nb21, nb22, nb23,
+                     ne31, ne32, ne33, nb31, nb32, nb33);
+    NO_DEVICE_CODE;
+#endif
+}
+
+template <int D, bool use_logit_softcap>
+static void launch_fattn_tile_generic_singlecol(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    constexpr int cols_per_block = 1;
+    constexpr int nwarps = 1; // one warp per block
+    constexpr size_t nbytes_shared = 0;
+    fattn_kernel_t fattn_kernel = flash_attn_tile_generic_f16_singlecol<D, use_logit_softcap>;
+    const int kq_stride = FATTN_KQ_STRIDE;
+    launch_fattn<D, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared,
+                                       kq_stride, /*need_f16_K=*/true, /*need_f16_V=*/true,
+                                       /*stream_k=*/false, /*warp_size=*/WARP_SIZE);
 }
 
 template<int D, int ncols, bool use_logit_softcap> // D == head size
@@ -631,6 +784,20 @@ static void launch_fattn_tile_switch_head_size(ggml_backend_cuda_context & ctx, 
     switch (Q->ne[0]) {
         case  64: {
             launch_fattn_tile_switch_ncols< 64, use_logit_softcap>(ctx, dst);
+        } break;
+        case  80: {
+            // det note: for special head sizes we take the single‑column
+            // generic tile path to avoid cross‑block combines and keep a
+            // stable reduction order (batch‑invariant).
+            launch_fattn_tile_generic_singlecol< 80, use_logit_softcap>(ctx, dst);
+        } break;
+        case  96: {
+            // det note: see comment above for D=80.
+            launch_fattn_tile_generic_singlecol< 96, use_logit_softcap>(ctx, dst);
+        } break;
+        case 112: {
+            // det note: see comment above for D=80.
+            launch_fattn_tile_generic_singlecol<112, use_logit_softcap>(ctx, dst);
         } break;
         case 128: {
             launch_fattn_tile_switch_ncols<128, use_logit_softcap>(ctx, dst);

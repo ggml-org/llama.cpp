@@ -1470,6 +1470,11 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     }
 
+    // det note: MMA kernels request stream_k=true for performance in the
+    // default (non‑det) path. launch_fattn() ignores stream‑k and
+    // multi‑block combine when ggml_is_deterministic() to keep reduction
+    // order stable. That is, determinism is enforced centrally in
+    // launch_fattn() regardless of the caller’s preference.
     launch_fattn<DV, ncols1, ncols2>
         (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, FATTN_KQ_STRIDE, true, true, true);
 }

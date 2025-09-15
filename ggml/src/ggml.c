@@ -481,6 +481,34 @@ const char * ggml_commit(void) {
     return GGML_COMMIT;
 }
 
+// Deterministic numerics toggle
+// det note (rationale): a single, central switch for determinism keeps policy
+// decisions inside kernels simple and testable. We mirror the guidance from the
+// Thinking Machines determinism write‑ups: make reduction order and algorithm
+// choice an explicit mode, not an incidental outcome of heuristics. Caching the
+// env read avoids overhead on hot paths while preserving a runtime override.
+bool ggml_is_deterministic(void) {
+#ifdef GGML_DETERMINISTIC
+    return true;
+#else
+    // cache env read
+    static int cached = -1;
+    if (cached == -1) {
+        const char * v = getenv("GGML_DETERMINISTIC");
+        int on = 0;
+        if (v) {
+            // accept common truthy values
+            if (strcmp(v, "1") == 0 || strcmp(v, "true") == 0 || strcmp(v, "TRUE") == 0 ||
+                strcmp(v, "on") == 0  || strcmp(v, "ON")   == 0 || strcmp(v, "yes")  == 0 || strcmp(v, "YES") == 0) {
+                on = 1;
+            }
+        }
+        cached = on;
+    }
+    return cached != 0;
+#endif
+}
+
 //
 // timing
 //
