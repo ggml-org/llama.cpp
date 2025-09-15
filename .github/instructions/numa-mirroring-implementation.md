@@ -19,14 +19,14 @@ developer@81ec6c6e6af6:/workspaces/llama-cpp-dbsanfte-dev/llama-cpp-numa-mirror$
 
 With numa mirroring:
 ```
-build: dccea3c5 (6465)
-developer@81ec6c6e6af6:/workspaces/llama-cpp-dbsanfte-dev/llama-cpp-numa-mirror$ cd /workspaces/llama-cpp-dbsanfte-dev/llama-cpp-numa-mirror && ./build-release/bin/llama-bench -m ../.devcontainer/Qwen3-32B-Q6_K.gguf --numa mirror
+developer@81ec6c6e6af6:/workspaces/llama-cpp-dbsanfte-dev$ ./build/bin/llama-bench -m .
+/.devcontainer/Qwen3-32B-Q6_K.gguf --numa mirror
 | model                          |       size |     params | backend    | threads |            test |                  t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
-| qwen3 32B Q6_K                 |  25.03 GiB |    32.76 B | CPU        |      56 |           pp512 |         16.22 ± 0.30 |
-| qwen3 32B Q6_K                 |  25.03 GiB |    32.76 B | CPU        |      56 |           tg128 |          2.80 ± 0.00 |
+| qwen3 32B Q6_K                 |  25.03 GiB |    32.76 B | CPU        |      56 |           pp512 |         21.36 ± 0.11 |
+| qwen3 32B Q6_K                 |  25.03 GiB |    32.76 B | CPU        |      56 |           tg128 |          2.70 ± 0.00 |
 
-build: dccea3c5 (6465)
+build: c665d3c9 (6468)
 ```
 
 ## Architecture
@@ -73,7 +73,7 @@ Clean integration point during model loading where NUMA mirrors are established 
 **Purpose**: Model loading with explicit NUMA mirror setup
 **Key addition**:
 - Detection of model weight tensors during loading
-- Call to `tensor_set_data_with_numa_mirrors()` for weight tensors
+- Call to `tensor_set_data_with_numa_mirrors()` for weight tensors at model loading time
 - Clean integration with existing model loading pipeline
 
 #### `src/llama-mmap.h` and `src/llama-mmap.cpp`
@@ -136,12 +136,159 @@ Instead of directly addressing `tensor->data`, instead you do `tensor_data(tenso
 
 The `tensor_data()` function in `ggml.h` has been optimized with a fast path:
 ```c
-static inline void * tensor_data(const struct ggml_tensor * tensor) {
-    if (tensor->numa_mirror_data == NULL) {
-        return tensor->data;  // Fast path: no NUMA mirrors
+    // Tensor data accessor functions for NUMA model mirroring compatibility:
+    
+    // External thread-local variable set at OMP threadpool creation time
+    extern __thread int ggml_current_numa_node;
+    
+    static inline void * tensor_data(const struct ggml_tensor * tensor) {
+        // Fast path: if no NUMA mirrors exist, avoid thread-local access entirely
+        if (tensor->__data[1] == NULL) {
+            return tensor->__data[0];
+        }
+        
+        // NUMA path: only read thread-local variable when NUMA mirrors exist
+        int numa_node = ggml_current_numa_node;
+        if (numa_node > 0 && numa_node < GGML_NUMA_MAX_NODES 
+            && tensor->__data[numa_node] != NULL) {
+            return tensor->__data[numa_node];
+        }
+        
+        return tensor->__data[0];
     }
-    return ggml_numa_get_tensor_data(tensor);  // NUMA-aware routing
-}
+
+    static inline void tensor_set_data(struct ggml_tensor * tensor, void * data) {
+        tensor->__data[0] = data;
+    }
+
+    // Model loading specific function - bypasses normal tensor_set_data logic
+    static inline void tensor_set_data_with_numa_mirrors(struct ggml_tensor * tensor, 
+                                                        void * primary_data,
+                                                        void ** numa_node_data,
+                                                        int numa_node_count) {
+        // Set primary data (node 0)
+        tensor->__data[0] = primary_data;
+        
+        // Set NUMA mirrors for other nodes
+        for (int node = 1; node < numa_node_count && node < GGML_NUMA_MAX_NODES; node++) {
+            tensor->__data[node] = numa_node_data[node];
+        }
+        
+        // Clear remaining slots
+        for (int node = numa_node_count; node < GGML_NUMA_MAX_NODES; node++) {
+            tensor->__data[node] = NULL;
+        }
+    }
+```
+
+Thread-local variables at OMP thread-creation time in ggml-cpu.c:
+```c
+
+```
+
+First-touch allocation at model weight loading time in llama-mmap.cpp:
+```c
+    // NUMA mirror logic: allocate and populate model weights on each NUMA node
+    struct numa_mapping {
+        void* addr;
+        size_t size;
+    };
+    std::vector<numa_mapping> numa_mappings;
+
+    // NUMA allocation using first-touch approach with thread affinity binding
+    void* numa_alloc_first_touch(size_t size, int node) {
+        // Define SIMD alignment (same as ggml_aligned_malloc)
+#if defined(__s390x__)
+        const size_t alignment = 256;
+#else
+        const size_t alignment = 64; 
+#endif
+        
+        // Bind current thread to the target NUMA node for first-touch
+        struct bitmask* old_mask = numa_get_run_node_mask();
+        if (numa_run_on_node(node) != 0) {
+            LLAMA_LOG_DEBUG("Warning: could not bind thread to NUMA node %d: %s\n", node, strerror(errno));
+            // Continue anyway - might still work
+        }
+        
+        // Use posix_memalign for SIMD alignment
+        void* ptr = nullptr;
+        int ret = posix_memalign(&ptr, alignment, size);
+        if (ret != 0) {
+            LLAMA_LOG_DEBUG("posix_memalign failed for %zu bytes with alignment %zu: %s\n", 
+                           size, alignment, strerror(ret));
+            // Restore original thread binding
+            if (old_mask) {
+                numa_run_on_node_mask(old_mask);
+                numa_free_nodemask(old_mask);
+            }
+            return nullptr;
+        }
+        
+        // First-touch: touch every page to ensure physical allocation on current node
+        volatile char* mem = (volatile char*)ptr;
+        const size_t page_size = sysconf(_SC_PAGESIZE);
+        for (size_t i = 0; i < size; i += page_size) {
+            mem[i] = 0; // First touch allocates the page on current NUMA node
+        }
+        
+        // Restore original thread binding
+        if (old_mask) {
+            numa_run_on_node_mask(old_mask);
+            numa_free_nodemask(old_mask);
+        }
+        
+        LLAMA_LOG_DEBUG("✅ First-touch allocation: %zu bytes for node %d at %p (SIMD aligned to %zu bytes)\n", 
+                       size, node, ptr, alignment);
+        return ptr;
+    }
+
+    void mmap_numa_mirror(struct llama_file * file) {
+        int num_nodes = numa_num_configured_nodes();
+        if (num_nodes <= 1) {
+            throw std::runtime_error("NUMA mirror mode requires multiple NUMA nodes");
+        }
+        
+        LLAMA_LOG_DEBUG("NUMA mirroring enabled - allocating %.2f MB on each of %d nodes using first-touch\n", 
+                file->size() / (1024.0 * 1024.0), num_nodes);
+        
+        size_t total_size = file->size();
+        for (int node = 0; node < num_nodes; ++node) {
+            LLAMA_LOG_DEBUG("NUMA: Allocating on node %d using first-touch approach\n", node);
+            
+            void* node_mem = numa_alloc_first_touch(total_size, node);
+            if (!node_mem) {
+                for (const auto& mapping : numa_mappings) {
+                    free(mapping.addr);  // Use free() for posix_memalign allocated memory
+                }
+                throw std::runtime_error("NUMA mirror allocation failed");
+            }
+            
+            // VERIFICATION: Check that memory was actually allocated on the expected NUMA node
+            int actual_node = -1;
+            if (get_mempolicy(&actual_node, NULL, 0, node_mem, MPOL_F_NODE | MPOL_F_ADDR) == 0) {
+                LLAMA_LOG_DEBUG("NUMA: Memory at %p allocated on node %d (expected %d)\n", 
+                               node_mem, actual_node, node);
+                if (actual_node != node) {
+                    LLAMA_LOG_WARN("NUMA: WARNING: Memory allocated on wrong node! Expected %d, got %d\n", 
+                                   node, actual_node);
+                } else {
+                    LLAMA_LOG_DEBUG("NUMA: ✅ First-touch succeeded - memory correctly placed on node %d\n", node);
+                }
+            } else {
+                LLAMA_LOG_WARN("NUMA: Could not verify allocation node for %p: %s\n", 
+                               node_mem, strerror(errno));
+            }
+            
+            file->seek(0, SEEK_SET);
+            file->read_raw(node_mem, total_size);
+            numa_mappings.push_back({node_mem, total_size});
+            
+            LLAMA_LOG_DEBUG("NUMA: Successfully allocated and populated %.2f MB on node %d at %p\n",
+                           total_size / (1024.0 * 1024.0), node, node_mem);
+        }
+        addr = numa_mappings.empty() ? nullptr : numa_mappings[0].addr;
+    }
 ```
 
 This optimization ensures minimal overhead for intermediate computation tensors while enabling NUMA routing for model weights.
