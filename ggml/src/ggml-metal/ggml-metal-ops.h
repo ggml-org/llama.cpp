@@ -18,8 +18,8 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_tmp(const struct ggml_tensor * op);
 
 ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_get_pipeline(
-        ggml_metal_t ctx,
         struct ggml_tensor * op,
+        ggml_metal_t ctx,
         bool    has_mask,
         bool    has_sinks,
         bool    has_bias,
@@ -27,8 +27,8 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_get_pipeline(
         int32_t nsg);
 
 ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_get_pipeline(
-        ggml_metal_t ctx,
         struct ggml_tensor * op,
+        ggml_metal_t ctx,
         bool    has_mask,
         bool    has_sinks,
         bool    has_bias,
@@ -37,20 +37,20 @@ ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_get_pipeline(
         int32_t nwg);
 
 ggml_metal_pipeline_t ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(
-        ggml_metal_t ctx,
         struct ggml_tensor * op,
+        ggml_metal_t ctx,
         int32_t dv,
         int32_t nwg);
 
 ggml_metal_pipeline_t ggml_metal_op_bin_get_pipeline(
-        ggml_metal_t ctx,
         enum ggml_op op,
+        ggml_metal_t ctx,
         int32_t n_fuse,
         bool row);
 
 ggml_metal_pipeline_t ggml_metal_op_rms_norm_get_pipeline(
-        ggml_metal_t ctx,
         struct ggml_tensor * op,
+        ggml_metal_t ctx,
         int32_t n_fuse);
 
 #ifdef __cplusplus

@@ -1408,11 +1408,11 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     // src1 is a row
                     GGML_ASSERT(ne11 == 1);
 
-                    pipeline = ggml_metal_op_bin_get_pipeline(ctx, dst->op, n_fuse, true);
+                    pipeline = ggml_metal_op_bin_get_pipeline(node->op, ctx, n_fuse, true);
 
                     bcast_row = true;
                 } else {
-                    pipeline = ggml_metal_op_bin_get_pipeline(ctx, dst->op, n_fuse, false);
+                    pipeline = ggml_metal_op_bin_get_pipeline(node->op, ctx, n_fuse, false);
                 }
 
                 if (n_fuse > 1) {
@@ -1602,7 +1602,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                 };
 
                 //const id<MTLComputePipelineState> pipeline = ctx->pipelines[GGML_METAL_PIPELINE_TYPE_ADD].pipeline;
-                const id<MTLComputePipelineState> pipeline = ggml_metal_op_bin_get_pipeline(ctx, GGML_OP_ADD, 1, false);
+                const id<MTLComputePipelineState> pipeline = ggml_metal_op_bin_get_pipeline(GGML_OP_ADD, ctx, 1, false);
 
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBytes:&args length:sizeof(args) atIndex:0];
@@ -3517,7 +3517,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                     }
                 }
 
-                const id<MTLComputePipelineState> pipeline = ggml_metal_op_rms_norm_get_pipeline(ctx, node, n_fuse);
+                const id<MTLComputePipelineState> pipeline = ggml_metal_op_rms_norm_get_pipeline(node, ctx, n_fuse);
 
                 int nth = 32; // SIMD width
 
@@ -4257,7 +4257,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_op_flash_attn_ext_get_pipeline(ctx, node, has_mask, has_sinks, has_bias, has_scap, nsg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_op_flash_attn_ext_get_pipeline(node, ctx, has_mask, has_sinks, has_bias, has_scap, nsg);
 
                     [encoder setComputePipelineState:pipeline];
                     [encoder setBytes:&args length:sizeof(args)     atIndex:0];
@@ -4372,7 +4372,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                         /*.logit_softcap =*/ logit_softcap,
                     };
 
-                    id<MTLComputePipelineState> pipeline = ggml_metal_op_flash_attn_ext_vec_get_pipeline(ctx, node, has_mask, has_sinks, has_bias, has_scap, nsg, nwg);
+                    id<MTLComputePipelineState> pipeline = ggml_metal_op_flash_attn_ext_vec_get_pipeline(node, ctx, has_mask, has_sinks, has_bias, has_scap, nsg, nwg);
 
                     GGML_ASSERT(nsg*32 <= (int) pipeline.maxTotalThreadsPerThreadgroup);
 
@@ -4426,7 +4426,7 @@ static int ggml_metal_encode_node(struct ggml_metal_encode_context * ctx_enc, in
                                 nrows,
                             };
 
-                            id<MTLComputePipelineState> pipeline0 = ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(ctx, node, ne20, nwg);
+                            id<MTLComputePipelineState> pipeline0 = ggml_metal_op_flash_attn_ext_vec_reduce_get_pipeline(node, ctx, ne20, nwg);
 
                             [encoder setComputePipelineState:pipeline0];
                             [encoder setBytes:&args0   length:sizeof(args0) atIndex:0];

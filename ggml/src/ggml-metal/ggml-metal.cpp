@@ -689,6 +689,7 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
 
     GGML_UNUSED(reg);
 }
+
 static ggml_backend_reg_i ggml_backend_metal_reg_i = {
     /* .get_name         = */ ggml_backend_metal_reg_get_name,
     /* .device_count     = */ ggml_backend_metal_reg_device_count,
