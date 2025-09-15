@@ -12250,8 +12250,8 @@ struct llm_build_olmo2 : public llm_graph_context {
                 cb(Vcur, "Vcur", il);
 
                 cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                        model.layers[il].wo, NULL,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
