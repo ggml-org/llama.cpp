@@ -12216,7 +12216,7 @@ struct llm_build_olmo2 : public llm_graph_context {
                 const bool is_swa = hparams.is_swa(il);
 
                 if (is_swa) {
-                    // For sliding window layers, Olmo3 does not use rope scaling.
+                    // For sliding window layers, Olmo3 use regular rope with no yarn rope scaling.
                     // This is achieved here by setting freq_scale and attn_factor to 1.
                     // We also set ext_factor to 0 to avoid a few unnecessary computations.
                     Qcur = ggml_rope_ext(
