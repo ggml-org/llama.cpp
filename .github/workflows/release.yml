@@ -530,15 +530,13 @@ jobs:
     runs-on: windows-2022
 
     env:
-      # The ROCm version must correspond to the version used in the HIP SDK.
-      ROCM_VERSION: "6.4.2"
       HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     strategy:
       matrix:
         include:
           - name: "radeon"
-            gpu_targets: "gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+            gpu_targets: "gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
@@ -548,7 +546,7 @@ jobs:
       - name: Clone rocWMMA repository
         id: clone_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
+          git clone https://github.com/rocm/rocwmma --branch develop --depth 1
 
       - name: Cache ROCm Installation
         id: cache-rocm
