@@ -376,6 +376,7 @@ struct ggml_backend_metal_context {
 
     // how many times a given op was fused
     uint64_t fuse_cnt[GGML_OP_COUNT];
+
     // capture state
     bool capture_next_compute;
     bool capture_started;
@@ -490,7 +491,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 
     ctx->cmd_buf_last = nil;
 
-    // load kernels
+    // load default kernels
     {
         NSError * error = nil;
 
@@ -501,12 +502,12 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 #define GGML_METAL_ADD_KERNEL(e, name, supported) \
         if (supported) { \
             struct ggml_metal_kernel * kernel = &ctx->kernels[e]; \
-            id<MTLFunction> metal_function = [ctx->library newFunctionWithName:@"kernel_"#name]; \
-            kernel->pipeline = [ctx->device newComputePipelineStateWithFunction:metal_function error:&error]; \
+            id<MTLFunction> function = [ctx->library newFunctionWithName:@"kernel_"#name]; \
+            kernel->pipeline = [ctx->device newComputePipelineStateWithFunction:function error:&error]; \
             GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, "kernel_"#name, (void *) kernel->pipeline, \
                     (int) kernel->pipeline.maxTotalThreadsPerThreadgroup, \
                     (int) kernel->pipeline.threadExecutionWidth); \
-            [metal_function release]; \
+            [function release]; \
             if (error) { \
                 GGML_LOG_ERROR("%s: error: load pipeline error: %s\n", __func__, [[error description] UTF8String]); \
                 return NULL; \
@@ -1140,6 +1141,25 @@ static id<MTLComputePipelineState> ggml_metal_rms_norm_get_pipeline(
 static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
 
+    for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
+        if (ctx->cmd_bufs[i].obj) {
+            [ctx->cmd_bufs[i].obj release];
+        }
+
+        if (ctx->cmd_bufs[i].mem_ranges) {
+            ggml_mem_ranges_free(ctx->cmd_bufs[i].mem_ranges);
+        }
+    }
+
+    for (int i = 0; i < (int) ctx->cmd_bufs_ext.count; ++i) {
+        if (ctx->cmd_bufs_ext[i]) {
+            [ctx->cmd_bufs_ext[i] release];
+        }
+    }
+
+    [ctx->cmd_bufs_ext removeAllObjects];
+    [ctx->cmd_bufs_ext release];
+
     for (int i = 0; i < GGML_METAL_KERNEL_TYPE_COUNT; ++i) {
         [ctx->kernels[i].pipeline release];
     }
@@ -1164,25 +1184,6 @@ static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
     Block_release(ctx->encode_async);
 
     //[ctx->queue release]; // [TAG_QUEUE_PER_BACKEND]
-
-    for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
-        if (ctx->cmd_bufs[i].obj) {
-            [ctx->cmd_bufs[i].obj release];
-        }
-
-        if (ctx->cmd_bufs[i].mem_ranges) {
-            ggml_mem_ranges_free(ctx->cmd_bufs[i].mem_ranges);
-        }
-    }
-
-    for (int i = 0; i < (int) ctx->cmd_bufs_ext.count; ++i) {
-        if (ctx->cmd_bufs_ext[i]) {
-            [ctx->cmd_bufs_ext[i] release];
-        }
-    }
-
-    [ctx->cmd_bufs_ext removeAllObjects];
-    [ctx->cmd_bufs_ext release];
 
     dispatch_release(ctx->d_queue);
 
@@ -5528,6 +5529,8 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_mapped(void) {
 
 // backend
 
+static void ggml_backend_metal_synchronize(ggml_backend_t backend);
+
 static const char * ggml_backend_metal_name(ggml_backend_t backend) {
     return "Metal";
 
@@ -5536,6 +5539,9 @@ static const char * ggml_backend_metal_name(ggml_backend_t backend) {
 
 static void ggml_backend_metal_free(ggml_backend_t backend) {
     struct ggml_backend_metal_context * ctx = backend->context;
+
+    // wait for any ongoing async operations to finish
+    ggml_backend_metal_synchronize(backend);
 
     ggml_metal_free(ctx);
 
