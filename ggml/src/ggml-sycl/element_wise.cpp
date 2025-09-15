@@ -2,6 +2,7 @@
 #include "ggml-sycl/presets.hpp"
 #include "ggml.h"
 #include "element_wise.hpp"
+#include <cstring>  
 
 #define SYCL_GLOBAL_ID_LOOP(K, ITEM) \
     for (auto i = ITEM.get_global_id(0); i < (size_t)K; i += ITEM.get_global_range(0))
@@ -926,6 +927,135 @@ static inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor
             ggml_sycl_detail::pad_sycl(src, dst_ptr, ne00, ne01, ne02, ne0, ne1, ne2, stream);
         });
 }
+static inline void ggml_sycl_op_set(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(dst->src[1] != nullptr);
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src0->type == dst->type);
+    GGML_ASSERT(src1->type == dst->type);
+#if defined(GGML_SYCL_F16)
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_I32);
+#else
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_I32);
+#endif
+    const size_t ts = ggml_type_size(dst->type); 
+
+    dpct::queue_ptr q = ctx.stream();
+    {
+        const bool same_type = (src0->type == dst->type);
+        const bool src_cont  = ggml_is_contiguous(src0);
+        const bool dst_cont  = ggml_is_contiguous(dst);
+
+        const void *p_src0 = src0->data;
+        void       *p_dst  = dst->data;
+
+        auto pt_src0 = sycl::get_pointer_type((const char*)p_src0, q->get_context());
+        auto pt_dst  = sycl::get_pointer_type((char*)p_dst,       q->get_context());
+
+        if (same_type && src_cont && dst_cont && ggml_nelements(src0) == ggml_nelements(dst)) {
+            const size_t bytes = ggml_nbytes(dst);
+            if (pt_src0 != sycl::usm::alloc::unknown && pt_dst != sycl::usm::alloc::unknown) {
+                SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(p_dst, p_src0, bytes)));
+            } else {
+                std::memcpy(p_dst, p_src0, bytes);
+            }
+        } else {
+            const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
+            const size_t  db0 = dst->nb[0], db1 = dst->nb[1], db2 = dst->nb[2], db3 = dst->nb[3];
+            const size_t  sb0 = src0->nb[0], sb1 = src0->nb[1], sb2 = src0->nb[2], sb3 = src0->nb[3];
+
+            const size_t N  = (size_t) ggml_nelements(dst);
+            const size_t WG = 256;
+            const size_t NG = ((N + WG - 1) / WG) * WG;
+
+            const size_t ge0 = (size_t) ne0;
+            const size_t ge1 = ge0 * (size_t) ne1;
+            const size_t ge2 = ge1 * (size_t) ne2;
+
+            q->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(NG), sycl::range<1>(WG)),
+                [=](sycl::nd_item<1> it) {
+                    size_t idx = it.get_global_linear_id();
+                    if (idx >= N) return;
+
+                    size_t i3 = idx / ge2;  size_t r2 = idx % ge2;
+                    size_t i2 = r2 / ge1;   size_t r1 = r2 % ge1;
+                    size_t i1 = r1 / ge0;   size_t i0 = r1 % ge0;
+
+                    const char * s = (const char*)p_src0 + (i0*sb0 + i1*sb1 + i2*sb2 + i3*sb3);
+                    char       * d = (char*)p_dst   + (i0*db0 + i1*db1 + i2*db2 + i3*db3);
+
+                    for (size_t b = 0; b < ts; ++b) d[b] = s[b];
+                }
+            );
+        }
+    }
+
+    {
+        const int32_t *p = (const int32_t *) dst->op_params;
+        const size_t nb1    = (size_t) p[0];
+        const size_t nb2    = (size_t) p[1];
+        const size_t nb3    = (size_t) p[2];
+        const size_t offset = (size_t) p[3];
+
+        const void *p_src1 = src1->data;
+        void       *p_dst  = dst->data;
+
+        const size_t sb0 = src1->nb[0], sb1 = src1->nb[1], sb2 = src1->nb[2], sb3 = src1->nb[3];
+        const size_t db0 = dst->nb[0]; 
+        const int64_t ne0 = src1->ne[0], ne1 = src1->ne[1], ne2 = src1->ne[2], ne3 = src1->ne[3];
+
+        if (ggml_is_contiguous(src1) && db0 == ts) {
+            const size_t row_bytes = (size_t) ne0 * ts;
+            const char *s_base = (const char*) p_src1;
+            char       *d_base = (char*) p_dst + offset;
+
+            for (int64_t i3 = 0; i3 < ne3; ++i3) {
+                for (int64_t i2 = 0; i2 < ne2; ++i2) {
+                    for (int64_t i1 = 0; i1 < ne1; ++i1) {
+                        const char *s_row = s_base + i1*sb1 + i2*sb2 + i3*sb3;
+                        char       *d_row = d_base + i1*nb1 + i2*nb2 + i3*nb3;
+
+                        auto pt_s = sycl::get_pointer_type(s_row, q->get_context());
+                        auto pt_d = sycl::get_pointer_type(d_row, q->get_context());
+                        if (pt_s != sycl::usm::alloc::unknown && pt_d != sycl::usm::alloc::unknown) {
+                            SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(d_row, s_row, row_bytes)));
+                        } else {
+                            std::memcpy(d_row, s_row, row_bytes);
+                        }
+                    }
+                }
+            }
+        } else {
+        
+            const size_t N  = (size_t) (ne0 * ne1 * ne2 * ne3);
+            const size_t WG = 256;
+            const size_t NG = ((N + WG - 1) / WG) * WG;
+
+            const size_t ge0 = (size_t) ne0;
+            const size_t ge1 = ge0 * (size_t) ne1;
+            const size_t ge2 = ge1 * (size_t) ne2;
+
+            q->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(NG), sycl::range<1>(WG)),
+                [=](sycl::nd_item<1> it) {
+                    size_t idx = it.get_global_linear_id();
+                    if (idx >= N) return;
+
+                    size_t i3 = idx / ge2;  size_t r2 = idx % ge2;
+                    size_t i2 = r2 / ge1;   size_t r1 = r2 % ge1;
+                    size_t i1 = r1 / ge0;   size_t i0 = r1 % ge0;
+
+                    const char * s = (const char*) p_src1 + (i0*sb0 + i1*sb1 + i2*sb2 + i3*sb3);
+                    char       * d = (char*) p_dst + offset + (i0*db0 + i1*nb1 + i2*nb2 + i3*nb3);
+
+                    for (size_t b = 0; b < ts; ++b) d[b] = s[b];
+                }
+            );
+        }
+    }
+}
 
 static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     float min_val;
@@ -1122,6 +1252,11 @@ void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_pad(ctx, dst);
+}
+
+void ggml_sycl_set(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    ggml_sycl_op_set(ctx, dst);
 }
 
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

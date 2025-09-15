@@ -3564,6 +3564,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_GET_ROWS:
             ggml_sycl_get_rows(ctx, dst);
             break;
+        case GGML_OP_SET:
+            ggml_sycl_set(ctx, dst);
+            break;
         case GGML_OP_SET_ROWS:
             ggml_sycl_op_set_rows(ctx, dst);
             break;
@@ -4167,6 +4170,25 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
 
 static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     switch (op->op) {
+        case GGML_OP_SET: {
+#if defined(GGML_SYCL_F16)
+    const bool types_ok =
+        (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_I32) &&
+        (op->src[0]->type == op->type) &&
+        (op->src[1] && op->src[1]->type == op->type);
+#else
+    const bool types_ok =
+        (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32) &&
+        (op->src[0]->type == op->type) &&
+        (op->src[1] && op->src[1]->type == op->type);
+#endif
+
+    const bool contiguous_ok =
+        ggml_is_contiguous(op->src[0]) &&
+        (!op->src[1] || ggml_is_contiguous(op->src[1]));
+
+    return types_ok && contiguous_ok;
+}
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
                 ggml_type src0_type = op->src[0]->type;
