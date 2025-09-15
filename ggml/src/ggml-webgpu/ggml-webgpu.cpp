@@ -597,7 +597,7 @@ static void ggml_webgpu_get_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
     uint32_t wg_x        = (dst->ne[1] * dst->ne[2] * dst->ne[3] + max_wg_size - 1) / max_wg_size;
 
     wgpu::ComputePipeline pipeline = ctx->get_rows_pipeline[src->type];
-    if (src->type == GGML_TYPE_F32 && dst->ne[0] < 4) {
+    if (src->type == GGML_TYPE_F32 && dst->ne[0] % 4 != 0) {
         pipeline = ctx->get_rows_f32_no_vec_pipeline;
     }
     ggml_backend_webgpu_build_and_enqueue(ctx, pipeline, params, entries, wg_x, ggml_op_name(dst->op));
