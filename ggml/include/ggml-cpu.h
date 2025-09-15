@@ -104,6 +104,13 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_wasm_simd  (void);
     GGML_BACKEND_API int ggml_cpu_has_llamafile  (void);
 
+    //
+    // NUMA work buffer allocation
+    //
+
+    GGML_BACKEND_API void * ggml_numa_alloc_work_buffer (size_t size);
+    GGML_BACKEND_API void   ggml_numa_free_work_buffer  (void * ptr);
+
     // Internal types and functions exposed for tests and benchmarks
 
     typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,

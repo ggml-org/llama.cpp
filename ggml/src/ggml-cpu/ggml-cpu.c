@@ -769,10 +769,64 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
 bool ggml_is_numa(void) {
     // Return true if:
-    // 1. Multiple physical NUMA nodes are present, OR
-    // 2. User explicitly requested NUMA mirror strategy (--numa mirror)
-    return g_state.numa.n_nodes > 1 || 
-           g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR;
+    // 1. Multiple physical NUMA nodes are present, AND
+    // 2. User explicitly requested a NUMA strategy
+    return g_state.numa.n_nodes > 1 && 
+           g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_DISABLED;
+}
+
+//
+// NUMA-aware work buffer allocation:
+// Based on empirical testing, allocating work buffers on node 0 provides
+// the best speed. Interleaving actually slows things down considerably.
+// If we optimised kernels for Numa awareness, this could be revisited.
+//
+
+void* ggml_numa_alloc_work_buffer(size_t size) {
+    void* ptr = malloc(size);
+    if (!ptr) {
+        return NULL;
+    }
+
+#ifdef GGML_USE_NUMA
+    if (ggml_is_numa()) {
+        // Bind to NUMA node 0 using first-touch policy
+        if (numa_available() >= 0) {
+            // Set memory policy to bind to node 0
+            unsigned long nodemask = 1UL; // Only node 0
+            if (set_mempolicy(MPOL_BIND, &nodemask, sizeof(nodemask) * 8) == 0) {
+                // Touch all pages to allocate them on node 0
+                memset(ptr, 0, size);
+                
+                // Reset memory policy to default
+                set_mempolicy(MPOL_DEFAULT, NULL, 0);
+                
+                GGML_LOG_DEBUG("NUMA: Work buffer allocated on node 0 (size: %zu bytes)\n", size);
+            } else {
+                // Fallback: just touch the pages without specific binding
+                memset(ptr, 0, size);
+                GGML_LOG_DEBUG("NUMA: Work buffer allocated with first-touch (size: %zu bytes)\n", size);
+            }
+        } else {
+            // NUMA not available, just use regular allocation
+            memset(ptr, 0, size);
+        }
+    } else {
+        // No NUMA, just touch the pages for consistency
+        memset(ptr, 0, size);
+    }
+#else
+    // No NUMA support, just touch the pages
+    memset(ptr, 0, size);
+#endif
+
+    return ptr;
+}
+
+void ggml_numa_free_work_buffer(void* ptr) {
+    if (ptr) {
+        free(ptr);
+    }
 }
 
 #if defined(__ARM_ARCH)
@@ -3285,9 +3339,18 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads, NULL);
 
-    cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
+    // Use NUMA-aware work buffer allocation instead of ggml_new_buffer
+    cplan.work_data = (uint8_t *)ggml_numa_alloc_work_buffer(cplan.work_size);
+    if (cplan.work_size > 0 && !cplan.work_data) {
+        return GGML_STATUS_ALLOC_FAILED;
+    }
 
-    return ggml_graph_compute(cgraph, &cplan);
+    enum ggml_status status = ggml_graph_compute(cgraph, &cplan);
+    
+    // Free the work buffer
+    ggml_numa_free_work_buffer(cplan.work_data);
+    
+    return status;
 }
 
 void ggml_cpu_fp32_to_fp32(const float * x, float * y, int64_t n) {
