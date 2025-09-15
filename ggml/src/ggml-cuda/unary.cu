@@ -86,30 +86,6 @@ static __device__ __forceinline__ float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
 }
 
-static __device__ __forceinline__ float op_reglu(float x) {
-    return fmaxf(x, 0);
-}
-
-static __device__ __forceinline__ float op_geglu(float x) {
-    const float GELU_COEF_A    = 0.044715f;
-    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
-    return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
-}
-
-static __device__ __forceinline__ float op_swiglu(float x) {
-    return x / (1.0f + expf(-x));
-}
-
-static __device__ __forceinline__ float op_geglu_erf(float x) {
-    const float SQRT_2_INV = 0.70710678118654752440084436210484f;
-    return 0.5f*x*(1.0f + erff(x*SQRT_2_INV));
-}
-
-static __device__ __forceinline__ float op_geglu_quick(float x) {
-    const float GELU_QUICK_COEF = -1.702f;
-    return x * (1.0f / (1.0f + expf(GELU_QUICK_COEF * x)));
-}
-
 // Special operation functions (stay in original locations)
 static __device__ __forceinline__ float op_silu_back(float grad, float x) {
     const float s = 1.0f / (1.0f + expf(-x));
@@ -407,26 +383,28 @@ void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary(ctx, dst, op_elu);
 }
 
+// GLU
 void ggml_cuda_op_reglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary_gated(ctx, dst, op_reglu);
+    ggml_cuda_op_unary_gated(ctx, dst, op_relu);
 }
 
 void ggml_cuda_op_geglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary_gated(ctx, dst, op_geglu);
+    ggml_cuda_op_unary_gated(ctx, dst, op_gelu);
 }
 
 void ggml_cuda_op_swiglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary_gated(ctx, dst, op_swiglu);
+    ggml_cuda_op_unary_gated(ctx, dst, op_silu);
 }
 
 void ggml_cuda_op_geglu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary_gated(ctx, dst, op_geglu_erf);
+    ggml_cuda_op_unary_gated(ctx, dst, op_gelu_erf);
 }
 
 void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary_gated(ctx, dst, op_geglu_quick);
+    ggml_cuda_op_unary_gated(ctx, dst, op_gelu_quick);
 }
 
+// xIELU
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
     const float * op_params = (const float*)dst->op_params;
