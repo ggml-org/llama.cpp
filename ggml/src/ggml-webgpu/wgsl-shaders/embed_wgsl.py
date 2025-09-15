@@ -26,6 +26,7 @@ def replace_placeholders(shader_text, replacements):
         shader_text = re.sub(pattern, str(val), shader_text)
     return shader_text
 
+
 def expand_includes(shader, input_dir):
     """
     Replace #include "file" lines in the text with the contents of that file.
@@ -44,6 +45,7 @@ def expand_includes(shader, input_dir):
         return expand_includes(included_code, input_dir)
 
     return include_pattern.sub(replacer, shader)
+
 
 def write_shader(shader_name, shader_code, output_dir, outfile):
     if output_dir:
