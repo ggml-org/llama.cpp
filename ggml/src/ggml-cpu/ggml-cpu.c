@@ -781,14 +781,12 @@ bool ggml_is_numa(void) {
 // the best speed. Interleaving actually slows things down considerably.
 // If we optimised kernels for Numa awareness, this could be revisited.
 //
-
 void* ggml_numa_alloc_work_buffer(size_t size) {
     void* ptr = malloc(size);
     if (!ptr) {
         return NULL;
     }
 
-#ifdef GGML_USE_NUMA
     if (ggml_is_numa()) {
         // Bind to NUMA node 0 using first-touch policy
         if (numa_available() >= 0) {
@@ -815,10 +813,6 @@ void* ggml_numa_alloc_work_buffer(size_t size) {
         // No NUMA, just touch the pages for consistency
         memset(ptr, 0, size);
     }
-#else
-    // No NUMA support, just touch the pages
-    memset(ptr, 0, size);
-#endif
 
     return ptr;
 }
