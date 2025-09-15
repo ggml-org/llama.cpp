@@ -122,9 +122,9 @@ static void conv2d_cuda_f32(const float * X_D, const float * K_D, float * Y_D, c
 void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * kernel = dst->src[0];
     const ggml_tensor * input  = dst->src[1];
-    float *             K_D    = (float *) kernel->data;
-    const float *       X_D    = (const float *) input->data;
-    float *             Y_D    = (float *) dst->data;
+    float *             K_D    = (float *) tensor_data(kernel);
+    const float *       X_D    = (const float *) tensor_data(input);
+    float *             Y_D    = (float *) tensor_data(dst);
 
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);

@@ -73,7 +73,7 @@ void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const dim3 grid_dims(ne01, ne02, ne03);
 
     pad_reflect_1d_kernel_f32<<<grid_dims, block_dims, 0, stream>>>(
-        src0->data, dst->data,
+        tensor_data(src0), tensor_data(dst),
         ne0, ne00, ne01, ne02, ne03,
         src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
         dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3],

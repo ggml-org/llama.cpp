@@ -121,9 +121,9 @@ void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * input  = dst->src[1];
 
     GGML_ASSERT(kernel->type == GGML_TYPE_F32 && input->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
-    const float * w_d = (const float *) kernel->data;
-    const float * x_d = (const float *) input->data;
-    float *       y_d = (float *) dst->data;
+    const float * w_d = (const float *) tensor_data(kernel);
+    const float * x_d = (const float *) tensor_data(input);
+    float *       y_d = (float *) tensor_data(dst);
 
     const int32_t * p          = (const int32_t *) dst->op_params;
     const int       stride_x   = p[0];

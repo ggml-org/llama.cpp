@@ -144,9 +144,9 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src0->nb[1] == src0->ne[0] * sizeof(float));
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float *       dst_d  = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float *       dst_d  = (float *) tensor_data(dst);
     cudaStream_t  stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

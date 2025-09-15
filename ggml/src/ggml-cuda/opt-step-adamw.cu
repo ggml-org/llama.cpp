@@ -64,11 +64,11 @@ void ggml_cuda_opt_step_adamw(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_v));
     GGML_ASSERT(ggml_nelements(adamw_params) == 7);
 
-    float       * src0_d         = (float       *) src0->data;
-    const float * src0_grad_d    = (const float *) src0_grad->data;
-    float       * src0_grad_m_d  = (float       *) src0_grad_m->data;
-    float       * src0_grad_v_d  = (float       *) src0_grad_v->data;
-    const float * adamw_params_d = (const float *) adamw_params->data;
+    float       * src0_d         = (float       *) tensor_data(src0);
+    const float * src0_grad_d    = (const float *) tensor_data(src0_grad);
+    float       * src0_grad_m_d  = (float       *) tensor_data(src0_grad_m);
+    float       * src0_grad_v_d  = (float       *) tensor_data(src0_grad_v);
+    const float * adamw_params_d = (const float *) tensor_data(adamw_params);
 
     cudaStream_t stream = ctx.stream();
 
