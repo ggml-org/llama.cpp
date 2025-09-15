@@ -34,6 +34,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_UNARY_OP_SILU",     op::translate_unary_silu                       },
         {"GGML_OP_VIEW",           op::translate_view                             },
         {"GGML_GLU_OP_SWIGLU",     op::translate_glu_swiglu                       },
+        {"GGML_GLU_OP_GEGLU",      op::translate_glu_geglu                        },
         {"GGML_OP_SET_ROWS",       op::translate_set_rows                         },
         {"GGML_OP_CPY",            op::translate_cpy                              },
         {"GGML_OP_FLASH_ATTN_EXT", op::translate_flash_attn_ext                   },
