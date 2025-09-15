@@ -378,16 +378,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
 
-# Always enable NUMA support (controlled at runtime via --numa mirror)
+# Always enable NUMA support
 find_library(NUMA_LIBRARY NAMES numa)
 if (NUMA_LIBRARY)
     message(STATUS "libnuma: ${NUMA_LIBRARY}")
-    message(STATUS
-            "-----------------\n"
-            "NUMA support enabled (controlled at runtime via --numa mirror)\n"
-            "Uses numa_alloc_onnode() for reliable NUMA-aware memory allocation")
-    message(STATUS
-            "-----------------")
+    message(STATUS "NUMA support enabled")
 
     foreach(lib "ggml" "ggml-base")
         target_link_libraries(${lib} PUBLIC ${NUMA_LIBRARY})

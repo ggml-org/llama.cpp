@@ -102,7 +102,7 @@ source ../../../.venv/bin/activate
 ./build/bin/llama-cli --version
 
 # Test model loading (requires model file)
-./build/bin/llama-cli -m path/to/model.gguf -p "Hello" -n 10
+./build/bin/llama-cli -m path/to/model.gguf -p "Hello" -n 10 -no-cnv
 ```
 
 ## Code Quality and Linting

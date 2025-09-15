@@ -775,6 +775,10 @@ bool ggml_is_numa(void) {
            g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_DISABLED;
 }
 
+enum ggml_numa_strategy ggml_numa_get_strategy(void) {
+    return g_state.numa.numa_strategy;
+}
+
 //
 // NUMA-aware work buffer allocation:
 // Based on empirical testing, allocating work buffers on node 0 provides
