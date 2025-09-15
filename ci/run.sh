@@ -270,7 +270,9 @@ function gg_run_ctest_with_model_debug {
     local model; model=$(gg_get_model)
     cd build-ci-debug
     set -e
+
     (LLAMACPP_TEST_MODELFILE="$model" time ctest --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
+
     set +e
     cd ..
 }
@@ -281,7 +283,15 @@ function gg_run_ctest_with_model_release {
     local model; model=$(gg_get_model)
     cd build-ci-release
     set -e
+
     (LLAMACPP_TEST_MODELFILE="$model" time ctest --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
+
+    # test memory leaks
+    #if [[ ! -z ${GG_BUILD_METAL} ]]; then
+    #    # TODO: this hangs for some reason ...
+    #    (time leaks -quiet -atExit -- ./bin/test-thread-safety -m $model --parallel 2 -t 2 -p "hello") 2>&1 | tee -a $OUT/${ci}-leaks.log
+    #fi
+
     set +e
     cd ..
 }
@@ -860,10 +870,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
-if [ -z ${GG_BUILD_SYCL} ]; then
-    # SYCL build breaks with debug build flags
-    test $ret -eq 0 && gg_run ctest_debug
-fi
+test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
@@ -871,9 +878,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run rerank_tiny
 
     if [ -z ${GG_BUILD_CLOUD} ] || [ ${GG_BUILD_EXTRA_TESTS_0} ]; then
-        if [ -z ${GG_BUILD_SYCL} ]; then
-            test $ret -eq 0 && gg_run test_scripts_debug
-        fi
+        test $ret -eq 0 && gg_run test_scripts_debug
         test $ret -eq 0 && gg_run test_scripts_release
     fi
 
@@ -884,9 +889,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
             test $ret -eq 0 && gg_run pythia_2_8b
             #test $ret -eq 0 && gg_run open_llama_7b_v2
         fi
-        if [ -z ${GG_BUILD_SYCL} ]; then
-            test $ret -eq 0 && gg_run ctest_with_model_debug
-        fi
+        test $ret -eq 0 && gg_run ctest_with_model_debug
         test $ret -eq 0 && gg_run ctest_with_model_release
     fi
 fi
