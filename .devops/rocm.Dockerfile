@@ -80,6 +80,10 @@ RUN apt-get update \
     python3-pip \
     python3 \
     python3-wheel\
+    && (CURRENT_PIP_VERSION=$(pip --version | awk '{print $2}') \
+        && dpkg --compare-versions "$CURRENT_PIP_VERSION" lt "23.1" \
+        && python3 -m pip install --upgrade pip \
+        || echo "pip >= 23.1, no upgrade needed") \
     && pip install --break-system-packages --upgrade setuptools \
     && pip install --break-system-packages -r requirements.txt \
     && apt autoremove -y \
