@@ -13,21 +13,7 @@ static __dpct_inline__ float op_add(const float a, const float b) {
 }
 
 static __dpct_inline__ float op_sub(const float a, const float b) {
-
-static __dpct_inline__ float op_count_equal(const float a, const float b) {
-    return (a == b) ? 1.0f : 0.0f;
-}
-
-void ggml_sycl_count_equal(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
     return a - b;
-
-static __dpct_inline__ float op_count_equal(const float a, const float b) {
-    return (a == b) ? 1.0f : 0.0f;
-}
-
-void ggml_sycl_count_equal(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
 }
 
 static __dpct_inline__ float op_count_equal(const float a, const float b) {
@@ -35,7 +21,6 @@ static __dpct_inline__ float op_count_equal(const float a, const float b) {
 }
 
 void ggml_sycl_count_equal(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
 
 static __dpct_inline__ float op_mul(const float a, const float b) {
     return a * b;
