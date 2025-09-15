@@ -28,7 +28,7 @@ static __global__ void pad_reflect_1d_kernel_f32(
     const int64_t tile0  = div_mod_packed.x;     // nth i0 tile
     const int64_t i1     = tile1;
     const int64_t i0     = threadIdx.x + tile0 * blockDim.x;
-    if ( i0 >= ne0 || i1 >= ne01 || i2 >= ne02 || i3 >= ne03 ) {
+    if (i0 >= ne0 || i1 >= ne01 || i2 >= ne02 || i3 >= ne03) {
         return;
     }
 
