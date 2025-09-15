@@ -228,7 +228,7 @@ jobs:
         if: ${{ matrix.build == 's390x' }}
         run: |
           for f in models/*.gguf; do
-            yes YES | head -n 1 | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
           done
 
       - name: Build
