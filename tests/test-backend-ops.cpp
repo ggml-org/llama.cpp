@@ -2236,29 +2236,6 @@ struct test_count_equal : public test_case {
     }
 };
 
-/* COUNT_EQUAL – typed test (no argmax), to cover F32/F16/I32/I16 */
-struct test_count_equal_typed : public test_case {
-    const ggml_type type;
-    const std::array<int64_t, 4> ne;
-
-    test_count_equal_typed(ggml_type type = GGML_TYPE_F32,
-                           std::array<int64_t, 4> ne = {128, 64, 1, 1})
-        : type(type), ne(ne) {}
-
-    std::string vars() override {
-        return VARS_TO_STR2(type, ne);
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_name(a, "a");
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_name(b, "b");
-        ggml_tensor * out = ggml_count_equal(ctx, a, b);
-        ggml_set_name(out, "out");
-        return out;
-    }
-};
 
 // GGML_OP_REPEAT
 struct test_repeat : public test_case {
@@ -5964,12 +5941,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
-    // COUNT_EQUAL – typed tests by dtype
-    test_cases.emplace_back(new test_count_equal_typed(GGML_TYPE_F32, {1024,  1, 1, 1}));
-    test_cases.emplace_back(new test_count_equal_typed(GGML_TYPE_F32, {  64, 64, 1, 1}));
-    test_cases.emplace_back(new test_count_equal_typed(GGML_TYPE_F16, { 256, 32, 1, 1}));
-    test_cases.emplace_back(new test_count_equal_typed(GGML_TYPE_I32, { 512, 16, 1, 1}));
-    test_cases.emplace_back(new test_count_equal_typed(GGML_TYPE_I16, { 512, 16, 1, 1}));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {1024,  1, 1, 1}));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {  64, 64, 1, 1}));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F16, { 256, 32, 1, 1}));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, { 512, 16, 1, 1}));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I16, { 512, 16, 1, 1}));
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,    1, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,  513, 1, 1}));
