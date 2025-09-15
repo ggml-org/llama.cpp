@@ -375,7 +375,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
     return res;
 }
 
-void ggml_metal_graph_optimize(ggml_cgraph * gf) {
+void ggml_graph_optimize(ggml_cgraph * gf) {
     constexpr int MAX_FUSE = 16;
 
     const int n = gf->n_nodes;

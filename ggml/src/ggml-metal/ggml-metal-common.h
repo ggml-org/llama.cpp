@@ -45,7 +45,7 @@ bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const struct ggml_tensor * ten
 //
 // note: this implementation is generic and not specific to metal
 //       if it proves to work well, we can start using it for other backends in the future
-void ggml_metal_graph_optimize(struct ggml_cgraph * gf);
+void ggml_graph_optimize(struct ggml_cgraph * gf);
 
 #ifdef __cplusplus
 }

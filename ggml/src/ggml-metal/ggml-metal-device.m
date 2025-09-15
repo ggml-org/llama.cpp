@@ -29,7 +29,7 @@ static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 @end
 #endif
 
-struct ggml_backend_metal_device {
+struct ggml_metal_device {
     id<MTLDevice>  mtl_device;
     id<MTLLibrary> mtl_library;
 
@@ -38,11 +38,11 @@ struct ggml_backend_metal_device {
     // ref: https://github.com/ggml-org/llama.cpp/pull/15906
     id<MTLCommandQueue> mtl_queue;
 
-    struct ggml_backend_metal_device_props props;
+    struct ggml_metal_device_props props;
 };
 
-ggml_backend_metal_device_t ggml_backend_metal_device_init(void) {
-    ggml_backend_metal_device_t ctx = calloc(1, sizeof(struct ggml_backend_metal_device));
+ggml_metal_device_t ggml_metal_device_init(void) {
+    ggml_metal_device_t ctx = calloc(1, sizeof(struct ggml_metal_device));
 
     assert(ctx != NULL);
 
@@ -268,7 +268,7 @@ ggml_backend_metal_device_t ggml_backend_metal_device_init(void) {
     return ctx;
 }
 
-void ggml_backend_metal_device_free(ggml_backend_metal_device_t ctx) {
+void ggml_metal_device_free(ggml_metal_device_t ctx) {
     assert(ctx != NULL);
 
     if (ctx->mtl_library) {
@@ -289,19 +289,19 @@ void ggml_backend_metal_device_free(ggml_backend_metal_device_t ctx) {
     free(ctx);
 }
 
-void * ggml_backend_metal_device_get_device(ggml_backend_metal_device_t ctx) {
+void * ggml_metal_device_get_device(ggml_metal_device_t ctx) {
     return ctx->mtl_device;
 }
 
-void * ggml_backend_metal_device_get_library(ggml_backend_metal_device_t ctx) {
+void * ggml_metal_device_get_library(ggml_metal_device_t ctx) {
     return ctx->mtl_library;
 }
 
-void * ggml_backend_metal_device_get_queue(ggml_backend_metal_device_t ctx) {
+void * ggml_metal_device_get_queue(ggml_metal_device_t ctx) {
     return ctx->mtl_queue;
 }
 
-void ggml_backend_metal_device_get_memory(ggml_backend_metal_device_t ctx, size_t * free, size_t * total) {
+void ggml_metal_device_get_memory(ggml_metal_device_t ctx, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
         *total = ctx->mtl_device.recommendedMaxWorkingSetSize;
         *free  = *total - ctx->mtl_device.currentAllocatedSize;
@@ -311,7 +311,234 @@ void ggml_backend_metal_device_get_memory(ggml_backend_metal_device_t ctx, size_
     }
 }
 
-struct ggml_backend_metal_device_props ggml_backend_metal_device_get_props(ggml_backend_metal_device_t ctx) {
+bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_tensor * op) {
+    const bool has_simdgroup_mm        = ctx->props.has_simdgroup_mm;
+    const bool has_simdgroup_reduction = ctx->props.has_simdgroup_reduction;
+    const bool has_bfloat              = ctx->props.has_bfloat;
+
+    if (!has_bfloat) {
+        if (op->type == GGML_TYPE_BF16) {
+            return false;
+        }
+
+        for (size_t i = 0, n = 3; i < n; ++i) {
+            if (op->src[i] != NULL && op->src[i]->type == GGML_TYPE_BF16) {
+                return false;
+            }
+        }
+    }
+
+    switch (op->op) {
+        case GGML_OP_UNARY:
+            switch (ggml_get_unary_op(op)) {
+                case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_ERF:
+                case GGML_UNARY_OP_GELU_QUICK:
+                case GGML_UNARY_OP_SILU:
+                case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_NEG:
+                case GGML_UNARY_OP_ABS:
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_EXP:
+                    return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                default:
+                    return false;
+            }
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    return ggml_is_contiguous_1(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+               default:
+                    return false;
+            }
+        case GGML_OP_NONE:
+        case GGML_OP_RESHAPE:
+        case GGML_OP_VIEW:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_PERMUTE:
+        case GGML_OP_CONCAT:
+            return true;
+        case GGML_OP_ADD:
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+        case GGML_OP_ADD_ID:
+            return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_ACC:
+        case GGML_OP_REPEAT:
+        case GGML_OP_SCALE:
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            return true;
+        case GGML_OP_CLAMP:
+            return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_SQR:
+        case GGML_OP_SQRT:
+        case GGML_OP_SIN:
+        case GGML_OP_COS:
+            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_LOG:
+            return false; // TODO: implement
+        case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
+        case GGML_OP_SOFT_MAX:
+        case GGML_OP_GROUP_NORM:
+            return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_L2_NORM:
+            return has_simdgroup_reduction && (op->ne[0] % 4 == 0 && ggml_is_contiguous_1(op->src[0]));
+        case GGML_OP_ARGMAX:
+            return has_simdgroup_reduction;
+        case GGML_OP_NORM:
+            return has_simdgroup_reduction && (op->ne[0] % 4 == 0 && ggml_is_contiguous_1(op->src[0]));
+        case GGML_OP_ROPE:
+            return true;
+        case GGML_OP_IM2COL:
+            return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+        case GGML_OP_POOL_1D:
+            return false;
+        case GGML_OP_UPSCALE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
+        case GGML_OP_POOL_2D:
+            return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_PAD:
+            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
+                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
+        case GGML_OP_PAD_REFLECT_1D:
+        case GGML_OP_TIMESTEP_EMBEDDING:
+        case GGML_OP_ARGSORT:
+        case GGML_OP_LEAKY_RELU:
+            return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_ARANGE:
+            return true;
+        case GGML_OP_FLASH_ATTN_EXT:
+            // for new head sizes, add checks here
+            if (op->src[0]->ne[0] != 40 &&
+                op->src[0]->ne[0] != 64 &&
+                op->src[0]->ne[0] != 80 &&
+                op->src[0]->ne[0] != 96 &&
+                op->src[0]->ne[0] != 112 &&
+                op->src[0]->ne[0] != 128 &&
+                op->src[0]->ne[0] != 192 &&
+                op->src[0]->ne[0] != 256) {
+                return false;
+            }
+            if (op->src[0]->ne[0] == 576) {
+                // DeepSeek sizes
+                // TODO: disabled for now, until optmized
+                return false;
+            }
+            if (op->src[1]->type != op->src[2]->type) {
+                return false;
+            }
+            return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
+        case GGML_OP_SSM_CONV:
+        case GGML_OP_SSM_SCAN:
+            return has_simdgroup_reduction;
+        case GGML_OP_RWKV_WKV6:
+        case GGML_OP_RWKV_WKV7:
+            return true;
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            return has_simdgroup_reduction &&
+                (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F32);
+        case GGML_OP_CPY:
+        case GGML_OP_DUP:
+        case GGML_OP_CONT:
+            {
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        switch (op->type) {
+                           case GGML_TYPE_F32:
+                           case GGML_TYPE_F16:
+                           case GGML_TYPE_BF16:
+                           case GGML_TYPE_Q8_0:
+                           case GGML_TYPE_Q4_0:
+                           case GGML_TYPE_Q4_1:
+                           case GGML_TYPE_Q5_0:
+                           case GGML_TYPE_Q5_1:
+                           case GGML_TYPE_IQ4_NL:
+                           case GGML_TYPE_I32:
+                                return true;
+                           default:
+                                return false;
+                        }
+                    case GGML_TYPE_F16:
+                        switch (op->type) {
+                            case GGML_TYPE_F32:
+                            case GGML_TYPE_F16:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    case GGML_TYPE_BF16:
+                        switch (op->type) {
+                            case GGML_TYPE_F32:
+                            case GGML_TYPE_BF16:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        switch (op->type) {
+                            case GGML_TYPE_F32:
+                            case GGML_TYPE_F16:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    case GGML_TYPE_I32:
+                        return op->type == GGML_TYPE_F32;
+                    default:
+                        return false;
+                };
+            }
+        case GGML_OP_DIAG_MASK_INF:
+        case GGML_OP_GET_ROWS:
+            {
+                return op->ne[3] == 1;
+            }
+        case GGML_OP_SET_ROWS:
+            {
+                if (op->src[0]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                switch (op->type) {
+                    case GGML_TYPE_F32:
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
+                    case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_IQ4_NL:
+                        return true;
+                    default:
+                        return false;
+                };
+            }
+        default:
+            return false;
+    }
+}
+
+struct ggml_metal_device_props ggml_metal_device_get_props(ggml_metal_device_t ctx) {
     return ctx->props;
 }
 
@@ -322,14 +549,14 @@ struct ggml_backend_metal_device_props ggml_backend_metal_device_get_props(ggml_
 // max memory buffers that can be mapped to the device
 #define GGML_METAL_MAX_BUFFERS 64
 
-struct ggml_backend_metal_buffer_wrapper {
+struct ggml_metal_buffer_wrapper {
     void   * data;
     size_t   size;
 
     id<MTLBuffer> metal;
 };
 
-struct ggml_backend_metal_buffer {
+struct ggml_metal_buffer {
     void * all_data; // TODO: https://github.com/ggml-org/llama.cpp/pull/15985
     size_t all_size;
 
@@ -338,7 +565,7 @@ struct ggml_backend_metal_buffer {
 
     // multiple buffers are used only to avoid the maximum buffer size limitation when using mmap
     int n_buffers;
-    struct ggml_backend_metal_buffer_wrapper buffers[GGML_METAL_MAX_BUFFERS];
+    struct ggml_metal_buffer_wrapper buffers[GGML_METAL_MAX_BUFFERS];
 
     bool use_residency_sets;
 
@@ -351,7 +578,7 @@ struct ggml_backend_metal_buffer {
     id<MTLCommandQueue> queue;
 };
 
-static void ggml_backend_metal_log_allocated_size(id<MTLDevice> device, size_t size_aligned) {
+static void ggml_metal_log_allocated_size(id<MTLDevice> device, size_t size_aligned) {
 #ifndef GGML_METAL_NDEBUG
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
     if (@available(macOS 10.12, iOS 16.0, *)) {
@@ -377,7 +604,7 @@ static void ggml_backend_metal_log_allocated_size(id<MTLDevice> device, size_t s
 }
 
 // rset init
-static bool ggml_backend_metal_buffer_rset_init(ggml_backend_metal_buffer_t ctx) {
+static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t ctx) {
     ctx->rset = nil;
 
     if (!ctx->use_residency_sets) {
@@ -387,7 +614,7 @@ static bool ggml_backend_metal_buffer_rset_init(ggml_backend_metal_buffer_t ctx)
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
     if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
         MTLResidencySetDescriptor * desc = [[MTLResidencySetDescriptor alloc] init];
-        desc.label = @"ggml_backend_metal";
+        desc.label = @"ggml_metal";
         desc.initialCapacity = ctx->n_buffers;
 
         NSError * error;
@@ -415,7 +642,7 @@ static bool ggml_backend_metal_buffer_rset_init(ggml_backend_metal_buffer_t ctx)
 }
 
 // rset free
-static void ggml_backend_metal_buffer_rset_free(ggml_backend_metal_buffer_t ctx) {
+static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t ctx) {
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
     if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
         if (ctx->rset) {
@@ -449,8 +676,8 @@ static void * ggml_metal_host_malloc(size_t n) {
     return data;
 }
 
-ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_device_t ctx, size_t size, bool shared) {
-    ggml_backend_metal_buffer_t res = calloc(1, sizeof(struct ggml_backend_metal_buffer));
+ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size, bool shared) {
+    ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
 
     const size_t size_page = sysconf(_SC_PAGESIZE);
 
@@ -459,7 +686,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx);
 
     shared = shared && props_dev.use_shared_buffers;
 
@@ -474,8 +701,8 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
     }
     res->all_size = size_aligned;
 
-    res->device = ggml_backend_metal_device_get_device(ctx);
-    res->queue  = ggml_backend_metal_device_get_queue (ctx);
+    res->device = ggml_metal_device_get_device(ctx);
+    res->queue  = ggml_metal_device_get_queue (ctx);
 
     res->n_buffers = 1;
 
@@ -507,19 +734,19 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_init(ggml_backend_metal_de
 
     res->use_residency_sets = props_dev.use_residency_sets;
 
-    if (!ggml_backend_metal_buffer_rset_init(res)) {
+    if (!ggml_metal_buffer_rset_init(res)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
         free(res);
         return NULL;
     }
 
-    //ggml_backend_metal_log_allocated_size(device, size_aligned);
+    //ggml_metal_log_allocated_size(device, size_aligned);
 
     return res;
 }
 
-ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_device_t ctx, void * ptr, size_t size, size_t max_tensor_size) {
-    ggml_backend_metal_buffer_t res = calloc(1, sizeof(struct ggml_backend_metal_buffer));
+ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, size_t size, size_t max_tensor_size) {
+    ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
 
     res->all_data = ptr;
     res->all_size = size;
@@ -542,10 +769,10 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    res->device = ggml_backend_metal_device_get_device(ctx);
-    res->queue  = ggml_backend_metal_device_get_queue (ctx);
+    res->device = ggml_metal_device_get_device(ctx);
+    res->queue  = ggml_metal_device_get_queue (ctx);
 
-    const struct ggml_backend_metal_device_props props_dev = ggml_backend_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props props_dev = ggml_metal_device_get_props(ctx);
 
     // the buffer fits into the max buffer size allowed by the device
     if (size_aligned <= props_dev.max_buffer_size) {
@@ -563,7 +790,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
             }
         }
 
-        ggml_backend_metal_log_allocated_size(res->device, size_aligned);
+        ggml_metal_log_allocated_size(res->device, size_aligned);
 
         ++res->n_buffers;
     } else {
@@ -590,7 +817,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
                 }
             }
 
-            ggml_backend_metal_log_allocated_size(res->device, size_step_aligned);
+            ggml_metal_log_allocated_size(res->device, size_step_aligned);
 
             if (i + size_step < size) {
                 GGML_LOG_INFO("\n");
@@ -602,7 +829,7 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
 
     res->use_residency_sets = props_dev.use_residency_sets;
 
-    if (!ggml_backend_metal_buffer_rset_init(res)) {
+    if (!ggml_metal_buffer_rset_init(res)) {
         GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
         free(res);
         return NULL;
@@ -611,12 +838,12 @@ ggml_backend_metal_buffer_t ggml_backend_metal_buffer_map(ggml_backend_metal_dev
     return res;
 }
 
-void ggml_backend_metal_buffer_free(ggml_backend_metal_buffer_t ctx) {
+void ggml_metal_buffer_free(ggml_metal_buffer_t ctx) {
     for (int i = 0; i < ctx->n_buffers; i++) {
         [ctx->buffers[i].metal release];
     }
 
-    ggml_backend_metal_buffer_rset_free(ctx);
+    ggml_metal_buffer_rset_free(ctx);
 
     if (ctx->is_shared) {
 #if TARGET_OS_OSX
@@ -629,15 +856,15 @@ void ggml_backend_metal_buffer_free(ggml_backend_metal_buffer_t ctx) {
     free(ctx);
 }
 
-void * ggml_backend_metal_buffer_get_base(ggml_backend_metal_buffer_t ctx) {
+void * ggml_metal_buffer_get_base(ggml_metal_buffer_t ctx) {
     return ctx->all_data;
 }
 
-bool ggml_backend_metal_buffer_is_shared(ggml_backend_metal_buffer_t ctx) {
+bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t ctx) {
     return ctx->is_shared;
 }
 
-void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t ctx, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     if (ctx->is_shared) {
         memset((char *)tensor->data + offset, value, size);
         return;
@@ -645,7 +872,7 @@ void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t ctx, st
 
     @autoreleasepool {
         // dst
-        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(ctx, tensor);
         buf_dst.offs += offset;
 
         id<MTLCommandQueue>  queue   = ctx->queue;
@@ -666,7 +893,7 @@ void ggml_backend_metal_buffer_memset_tensor(ggml_backend_metal_buffer_t ctx, st
     }
 }
 
-void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (ctx->is_shared) {
         memcpy((char *)tensor->data + offset, data, size);
         return;
@@ -681,7 +908,7 @@ void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t ctx, struc
                                                           deallocator:nil];
 
         // dst
-        struct ggml_backend_metal_buffer_id buf_dst = ggml_backend_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(ctx, tensor);
         buf_dst.offs += offset;
 
         // note: for experimentation purposes, here we use a semaphore to wait for the copy to complete
@@ -717,7 +944,7 @@ void ggml_backend_metal_buffer_set_tensor(ggml_backend_metal_buffer_t ctx, struc
     }
 }
 
-void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     if (ctx->is_shared) {
         memcpy(data, (const char *)tensor->data + offset, size);
         return;
@@ -725,7 +952,7 @@ void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t ctx, const
 
     @autoreleasepool {
         // src
-        struct ggml_backend_metal_buffer_id buf_src = ggml_backend_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_src = ggml_metal_buffer_get_id(ctx, tensor);
         buf_src.offs += offset;
 
         // dst
@@ -754,7 +981,7 @@ void ggml_backend_metal_buffer_get_tensor(ggml_backend_metal_buffer_t ctx, const
     }
 }
 
-void ggml_backend_metal_buffer_clear(ggml_backend_metal_buffer_t ctx, uint8_t value) {
+void ggml_metal_buffer_clear(ggml_metal_buffer_t ctx, uint8_t value) {
     if (ctx->is_shared) {
         memset(ctx->all_data, value, ctx->all_size);
         return;
@@ -779,8 +1006,8 @@ void ggml_backend_metal_buffer_clear(ggml_backend_metal_buffer_t ctx, uint8_t va
     }
 }
 
-struct ggml_backend_metal_buffer_id ggml_backend_metal_buffer_get_id(ggml_backend_metal_buffer_t ctx, const struct ggml_tensor * t) {
-    struct ggml_backend_metal_buffer_id res = { nil, 0 };
+struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t ctx, const struct ggml_tensor * t) {
+    struct ggml_metal_buffer_id res = { nil, 0 };
 
     const int64_t tsize = ggml_nbytes(t);
 
