@@ -38,7 +38,7 @@ static __global__ void pad_reflect_1d_kernel_f32(
     float value;
     const int64_t j = i0 - p0;
 
-    if ( j<0 ) {// i0<p0
+    if (j < 0) {// i0<p0
         // Left padding - reflect
         value = *(const float *)(src0_ptr - j * nb00);
     } else if ( j < ne00 ) { //i0 < ne0 - p1
