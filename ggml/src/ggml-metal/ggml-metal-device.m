@@ -44,12 +44,6 @@ ggml_backend_metal_device_t ggml_backend_metal_device_init(void) {
             ctx->props.has_bfloat  = [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
             ctx->props.has_bfloat |= [ctx->mtl_device supportsFamily:MTLGPUFamilyApple6];
 
-#if defined(GGML_METAL_USE_BF16)
-            ctx->props.use_bfloat = ctx->props.has_bfloat;
-#else
-            ctx->props.use_bfloat = false;
-#endif
-
             ctx->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
             ctx->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
@@ -172,8 +166,8 @@ ggml_backend_metal_device_t ggml_backend_metal_device_init(void) {
                         // dictionary of preprocessor macros
                         NSMutableDictionary * prep = [NSMutableDictionary dictionary];
 
-                        if (ctx->props.use_bfloat) {
-                            [prep setObject:@"1" forKey:@"GGML_METAL_USE_BF16"];
+                        if (ctx->props.has_bfloat) {
+                            [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
                         }
 
 #if GGML_METAL_EMBED_LIBRARY
@@ -238,7 +232,6 @@ ggml_backend_metal_device_t ggml_backend_metal_device_init(void) {
             GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, ctx->props.has_simdgroup_mm        ? "true" : "false");
             GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, ctx->props.has_unified_memory      ? "true" : "false");
             GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, ctx->props.has_bfloat              ? "true" : "false");
-            GGML_LOG_INFO("%s: use bfloat            = %s\n", __func__, ctx->props.use_bfloat              ? "true" : "false");
             GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, ctx->props.use_residency_sets      ? "true" : "false");
             GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, ctx->props.use_shared_buffers      ? "true" : "false");
 

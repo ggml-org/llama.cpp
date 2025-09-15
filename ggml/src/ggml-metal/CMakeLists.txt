@@ -21,10 +21,6 @@ if (GGML_METAL_NDEBUG)
     add_compile_definitions(GGML_METAL_NDEBUG)
 endif()
 
-if (GGML_METAL_USE_BF16)
-    add_compile_definitions(GGML_METAL_USE_BF16)
-endif()
-
 # copy metal files to bin directory
 configure_file(../ggml-common.h  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h     COPYONLY)
 configure_file(ggml-metal.metal  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.metal  COPYONLY)

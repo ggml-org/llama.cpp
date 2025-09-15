@@ -19,7 +19,6 @@ struct ggml_backend_metal_device_props {
     bool has_simdgroup_mm;
     bool has_unified_memory;
     bool has_bfloat;
-    bool use_bfloat;
     bool use_residency_sets;
     bool use_shared_buffers;
 
