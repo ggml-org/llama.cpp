@@ -8258,11 +8258,7 @@ class LLaDAMoEModel(TextModel):
         if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
             self.gguf_writer.add_expert_used_count(n_experts_used)
 
-        mask_token_id = 156895
-        if self.hparams.get("mask_token_id") is not None:
-            mask_token_id = self.hparams["mask_token_id"]
-
-        self.gguf_writer.add_mask_token_id(mask_token_id)
+        self.gguf_writer.add_mask_token_id(156895)
         self.gguf_writer.add_causal_attention(False)
         self.gguf_writer.add_diffusion_shift_logits(False)
 
@@ -8314,7 +8310,6 @@ class LLaDAMoEModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
