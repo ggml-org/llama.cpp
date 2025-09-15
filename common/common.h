@@ -517,7 +517,6 @@ std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);
 bool parse_cpu_mask(const std::string & mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
-bool cpu_mask_set_physical_cores_only(bool(&boolmask)[GGML_MAX_N_THREADS]);
 void postprocess_cpu_params(cpu_params & cpuparams, const cpu_params * role_model = nullptr);
 bool set_process_priority(enum ggml_sched_priority prio);
 

@@ -3331,6 +3331,8 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 }
 
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
+    GGML_UNUSED(ctx);
+    
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads, NULL);
 
     // Use NUMA-aware work buffer allocation instead of ggml_new_buffer
