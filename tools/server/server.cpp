@@ -32,8 +32,6 @@
 #include <unordered_set>
 
 #ifdef LLAMA_CPP_SYSTEMD_SUPPORT
-#    include <sys/socket.h>
-#    include <sys/stat.h>
 #    include <systemd/sd-daemon.h>
 #endif  // LLAMA_CPP_SYSTEMD_SUPPORT
 
@@ -4093,17 +4091,35 @@ class SystemdServer : public httplib::Server {
             return false;
         }
 
-        int         fd = SD_LISTEN_FDS_START;
-        struct stat statbuf;
-        if (fstat(fd, &statbuf) == -1 || !S_ISSOCK(statbuf.st_mode)) {
-            LOG_ERR("%s: fstat() failed or fd is not a socket\n", __func__);
+        int fd = SD_LISTEN_FDS_START;
+        if (!sd_is_socket(fd, AF_UNSPEC, SOCK_STREAM, -1)) {
+            LOG_ERR("%s: fd is not a socket\n", __func__);
             return false;
         }
 
         LOG_INF("%s: using systemd socket fd %d\n", __func__, fd);
-        svr_sock_ = fd;
+        svr_sock_     = fd;
+        socket_is_sd_ = true;
+        // Add a timeout to internal processing loop to enable graceful shutdown by
+        // just closing the socket.
+        set_idle_interval(1, 0);
         return true;
     }
+
+    bool close_sd_socket() {
+        if (!socket_is_sd_.exchange(false)) {
+            return false;
+        }
+        // If we're using a systemd socket, we don't own it, so we just close it without
+        // shutdown.
+        SRV_INF("%s: closing systemd socket...\n", __func__);
+        std::atomic<socket_t> sock(svr_sock_.exchange(INVALID_SOCKET));
+        httplib::detail::close_socket(sock);
+        return true;
+    }
+
+  private:
+    std::atomic<bool> socket_is_sd_{ false };
 };
 #endif  // LLAMA_CPP_SYSTEMD_SUPPORT
 
@@ -5310,14 +5326,6 @@ int main(int argc, char ** argv) {
     log_data["n_threads_http"] =  std::to_string(params.n_threads_http);
     svr->new_task_queue = [&params] { return new httplib::ThreadPool(params.n_threads_http); };
 
-    // clean up function, to be called before exit
-    auto clean_up = [&svr, &ctx_server]() {
-        SRV_INF("%s: cleaning up before exit...\n", __func__);
-        svr->stop();
-        ctx_server.queue_results.terminate();
-        llama_backend_free();
-    };
-
     bool was_bound = false;
     bool is_sock   = false;
 
@@ -5354,6 +5362,27 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // clean up function, to be called before exit
+    auto clean_up = [&svr, &ctx_server
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+                     , &using_sd_socket
+#endif
+    ]() {
+        SRV_INF("%s: cleaning up before exit...\n", __func__);
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+        if (!using_sd_socket) {
+#endif
+            svr->stop();
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+        } else {
+            sd_notify(0, "STOPPING=1");
+            static_cast<SystemdServer *>(svr.get())->close_sd_socket();
+        }
+#endif
+        ctx_server.queue_results.terminate();
+        llama_backend_free();
+    };
+
     if (!was_bound) {
         LOG_ERR("%s: couldn't bind HTTP server socket, hostname: %s, port: %d\n", __func__, params.hostname.c_str(), params.port);
         clean_up();
@@ -5364,7 +5393,16 @@ int main(int argc, char ** argv) {
     std::thread t([&]() { svr->listen_after_bind(); });
     svr->wait_until_ready();
 
-    LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__, params.hostname.c_str(), params.port, params.n_threads_http);
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (!using_sd_socket) {
+#endif
+        LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__,
+                params.hostname.c_str(), params.port, params.n_threads_http);
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    } else {
+        LOG_INF("%s: HTTP server is listening on systemd socket, http threads: %d\n", __func__, params.n_threads_http);
+    }
+#endif
 
     // load the model
     LOG_INF("%s: loading model\n", __func__);
