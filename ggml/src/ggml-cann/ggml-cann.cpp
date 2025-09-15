@@ -117,6 +117,24 @@ bool parse_bool(const std::string& value) {
 }
 
 /**
+ * @brief Parse a string as an integer, returning 0 if invalid.
+ *
+ * This function attempts to convert the input string `value` to an `int`.
+ * If the string is not a valid integer or is out of the `int` range,
+ * it returns 0.
+ *
+ * @param value The string to parse.
+ * @return The parsed integer, or 0 if conversion fails.
+ */
+int parse_integer(const std::string& value) {
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return 0;
+    }
+}
+
+/**
  * @brief Initialize the CANN device information.
  *
  * This function initializes the CANN device information by obtaining the
@@ -2092,16 +2110,17 @@ static bool ggml_backend_cann_cpy_tensor_async(
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
-
         // record event on src stream after the copy
-        if (!cann_ctx_src->copy_event) {
-            ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
-        }
-        ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
+        // TODO: this event is not effective with acl graph mode, change to use aclrtSynchronizeStream
+        // if (!cann_ctx_src->copy_event) {
+        //     ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
+        // }
+        // ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
 
-        // wait on dst stream for the copy to complete
-        ggml_cann_set_device(cann_ctx_dst->device);
-        ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
+        // // wait on dst stream for the copy to complete
+        // ggml_cann_set_device(cann_ctx_dst->device);
+        // ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
+        ACL_CHECK(aclrtSynchronizeStream(cann_ctx_src->stream()));
     } else {
         // src and dst are on the same backend
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
@@ -2130,30 +2149,52 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_ACL_GRAPH
 /**
- * @brief Populate the internal CANN graph node properties from the ggml computation graph.
+ * @brief Add a new CANN graph to the LRU cache by populating node properties from the ggml graph.
  *
- * This function copies all node attributes (operation type, dimensions, strides, input sources,
- * and operation parameters) into the cached CANN graph structure for later reuse or comparison.
+ * This function creates a new ggml_cann_graph object and fills its node properties
+ * (operation type, dimensions, strides, input sources, and operation parameters)
+ * based on the current ggml computation graph.
  *
- * @param cann_ctx  The CANN backend context.
- * @param cgraph    The ggml computational graph.
+ * Each node in the ggml graph is mapped to a property entry in the new CANN graph:
+ * - node address
+ * - operation type
+ * - shape (ne) and strides (nb)
+ * - source tensor addresses
+ * - operation parameters
+ *
+ * After initialization, the new graph is pushed into the LRU cache owned by the
+ * CANN backend context. The cache takes ownership of the graph and manages its
+ * lifetime (including deletion upon eviction).
+ *
+ * @param cann_ctx  The CANN backend context containing the graph cache.
+ * @param cgraph    The current ggml computation graph.
  */
-static void set_ggml_graph_node_properties(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
-        ggml_tensor * node = cgraph->nodes[node_idx];
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_address = node->data;
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_op = node->op;
+static void add_lru_matched_graph_node_properties(
+        ggml_backend_cann_context * cann_ctx,
+        ggml_cgraph * cgraph) {
+    // Create a new ggml_cann_graph object on the heap (its lifetime is managed by the cache).
+    ggml_cann_graph * new_graph = new ggml_cann_graph();
+    new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
 
-        for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].ne[dim] = node->ne[dim];
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].nb[dim] = node->nb[dim];
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        ggml_tensor * node = cgraph->nodes[node_idx];
+        auto & prop = new_graph->ggml_graph_properties[node_idx];
+
+        prop.node_address = node->data;
+        prop.node_op      = node->op;
+
+        std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
+        std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
+
+        for (int src = 0; src < GGML_MAX_SRC; ++src) {
+            prop.src_address[src] = node->src[src] ? node->src[src]->data : nullptr;
         }
-        for (int src = 0; src < GGML_MAX_SRC; src++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].src_address[src] =
-                node->src[src] ? node->src[src]->data : nullptr;
-        }
-        memcpy(cann_ctx->cann_graph->ggml_graph_properties[node_idx].op_params, node->op_params, GGML_MAX_OP_PARAMS);
+
+        memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
     }
+
+    // Insert into the LRU cache (cache takes ownership and will delete it when evicted).
+    cann_ctx->graph_lru_cache.push(new_graph);
 }
 
 /**
@@ -2198,30 +2239,45 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 }
 
 /**
- * @brief Determine if the CANN graph needs to be rebuilt due to graph changes.
+ * @brief Check whether there is a cached CANN graph that matches the current ggml graph.
  *
- * This checks whether the number or properties of ggml graph nodes have changed
- * compared to the last captured CANN graph. If so, the CANN graph must be re-captured.
+ * This function iterates through the cached CANN graphs stored in the LRU cache and
+ * compares them against the given ggml computation graph. A match requires that the
+ * number of nodes is the same and that each node’s properties (operation type,
+ * dimensions, strides, inputs, and operation parameters) are identical.
  *
- * @param cann_ctx  The CANN backend context.
+ * If a matching graph is found, it is promoted to the front of the LRU cache and the
+ * function returns true. Otherwise, the function returns false, indicating that a new
+ * CANN graph needs to be captured.
+ *
+ * @param cann_ctx  The CANN backend context containing the graph cache.
  * @param cgraph    The current ggml computation graph.
- * @return true if an update is required; false otherwise.
+ * @return true if a matching cached graph exists; false otherwise.
  */
-static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    // The number of nodes is different, so the graph needs to be reconstructed.
-    if (cann_ctx->cann_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
-        cann_ctx->cann_graph->ggml_graph_properties.resize(cgraph->n_nodes);
-        return true;
-    }
+static bool is_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
+    ggml_cann_graph_lru_cache &lru_cache = cann_ctx->graph_lru_cache;
+    for (auto &graph_ptr : lru_cache.cache_list) {
+        // Skip graphs with a different number of nodes.
+        if (graph_ptr->ggml_graph_properties.size() != static_cast<size_t>(cgraph->n_nodes)) {
+            continue;
+        }
 
-    // The number of nodes is the same; iterate over each node to check whether they match.
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        bool has_matching_properties = ggml_graph_node_has_matching_properties(
-            cgraph->nodes[i], &cann_ctx->cann_graph->ggml_graph_properties[i]);
-        if(!has_matching_properties) {
+        // Check if all nodes match.
+        bool all_match = true;
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            if (!ggml_graph_node_has_matching_properties(cgraph->nodes[i], &graph_ptr->ggml_graph_properties[i])) {
+                all_match = false;
+                break;
+            }
+        }
+
+        if (all_match) {
+            // update cache_list && renturn graph_ptr
+            lru_cache.move_to_front(graph_ptr);
             return true;
         }
     }
+
     return false;
 }
 #endif  // USE_ACL_GRAPH
@@ -2240,17 +2296,13 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
  * @param cann_graph_update_required Whether graph capture is needed due to graph changes.
  */
 static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
-    bool & use_cann_graph, bool & cann_graph_update_required) {
+    bool & use_cann_graph,  bool & cann_graph_update_required) {
 #ifdef USE_ACL_GRAPH
+    ggml_cann_graph* matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
     if (use_cann_graph && cann_graph_update_required) {
-        if (cann_ctx->cann_graph->graph != nullptr) {
-            ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
-            cann_ctx->cann_graph->graph = nullptr;
-        }
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
 #endif // USE_ACL_GRAPH
-
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
     if (!use_cann_graph || cann_graph_update_required) {
@@ -2271,12 +2323,12 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 
 #ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
-        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
+        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
     }
 
     if (use_cann_graph) {
         // Execute graph
-        ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->cann_graph->graph, cann_ctx->stream()));
+        ACL_CHECK(aclmdlRIExecuteAsync(matched_graph->graph, cann_ctx->stream()));
     }
 #endif // USE_ACL_GRAPH
 }
@@ -2301,28 +2353,44 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_cann_set_device(cann_ctx->device);
     g_nz_workspaces[cann_ctx->device].clear();
 
+    // calculate rope cache for fist layer in current device.
+    cann_ctx->rope_cache.cached = false;
+
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
+
+    static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
+    if (!prefill_use_graph) {
+        // Do not use acl_graph for prefill.
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->nodes[i];
+            // TODO: Optimize here. Currently, we can only
+            // get seq_len by FA's input.
+            if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+                // Q -> src[0], shape: [B, S, N, D]
+                use_cann_graph = (node->src[0]->ne[1] == 1);
+                break;
+            }
+        }
+    }
 
     if (!cann_ctx->acl_graph_mode) {
         use_cann_graph = false;
     }
 
     if (use_cann_graph) {
-        if (cann_ctx->cann_graph == nullptr) {
-            cann_ctx->cann_graph.reset(new ggml_cann_graph());
-            cann_graph_update_required = true;
+        // If no matching graph is found, the graph needs to be recaptured.
+        cann_graph_update_required = !is_matched_graph(cann_ctx, cgraph);
+        if (cann_graph_update_required) {
+            // If no matching graph is found, add a new ACL graph.
+            add_lru_matched_graph_node_properties(cann_ctx, cgraph);
         }
-
-        cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
-        set_ggml_graph_node_properties(cann_ctx, cgraph);
     }
 #else
     bool use_cann_graph = false;
     bool cann_graph_update_required = false;
 #endif  // USE_ACL_GRAPH
-
     evaluate_and_capture_cann_graph(
         cann_ctx,
         cgraph,
@@ -2689,6 +2757,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
     /* .graph_compute           = */ ggml_backend_cann_graph_compute,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
+    /* .optimize_graph          = */ NULL,
 };
 
 /**

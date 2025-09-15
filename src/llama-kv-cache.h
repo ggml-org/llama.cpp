@@ -89,6 +89,7 @@ public:
                      uint32_t   n_seq_max,
                      uint32_t   n_pad,
                      uint32_t   n_swa,
+               llama_swa_type   swa_type,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
@@ -211,6 +212,9 @@ private:
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 
+    // this is the SWA type of the cache - not to be confused with the model SWA type
+    const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
+
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
@@ -313,9 +317,17 @@ public:
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
+    // note: the heads in k_cur and v_cur should be layed out contiguously in memory
+    //   - k_cur  [n_embd_head_k, n_head_k, n_tokens]
+    //   - k_idxs [n_tokens]
+    //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
+    //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
+    // create destination indices for each head of the current batch for where it would be written in the KV cache
+    // the indices address the global KV cache (not per stream) - this is not relevant for the user of this API, but
+    //   helps understand the implementation logic of cpy_k and cpy_v
     ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
     ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
 
