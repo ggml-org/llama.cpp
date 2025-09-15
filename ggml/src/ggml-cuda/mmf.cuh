@@ -67,9 +67,8 @@ static __global__ void mul_mat_f(
                 slot_map[j] = -1;
             }
 
-            for (int k_base = 0; k_base < nchannels_dst; k_base += warp_size) {
-                int k = k_base + threadIdx.x;
-                int match = (k < nchannels_dst) && (id_row[k*stride_col_id] == expert_idx);
+            for (int k = threadIdx.x; k < nchannels_dst; k += warp_size) {
+                int match = id_row[k*stride_col_id] == expert_idx;
 
                 if (match) {
                     slot_map[j] = k;
