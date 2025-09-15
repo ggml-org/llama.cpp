@@ -179,6 +179,14 @@ extern "C" {
         LLAMA_ATTENTION_TYPE_NON_CAUSAL  = 1,
     };
 
+    enum llama_flash_attn_type {
+        LLAMA_FLASH_ATTN_TYPE_AUTO     = -1,
+        LLAMA_FLASH_ATTN_TYPE_DISABLED = 0,
+        LLAMA_FLASH_ATTN_TYPE_ENABLED  = 1,
+    };
+
+    LLAMA_API const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type);
+
     enum llama_split_mode {
         LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
         LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
@@ -198,7 +206,7 @@ extern "C" {
         llama_token_data * data;
         size_t size;
         int64_t selected; // this is the index in the data array (i.e. not the token id)
-        bool sorted;
+        bool sorted;      // note: do not assume the data is sorted - always check this flag
     } llama_token_data_array;
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
@@ -303,6 +311,7 @@ extern "C" {
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
+        enum llama_flash_attn_type   flash_attn_type;   // when to enable Flash Attention
 
         // ref: https://github.com/ggml-org/llama.cpp/pull/2054
         float    rope_freq_base;   // RoPE base frequency, 0 = from model
@@ -329,7 +338,6 @@ extern "C" {
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
-        bool flash_attn;  // use flash attention [EXPERIMENTAL]
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
@@ -553,9 +561,31 @@ extern "C" {
             struct llama_model * model,
             const char * path_lora);
 
+    // Functions to access the adapter's GGUF metadata scalar values
+    // - The functions return the length of the string on success, or -1 on failure
+    // - The output string is always null-terminated and cleared on failure
+    // - When retrieving a string, an extra byte must be allocated to account for the null terminator
+    // - GGUF array values are not supported by these functions
+
+    // Get metadata value as a string by key name
+    LLAMA_API int32_t llama_adapter_meta_val_str(const struct llama_adapter_lora * adapter, const char * key, char * buf, size_t buf_size);
+
+    // Get the number of metadata key/value pairs
+    LLAMA_API int32_t llama_adapter_meta_count(const struct llama_adapter_lora * adapter);
+
+    // Get metadata key name by index
+    LLAMA_API int32_t llama_adapter_meta_key_by_index(const struct llama_adapter_lora * adapter, int32_t i, char * buf, size_t buf_size);
+
+    // Get metadata value as a string by index
+    LLAMA_API int32_t llama_adapter_meta_val_str_by_index(const struct llama_adapter_lora * adapter, int32_t i, char * buf, size_t buf_size);
+
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted
     LLAMA_API void llama_adapter_lora_free(struct llama_adapter_lora * adapter);
+
+    // Get the invocation tokens if the current lora is an alora
+    LLAMA_API uint64_t            llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter);
+    LLAMA_API const llama_token * llama_adapter_get_alora_invocation_tokens  (const struct llama_adapter_lora * adapter);
 
     // The following functions operate on a llama_context, hence the naming: llama_verb_...
 
@@ -1129,11 +1159,6 @@ extern "C" {
 
     LLAMA_API struct llama_sampler * llama_sampler_init_greedy(void);
     LLAMA_API struct llama_sampler * llama_sampler_init_dist  (uint32_t seed);
-
-    /// @details Sorts candidate tokens by their logits in descending order and calculate probabilities based on logits.
-    /// NOTE: Avoid using on the full vocabulary as the sorting can become slow. For example, apply top-k or top-p sampling first.
-    DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_softmax    (void),
-        "will be removed in the future (see https://github.com/ggml-org/llama.cpp/pull/9896#discussion_r1800920915)");
 
     /// @details Top-K sampling described in academic paper "The Curious Case of Neural Text Degeneration" https://arxiv.org/abs/1904.09751
     /// Setting k <= 0 makes this a noop

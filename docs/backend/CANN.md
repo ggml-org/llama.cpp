@@ -293,17 +293,14 @@ We would like to thank Tuo Dai, Shanni Li, and all of the project maintainers fr
 
 ## Environment variable setup
 
-### GGML_CANN_ASYNC_MODE
-
-Enables asynchronous operator submission. Disabled by default.
-
 ### GGML_CANN_MEM_POOL
 
-Specifies the memory pool management strategy:
+Specifies the memory pool management strategy, Default is vmm.
 
 - vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
 
 - prio: Employs a priority queue-based memory pool management.
+
 - leg: Uses a fixed-size buffer pool.
 
 ### GGML_CANN_DISABLE_BUF_POOL_CLEAN
@@ -312,5 +309,16 @@ Controls automatic cleanup of the memory pool. This option is only effective whe
 
 ### GGML_CANN_WEIGHT_NZ
 
-Converting the matmul weight format from ND to NZ can significantly improve performance on the 310I DUO NPU.
+Converting the matmul weight format from ND to NZ to improve performance. Enabled by default.
 
+### GGML_CANN_ACL_GRAPH
+
+Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default.
+
+### GGML_CANN_GRAPH_CACHE_CAPACITY
+
+Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. When the number of cached graphs exceeds this capacity, the least recently used graph will be evicted.
+
+### GGML_CANN_PREFILL_USE_GRAPH
+
+Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.

@@ -746,6 +746,124 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 #endif // LLAMA_USE_CURL
 
 //
+// Docker registry functions
+//
+
+static std::string common_docker_get_token(const std::string & repo) {
+    std::string url = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repo + ":pull";
+
+    common_remote_params params;
+    auto                 res = common_remote_get_content(url, params);
+
+    if (res.first != 200) {
+        throw std::runtime_error("Failed to get Docker registry token, HTTP code: " + std::to_string(res.first));
+    }
+
+    std::string            response_str(res.second.begin(), res.second.end());
+    nlohmann::ordered_json response = nlohmann::ordered_json::parse(response_str);
+
+    if (!response.contains("token")) {
+        throw std::runtime_error("Docker registry token response missing 'token' field");
+    }
+
+    return response["token"].get<std::string>();
+}
+
+static std::string common_docker_resolve_model(const std::string & docker) {
+    // Parse ai/smollm2:135M-Q4_K_M
+    size_t      colon_pos = docker.find(':');
+    std::string repo, tag;
+    if (colon_pos != std::string::npos) {
+        repo = docker.substr(0, colon_pos);
+        tag  = docker.substr(colon_pos + 1);
+    } else {
+        repo = docker;
+        tag  = "latest";
+    }
+
+    // ai/ is the default
+    size_t      slash_pos = docker.find('/');
+    if (slash_pos == std::string::npos) {
+        repo.insert(0, "ai/");
+    }
+
+    LOG_INF("%s: Downloading Docker Model: %s:%s\n", __func__, repo.c_str(), tag.c_str());
+    try {
+        // --- helper: digest validation ---
+        auto validate_oci_digest = [](const std::string & digest) -> std::string {
+            // Expected: algo:hex ; start with sha256 (64 hex chars)
+            // You can extend this map if supporting other algorithms in future.
+            static const std::regex re("^sha256:([a-fA-F0-9]{64})$");
+            std::smatch m;
+            if (!std::regex_match(digest, m, re)) {
+                throw std::runtime_error("Invalid OCI digest format received in manifest: " + digest);
+            }
+            // normalize hex to lowercase
+            std::string normalized = digest;
+            std::transform(normalized.begin()+7, normalized.end(), normalized.begin()+7, [](unsigned char c){
+                return std::tolower(c);
+            });
+            return normalized;
+        };
+
+        std::string token = common_docker_get_token(repo);  // Get authentication token
+
+        // Get manifest
+        const std::string    url_prefix = "https://registry-1.docker.io/v2/" + repo;
+        std::string          manifest_url = url_prefix + "/manifests/" + tag;
+        common_remote_params manifest_params;
+        manifest_params.headers.push_back("Authorization: Bearer " + token);
+        manifest_params.headers.push_back(
+            "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json");
+        auto manifest_res = common_remote_get_content(manifest_url, manifest_params);
+        if (manifest_res.first != 200) {
+            throw std::runtime_error("Failed to get Docker manifest, HTTP code: " + std::to_string(manifest_res.first));
+        }
+
+        std::string            manifest_str(manifest_res.second.begin(), manifest_res.second.end());
+        nlohmann::ordered_json manifest = nlohmann::ordered_json::parse(manifest_str);
+        std::string            gguf_digest;  // Find the GGUF layer
+        if (manifest.contains("layers")) {
+            for (const auto & layer : manifest["layers"]) {
+                if (layer.contains("mediaType")) {
+                    std::string media_type = layer["mediaType"].get<std::string>();
+                    if (media_type == "application/vnd.docker.ai.gguf.v3" ||
+                        media_type.find("gguf") != std::string::npos) {
+                        gguf_digest = layer["digest"].get<std::string>();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (gguf_digest.empty()) {
+            throw std::runtime_error("No GGUF layer found in Docker manifest");
+        }
+
+        // Validate & normalize digest
+        gguf_digest = validate_oci_digest(gguf_digest);
+        LOG_DBG("%s: Using validated digest: %s\n", __func__, gguf_digest.c_str());
+
+        // Prepare local filename
+        std::string model_filename = repo;
+        std::replace(model_filename.begin(), model_filename.end(), '/', '_');
+        model_filename += "_" + tag + ".gguf";
+        std::string local_path = fs_get_cache_file(model_filename);
+
+        const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
+        if (!common_download_file_single(blob_url, local_path, token, false)) {
+            throw std::runtime_error("Failed to download Docker Model");
+        }
+
+        LOG_INF("%s: Downloaded Docker Model to: %s\n", __func__, local_path.c_str());
+        return local_path;
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: Docker Model download failed: %s\n", __func__, e.what());
+        throw;
+    }
+}
+
+//
 // utils
 //
 
@@ -795,7 +913,9 @@ static handle_model_result common_params_handle_model(
     handle_model_result result;
     // handle pre-fill default model path and url based on hf_repo and hf_file
     {
-        if (!model.hf_repo.empty()) {
+        if (!model.docker_repo.empty()) {  // Handle Docker URLs by resolving them to local paths
+            model.path = common_docker_resolve_model(model.docker_repo);
+        } else if (!model.hf_repo.empty()) {
             // short-hand to avoid specifying --hf-file -> default it to --model
             if (model.hf_file.empty()) {
                 if (model.path.empty()) {
@@ -1106,7 +1226,7 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
     printf("\"\n\n");
 
     printf("    case \"$prev\" in\n");
-    printf("        --model)\n");
+    printf("        --model|-m)\n");
     printf("            COMPREPLY=( $(compgen -f -X '!*.gguf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
     printf("            return 0\n");
     printf("            ;;\n");
@@ -1184,7 +1304,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     } else {
         for (const auto & device : dev_names) {
             auto * dev = ggml_backend_dev_by_name(device.c_str());
-            if (!dev || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                 throw std::invalid_argument(string_format("invalid device: %s", device.c_str()));
             }
             devices.push_back(dev);
@@ -1194,7 +1314,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     return devices;
 }
 
-static void add_rpc_devices(std::string servers) {
+static void add_rpc_devices(const std::string & servers) {
     auto rpc_servers = string_split<std::string>(servers, ',');
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
@@ -1261,6 +1381,18 @@ static std::string list_builtin_chat_templates() {
         msg << tmpl << (&tmpl == &supported_tmpl.back() ? "" : ", ");
     }
     return msg.str();
+}
+
+static bool is_truthy(const std::string & value) {
+    return value == "on" || value == "enabled" || value == "1";
+}
+
+static bool is_falsey(const std::string & value) {
+    return value == "off" || value == "disabled" || value == "0";
+}
+
+static bool is_autoy(const std::string & value) {
+    return value == "auto" || value == "-1";
 }
 
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
@@ -1544,13 +1676,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_chunks = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
-    add_opt(common_arg(
-        {"-fa", "--flash-attn"},
-        string_format("enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.flash_attn = true;
-        }
-    ).set_env("LLAMA_ARG_FLASH_ATTN"));
+    add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
+                       string_format("set Flash Attention use ('on', 'off', or 'auto', default: '%s')",
+                                     llama_flash_attn_type_name(params.flash_attn_type)),
+                       [](common_params & params, const std::string & value) {
+                           if (is_truthy(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+                           } else if (is_falsey(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+                           } else if (is_autoy(value)) {
+                               params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+                           } else {
+                               throw std::runtime_error(
+                                   string_format("error: unkown value for --flash-attn: '%s'\n", value.c_str()));
+                           }
+                       }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
@@ -2376,24 +2516,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
-            std::vector<ggml_backend_dev_t> rpc_devices;
-            std::vector<ggml_backend_dev_t> all_devices;
+            std::vector<ggml_backend_dev_t> devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
-                        rpc_devices.push_back(dev);
-                    } else {
-                        all_devices.push_back(dev);
-                    }
+                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    devices.push_back(dev);
                 }
             }
-            // insert RPC devices in front
-            all_devices.insert(all_devices.begin(), rpc_devices.begin(), rpc_devices.end());
             printf("Available devices:\n");
-            for (size_t i = 0; i < all_devices.size(); ++i) {
-                auto * dev = all_devices[i];
+            for (auto * dev : devices) {
                 size_t free, total;
                 ggml_backend_dev_memory(dev, &free, &total);
                 printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
@@ -2458,7 +2589,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
-        "number of layers to store in VRAM",
+        string_format("max. number of layers to store in VRAM (default: %d)", params.n_gpu_layers),
         [](common_params & params, int value) {
             params.n_gpu_layers = value;
             if (!llama_supports_gpu_offload()) {
@@ -2555,7 +2686,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0, nullptr });
+            params.lora_adapters.push_back({ std::string(value), 1.0, "", "", nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -2563,7 +2694,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora-scaled"}, "FNAME", "SCALE",
         "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale), nullptr });
+            params.lora_adapters.push_back({ fname, std::stof(scale), "", "", nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -2616,6 +2747,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.url = value;
         }
     ).set_env("LLAMA_ARG_MODEL_URL"));
+    add_opt(common_arg(
+        { "-dr", "--docker-repo" }, "[<repo>/]<model>[:quant]",
+        "Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.\n"
+        "example: gemma3\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.docker_repo = value;
+        }
+    ).set_env("LLAMA_ARG_DOCKER_REPO"));
     add_opt(common_arg(
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
@@ -2955,19 +3095,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_METRICS"));
     add_opt(common_arg(
-        {"--slots"},
-        string_format("enable slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.endpoint_slots = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
-    add_opt(common_arg(
         {"--props"},
         string_format("enable changing global properties via POST /props (default: %s)", params.endpoint_props ? "enabled" : "disabled"),
         [](common_params & params) {
             params.endpoint_props = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_PROPS"));
+    add_opt(common_arg(
+        {"--slots"},
+        string_format("enable slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.endpoint_slots = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
     add_opt(common_arg(
         {"--no-slots"},
         "disables slots monitoring endpoint",
@@ -3126,13 +3266,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_file(common_log_main(), value.c_str());
         }
     ));
-    add_opt(common_arg(
-        {"--log-colors"},
-        "Enable colored logging",
-        [](common_params &) {
-            common_log_set_colors(common_log_main(), true);
-        }
-    ).set_env("LLAMA_LOG_COLORS"));
+    add_opt(common_arg({ "--log-colors" }, "[on|off|auto]",
+                       "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
+                       "'auto' enables colors when output is to a terminal",
+                       [](common_params &, const std::string & value) {
+                           if (is_truthy(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_ENABLED);
+                           } else if (is_falsey(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_DISABLED);
+                           } else if (is_autoy(value)) {
+                               common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
+                           } else {
+                               throw std::invalid_argument(
+                                   string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+                           }
+                       }).set_env("LLAMA_LOG_COLORS"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
@@ -3459,8 +3607,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3475,8 +3621,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3491,8 +3635,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3508,10 +3650,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 99;
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;
@@ -3527,10 +3666,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
             params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
             params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
-            params.speculative.n_gpu_layers = 99;
             params.port = 8012;
-            params.n_gpu_layers = 99;
-            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-30b-default"},
+        string_format("use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF";
+            params.model.hf_file = "qwen3-coder-30b-a3b-instruct-q8_0.gguf";
+            params.port = 8012;
             params.n_ubatch = 1024;
             params.n_batch = 1024;
             params.n_ctx = 0;

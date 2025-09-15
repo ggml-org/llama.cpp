@@ -258,6 +258,36 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+static void print_mask(float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
+    LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
+    const char * swa_type_str = (swa_type == LLAMA_SWA_TYPE_NONE) ? "LLAMA_SWA_TYPE_NONE" :
+                          (swa_type == LLAMA_SWA_TYPE_STANDARD) ? "LLAMA_SWA_TYPE_STANDARD" :
+                          (swa_type == LLAMA_SWA_TYPE_CHUNKED) ? "LLAMA_SWA_TYPE_CHUNKED" :
+                          (swa_type == LLAMA_SWA_TYPE_SYMMETRIC) ? "LLAMA_SWA_TYPE_SYMMETRIC" : "unknown";
+    LLAMA_LOG_DEBUG("%s: n_swa : %d, n_kv: %d, swq_type: %s\n", __func__, (int)n_swa, (int)n_kv, swa_type_str);
+    LLAMA_LOG_DEBUG("%s: '0' = can attend, '∞' = masked\n", __func__);
+    LLAMA_LOG_DEBUG("%s: Rows = query tokens, Columns = key/value tokens\n\n", __func__);
+
+    LLAMA_LOG_DEBUG("    ");
+    for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+        LLAMA_LOG_DEBUG("%2d", j);
+    }
+    LLAMA_LOG_DEBUG("\n");
+
+    for (int i = 0; i < std::min((int64_t)20, n_tokens); ++i) {
+        LLAMA_LOG_DEBUG(" %2d ", i);
+        for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+            float val = data[i * n_kv + j];
+            if (val == -INFINITY) {
+                LLAMA_LOG_DEBUG(" ∞");
+            } else {
+                LLAMA_LOG_DEBUG(" 0");
+            }
+        }
+        LLAMA_LOG_DEBUG("\n");
+    }
+}
+
 void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
@@ -266,6 +296,9 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
 
     float * data = (float *) kq_mask->data;
+
+    // [TAG_NO_CACHE_ISWA]
+    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "TODO: implement");
 
     for (int h = 0; h < 1; ++h) {
         for (int i1 = 0; i1 < n_tokens; ++i1) {
@@ -277,20 +310,32 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                 for (int s = 0; s < ubatch->n_seq_id[i0]; ++s) {
                     const llama_seq_id s0 = ubatch->seq_id[i0][0];
 
-                    // TODO: reimplement this like in llama_kv_cache
-                    if (s0 == s1 && (!cparams.causal_attn || ubatch->pos[i0] <= ubatch->pos[i1])) {
-                        if (hparams.use_alibi) {
-                            f = -std::abs(ubatch->pos[i0] - ubatch->pos[i1]);
-                        } else {
-                            f = 0.0f;
-                        }
-                        break;
+                    if (s0 != s1) {
+                        continue; // skip different sequences
+                    }
+
+                    if (cparams.causal_attn && ubatch->pos[i0] > ubatch->pos[i1]) {
+                        continue; // skip future tokens for causal attention
+                    }
+
+                    // TODO: this does not take into account that some layers are SWA and others are note (i.e. iSWA) [TAG_NO_CACHE_ISWA]
+                    //if (hparams.is_masked_swa(ubatch->pos[i0], ubatch->pos[i1])) {
+                    //    continue; // skip masked tokens for SWA
+                    //}
+
+                    // TODO: reimplement this like in llama_kv_cache_unified
+                    if (hparams.use_alibi) {
+                        f = -std::abs(ubatch->pos[i0] - ubatch->pos[i1]);
+                    } else {
+                        f = 0.0f;
                     }
                 }
-
                 data[h*(n_kv*n_tokens) + i1*n_kv + i0] = f;
             }
         }
+    }
+    if (debug) {
+        print_mask(data, n_tokens, n_kv, hparams.n_swa, hparams.swa_type);
     }
 }
 
@@ -313,8 +358,6 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     res &= self_kq_mask->ne[0] == mctx->get_n_kv();
     res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
-
-    res &= mctx->get_supports_set_rows(); // TODO: tmp
 
     return res;
 }
@@ -349,8 +392,6 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
     res &= self_kq_mask_swa->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
-
-    res &= mctx->get_base()->get_supports_set_rows(); // TODO: tmp
 
     return res;
 }
@@ -1225,13 +1266,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * kq_mask,
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
-             float     kq_scale) const {
+               float   kq_scale,
+                 int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
 
-    q = ggml_reshape_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream);
+    q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
 
     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
@@ -1260,6 +1302,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
@@ -1275,6 +1318,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             // The permutations are noops and only change how the tensor data is interpreted.
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
             cur = ggml_mul_mat(ctx0, v_mla, cur);
+            cb(cur, "fattn_mla", il);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
             cur = ggml_cont(ctx0, cur); // Needed because ggml_reshape_2d expects contiguous inputs.
 #endif
@@ -1283,6 +1327,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+        cb(kq, "kq", il);
 
         // note: this op tends to require high floating point range
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
@@ -1290,38 +1335,48 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         if (arch == LLM_ARCH_GROK) {
             // need to do the following:
-            // multiply by attn_output_multiplyer of 0.08838834764831845
+            // multiply by attn_output_multiplier
             // and then :
             // kq = 30 * tanh(kq / 30)
             // before the softmax below
 
-            kq = ggml_tanh(ctx0, ggml_scale(ctx0, kq, 0.08838834764831845f/30.0f));
-            kq = ggml_scale(ctx0, kq, 30);
+            kq = ggml_tanh(ctx0, ggml_scale(ctx0, kq, hparams.f_attn_out_scale / hparams.f_attn_logit_softcapping));
+            cb(kq, "kq_tanh", il);
+            kq = ggml_scale(ctx0, kq, hparams.f_attn_logit_softcapping);
+            cb(kq, "kq_scaled", il);
         }
 
         if (hparams.attn_soft_cap) {
             kq = ggml_scale(ctx0, kq, 1.0f / hparams.f_attn_logit_softcapping);
+            cb(kq, "kq_scaled_1", il);
             kq = ggml_tanh (ctx0, kq);
+            cb(kq, "kq_tanh", il);
             kq = ggml_scale(ctx0, kq, hparams.f_attn_logit_softcapping);
+            cb(kq, "kq_scaled_2", il);
         }
 
         if (kq_b) {
             kq = ggml_add(ctx0, kq, kq_b);
+            cb(kq, "kq_plus_kq_b", il);
         }
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
         ggml_soft_max_add_sinks(kq, sinks);
+        cb(kq, "kq_soft_max", il);
 
         if (!v_trans) {
             // note: avoid this branch
             v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+            cb(v, "v_cont", il);
         }
 
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
+        cb(kqv, "kqv", il);
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
         if (v_mla) {
             kqv = ggml_mul_mat(ctx0, v_mla, kqv);
+            cb(kqv, "kqv_mla", il);
         }
 
         cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
@@ -1376,13 +1431,14 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
-    assert(!ubatch.equal_seqs());
+    //       but it might not be worth it: https://github.com/ggml-org/llama.cpp/pull/15636
+    //assert(!ubatch.equal_seqs() || (k_cur->ne[3] == 1 && k_cur->ne[3] == ubatch.n_seqs_unq));
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1471,7 +1527,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1538,7 +1594,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1593,7 +1649,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {

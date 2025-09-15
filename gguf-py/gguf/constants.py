@@ -109,7 +109,9 @@ class Keys:
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
+        DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
+        ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         SWIN_NORM                         = "{arch}.swin_norm"
         RESCALE_EVERY_N_LAYERS            = "{arch}.rescale_every_n_layers"
@@ -145,21 +147,27 @@ class Keys:
         REL_BUCKETS_COUNT            = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW               = "{arch}.attention.sliding_window"
         SCALE                        = "{arch}.attention.scale"
+        OUTPUT_SCALE                 = "{arch}.attention.output_scale"
+        TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
 
     class Rope:
-        DIMENSION_COUNT         = "{arch}.rope.dimension_count"
-        DIMENSION_SECTIONS      = "{arch}.rope.dimension_sections"
-        FREQ_BASE               = "{arch}.rope.freq_base"
-        SCALING_TYPE            = "{arch}.rope.scaling.type"
-        SCALING_FACTOR          = "{arch}.rope.scaling.factor"
-        SCALING_ATTN_FACTOR     = "{arch}.rope.scaling.attn_factor"
-        SCALING_ORIG_CTX_LEN    = "{arch}.rope.scaling.original_context_length"
-        SCALING_FINETUNED       = "{arch}.rope.scaling.finetuned"
-        SCALING_YARN_LOG_MUL    = "{arch}.rope.scaling.yarn_log_multiplier"
+        DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
+        FREQ_BASE                = "{arch}.rope.freq_base"
+        SCALING_TYPE             = "{arch}.rope.scaling.type"
+        SCALING_FACTOR           = "{arch}.rope.scaling.factor"
+        SCALING_ATTN_FACTOR      = "{arch}.rope.scaling.attn_factor"
+        SCALING_ORIG_CTX_LEN     = "{arch}.rope.scaling.original_context_length"
+        SCALING_FINETUNED        = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_LOG_MUL     = "{arch}.rope.scaling.yarn_log_multiplier"
+        SCALING_YARN_EXT_FACTOR  = "{arch}.rope.scaling.yarn_ext_factor"
+        SCALING_YARN_ATTN_FACTOR = "{arch}.rope.scaling.yarn_attn_factor"
+        SCALING_YARN_BETA_FAST   = "{arch}.rope.scaling.yarn_beta_fast"
+        SCALING_YARN_BETA_SLOW   = "{arch}.rope.scaling.yarn_beta_slow"
 
     class Split:
         LLM_KV_SPLIT_NO            = "split.no"
@@ -231,8 +239,11 @@ class Keys:
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
 
     class Adapter:
-        TYPE       = "adapter.type"
-        LORA_ALPHA = "adapter.lora.alpha"
+        TYPE                    = "adapter.type"
+        LORA_ALPHA              = "adapter.lora.alpha"
+        LORA_TASK_NAME          = "adapter.lora.task_name"
+        LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
+        ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"
 
     class IMatrix:
         CHUNK_COUNT = "imatrix.chunk_count"
@@ -315,6 +326,7 @@ class MODEL_ARCH(IntEnum):
     NOMIC_BERT_MOE   = auto()
     NEO_BERT         = auto()
     JINA_BERT_V2     = auto()
+    JINA_BERT_V3     = auto()
     BLOOM            = auto()
     STABLELM         = auto()
     QWEN             = auto()
@@ -337,6 +349,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA2           = auto()
     GEMMA3           = auto()
     GEMMA3N          = auto()
+    GEMMA_EMBEDDING  = auto()
     STARCODER2       = auto()
     RWKV6            = auto()
     RWKV6QWEN2       = auto()
@@ -364,6 +377,7 @@ class MODEL_ARCH(IntEnum):
     T5ENCODER        = auto()
     JAIS             = auto()
     NEMOTRON         = auto()
+    NEMOTRON_H       = auto()
     EXAONE           = auto()
     EXAONE4          = auto()
     GRANITE          = auto()
@@ -647,6 +661,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.NOMIC_BERT_MOE:   "nomic-bert-moe",
     MODEL_ARCH.NEO_BERT:         "neo-bert",
     MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
+    MODEL_ARCH.JINA_BERT_V3:     "jina-bert-v3",
     MODEL_ARCH.BLOOM:            "bloom",
     MODEL_ARCH.STABLELM:         "stablelm",
     MODEL_ARCH.QWEN:             "qwen",
@@ -669,6 +684,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA2:           "gemma2",
     MODEL_ARCH.GEMMA3:           "gemma3",
     MODEL_ARCH.GEMMA3N:          "gemma3n",
+    MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
     MODEL_ARCH.STARCODER2:       "starcoder2",
     MODEL_ARCH.RWKV6:            "rwkv6",
     MODEL_ARCH.RWKV6QWEN2:       "rwkv6qwen2",
@@ -696,6 +712,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.T5ENCODER:        "t5encoder",
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.NEMOTRON:         "nemotron",
+    MODEL_ARCH.NEMOTRON_H:       "nemotron_h",
     MODEL_ARCH.EXAONE:           "exaone",
     MODEL_ARCH.EXAONE4:          "exaone4",
     MODEL_ARCH.GRANITE:          "granite",
@@ -1104,6 +1121,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_POST_NORM,
         MODEL_TENSOR.LAYER_OUT_NORM,
     ],
     MODEL_ARCH.GPTNEOX: [
@@ -1233,6 +1251,18 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.LAYER_OUT_NORM,
         MODEL_TENSOR.CLS,
+    ],
+    MODEL_ARCH.JINA_BERT_V3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_TYPES,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.LAYER_OUT_NORM,
     ],
     MODEL_ARCH.MPT: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1700,6 +1730,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.LAUREL_L,
         MODEL_TENSOR.LAUREL_R,
         MODEL_TENSOR.LAUREL_POST_NORM,
+    ],
+    MODEL_ARCH.GEMMA_EMBEDDING: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.STARCODER2: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -2281,6 +2329,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.NEMOTRON_H: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.EXAONE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -2850,6 +2917,7 @@ class VisionProjectorType:
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
+    KIMIVL = "kimivl"
 
 
 # Items here are (block size, type size)

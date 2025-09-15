@@ -28,9 +28,51 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
     return str;
 }
 
+static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
+    union {
+        float f;
+        uint32_t i;
+    } u;
+    u.i = (uint32_t)h.bits << 16;
+    return u.f;
+}
+
+static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
+    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+    float v;
+    if (type == GGML_TYPE_F16) {
+        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+    } else if (type == GGML_TYPE_F32) {
+        v = *(float *) &data[i];
+    } else if (type == GGML_TYPE_I64) {
+        v = (float) *(int64_t *) &data[i];
+    } else if (type == GGML_TYPE_I32) {
+        v = (float) *(int32_t *) &data[i];
+    } else if (type == GGML_TYPE_I16) {
+        v = (float) *(int16_t *) &data[i];
+    } else if (type == GGML_TYPE_I8) {
+        v = (float) *(int8_t *) &data[i];
+    } else if (type == GGML_TYPE_BF16) {
+        v = ggml_compute_bf16_to_fp32(*(ggml_bf16_t *) &data[i]);
+    } else {
+        GGML_ABORT("fatal error");
+    }
+    return v;
+}
+
 static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
     GGML_ASSERT(n > 0);
     float sum = 0;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
+                    sum += v;
+                }
+            }
+        }
+    }
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
         LOG("                                     [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
@@ -50,25 +92,8 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                         LOG("..., ");
                         i0 = ne[0] - n;
                     }
-                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-                    float v;
-                    if (type == GGML_TYPE_F16) {
-                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
-                    } else if (type == GGML_TYPE_F32) {
-                        v = *(float *) &data[i];
-                    } else if (type == GGML_TYPE_I64) {
-                        v = (float) *(int64_t *) &data[i];
-                    } else if (type == GGML_TYPE_I32) {
-                        v = (float) *(int32_t *) &data[i];
-                    } else if (type == GGML_TYPE_I16) {
-                        v = (float) *(int16_t *) &data[i];
-                    } else if (type == GGML_TYPE_I8) {
-                        v = (float) *(int8_t *) &data[i];
-                    } else {
-                        GGML_ABORT("fatal error");
-                    }
+                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
                     LOG("%12.4f", v);
-                    sum += v;
                     if (i0 < ne[0] - 1) LOG(", ");
                 }
                 LOG("],\n");

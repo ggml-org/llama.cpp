@@ -68,12 +68,6 @@ struct ggml_compute_params {
 #endif  // __VXE2__
 #endif  // __s390x__ && __VEC__
 
-#if defined(__s390x__) && defined(GGML_NNPA)
-#ifndef __NNPA__
-#define __NNPA__
-#endif  // __NNPA__
-#endif  // __s390x__ && GGML_NNPA
-
 #if defined(__ARM_FEATURE_SVE)
 #include <sys/prctl.h>
 #endif
@@ -489,8 +483,13 @@ inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
 /**
  * @see https://github.com/ggml-org/llama.cpp/pull/14037
  */
-inline float vec_hsum(float32x4_t v) {
+inline static float vec_hsum_f32x4(float32x4_t v) {
     float32x4_t v_temp = v + vec_reve(v);
+    return v_temp[0] + v_temp[1];
+}
+
+inline static int32_t vec_hsum_i32x4(int32x4_t v) {
+    int32x4_t v_temp = v + vec_reve(v);
     return v_temp[0] + v_temp[1];
 }
 
