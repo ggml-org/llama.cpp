@@ -507,7 +507,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_te
                         return false;
                 };
             }
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_GET_ROWS:
             {
                 return op->ne[3] == 1;
