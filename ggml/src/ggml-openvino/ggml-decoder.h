@@ -19,7 +19,8 @@ public:
 
     // Node decoder, called in GgmlOvDecoder::visit_subgraph
     GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
-                  int context_size, int num_heads, int num_heads_kv, int head_size);
+                  int context_size, int context_size_swa, int num_heads, int num_heads_kv, int head_size,
+                  const std::vector<int>& swa_layers);
 
     // Naive graph decoder
     GgmlOvDecoder(struct ggml_cgraph* cgraph, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
@@ -101,6 +102,12 @@ public:
 
     virtual int get_context_size() const override { return m_context_size; }
 
+    virtual int get_context_size_swa() const override { return m_context_size_swa; }
+
+    virtual int is_swa_layer(int layer) const override {
+        return std::find(m_swa_layers.begin(), m_swa_layers.end(), layer) != m_swa_layers.end();
+    }
+
     virtual int get_num_heads() const override { return m_num_heads; }
 
     virtual int get_num_heads_kv() const override { return m_num_heads_kv; }
@@ -156,6 +163,8 @@ private:
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
     int m_context_size;
+    int m_context_size_swa;
+    std::vector<int> m_swa_layers;
     int m_num_heads;
     int m_num_heads_kv;
     int m_head_size;
@@ -166,3 +175,5 @@ private:
 };
 
 void print_tensor_address_map(const struct ggml_cgraph* cgraph);
+
+int extract_layer_from_name(const std::string& name);
