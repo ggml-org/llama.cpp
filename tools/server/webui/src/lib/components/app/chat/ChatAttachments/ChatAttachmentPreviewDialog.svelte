@@ -36,6 +36,10 @@
 
 	let displayName = $derived(uploadedFile?.name || attachment?.name || name || 'Unknown File');
 
+	let displayPreview = $derived(
+		uploadedFile?.preview || (attachment?.type === 'imageFile' ? attachment.base64Url : preview)
+	);
+
 	let displayType = $derived(
 		uploadedFile?.type ||
 			(attachment?.type === 'imageFile'
@@ -51,10 +55,6 @@
 
 	let displaySize = $derived(uploadedFile?.size || size);
 
-	let displayPreview = $derived(
-		uploadedFile?.preview || (attachment?.type === 'imageFile' ? attachment.base64Url : preview)
-	);
-
 	let displayTextContent = $derived(
 		uploadedFile?.textContent ||
 			(attachment?.type === 'textFile'
@@ -67,10 +67,13 @@
 	let isAudio = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.AUDIO || displayType === 'audio'
 	);
+
 	let isImage = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image'
 	);
+
 	let isPdf = $derived(displayType === ApplicationMimeType.PDF);
+
 	let isText = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text'
 	);
@@ -84,8 +87,11 @@
 	});
 
 	let pdfViewMode = $state<'text' | 'pages'>('pages');
+
 	let pdfImages = $state<string[]>([]);
+
 	let pdfImagesLoading = $state(false);
+
 	let pdfImagesError = $state<string | null>(null);
 
 	async function loadPdfImages() {
@@ -228,12 +234,7 @@
 
 							<p class="text-sm text-muted-foreground">{pdfImagesError}</p>
 
-							<Button
-								class="mt-4"
-								onclick={() => {
-									pdfViewMode = 'text';
-								}}>View as Text</Button
-							>
+							<Button class="mt-4" onclick={() => (pdfViewMode = 'text')}>View as Text</Button>
 						</div>
 					</div>
 				{:else if pdfImages.length > 0}
