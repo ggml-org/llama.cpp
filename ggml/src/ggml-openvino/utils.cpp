@@ -362,7 +362,7 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
                 input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
             }
 
-        } else if (param_name == "KQ_mask") {
+        } else if (param_name.find("KQ_mask") == 0) {
             size_t context_size = ggml_decoder->get_context_size();
             const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
             if (is_first_token) {
