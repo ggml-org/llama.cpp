@@ -273,8 +273,8 @@ void main() {
 
             uint32_t H_idx_x_s1 = OH_idx - KH_idx_b * p.d1 + p.p1;
             uint32_t W_idx_x_s0 = OW_idx - KW_idx_b * p.d0 + p.p0;
-            uint32_t H_idx = fastdiv(H_idx_x_s1, p.s0mp, p.s0L);
-            uint32_t W_idx = fastdiv(W_idx_x_s0, p.s1mp, p.s1L);
+            uint32_t H_idx = fastdiv(H_idx_x_s1, p.s1mp, p.s1L);
+            uint32_t W_idx = fastdiv(W_idx_x_s0, p.s0mp, p.s0L);
             float val;
             if (CRS_idx_b >= CRS || NPQ_idx >= NPQ ||
                 int32_t(H_idx) < 0 || H_idx >= p.H || int32_t(W_idx) < 0 || W_idx >= p.W ||
