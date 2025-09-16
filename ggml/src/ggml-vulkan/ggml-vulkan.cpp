@@ -5,7 +5,13 @@
 #include "ggml-cpu.h"
 #endif
 
+// See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+
 #include <vulkan/vulkan.hpp>
+
+// See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 #include <algorithm>
 #include <cmath>
@@ -121,6 +127,8 @@ struct vk_pipeline_struct {
     bool needed {};
     // set to true when the shader has been compiled
     bool compiled {};
+    // number of registers used, extracted from pipeline executable properties
+    uint32_t register_count {};
 };
 
 typedef std::shared_ptr<vk_pipeline_struct> vk_pipeline;
@@ -428,6 +436,8 @@ struct vk_device_struct {
     uint32_t coopmat_int_k;
 
     bool coopmat2;
+
+    bool pipeline_executable_properties_support {};
 
     size_t idx;
 
@@ -1221,8 +1231,6 @@ static std::string format_size(size_t size) {
     return oss.str();
 }
 
-static std::mutex log_mutex;
-
 class vk_memory_logger {
 public:
     vk_memory_logger(): total_device(0), total_host(0) {}
@@ -1412,6 +1420,8 @@ struct ggml_backend_vk_buffer_context {
 };
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
+static std::mutex log_mutex;
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     std::lock_guard<std::mutex> guard(log_mutex);
     vk_buffer buf = buf_ref.lock();
@@ -1601,6 +1611,20 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         duoni.pObjectName = pipeline->name.c_str();
         duoni.objectHandle = /*reinterpret_cast*/(uint64_t)(static_cast<VkPipeline>(pipeline->pipeline));
         vk_instance.pfn_vkSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+    }
+
+    if (device->pipeline_executable_properties_support) {
+        vk::PipelineExecutableInfoKHR executableInfo;
+        executableInfo.pipeline = pipeline->pipeline;
+
+        auto statistics = device->device.getPipelineExecutableStatisticsKHR(executableInfo);
+        for (auto & s : statistics) {
+            // "Register Count" is reported by NVIDIA drivers.
+            if (strcmp(s.name, "Register Count") == 0) {
+                VK_LOG_DEBUG(pipeline->name << " " << s.name << ": " << s.value.u64 << " registers");
+                pipeline->register_count = (uint32_t)s.value.u64;
+            }
+        }
     }
 
     {
@@ -3610,6 +3634,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool amd_shader_core_properties2 = false;
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
+        bool pipeline_executable_properties_support = false;
         device->coopmat_support = false;
         device->integer_dot_product = false;
         bool bfloat16_support = false;
@@ -3652,6 +3677,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                        !getenv("GGML_VK_DISABLE_BFLOAT16")) {
                 bfloat16_support = true;
 #endif
+            } else if (strcmp("VK_KHR_pipeline_executable_properties", properties.extensionName) == 0) {
+                pipeline_executable_properties_support = true;
             }
         }
 
@@ -3878,7 +3905,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_shader_integer_dot_product");
         }
 
+        VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pep_features {};
+        pep_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+        if (pipeline_executable_properties_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&pep_features;
+            last_struct = (VkBaseOutStructure *)&pep_features;
+            device_extensions.push_back("VK_KHR_pipeline_executable_properties");
+        }
+
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+
+        device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
         device->fp16 = device->fp16 && vk12_features.shaderFloat16;
 
@@ -4395,6 +4432,9 @@ static void ggml_vk_instance_init() {
     }
     VK_LOG_DEBUG("ggml_vk_instance_init()");
 
+    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
     uint32_t api_version = vk::enumerateInstanceVersion();
 
     if (api_version < VK_API_VERSION_1_2) {
@@ -4461,6 +4501,9 @@ static void ggml_vk_instance_init() {
     }
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+
+    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
 
     std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
@@ -13095,16 +13138,16 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
     } else if (tensor->op == GGML_OP_IM2COL_3D) {
         const int32_t s0 = tensor->op_params[0];
         const int32_t s1 = tensor->op_params[1];
-        const int32_t s1 = tensor->op_params[2];
+        const int32_t s2 = tensor->op_params[2];
         const int32_t p0 = tensor->op_params[3];
         const int32_t p1 = tensor->op_params[4];
-        const int32_t p1 = tensor->op_params[5];
+        const int32_t p2 = tensor->op_params[5];
         const int32_t d0 = tensor->op_params[6];
         const int32_t d1 = tensor->op_params[7];
-        const int32_t d1 = tensor->op_params[8];
+        const int32_t d2 = tensor->op_params[8];
         const int32_t IC = tensor->op_params[9];
 
-        tensor_clone = ggml_im2col(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
+        tensor_clone = ggml_im2col_3d(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
     } else if (tensor->op == GGML_OP_TIMESTEP_EMBEDDING) {
         const int32_t dim = tensor->op_params[0];
         const int32_t max_period = tensor->op_params[1];

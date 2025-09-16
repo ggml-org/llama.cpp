@@ -1304,7 +1304,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     } else {
         for (const auto & device : dev_names) {
             auto * dev = ggml_backend_dev_by_name(device.c_str());
-            if (!dev || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                 throw std::invalid_argument(string_format("invalid device: %s", device.c_str()));
             }
             devices.push_back(dev);
@@ -1314,7 +1314,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     return devices;
 }
 
-static void add_rpc_devices(std::string servers) {
+static void add_rpc_devices(const std::string & servers) {
     auto rpc_servers = string_split<std::string>(servers, ',');
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
@@ -1704,7 +1704,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.system_prompt = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -2516,24 +2516,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
-            std::vector<ggml_backend_dev_t> rpc_devices;
-            std::vector<ggml_backend_dev_t> all_devices;
+            std::vector<ggml_backend_dev_t> devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
-                        rpc_devices.push_back(dev);
-                    } else {
-                        all_devices.push_back(dev);
-                    }
+                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    devices.push_back(dev);
                 }
             }
-            // insert RPC devices in front
-            all_devices.insert(all_devices.begin(), rpc_devices.begin(), rpc_devices.end());
             printf("Available devices:\n");
-            for (size_t i = 0; i < all_devices.size(); ++i) {
-                auto * dev = all_devices[i];
+            for (auto * dev : devices) {
                 size_t free, total;
                 ggml_backend_dev_memory(dev, &free, &total);
                 printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
@@ -2557,7 +2548,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cpu-moe", "-cmoe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(
@@ -2570,7 +2561,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             for (int i = 0; i < value; ++i) {
                 // keep strings alive and avoid leaking memory by storing them in a static vector
                 static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                buft_overrides.push_back(llm_ffn_exps_block_regex(i));
                 params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
             }
         }
@@ -2579,7 +2570,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cpu-moe-draft", "-cmoed"},
         "keep all Mixture of Experts (MoE) weights in the CPU for the draft model",
         [](common_params & params) {
-            params.speculative.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+            params.speculative.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CPU_MOE_DRAFT"));
     add_opt(common_arg(
@@ -2591,7 +2582,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             for (int i = 0; i < value; ++i) {
                 static std::list<std::string> buft_overrides_draft;
-                buft_overrides_draft.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                buft_overrides_draft.push_back(llm_ffn_exps_block_regex(i));
                 params.speculative.tensor_buft_overrides.push_back({buft_overrides_draft.back().c_str(), ggml_backend_cpu_buffer_type()});
             }
         }
