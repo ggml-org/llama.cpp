@@ -250,6 +250,7 @@ struct cmd_params {
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
+    std::vector<int>                 n_cpu_moe;
     std::vector<std::string>         rpc_servers;
     std::vector<llama_split_mode>    split_mode;
     std::vector<int>                 main_gpu;
@@ -286,6 +287,7 @@ static const cmd_params cmd_params_defaults = {
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { 99 },
+    /* n_cpu_moe            */ { 0 },
     /* rpc_servers          */ { "" },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* main_gpu             */ { 0 },
@@ -353,6 +355,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --poll <0...100>                          (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                  (default: %s)\n",
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
+           join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     if (llama_supports_rpc()) {
         printf("  -rpc, --rpc <rpc_servers>                 (default: %s)\n",
                join(cmd_params_defaults.rpc_servers, ",").c_str());
@@ -564,6 +568,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
+            } else if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_cpu_moe.insert(params.n_cpu_moe.end(), p.begin(), p.end());
             } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -841,6 +852,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_gpu_layers.empty()) {
         params.n_gpu_layers = cmd_params_defaults.n_gpu_layers;
     }
+    if (params.n_cpu_moe.empty()) {
+        params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
+    }
     if (params.rpc_servers.empty()) {
         params.rpc_servers = cmd_params_defaults.rpc_servers;
     }
@@ -901,6 +915,7 @@ struct cmd_params_instance {
     bool               cpu_strict;
     int                poll;
     int                n_gpu_layers;
+    int                n_cpu_moe;
     std::string        rpc_servers_str;
     llama_split_mode   split_mode;
     int                main_gpu;
@@ -973,20 +988,50 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap     = use_mmap;
 
-        if (tensor_buft_overrides.empty()) {
-            mparams.tensor_buft_overrides = nullptr;
+        if (n_cpu_moe <= 0) {
+            if (tensor_buft_overrides.empty()) {
+                mparams.tensor_buft_overrides = nullptr;
+            } else {
+                GGML_ASSERT(tensor_buft_overrides.back().pattern == nullptr &&
+                            "Tensor buffer overrides not terminated with empty pattern");
+                mparams.tensor_buft_overrides = tensor_buft_overrides.data();
+            }
         } else {
-            GGML_ASSERT(tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
-            mparams.tensor_buft_overrides = tensor_buft_overrides.data();
+            static std::vector<llama_model_tensor_buft_override> merged;
+            static std::vector<std::string> patterns;
+
+            merged.clear();
+            patterns.clear();
+
+            auto first = tensor_buft_overrides.begin();
+            auto last  = tensor_buft_overrides.end();
+            if (first != last && (last - 1)->pattern == nullptr) {
+                --last;
+            }
+            merged.insert(merged.end(), first, last);
+
+            patterns.reserve((size_t) n_cpu_moe);
+            merged.reserve(merged.size() + (size_t) n_cpu_moe + 1);
+
+            for (int i = 0; i < n_cpu_moe; ++i) {
+                patterns.push_back(llm_ffn_exps_block_regex(i));
+                merged.push_back({ patterns.back().c_str(),
+                                ggml_backend_cpu_buffer_type() });
+            }
+
+            merged.push_back({ nullptr, nullptr });
+
+            mparams.tensor_buft_overrides = merged.data();
         }
 
         return mparams;
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
-               split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
-               tensor_split == other.tensor_split && vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
+        return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
+               rpc_servers_str == other.rpc_servers_str && split_mode == other.split_mode &&
+               main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
+               vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
     llama_context_params to_llama_cparams() const {
@@ -1014,6 +1059,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     // clang-format off
     for (const auto & m : params.model)
     for (const auto & nl : params.n_gpu_layers)
+    for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & rpc : params.rpc_servers)
     for (const auto & sm : params.split_mode)
     for (const auto & mg : params.main_gpu)
@@ -1051,6 +1097,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1083,6 +1130,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1115,6 +1163,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .rpc_servers  = */ rpc,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
@@ -1152,6 +1201,7 @@ struct test {
     ggml_type                type_k;
     ggml_type                type_v;
     int                      n_gpu_layers;
+    int                      n_cpu_moe;
     llama_split_mode         split_mode;
     int                      main_gpu;
     bool                     no_kv_offload;
@@ -1186,6 +1236,7 @@ struct test {
         type_k         = inst.type_k;
         type_v         = inst.type_v;
         n_gpu_layers   = inst.n_gpu_layers;
+        n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
@@ -1236,12 +1287,14 @@ struct test {
 
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
-            "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
-            "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
-            "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
+            "build_commit",   "build_number",  "cpu_info",      "gpu_info",       "backends",
+            "model_filename", "model_type",    "model_size",    "model_n_params", "n_batch",
+            "n_ubatch",       "n_threads",     "cpu_mask",      "cpu_strict",     "poll",
+            "type_k",         "type_v",        "n_gpu_layers",  "n_cpu_moe",      "split_mode",
+            "main_gpu",       "no_kv_offload", "flash_attn",    "tensor_split",   "tensor_buft_overrides",
+            "use_mmap",       "embeddings",    "no_op_offload", "n_prompt",       "n_gen",
+            "n_depth",        "test_time",     "avg_ns",        "stddev_ns",      "avg_ts",
+            "stddev_ts"
         };
         return fields;
     }
@@ -1251,8 +1304,8 @@ struct test {
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
-            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
+            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
+            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
@@ -1320,6 +1373,7 @@ struct test {
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
                                             std::to_string(n_gpu_layers),
+                                            std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
@@ -1567,6 +1621,9 @@ struct markdown_printer : public printer {
                               test::get_backend().find("BLAS") != std::string::npos;
         if (!is_cpu_backend) {
             fields.emplace_back("n_gpu_layers");
+        }
+        if (params.n_cpu_moe.size() > 1) {
+            fields.emplace_back("n_cpu_moe");
         }
         if (params.n_threads.size() > 1 || params.n_threads != cmd_params_defaults.n_threads || is_cpu_backend) {
             fields.emplace_back("n_threads");
