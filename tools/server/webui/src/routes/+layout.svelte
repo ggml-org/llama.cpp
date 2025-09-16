@@ -35,6 +35,48 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
+	// Global keyboard shortcuts
+	function handleKeydown(event: KeyboardEvent) {
+		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+		if (isCtrlOrCmd && event.key === 'k') {
+			event.preventDefault();
+			if (chatSidebar?.activateSearchMode) {
+				chatSidebar.activateSearchMode();
+				sidebarOpen = true;
+			}
+		}
+
+		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
+			event.preventDefault();
+			goto('/?new_chat=true');
+		}
+
+		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
+			event.preventDefault();
+
+			if (chatSidebar?.editActiveConversation) {
+				chatSidebar.editActiveConversation();
+			}
+		}
+	}
+
+	function handleTitleUpdateCancel() {
+		titleUpdateDialogOpen = false;
+		if (titleUpdateResolve) {
+			titleUpdateResolve(false);
+			titleUpdateResolve = null;
+		}
+	}
+
+	function handleTitleUpdateConfirm() {
+		titleUpdateDialogOpen = false;
+		if (titleUpdateResolve) {
+			titleUpdateResolve(true);
+			titleUpdateResolve = null;
+		}
+	}
+
 	$effect(() => {
 		if (isHomeRoute && !isNewChatMode) {
 			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
@@ -96,48 +138,6 @@
 			});
 		});
 	});
-
-	function handleTitleUpdateConfirm() {
-		titleUpdateDialogOpen = false;
-		if (titleUpdateResolve) {
-			titleUpdateResolve(true);
-			titleUpdateResolve = null;
-		}
-	}
-
-	function handleTitleUpdateCancel() {
-		titleUpdateDialogOpen = false;
-		if (titleUpdateResolve) {
-			titleUpdateResolve(false);
-			titleUpdateResolve = null;
-		}
-	}
-
-	// Global keyboard shortcuts
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (isCtrlOrCmd && event.key === 'k') {
-			event.preventDefault();
-			if (chatSidebar?.activateSearchMode) {
-				chatSidebar.activateSearchMode();
-				sidebarOpen = true;
-			}
-		}
-
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
-			event.preventDefault();
-			goto('/?new_chat=true');
-		}
-
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
-			event.preventDefault();
-
-			if (chatSidebar?.editActiveConversation) {
-				chatSidebar.editActiveConversation();
-			}
-		}
-	}
 </script>
 
 <ModeWatcher />
