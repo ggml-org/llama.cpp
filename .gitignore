@@ -149,5 +149,6 @@ poetry.toml
 /run-chat.sh
 .ccache/
 
-# WebUI
-/tools/server/webui-old
+# Code Workspace
+*.code-workspace
+
