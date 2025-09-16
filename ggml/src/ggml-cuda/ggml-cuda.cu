@@ -3210,6 +3210,7 @@ struct ggml_backend_cuda_device_context {
     int device;
     std::string name;
     std::string description;
+    std::string pci_bus_id;
 };
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
@@ -3234,9 +3235,12 @@ static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend
 }
 
 static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
+
     props->name        = ggml_backend_cuda_device_get_name(dev);
     props->description = ggml_backend_cuda_device_get_description(dev);
     props->type        = ggml_backend_cuda_device_get_type(dev);
+    props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_cuda_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
     bool host_buffer = getenv("GGML_CUDA_NO_PINNED") == nullptr;
@@ -3803,6 +3807,10 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 cudaDeviceProp prop;
                 CUDA_CHECK(cudaGetDeviceProperties(&prop, i));
                 dev_ctx->description = prop.name;
+
+                char pci_bus_id[16] = {};
+                snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.0", prop.pciDomainID, prop.pciBusID, prop.pciDeviceID);
+                dev_ctx->pci_bus_id = pci_bus_id;
 
                 ggml_backend_dev_t dev = new ggml_backend_device {
                     /* .iface   = */ ggml_backend_cuda_device_interface,
