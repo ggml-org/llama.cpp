@@ -105,7 +105,7 @@ export class SlotsService {
 		predicted_n: number;
 		predicted_per_second: number;
 		cache_n: number;
-		prompt_progress?: MessagePromptProgress;
+		prompt_progress?: ChatMessagePromptProgress;
 	}): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
 

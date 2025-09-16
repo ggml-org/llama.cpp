@@ -11,7 +11,7 @@
 		role: 'user' | 'assistant';
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
-		siblingInfo?: MessageSiblingInfo | null;
+		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
 			totalCount: number;

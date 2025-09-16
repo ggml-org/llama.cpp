@@ -3,7 +3,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FileTypeCategory } from '$lib/constants/supported-file-types';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 	import { supportsAudio, supportsVision } from '$lib/stores/server.svelte';
 

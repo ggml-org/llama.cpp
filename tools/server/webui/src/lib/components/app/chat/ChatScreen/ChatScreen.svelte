@@ -2,7 +2,7 @@
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
+	import { isFileTypeSupported } from '$lib/utils/file-type';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
 	import { supportsVision, supportsAudio, serverLoading } from '$lib/stores/server.svelte';
 	import {

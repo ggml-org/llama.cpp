@@ -36,7 +36,7 @@
 		onShouldBranchAfterEditChange?: (value: boolean) => void;
 		showDeleteDialog: boolean;
 		shouldBranchAfterEdit?: boolean;
-		siblingInfo?: MessageSiblingInfo | null;
+		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 		thinkingContent: string | null;
 	}

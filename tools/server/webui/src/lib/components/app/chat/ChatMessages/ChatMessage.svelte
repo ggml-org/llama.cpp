@@ -18,7 +18,7 @@
 		) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
-		siblingInfo?: MessageSiblingInfo | null;
+		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
 	let {

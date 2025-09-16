@@ -19,9 +19,9 @@ import type {
 	ChatMessageType,
 	ChatRole,
 	ChatUploadedFile,
-	MessageSiblingInfo,
-	MessagePromptProgress,
-	MessageTimings
+	ChatMessageSiblingInfo,
+	ChatMessagePromptProgress,
+	ChatMessageTimings
 } from '$lib/types/chat';
 
 import type {
@@ -33,6 +33,22 @@ import type {
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtraPdfFile
 } from '$lib/types/database';
+
+import type {
+	FileTypeCategory,
+	FileTypeImage,
+	FileTypeAudio,
+	FileTypePdf,
+	FileTypeText,
+	FileExtensionImage,
+	FileExtensionAudio,
+	FileExtensionPdf,
+	FileExtensionText,
+	MimeTypeApplication,
+	MimeTypeAudio,
+	MimeTypeImage,
+	MimeTypeText
+} from '$lib/types/files';
 
 import type {
 	SettingsConfigValue,
@@ -60,6 +76,9 @@ declare global {
 		ApiLlamaCppServerProps,
 		ApiProcessingState,
 		ChatMessageData,
+		ChatMessagePromptProgress,
+		ChatMessageSiblingInfo,
+		ChatMessageTimings,
 		ChatMessageType,
 		ChatRole,
 		ChatUploadedFile,
@@ -70,9 +89,19 @@ declare global {
 		DatabaseMessageExtraImageFile,
 		DatabaseMessageExtraTextFile,
 		DatabaseMessageExtraPdfFile,
-		MessageSiblingInfo,
-		MessagePromptProgress,
-		MessageTimings,
+		FileTypeCategory,
+		FileTypeImage,
+		FileTypeAudio,
+		FileTypePdf,
+		FileTypeText,
+		FileExtensionImage,
+		FileExtensionAudio,
+		FileExtensionPdf,
+		FileExtensionText,
+		MimeTypeApplication,
+		MimeTypeAudio,
+		MimeTypeImage,
+		MimeTypeText,
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,

@@ -1,5 +1,3 @@
-import { AudioMimeType } from '$lib/constants/supported-file-types';
-
 /**
  * AudioRecorder - Browser-based audio recording with MediaRecorder API
  *
@@ -49,7 +47,7 @@ export class AudioRecorder {
 			}
 
 			this.mediaRecorder.onstop = () => {
-				const mimeType = this.mediaRecorder?.mimeType || AudioMimeType.WAV;
+				const mimeType = this.mediaRecorder?.mimeType || MimeTypeAudio.WAV;
 				const audioBlob = new Blob(this.audioChunks, { type: mimeType });
 
 				this.cleanup();
@@ -81,14 +79,14 @@ export class AudioRecorder {
 	private initializeRecorder(stream: MediaStream): void {
 		const options: MediaRecorderOptions = {};
 
-		if (MediaRecorder.isTypeSupported(AudioMimeType.WAV)) {
-			options.mimeType = AudioMimeType.WAV;
-		} else if (MediaRecorder.isTypeSupported(AudioMimeType.WEBM_OPUS)) {
-			options.mimeType = AudioMimeType.WEBM_OPUS;
-		} else if (MediaRecorder.isTypeSupported(AudioMimeType.WEBM)) {
-			options.mimeType = AudioMimeType.WEBM;
-		} else if (MediaRecorder.isTypeSupported(AudioMimeType.MP4)) {
-			options.mimeType = AudioMimeType.MP4;
+		if (MediaRecorder.isTypeSupported(MimeTypeAudio.WAV)) {
+			options.mimeType = MimeTypeAudio.WAV;
+		} else if (MediaRecorder.isTypeSupported(MimeTypeAudio.WEBM_OPUS)) {
+			options.mimeType = MimeTypeAudio.WEBM_OPUS;
+		} else if (MediaRecorder.isTypeSupported(MimeTypeAudio.WEBM)) {
+			options.mimeType = MimeTypeAudio.WEBM;
+		} else if (MediaRecorder.isTypeSupported(MimeTypeAudio.MP4)) {
+			options.mimeType = MimeTypeAudio.MP4;
 		} else {
 			console.warn('No preferred audio format supported, using default');
 		}
@@ -191,7 +189,7 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 		}
 	}
 
-	return new Blob([arrayBuffer], { type: AudioMimeType.WAV });
+	return new Blob([arrayBuffer], { type: MimeTypeAudio.WAV });
 }
 
 /**

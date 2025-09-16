@@ -3,18 +3,7 @@
  * Ensures only compatible file types are processed based on model capabilities
  */
 
-import {
-	FileTypeCategory,
-	getFileTypeCategory,
-	ImageExtension,
-	ImageMimeType,
-	AudioExtension,
-	AudioMimeType,
-	PdfExtension,
-	ApplicationMimeType,
-	TextExtension,
-	TextMimeType
-} from '$lib/constants/supported-file-types';
+import { getFileTypeCategory } from '$lib/utils/file-type';
 import { supportsVision, supportsAudio } from '$lib/stores/server.svelte';
 
 /**
@@ -163,21 +152,21 @@ export function generateModalityAwareAcceptString(): string {
 	const acceptedMimeTypes: string[] = [];
 
 	// Always include text files and PDFs
-	acceptedExtensions.push(...Object.values(TextExtension));
-	acceptedMimeTypes.push(...Object.values(TextMimeType));
-	acceptedExtensions.push(...Object.values(PdfExtension));
-	acceptedMimeTypes.push(...Object.values(ApplicationMimeType));
+	acceptedExtensions.push(...(Object.values(FileExtensionText) as string[]));
+	acceptedMimeTypes.push(...(Object.values(MimeTypeText) as string[]));
+	acceptedExtensions.push(...(Object.values(FileExtensionPdf) as string[]));
+	acceptedMimeTypes.push(...(Object.values(MimeTypeApplication) as string[]));
 
 	// Include images only if vision is supported
 	if (hasVision) {
-		acceptedExtensions.push(...Object.values(ImageExtension));
-		acceptedMimeTypes.push(...Object.values(ImageMimeType));
+		acceptedExtensions.push(...(Object.values(FileExtensionImage) as string[]));
+		acceptedMimeTypes.push(...(Object.values(MimeTypeImage) as string[]));
 	}
 
 	// Include audio only if audio is supported
 	if (hasAudio) {
-		acceptedExtensions.push(...Object.values(AudioExtension));
-		acceptedMimeTypes.push(...Object.values(AudioMimeType));
+		acceptedExtensions.push(...(Object.values(FileExtensionAudio) as string[]));
+		acceptedMimeTypes.push(...(Object.values(MimeTypeAudio) as string[]));
 	}
 
 	return [...acceptedExtensions, ...acceptedMimeTypes].join(',');

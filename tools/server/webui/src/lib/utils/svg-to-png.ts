@@ -1,5 +1,3 @@
-import { ImageMimeType } from '$lib/constants/supported-file-types';
-
 /**
  * Convert an SVG base64 data URL to a PNG data URL
  * @param base64UrlSvg - The SVG base64 data URL to convert
@@ -35,7 +33,7 @@ export function svgBase64UrlToPngDataURL(
 				}
 				ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
-				resolve(canvas.toDataURL(ImageMimeType.PNG));
+				resolve(canvas.toDataURL(MimeTypeImage.PNG));
 			};
 
 			img.onerror = () => {
@@ -58,7 +56,7 @@ export function svgBase64UrlToPngDataURL(
  * @returns True if the file is an SVG
  */
 export function isSvgFile(file: File): boolean {
-	return file.type === ImageMimeType.SVG;
+	return file.type === MimeTypeImage.SVG;
 }
 
 /**
@@ -67,5 +65,5 @@ export function isSvgFile(file: File): boolean {
  * @returns True if the MIME type is image/svg+xml
  */
 export function isSvgMimeType(mimeType: string): boolean {
-	return mimeType === ImageMimeType.SVG;
+	return mimeType === MimeTypeImage.SVG;
 }

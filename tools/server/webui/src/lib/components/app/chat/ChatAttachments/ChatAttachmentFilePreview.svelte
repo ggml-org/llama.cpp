@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { FileTypeCategory, TextMimeType } from '$lib/constants/supported-file-types';
 	import { formatFileSize, getFileTypeLabel, getPreviewText } from '$lib/utils/file-preview';
 
 	interface Props {
@@ -29,7 +28,7 @@
 	}: Props = $props();
 </script>
 
-{#if type === TextMimeType.PLAIN || type === FileTypeCategory.TEXT}
+{#if type === MimeTypeText.PLAIN || type === FileTypeCategory.TEXT}
 	{#if readonly}
 		<!-- Readonly mode (ChatMessage) -->
 		<button

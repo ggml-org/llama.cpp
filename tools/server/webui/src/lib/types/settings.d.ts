@@ -1,5 +1,5 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import type { MessageTimings } from './chat';
+import type { ChatMessageTimings } from './chat';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -41,7 +41,7 @@ export interface SettingsChatServiceOptions {
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
-	onComplete?: (response: string, reasoningContent?: string, timings?: MessageTimings) => void;
+	onComplete?: (response: string, reasoningContent?: string, timings?: ChatMessageTimings) => void;
 	onError?: (error: Error) => void;
 }
 

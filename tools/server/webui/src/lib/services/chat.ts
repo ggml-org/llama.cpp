@@ -230,7 +230,11 @@ export class ChatService {
 	private async handleStreamResponse(
 		response: Response,
 		onChunk?: (chunk: string) => void,
-		onComplete?: (response: string, reasoningContent?: string, timings?: MessageTimings) => void,
+		onComplete?: (
+			response: string,
+			reasoningContent?: string,
+			timings?: ChatMessageTimings
+		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void
 	): Promise<void> {
@@ -246,7 +250,7 @@ export class ChatService {
 		let regularContent = '';
 		let insideThinkTag = false;
 		let hasReceivedData = false;
-		let lastTimings: MessageTimings | undefined;
+		let lastTimings: ChatMessageTimings | undefined;
 
 		try {
 			while (true) {
@@ -359,7 +363,11 @@ export class ChatService {
 	 */
 	private async handleNonStreamResponse(
 		response: Response,
-		onComplete?: (response: string, reasoningContent?: string, timings?: MessageTimings) => void,
+		onComplete?: (
+			response: string,
+			reasoningContent?: string,
+			timings?: ChatMessageTimings
+		) => void,
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
@@ -669,8 +677,8 @@ export class ChatService {
 	 * @param promptProgress - Progress data from the API response
 	 */
 	private updateProcessingState(
-		timings?: MessageTimings,
-		promptProgress?: MessagePromptProgress
+		timings?: ChatMessageTimings,
+		promptProgress?: ChatMessagePromptProgress
 	): void {
 		// Calculate tokens per second from timing data
 		const tokensPerSecond =

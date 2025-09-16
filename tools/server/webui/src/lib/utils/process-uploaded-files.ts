@@ -1,7 +1,7 @@
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory, getFileTypeCategory } from '$lib/constants/supported-file-types';
+import { getFileTypeCategory } from '$lib/utils/file-type';
 import { supportsVision } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toast } from 'svelte-sonner';

@@ -5,7 +5,7 @@
 
 	interface Props {
 		class?: string;
-		siblingInfo: MessageSiblingInfo | null;
+		siblingInfo: ChatMessageSiblingInfo | null;
 		onNavigateToSibling?: (siblingId: string) => void;
 	}
 

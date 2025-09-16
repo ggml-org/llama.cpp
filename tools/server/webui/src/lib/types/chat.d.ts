@@ -11,21 +11,21 @@ export interface ChatUploadedFile {
 	textContent?: string;
 }
 
-export interface MessageSiblingInfo {
+export interface ChatMessageSiblingInfo {
 	message: DatabaseMessage;
 	siblingIds: string[];
 	currentIndex: number;
 	totalSiblings: number;
 }
 
-export interface MessagePromptProgress {
+export interface ChatMessagePromptProgress {
 	cache: number;
 	processed: number;
 	time_ms: number;
 	total: number;
 }
 
-export interface MessageTimings {
+export interface ChatMessageTimings {
 	cache_n?: number;
 	predicted_ms?: number;
 	predicted_n?: number;

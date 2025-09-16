@@ -8,17 +8,6 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
-	import {
-		TextMimeType,
-		ImageExtension,
-		ImageMimeType,
-		AudioExtension,
-		AudioMimeType,
-		PdfExtension,
-		ApplicationMimeType,
-		TextExtension,
-		FileTypeCategory
-	} from '$lib/constants/supported-file-types';
 	import { config } from '$lib/stores/settings.svelte';
 	import {
 		AudioRecorder,
@@ -66,13 +55,15 @@
 	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
 		switch (fileType) {
 			case FileTypeCategory.IMAGE:
-				return [...Object.values(ImageExtension), ...Object.values(ImageMimeType)].join(',');
+				return [...Object.values(FileExtensionImage), ...Object.values(MimeTypeImage)].join(',');
 			case FileTypeCategory.AUDIO:
-				return [...Object.values(AudioExtension), ...Object.values(AudioMimeType)].join(',');
+				return [...Object.values(FileExtensionAudio), ...Object.values(MimeTypeAudio)].join(',');
 			case FileTypeCategory.PDF:
-				return [...Object.values(PdfExtension), ...Object.values(ApplicationMimeType)].join(',');
+				return [...Object.values(FileExtensionPdf), ...Object.values(MimeTypeApplication)].join(
+					','
+				);
 			case FileTypeCategory.TEXT:
-				return [...Object.values(TextExtension), TextMimeType.PLAIN].join(',');
+				return [...Object.values(FileExtensionText), MimeTypeText.PLAIN].join(',');
 			default:
 				return '';
 		}
@@ -132,7 +123,7 @@
 			return;
 		}
 
-		const text = event.clipboardData.getData(TextMimeType.PLAIN);
+		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
 
 		if (
 			text.length > 0 &&
@@ -142,7 +133,7 @@
 			event.preventDefault();
 
 			const textFile = new File([text], 'Pasted', {
-				type: TextMimeType.PLAIN
+				type: MimeTypeText.PLAIN
 			});
 
 			onFileUpload?.([textFile]);

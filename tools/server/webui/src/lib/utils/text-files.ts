@@ -3,16 +3,15 @@
  * Handles text file detection, reading, and validation
  */
 
-import { TextExtension } from '$lib/constants/supported-file-types';
-
 /**
  * Check if a filename indicates a text file based on its extension
  * @param filename - The filename to check
  * @returns True if the filename has a recognized text file extension
  */
 export function isTextFileByName(filename: string): boolean {
-	const textExtensions = Object.values(TextExtension);
-	return textExtensions.some((ext) => filename.toLowerCase().endsWith(ext));
+	const textExtensions = Object.values(FileExtensionText);
+
+	return textExtensions.some((ext: FileExtensionText) => filename.toLowerCase().endsWith(ext));
 }
 
 /**
@@ -23,6 +22,7 @@ export function isTextFileByName(filename: string): boolean {
 export async function readFileAsText(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = (event) => {
 			if (event.target?.result !== null && event.target?.result !== undefined) {
 				resolve(event.target.result as string);
@@ -30,7 +30,9 @@ export async function readFileAsText(file: File): Promise<string> {
 				reject(new Error('Failed to read file'));
 			}
 		};
+
 		reader.onerror = () => reject(new Error('File reading error'));
+
 		reader.readAsText(file);
 	});
 }
@@ -56,6 +58,7 @@ export function isLikelyTextFile(content: string): boolean {
 		if (charCode === 0) {
 			nullCount++;
 			suspiciousCount++;
+
 			continue;
 		}
 

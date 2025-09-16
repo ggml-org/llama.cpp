@@ -4,7 +4,6 @@
  */
 
 import { browser } from '$app/environment';
-import { ImageMimeType, ApplicationMimeType } from '$lib/constants/supported-file-types';
 import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {
@@ -117,7 +116,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 			});
 			pages.push(
 				task.promise.then(() => {
-					return canvas.toDataURL(ImageMimeType.PNG);
+					return canvas.toDataURL(MimeTypeImage.PNG);
 				})
 			);
 		}
@@ -137,7 +136,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
  * @returns True if the file is a PDF
  */
 export function isPdfFile(file: File): boolean {
-	return file.type === ApplicationMimeType.PDF;
+	return file.type === MimeTypeApplication.PDF;
 }
 
 /**
@@ -146,5 +145,5 @@ export function isPdfFile(file: File): boolean {
  * @returns True if the MIME type is application/pdf
  */
 export function isApplicationMimeType(mimeType: string): boolean {
-	return mimeType === ApplicationMimeType.PDF;
+	return mimeType === MimeTypeApplication.PDF;
 }

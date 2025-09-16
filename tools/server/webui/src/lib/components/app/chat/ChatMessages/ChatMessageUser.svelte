@@ -11,7 +11,7 @@
 		message: DatabaseMessage;
 		isEditing: boolean;
 		editedContent: string;
-		siblingInfo?: MessageSiblingInfo | null;
+		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
 			totalCount: number;

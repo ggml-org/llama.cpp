@@ -1,4 +1,4 @@
-import type { MessagePromptProgress } from './chat';
+import type { ChatMessagePromptProgress } from './chat';
 
 export interface ApiChatMessageContentPart {
 	type: 'text' | 'image_url' | 'input_audio';
@@ -163,7 +163,7 @@ export interface ApiChatCompletionStreamChunk {
 		predicted_ms?: number;
 		cache_n?: number;
 	};
-	prompt_progress?: MessagePromptProgress;
+	prompt_progress?: ChatMessagePromptProgress;
 }
 
 export interface ApiChatCompletionResponse {

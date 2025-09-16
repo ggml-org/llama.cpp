@@ -338,7 +338,7 @@ class ChatStore {
 			onComplete: async (
 				finalContent?: string,
 				reasoningContent?: string,
-				timings?: MessageTimings
+				timings?: ChatMessageTimings
 			) => {
 				slotsService.stopStreaming();
 
@@ -649,7 +649,7 @@ class ChatStore {
 				const updateData: {
 					content: string;
 					thinking?: string;
-					timings?: MessageTimings;
+					timings?: ChatMessageTimings;
 				} = {
 					content: partialThinking.remainingContent || this.currentResponse
 				};

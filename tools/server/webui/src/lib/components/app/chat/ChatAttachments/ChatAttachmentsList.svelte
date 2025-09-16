@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
+	import { getFileTypeCategory } from '$lib/utils/file-type';
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
-	import { FileTypeCategory, getFileTypeCategory } from '$lib/constants/supported-file-types';
 
 	interface Props {
 		class?: string;

@@ -145,7 +145,7 @@ export function findDescendantMessages(
 export function getMessageSiblings(
 	messages: readonly DatabaseMessage[],
 	messageId: string
-): MessageSiblingInfo | null {
+): ChatMessageSiblingInfo | null {
 	const nodeMap = new Map<string, DatabaseMessage>();
 
 	// Build node map for quick lookups
@@ -209,10 +209,10 @@ export function getMessageSiblings(
 export function getMessageDisplayList(
 	messages: readonly DatabaseMessage[],
 	leafNodeId: string
-): MessageSiblingInfo[] {
+): ChatMessageSiblingInfo[] {
 	// Get the current conversation path
 	const currentPath = filterByLeafNodeId(messages, leafNodeId, true);
-	const result: MessageSiblingInfo[] = [];
+	const result: ChatMessageSiblingInfo[] = [];
 
 	// Add sibling info for each message in the current path
 	for (const message of currentPath) {

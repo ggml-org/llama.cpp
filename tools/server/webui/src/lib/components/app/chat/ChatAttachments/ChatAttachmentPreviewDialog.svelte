@@ -3,11 +3,7 @@
 	import { FileText, Image, Music, FileIcon, Eye } from '@lucide/svelte';
 	import { convertPDFToImage } from '$lib/utils/pdf-processing';
 	import { Button } from '$lib/components/ui/button';
-	import {
-		FileTypeCategory,
-		ApplicationMimeType,
-		getFileTypeCategory
-	} from '$lib/constants/supported-file-types';
+	import { getFileTypeCategory } from '$lib/utils/file-type';
 	import { formatFileSize } from '$lib/utils/file-preview';
 
 	interface Props {
@@ -49,7 +45,7 @@
 					: attachment?.type === 'audioFile'
 						? attachment.mimeType || 'audio'
 						: attachment?.type === 'pdfFile'
-							? ApplicationMimeType.PDF
+							? MimeTypeApplication.PDF
 							: type || 'unknown')
 	);
 
@@ -72,7 +68,7 @@
 		getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image'
 	);
 
-	let isPdf = $derived(displayType === ApplicationMimeType.PDF);
+	let isPdf = $derived(displayType === MimeTypeApplication.PDF);
 
 	let isText = $derived(
 		getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text'
@@ -121,7 +117,7 @@
 						byteNumbers[i] = byteCharacters.charCodeAt(i);
 					}
 					const byteArray = new Uint8Array(byteNumbers);
-					file = new File([byteArray], displayName, { type: ApplicationMimeType.PDF });
+					file = new File([byteArray], displayName, { type: MimeTypeApplication.PDF });
 				}
 			}
 
