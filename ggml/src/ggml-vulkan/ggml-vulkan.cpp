@@ -5,7 +5,13 @@
 #include "ggml-cpu.h"
 #endif
 
+// See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+
 #include <vulkan/vulkan.hpp>
+
+// See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 #include <algorithm>
 #include <cmath>
@@ -121,6 +127,8 @@ struct vk_pipeline_struct {
     bool needed {};
     // set to true when the shader has been compiled
     bool compiled {};
+    // number of registers used, extracted from pipeline executable properties
+    uint32_t register_count {};
 };
 
 typedef std::shared_ptr<vk_pipeline_struct> vk_pipeline;
@@ -428,6 +436,8 @@ struct vk_device_struct {
     uint32_t coopmat_int_k;
 
     bool coopmat2;
+
+    bool pipeline_executable_properties_support {};
 
     size_t idx;
 
@@ -1221,8 +1231,6 @@ static std::string format_size(size_t size) {
     return oss.str();
 }
 
-static std::mutex log_mutex;
-
 class vk_memory_logger {
 public:
     vk_memory_logger(): total_device(0), total_host(0) {}
@@ -1412,6 +1420,8 @@ struct ggml_backend_vk_buffer_context {
 };
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
+static std::mutex log_mutex;
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     std::lock_guard<std::mutex> guard(log_mutex);
     vk_buffer buf = buf_ref.lock();
@@ -1601,6 +1611,20 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         duoni.pObjectName = pipeline->name.c_str();
         duoni.objectHandle = /*reinterpret_cast*/(uint64_t)(static_cast<VkPipeline>(pipeline->pipeline));
         vk_instance.pfn_vkSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+    }
+
+    if (device->pipeline_executable_properties_support) {
+        vk::PipelineExecutableInfoKHR executableInfo;
+        executableInfo.pipeline = pipeline->pipeline;
+
+        auto statistics = device->device.getPipelineExecutableStatisticsKHR(executableInfo);
+        for (auto & s : statistics) {
+            // "Register Count" is reported by NVIDIA drivers.
+            if (strcmp(s.name, "Register Count") == 0) {
+                VK_LOG_DEBUG(pipeline->name << " " << s.name << ": " << s.value.u64 << " registers");
+                pipeline->register_count = (uint32_t)s.value.u64;
+            }
+        }
     }
 
     {
@@ -1937,7 +1961,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
 
-    for (auto &req_flags : req_flags_list) {
+    for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
+        const auto & req_flags = *it;
+
         uint32_t memory_type_index = find_properties(&mem_props, &mem_req, req_flags);
 
         if (memory_type_index == UINT32_MAX) {
@@ -1950,10 +1976,15 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             break;
         } catch (const vk::SystemError& e) {
             // loop and retry
+            // during last attempt throw the exception
+            if (it + 1 == req_flags_list.end()) {
+                device->device.destroyBuffer(buf->buffer);
+                throw e;
+            }
         }
     }
 
-    if (buf->device_memory == VK_NULL_HANDLE) {
+    if (!buf->device_memory) {
         device->device.destroyBuffer(buf->buffer);
         throw vk::OutOfDeviceMemoryError("No suitable memory type found");
     }
@@ -3387,7 +3418,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_wg512, "soft_max_f32_wg512", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16, "soft_max_f32_f16", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16_wg512, "soft_max_f32_f16_wg512", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_soft_max_back_f32, "soft_max_back_f32", soft_max_back_f32_len, soft_max_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_back_f32, "soft_max_back_f32", soft_max_back_f32_len, soft_max_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_rope_norm_f32, "rope_norm_f32", rope_norm_f32_len, rope_norm_f32_data, "main", 4, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_rope_neox_f32, "rope_neox_f32", rope_neox_f32_len, rope_neox_f32_data, "main", 4, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
@@ -3603,6 +3634,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool amd_shader_core_properties2 = false;
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
+        bool pipeline_executable_properties_support = false;
         device->coopmat_support = false;
         device->integer_dot_product = false;
         bool bfloat16_support = false;
@@ -3645,6 +3677,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                        !getenv("GGML_VK_DISABLE_BFLOAT16")) {
                 bfloat16_support = true;
 #endif
+            } else if (strcmp("VK_KHR_pipeline_executable_properties", properties.extensionName) == 0) {
+                pipeline_executable_properties_support = true;
             }
         }
 
@@ -3736,6 +3770,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
+#ifdef __APPLE__
+        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
+        if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            device->subgroup_arithmetic = false;
+        }
+#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
@@ -3865,7 +3905,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_shader_integer_dot_product");
         }
 
+        VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pep_features {};
+        pep_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+        if (pipeline_executable_properties_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&pep_features;
+            last_struct = (VkBaseOutStructure *)&pep_features;
+            device_extensions.push_back("VK_KHR_pipeline_executable_properties");
+        }
+
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+
+        device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
         device->fp16 = device->fp16 && vk12_features.shaderFloat16;
 
@@ -4382,6 +4432,9 @@ static void ggml_vk_instance_init() {
     }
     VK_LOG_DEBUG("ggml_vk_instance_init()");
 
+    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
     uint32_t api_version = vk::enumerateInstanceVersion();
 
     if (api_version < VK_API_VERSION_1_2) {
@@ -4449,6 +4502,9 @@ static void ggml_vk_instance_init() {
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
+    // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
+
     std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
@@ -4484,7 +4540,7 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
                 // Check if there are two physical devices corresponding to the same GPU
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
@@ -4554,7 +4610,7 @@ static void ggml_vk_instance_init() {
             }
         }
 
-        // If no dedicated GPUs found, fall back to the first non-CPU device.
+        // If no GPUs found, fall back to the first non-CPU device.
         // If only CPU devices are available, return without devices.
         if (vk_instance.device_indices.empty()) {
             for (size_t i = 0; i < devices.size(); i++) {
@@ -9139,7 +9195,7 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
 static void ggml_vk_soft_max_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
     float * op_params = (float *)dst->op_params;
-    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SOFT_MAX_BACK, { (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], op_params[0], op_params[1] }, dryrun);
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SOFT_MAX_BACK, { (uint32_t)src0->ne[0], (uint32_t)ggml_nrows(src0), op_params[0], op_params[1] }, dryrun);
 }
 
 static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, bool backprop, bool dryrun = false) {
@@ -12065,12 +12121,63 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     }
 }
 
+static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+
+    vk::PhysicalDeviceProperties2 props = {};
+    device.getProperties2(&props);
+
+    return props.properties.deviceType;
+}
+
+static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+
+    const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+    bool ext_support = false;
+
+    for (const auto& properties : ext_props) {
+        if (strcmp("VK_EXT_pci_bus_info", properties.extensionName) == 0) {
+            ext_support = true;
+            break;
+        }
+    }
+
+    if (!ext_support) {
+        return "";
+    }
+
+    vk::PhysicalDeviceProperties2 props = {};
+    vk::PhysicalDevicePCIBusInfoPropertiesEXT pci_bus_info = {};
+
+    props.pNext = &pci_bus_info;
+
+    device.getProperties2(&props);
+
+    const uint32_t pci_domain = pci_bus_info.pciDomain;
+    const uint32_t pci_bus = pci_bus_info.pciBus;
+    const uint32_t pci_device = pci_bus_info.pciDevice;
+    const uint8_t pci_function = (uint8_t) pci_bus_info.pciFunction; // pci function is between 0 and 7, prevent printf overflow warning
+
+    char pci_bus_id[16] = {};
+    snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.%x", pci_domain, pci_bus, pci_device, pci_function);
+
+    return std::string(pci_bus_id);
+}
+
 //////////////////////////
 
 struct ggml_backend_vk_device_context {
     size_t device;
     std::string name;
     std::string description;
+    bool is_integrated_gpu;
+    std::string pci_bus_id;
 };
 
 static const char * ggml_backend_vk_device_get_name(ggml_backend_dev_t dev) {
@@ -12099,14 +12206,18 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(gg
 }
 
 static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_dev_t dev) {
-    UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_GPU;
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+
+    return ctx->is_integrated_gpu ? GGML_BACKEND_DEVICE_TYPE_IGPU : GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+
     props->name        = ggml_backend_vk_device_get_name(dev);
     props->description = ggml_backend_vk_device_get_description(dev);
     props->type        = ggml_backend_vk_device_get_type(dev);
+    props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ false,
@@ -12373,8 +12484,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
 
                 if (
-                    src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32 ||
-                    src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32
+                    (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32) ||
+                    (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32)
                 ) {
                     return true;
                 }
@@ -12539,6 +12650,8 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                 ctx->device = i;
                 ctx->name = GGML_VK_NAME + std::to_string(i);
                 ctx->description = desc;
+                ctx->is_integrated_gpu = ggml_backend_vk_get_device_type(i) == vk::PhysicalDeviceType::eIntegratedGpu;
+                ctx->pci_bus_id = ggml_backend_vk_get_device_pci_id(i);
                 devices.push_back(new ggml_backend_device {
                     /* .iface   = */ ggml_backend_vk_device_i,
                     /* .reg     = */ reg,
@@ -13025,16 +13138,16 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
     } else if (tensor->op == GGML_OP_IM2COL_3D) {
         const int32_t s0 = tensor->op_params[0];
         const int32_t s1 = tensor->op_params[1];
-        const int32_t s1 = tensor->op_params[2];
+        const int32_t s2 = tensor->op_params[2];
         const int32_t p0 = tensor->op_params[3];
         const int32_t p1 = tensor->op_params[4];
-        const int32_t p1 = tensor->op_params[5];
+        const int32_t p2 = tensor->op_params[5];
         const int32_t d0 = tensor->op_params[6];
         const int32_t d1 = tensor->op_params[7];
-        const int32_t d1 = tensor->op_params[8];
+        const int32_t d2 = tensor->op_params[8];
         const int32_t IC = tensor->op_params[9];
 
-        tensor_clone = ggml_im2col(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
+        tensor_clone = ggml_im2col_3d(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
     } else if (tensor->op == GGML_OP_TIMESTEP_EMBEDDING) {
         const int32_t dim = tensor->op_params[0];
         const int32_t max_period = tensor->op_params[1];
