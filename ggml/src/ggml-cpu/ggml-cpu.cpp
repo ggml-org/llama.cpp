@@ -124,7 +124,7 @@ static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(ggml_backend
     cpu_plan->cgraph = *cgraph; // FIXME: deep copy
 
     if (cpu_plan->cplan.work_size > 0) {
-        cpu_plan->cplan.work_data = new uint8_t[cpu_plan->cplan.work_size];
+        cpu_plan->cplan.work_data = (uint8_t*)ggml_numa_alloc_work_buffer(cpu_plan->cplan.work_size);
         if (cpu_plan->cplan.work_data == NULL) {
             delete cpu_plan;
             return NULL;
@@ -140,7 +140,7 @@ static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(ggml_backend
 static void ggml_backend_cpu_graph_plan_free(ggml_backend_t backend, ggml_backend_graph_plan_t plan) {
     struct ggml_backend_plan_cpu * cpu_plan = (struct ggml_backend_plan_cpu *)plan;
 
-    delete[] cpu_plan->cplan.work_data;
+    ggml_numa_free_work_buffer(cpu_plan->cplan.work_data);
     delete cpu_plan;
 
     GGML_UNUSED(backend);
@@ -631,6 +631,9 @@ static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const ch
     }
     if (strcmp(name, "ggml_backend_cpu_is_numa") == 0) {
         return (void *)ggml_is_numa;
+    }
+    if (strcmp(name, "ggml_backend_cpu_numa_get_strategy") == 0) {
+        return (void *)ggml_numa_get_strategy;
     }
 
     // threadpool - TODO:  move to ggml-base

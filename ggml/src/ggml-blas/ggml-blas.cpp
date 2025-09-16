@@ -70,7 +70,7 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
 
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
-                const void  *       x      = (char *)  src0->data + i02*nb02          + i03*nb03;
+                const void  *       x      = (char *)  tensor_data(src0) + i02*nb02          + i03*nb03;
                       float * const wplane = (float *) wdata      + i02*ne_plane      + i03*ne02*ne_plane;
 
                 const int min_cols_per_thread = 4096;
@@ -132,9 +132,9 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
             const int64_t i03 = i13/r3;
             const int64_t i02 = i12/r2;
 
-            const float * x = (float *) ((char *) src0->data + i02*nb02 + i03*nb03);
-            const float * y = (float *) ((char *) src1->data + i12*nb12 + i13*nb13);
-                  float * d = (float *) ((char *)  dst->data + i12*nb2  + i13*nb3);
+            const float * x = (float *) ((char *) tensor_data(src0) + i02*nb02 + i03*nb03);
+            const float * y = (float *) ((char *) tensor_data(src1) + i12*nb12 + i13*nb13);
+                  float * d = (float *) ((char *)  tensor_data(dst) + i12*nb2  + i13*nb3);
 
             if (type != GGML_TYPE_F32) {
                 x = (float *) wdata + i02*ne_plane + i03*ne02*ne_plane;
@@ -183,7 +183,7 @@ static void ggml_backend_blas_out_prod(ggml_backend_blas_context * ctx, struct g
     // c: (m,n)
     //
     // However, if ggml_is_transposed(src1) is true, then
-    // src1->data already contains a transposed version, so sgemm mustn't
+    // tensor_data(src1) already contains a transposed version, so sgemm mustn't
     // transpose it further.
 
     int n = src0->ne[0];
@@ -201,9 +201,9 @@ static void ggml_backend_blas_out_prod(ggml_backend_blas_context * ctx, struct g
         lda = k;
     }
 
-    float * a = (float *) ((char *) src1->data);
-    float * b = (float *) ((char *) src0->data);
-    float * c = (float *) ((char *) dst->data);
+    float * a = (float *) ((char *) tensor_data(src1));
+    float * b = (float *) ((char *) tensor_data(src0));
+    float * c = (float *) ((char *) tensor_data(dst));
 
     cblas_sgemm(CblasRowMajor, transposeA, CblasNoTrans, m, n, k, 1.0, a, lda, b, n, 0.0, c, n);
 

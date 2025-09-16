@@ -1056,7 +1056,7 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
         }
         std::vector<char> data_orig(nbytes);
         ggml_backend_tensor_get(t_orig, data_orig.data(), 0, nbytes);
-        if (!std::equal(data_orig.data(), data_orig.data() + nbytes, reinterpret_cast<const char *>(t_read->data))) {
+        if (!std::equal(data_orig.data(), data_orig.data() + nbytes, reinterpret_cast<const char *>(tensor_data(t_read)))) {
             ok = false;
         }
 

@@ -43,9 +43,9 @@ static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
 // Always returns the base offset of a tensor, regardless of views.
 static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
     if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) webgpu_ptr_base;
+        return (uint8_t *) tensor->tensor_data(view_src) - (uint8_t *) webgpu_ptr_base;
     }
-    return (uint8_t *) tensor->data - (uint8_t *) webgpu_ptr_base;
+    return (uint8_t *) tensor_data(tensor) - (uint8_t *) webgpu_ptr_base;
 }
 
 /* Struct definitions */

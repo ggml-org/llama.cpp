@@ -65,6 +65,9 @@ struct cpu_params {
 
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
+int32_t cpu_detect_physical_cores_topology(); // Detect actual physical cores using CPU topology
+bool cpu_get_physical_cores_topology(std::vector<int> & physical_cores); // Get list of physical core IDs
+bool cpu_mask_set_physical_cores_with_hyperthreading(bool(&boolmask)[GGML_MAX_N_THREADS]); // Set mask to include physical cores + hyperthread siblings
 
 //
 // Common params

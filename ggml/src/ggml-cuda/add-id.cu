@@ -41,10 +41,10 @@ void ggml_cuda_op_add_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(nb10 == sizeof(float));
     GGML_ASSERT(nb20 == sizeof(int32_t));
 
-    const float * src0_d = (const float *)src0->data;
-    const float * src1_d = (const float *)src1->data;
-    const int32_t * src2_d = (const int32_t *)src2->data;
-    float * dst_d = (float *)dst->data;
+    const float * src0_d = (const float *)tensor_data(src0);
+    const float * src1_d = (const float *)tensor_data(src1);
+    const int32_t * src2_d = (const int32_t *)tensor_data(src2);
+    float * dst_d = (float *)tensor_data(dst);
 
     int threads = std::min((int)ne00, 768); // cols
     dim3 blocks(ne01, ne02); // n_experts_used, n_tokens

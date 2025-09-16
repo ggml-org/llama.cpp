@@ -151,7 +151,7 @@ static void ggml_zdnn_mul_mat_op(ggml_backend_zdnn_context * ctx, const ggml_ten
     ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));
     // TODO: Remove in the future as we are currently DLF16 -> FP32 then in the next op, FP32 -> DLF16 again. Inefficient.
-    ZDNN_CHECK(zdnn_transform_origtensor(&output_extra->ztensor, output->data));
+    ZDNN_CHECK(zdnn_transform_origtensor(&output_extra->ztensor, tensor_data(output)));
 
     GGML_UNUSED(ctx);
     GGML_UNUSED(weights_rows);
@@ -376,7 +376,7 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
     int buffer_idx = ctx->n_buffers;
 
     std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
-    zdnn_buffer->data = tensor->data;
+    tensor_set_data(zdnn_buffer, tensor_data(tensor);
     zdnn_buffer->size = tsize;
     zdnn_buffer->extra = nullptr;
     snprintf(zdnn_buffer->name, GGML_MAX_NAME, "%s", tensor->name);
@@ -388,7 +388,7 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
         case GGML_OP_MUL_MAT:
             {
                 std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_bias_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
-                zdnn_bias_buffer->data = (void *)calloc(tensor->ne[0], ggml_element_size(tensor));
+                tensor_set_data(zdnn_bias_buffer, (void *)calloc(tensor->ne[0], ggml_element_size(tensor));
                 zdnn_bias_buffer->size = ggml_element_size(tensor) * tensor->ne[0];
                 snprintf(zdnn_bias_buffer->name, GGML_MAX_NAME, "%.*s (bias)",
                          GGML_MAX_NAME - (int)sizeof(" (bias)"), tensor->name);
@@ -399,7 +399,7 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
                                         zdnn_bias_buffer->ztensor,
                                         tensor, bias_dim, ZDNN_1D);
 
-                ggml_zdnn_load_tensor(zdnn_bias_buffer->ztensor, zdnn_bias_buffer->data);
+                ggml_zdnn_load_tensor(zdnn_bias_buffer->ztensor, tensor_data(zdnn_bias_buffer));
                 zdnn_buffer->extra = zdnn_bias_buffer.get();
 
                 ctx->buffers.push_back(std::move(zdnn_bias_buffer));
@@ -421,26 +421,26 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
 }
 
 static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-    memset((char *)tensor->data + offset, value, size);
+    memset((char *)tensor_data(tensor) + offset, value, size);
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    memcpy((char *)tensor->data + offset, data, size);
+    memcpy((char *)tensor_data(tensor) + offset, data, size);
 
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
 
     // Fixes the LLAMA_SET_ROWS bug
     // see: https://github.com/ggml-org/llama.cpp/issues/15414
     if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE && extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
-    if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
+    if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor_data(tensor));
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_zdnn_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    memcpy(data, (const char *)tensor->data + offset, size);
+    memcpy(data, (const char *)tensor_data(tensor) + offset, size);
 
     GGML_UNUSED(buffer);
 }
@@ -495,7 +495,7 @@ static ggml_backend_buffer_t ggml_backend_zdnn_buffer_type_alloc_buffer(ggml_bac
 
     if (ctx->all_data != NULL) {
         std::unique_ptr<ggml_backend_zdnn_buffer> zdnn_buffer = std::make_unique<ggml_backend_zdnn_buffer>();
-        zdnn_buffer->data = ctx->all_data;
+        tensor_set_data(zdnn_buffer, ctx->all_data;
         zdnn_buffer->size = size_aligned;
         ctx->buffers.push_back(std::move(zdnn_buffer));
     }

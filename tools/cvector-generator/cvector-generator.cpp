@@ -81,8 +81,8 @@ struct callback_data {
         // copy tensor data
         auto n_bytes = ggml_nbytes(t);
         struct ggml_tensor * t_layer = ggml_new_tensor_2d(ctx_ggml, t->type, t->ne[0], t->ne[1]);
-        t_layer->data = malloc(n_bytes); // TODO @ngxson : get rid of this malloc somehow
-        ggml_backend_tensor_get(t, t_layer->data, 0, n_bytes);
+        tensor_set_data(t_layer, malloc(n_bytes)); // TODO @ngxson : get rid of this malloc somehow
+        ggml_backend_tensor_get(t, tensor_data(t_layer), 0, n_bytes);
         ggml_set_name(t_layer, ggml_get_name(t));
         //print_debug_tensor(t_layer);
 
@@ -98,8 +98,8 @@ struct callback_data {
     // NOTE: final layer is ignored. we only have (n_layers - 1) to process
     std::vector<struct ggml_tensor *> calc_diff() {
         for (float il = 0; il < v_pos.size(); il++) {
-            float * a = (float *) v_pos[il]->data;
-            float * b = (float *) v_neg[il]->data;
+            float * a = (float *) tensor_data(v_pos[il]);
+            float * b = (float *) tensor_data(v_neg[il]);
             size_t n_elem = ggml_nelements(v_pos[il]);
             for (size_t j = 0; j < n_elem; j++) {
                 a[j] -= b[j];
@@ -141,7 +141,7 @@ struct callback_data {
         struct ggml_tensor * diff_filtered = ggml_new_tensor_2d(
             ctx_ggml, GGML_TYPE_F32, n_embd, n_nonzero_rows);
         ggml_format_name(diff_filtered, "diff_filtered_%s", a->name);
-        diff_filtered->data = malloc(ggml_nbytes(diff_filtered));
+        tensor_set_data(diff_filtered, malloc(ggml_nbytes(diff_filtered)));
 
         // copy non-zero rows
         for (int dest_row = 0; dest_row < n_nonzero_rows; dest_row++) {
@@ -159,9 +159,9 @@ struct callback_data {
 
     // we don't implement destructor, because we want to reuse callback_data. we just want to free the tensors
     void reset() {
-        for (auto ptr : v_pos) free(ptr->data);
-        for (auto ptr : v_neg) free(ptr->data);
-        for (auto ptr : v_diff_filtered) free(ptr->data);
+        for (auto ptr : v_pos) free(tensor_data(ptr));
+        for (auto ptr : v_neg) free(tensor_data(ptr));
+        for (auto ptr : v_diff_filtered) free(tensor_data(ptr));
         v_pos.clear();
         v_neg.clear();
         v_diff_filtered.clear();
@@ -208,7 +208,7 @@ struct train_context {
             std::vector<uint8_t> empty;
             v_diff_tmp.push_back(empty);
             auto t = ggml_new_tensor_1d(ctx_ggml, GGML_TYPE_F32, n_embd);
-            t->data = malloc(ggml_nbytes(t)); // TODO: get rid of malloc if possible
+            tensor_set_data(t, malloc(ggml_nbytes(t))); // TODO: get rid of malloc if possible
             v_final.push_back(t);
         }
     }
@@ -221,7 +221,7 @@ struct train_context {
             auto & diff_tmp = v_diff_tmp[il];
             size_t curr_size = diff_tmp.size();
             diff_tmp.resize(curr_size + ggml_nbytes(t));
-            memcpy(diff_tmp.data() + curr_size, t->data, ggml_nbytes(t));
+            memcpy(diff_tmp.data() + curr_size, tensor_data(t), ggml_nbytes(t));
         }
     }
 
@@ -238,7 +238,7 @@ struct train_context {
                 ? ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_rows, n_embd)
                 : ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_embd, n_rows);
             ggml_set_name(diff, (std::string("diff_") + std::to_string(il)).c_str());
-            diff->data = malloc(ggml_nbytes(diff)); // TODO: get rid of this malloc if possible
+            tensor_set_data(diff, malloc(ggml_nbytes(diff))); // TODO: get rid of this malloc if possible
             if (transpose) {
                 // copy data & transpose
                 float * arr = (float *) diff_tmp.data();
@@ -250,7 +250,7 @@ struct train_context {
                 }
             } else {
                 // only copy
-                memcpy(diff->data, diff_tmp.data(), ggml_nbytes(diff));
+                memcpy(tensor_data(diff), diff_tmp.data(), ggml_nbytes(diff));
             }
             v_diff.push_back(diff);
             print_debug_tensor(diff);
@@ -260,8 +260,8 @@ struct train_context {
     }
 
     ~train_context() {
-        for (auto ptr : v_final) free(ptr->data);
-        for (auto ptr : v_diff) free(ptr->data);
+        for (auto ptr : v_final) free(tensor_data(ptr));
+        for (auto ptr : v_diff) free(tensor_data(ptr));
         // no need to free v_diff_tmp, since we didn't use malloc
         ggml_free(ctx_ggml);
     }

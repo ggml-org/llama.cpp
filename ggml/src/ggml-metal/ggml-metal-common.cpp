@@ -61,8 +61,8 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
         // ref: https://github.com/ggml-org/llama.cpp/pull/15966
         mr = {
             /*.pb =*/ (uint64_t) tensor->buffer,
-            /*.p0 =*/ (uint64_t) tensor->data,
-            /*.p1 =*/ (uint64_t) tensor->data + ggml_backend_buft_get_alloc_size(tensor->buffer->buft, tensor),
+            /*.p0 =*/ (uint64_t) tensor_data(tensor),
+            /*.p1 =*/ (uint64_t) tensor_data(tensor) + ggml_backend_buft_get_alloc_size(tensor->buffer->buft, tensor),
             /*.pt =*/ pt,
         };
     } else {

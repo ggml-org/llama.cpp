@@ -222,9 +222,9 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(        nb0        == ts_dst);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
 
-    const char  * src0_d = (const char  *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       *  dst_d = (float       *)  dst->data;
+    const char  * src0_d = (const char  *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float       *  dst_d = (float       *)  tensor_data(dst);
 
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
@@ -233,7 +233,7 @@ void ggml_cuda_mul_mat_q(
         if (size_alloc > size_data) {
             GGML_ASSERT(ggml_is_contiguously_allocated(src0));
             GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+            CUDA_CHECK(cudaMemsetAsync((char *) tensor_data(src0) + size_data, 0, size_alloc - size_data, stream));
         }
     }
 
@@ -295,31 +295,31 @@ void ggml_cuda_mul_mat_q(
 
         switch (n_expert_used) {
             case  2:
-                launch_mmq_ids_helper< 2> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper< 2> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  4:
-                launch_mmq_ids_helper< 4> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper< 4> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  6:
-                launch_mmq_ids_helper< 6> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper< 6> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  8:
-                launch_mmq_ids_helper< 8> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper< 8> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case 16:
-                launch_mmq_ids_helper<16> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper<16> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case 32:
-                launch_mmq_ids_helper<32> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper<32> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             default:
-                launch_mmq_ids_helper< 0> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                launch_mmq_ids_helper< 0> ((const int32_t *) tensor_data(ids), ids_src1.get(), ids_dst.get(), expert_bounds.get(),
                     ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
         }

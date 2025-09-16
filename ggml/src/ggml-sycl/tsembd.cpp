@@ -59,8 +59,8 @@ static void timestep_embedding_f32_sycl(
 void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     const ggml_tensor *  src0   = dst->src[0];
-    const float * src0_d = (const float *)src0->data;
-    float * dst_d = (float *)dst->data;
+    const float * src0_d = (const float *)tensor_data(src0);
+    float * dst_d = (float *)tensor_data(dst);
     dpct::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

@@ -1398,9 +1398,9 @@ static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
 static uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
     if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) vk_ptr_base;
+        return (uint8_t *) tensor->tensor_data(view_src) - (uint8_t *) vk_ptr_base;
     }
-    return (uint8_t *) tensor->data - (uint8_t *) vk_ptr_base;
+    return (uint8_t *) tensor_data(tensor) - (uint8_t *) vk_ptr_base;
 }
 
 struct ggml_backend_vk_buffer_context {
@@ -5215,7 +5215,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
     size_t buf_offset = 0;
-    ggml_vk_host_get(ctx->device, tensor->data, buf, buf_offset);
+    ggml_vk_host_get(ctx->device, tensor_data(tensor), buf, buf_offset);
 
     const uint64_t ne0 = tensor->ne[0];
     const uint64_t ne1 = tensor->ne[1];
@@ -5283,16 +5283,16 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
         for (uint64_t i2 = 0; i2 < ne2; i2++) {
             // Find longest contiguous slice
             if (ne1*nb1 == dstnb2) {
-                deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2, dstnb2, &subctx->in_memcpys);
+                deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2, (const uint8_t *) tensor_data(tensor) + buf_offset + i3*nb3 + i2*nb2, dstnb2, &subctx->in_memcpys);
             } else {
                 for (uint64_t i1 = 0; i1 < ne1; i1++) {
                     if (ne0*nb0/bs == dstnb1) {
-                        deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2 + i1*nb1, dstnb1, &subctx->in_memcpys);
+                        deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, (const uint8_t *) tensor_data(tensor) + buf_offset + i3*nb3 + i2*nb2 + i1*nb1, dstnb1, &subctx->in_memcpys);
                     } else {
                         const uint64_t s_off = buf_offset + i3*nb3 + i2*nb2 + i1*nb1;
                         const uint64_t d_off = i3*dstnb3 + i2*dstnb2 + i1*dstnb1;
                         for (uint64_t i0 = 0; i0 < ne0; i0++) {
-                            deferred_memcpy((uint8_t *)staging->ptr + d_off + i0*dstnb0, (const uint8_t *) tensor->data + s_off + i0*nb0, dstnb0, &subctx->in_memcpys);
+                            deferred_memcpy((uint8_t *)staging->ptr + d_off + i0*dstnb0, (const uint8_t *) tensor_data(tensor) + s_off + i0*nb0, dstnb0, &subctx->in_memcpys);
                         }
                     }
                 }
@@ -5909,8 +5909,8 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     bool src1_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src0->data, d_Qx, qx_buf_offset);
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src0), d_Qx, qx_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
         src0_uma = d_Qx != nullptr;
         src1_uma = d_Qy != nullptr;
     }
@@ -6226,8 +6226,8 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     bool src1_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src0->data, d_Qx, qx_buf_offset);
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src0), d_Qx, qx_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
         src0_uma = d_Qx != nullptr;
         src1_uma = d_Qy != nullptr;
     }
@@ -6462,7 +6462,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
     bool src1_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
         src1_uma = d_Qy != nullptr;
     }
 
@@ -6559,7 +6559,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     bool src1_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
         src1_uma = d_Qy != nullptr;
     }
 
@@ -6677,9 +6677,9 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     bool ids_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src0->data, d_Qx, qx_buf_offset);
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
-        ggml_vk_host_get(ctx->device, ids->data, d_ids, ids_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src0), d_Qx, qx_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(ids), d_ids, ids_buf_offset);
         src0_uma = d_Qx != nullptr;
         src1_uma = d_Qy != nullptr;
         ids_uma = d_ids != nullptr;
@@ -6913,9 +6913,9 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     bool ids_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src0->data, d_Qx, qx_buf_offset);
-        ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
-        ggml_vk_host_get(ctx->device, ids->data, d_ids, ids_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src0), d_Qx, qx_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src1), d_Qy, qy_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(ids), d_ids, ids_buf_offset);
         src0_uma = d_Qx != nullptr;
         src1_uma = d_Qy != nullptr;
         ids_uma = d_ids != nullptr;
@@ -7354,20 +7354,20 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     bool Q_uma = false, K_uma = false, V_uma = false, D_uma = false, M_uma = false, S_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, q->data, d_Q, q_buf_offset);
-        ggml_vk_host_get(ctx->device, k->data, d_K, k_buf_offset);
-        ggml_vk_host_get(ctx->device, v->data, d_V, v_buf_offset);
-        ggml_vk_host_get(ctx->device, dst->data, d_D, d_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(q), d_Q, q_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(k), d_K, k_buf_offset);
+        ggml_vk_host_get(ctx->device, v->data(), d_V, v_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(dst), d_D, d_buf_offset);
         Q_uma = d_Q != nullptr;
         K_uma = d_K != nullptr;
         V_uma = d_V != nullptr;
         D_uma = d_D != nullptr;
         if (mask) {
-            ggml_vk_host_get(ctx->device, mask->data, d_M, m_buf_offset);
+            ggml_vk_host_get(ctx->device, tensor_data(mask), d_M, m_buf_offset);
             M_uma = d_M != nullptr;
         }
         if (sinks) {
-            ggml_vk_host_get(ctx->device, sinks->data, d_S, s_buf_offset);
+            ggml_vk_host_get(ctx->device, tensor_data(sinks), d_S, s_buf_offset);
             S_uma = d_S != nullptr;
         }
     }
@@ -8123,14 +8123,14 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     bool src2_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, src0->data, d_X, x_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(src0), d_X, x_buf_offset);
         src0_uma = d_X != nullptr;
         if (use_src1) {
-            ggml_vk_host_get(ctx->device, src1->data, d_Y, y_buf_offset);
+            ggml_vk_host_get(ctx->device, tensor_data(src1), d_Y, y_buf_offset);
             src1_uma = d_Y != nullptr;
         }
         if (use_src2) {
-            ggml_vk_host_get(ctx->device, src2->data, d_Z, z_buf_offset);
+            ggml_vk_host_get(ctx->device, tensor_data(src2), d_Z, z_buf_offset);
             src2_uma = d_Z != nullptr;
         }
     }
@@ -8712,7 +8712,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
             srcs_uma[i] = d_srcs[i] != nullptr;
         }
 
-        ggml_vk_host_get(ctx->device, dst->data, d_D, dst_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(dst), d_D, dst_offset);
         dst_uma = d_D != nullptr;
     }
 
@@ -8844,11 +8844,11 @@ static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_cont
     bool X_uma = false, G_uma = false, GM_uma = false, GV_uma = false, P_uma = false;
 
     if (ctx->device->uma) {
-        ggml_vk_host_get(ctx->device, x->data, d_X, x_offset);
-        ggml_vk_host_get(ctx->device, g->data, d_G, g_offset);
-        ggml_vk_host_get(ctx->device, gm->data, d_GM, gm_offset);
-        ggml_vk_host_get(ctx->device, gv->data, d_GV, gv_offset);
-        ggml_vk_host_get(ctx->device, p->data, d_P, p_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(x), d_X, x_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(g), d_G, g_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(gm), d_GM, gm_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(gv), d_GV, gv_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(p), d_P, p_offset);
 
         X_uma = d_X != nullptr;
         G_uma = d_G != nullptr;
@@ -9764,9 +9764,9 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     ggml_tensor * src1_ggml = ggml_new_tensor_3d(ggml_ctx, src1_type, k, n, batch);
     ggml_tensor * tensor_ggml = ggml_mul_mat(ggml_ctx, src0_ggml, src1_ggml);
 
-    src0_ggml->data = x;
-    src1_ggml->data = y;
-    tensor_ggml->data = d_chk;
+    tensor_set_data(src0_ggml, x;
+    tensor_set_data(src1_ggml, y;
+    tensor_set_data(tensor_ggml, d_chk;
 
     ggml_cgraph * cgraph = ggml_new_graph(ggml_ctx);
     ggml_build_forward_expand(cgraph, tensor_ggml);
@@ -9857,9 +9857,9 @@ static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, int i0, int i1
             if (idx0 >= 0 && idx0 < tensor->ne[0] && idx1 >= 0 && idx1 < tensor->ne[1] && i2 >= 0 && i2 < tensor->ne[2] && i3 >= 0 && i3 < tensor->ne[3]) {
                 float val;
                 if (tensor->type == GGML_TYPE_F32) {
-                    val = *(float *) ((char *) tensor->data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]);
+                    val = *(float *) ((char *) tensor_data(tensor) + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]);
                 } else if (tensor->type == GGML_TYPE_F16) {
-                    val = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) tensor->data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]));
+                    val = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) tensor_data(tensor) + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]));
                 } else {
                     GGML_ABORT("fatal error");
                 }
@@ -10244,9 +10244,9 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     ggml_tensor * src1_ggml = ggml_new_tensor_3d(ggml_ctx, GGML_TYPE_F32, k, n, batch);
     ggml_tensor * tensor_ggml = ggml_mul_mat(ggml_ctx, src0_ggml, src1_ggml);
 
-    src0_ggml->data = qx;
-    src1_ggml->data = y;
-    tensor_ggml->data = d_chk;
+    tensor_set_data(src0_ggml, qx;
+    tensor_set_data(src1_ggml, y;
+    tensor_set_data(tensor_ggml, d_chk;
 
     ggml_cgraph * cgraph = ggml_new_graph(ggml_ctx);
     ggml_build_forward_expand(cgraph, tensor_ggml);
@@ -12813,7 +12813,7 @@ static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, const void * d
 }
 
 static void ggml_vk_print_tensor(const ggml_tensor * tensor, const char * name) {
-    void * tensor_data = tensor->data;
+    void * tensor_data = tensor_data(tensor);
 
     const bool is_gpu = tensor->buffer != nullptr && ggml_backend_buffer_is_vk(tensor->buffer);
 
@@ -12911,9 +12911,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         src_size[i] = ggml_nbytes(srci);
         src_buffer[i] = malloc(srci_size);
 
-        srci_clone->data = src_buffer[i];
+        tensor_set_data(srci_clone, src_buffer[i];
         if (ggml_backend_buffer_is_host(srci->buffer)) {
-            memcpy(srci_clone->data, srci->data, srci_size);
+            memcpy(tensor_data(srci_clone), tensor_data(srci), srci_size);
             memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
         } else if (ggml_backend_buffer_is_vk(srci->buffer)) {
             ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)srci->buffer->context;
@@ -12923,7 +12923,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 for (int i3 = 0; i3 < srci->ne[3]; i3++) {
                     for (int i2 = 0; i2 < srci->ne[2]; i2++) {
                         const int idx = i3*srci->ne[2] + i2;
-                        ggml_vk_buffer_read(buffer_gpu, offset + idx * srci->nb[2], ((char *)srci_clone->data + idx * srci_clone->nb[2]), srci->ne[1] * srci->nb[1]);
+                        ggml_vk_buffer_read(buffer_gpu, offset + idx * srci->nb[2], ((char *)tensor_data(srci_clone) + idx * srci_clone->nb[2]), srci->ne[1] * srci->nb[1]);
                     }
                 }
 
@@ -12936,7 +12936,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 if (offset + srci_size >= buffer_gpu->size) {
                     srci_size = buffer_gpu->size - offset;
                 }
-                ggml_vk_buffer_read(buffer_gpu, offset, srci_clone->data, srci_size);
+                ggml_vk_buffer_read(buffer_gpu, offset, tensor_data(srci_clone), srci_size);
                 memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
@@ -13212,7 +13212,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
     comp_size = ggml_nbytes(tensor_clone);
 
     comp_result = malloc(comp_size);
-    memcpy(comp_result, tensor_clone->data, comp_size);
+    memcpy(comp_result, tensor_data(tensor_clone), comp_size);
     memcpy(comp_nb, tensor_clone->nb, sizeof(size_t) * GGML_MAX_DIMS);
 
     for (int i = 0; i < 6; i++) {
@@ -13248,7 +13248,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
     ggml_tensor * src2 = tensor->src[2];
     ggml_tensor * src3 = tensor->src[3];
 
-    void * tensor_data = tensor->data;
+    void * tensor_data = tensor_data(tensor);
 
     if (ggml_backend_buffer_is_vk(tensor->buffer)) {
         size_t tensor_size = ggml_nbytes(tensor);

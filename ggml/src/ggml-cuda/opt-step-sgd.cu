@@ -37,9 +37,9 @@ void ggml_cuda_opt_step_sgd(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_nelements(params) == 2);
 
-    float       * src0_d      = (float       *) src0->data;
-    const float * src0_grad_d = (const float *) src0_grad->data;
-    const float * params_d    = (const float *) params->data;
+    float       * src0_d      = (float       *) tensor_data(src0);
+    const float * src0_grad_d = (const float *) tensor_data(src0_grad);
+    const float * params_d    = (const float *) tensor_data(params);
 
     cudaStream_t stream = ctx.stream();
 

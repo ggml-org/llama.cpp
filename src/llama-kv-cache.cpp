@@ -1135,7 +1135,7 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    int64_t * data = (int64_t *) dst->data;
+    int64_t * data = (int64_t *) tensor_data(dst);
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const int64_t offs = sinfo.strm[s]*get_size();
@@ -1151,7 +1151,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    int64_t * data = (int64_t *) dst->data;
+    int64_t * data = (int64_t *) tensor_data(dst);
 
     if (!v_trans) {
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
@@ -1182,7 +1182,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
 void llama_kv_cache::set_input_k_shift(ggml_tensor * dst) const {
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
-    int32_t * data = (int32_t *) dst->data;
+    int32_t * data = (int32_t *) tensor_data(dst);
 
     for (uint32_t s = 0; s < n_stream; ++s) {
         const auto & cells = v_cells[s];
@@ -1197,7 +1197,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     const uint32_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    float * data = (float *) dst->data;
+    float * data = (float *) tensor_data(dst);
 
     const int64_t n_kv     = dst->ne[0];
     const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
@@ -1274,7 +1274,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
-    int32_t * data = (int32_t *) dst->data;
+    int32_t * data = (int32_t *) tensor_data(dst);
 
     const int32_t n_kv = dst->ne[0];
 

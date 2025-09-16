@@ -466,8 +466,8 @@ static void l2_norm_f32_cuda(
 
 void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const float * src0_d = (const float *) src0->data;
-    float * dst_d = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    float * dst_d = (float *) tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -490,8 +490,8 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const float * src0_d = (const float *)src0->data;
-    float * dst_d = (float *)dst->data;
+    const float * src0_d = (const float *)tensor_data(src0);
+    float * dst_d = (float *)tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -509,8 +509,8 @@ void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
 
 void ggml_cuda_op_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const float * src0_d = (const float *) src0->data;
-    float * dst_d = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    float * dst_d = (float *) tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -537,21 +537,21 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    const float * src0_d = (const float *) rms_norm_src->data;
+    const float * src0_d = (const float *) tensor_data(rms_norm_src);
     const float * mul_d = nullptr;
     const ggml_tensor * mul_src = nullptr;
 
     if (mul_tensor->src[0] == dst) {
-        mul_d = (float *) mul_tensor->src[1]->data;
+        mul_d = (float *) tensor_data(mul_tensor->src[1]);
         mul_src = mul_tensor->src[1];
     } else if(mul_tensor->src[1] == dst) {
-        mul_d = (float *) mul_tensor->src[0]->data;
+        mul_d = (float *) tensor_data(mul_tensor->src[0]);
         mul_src = mul_tensor->src[0];
     } else {
         GGML_ASSERT(false);
     }
 
-    float * dst_d = (float *) mul_tensor->data;
+    float * dst_d = (float *) tensor_data(mul_tensor);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
@@ -600,15 +600,15 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
 
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    const float *       src0_d  = (const float *) rms_norm_src->data;
+    const float *       src0_d  = (const float *) tensor_data(rms_norm_src);
     const float *       mul_d   = nullptr;
     const ggml_tensor * mul_src = nullptr;
 
     if (mul_tensor->src[0] == dst) {
-        mul_d   = (float *) mul_tensor->src[1]->data;
+        mul_d   = (float *) tensor_data(mul_tensor->src[1]);
         mul_src = mul_tensor->src[1];
     } else if (mul_tensor->src[1] == dst) {
-        mul_d   = (float *) mul_tensor->src[0]->data;
+        mul_d   = (float *) tensor_data(mul_tensor->src[0]);
         mul_src = mul_tensor->src[0];
     } else {
         GGML_ASSERT(false);
@@ -618,16 +618,16 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
     const ggml_tensor * add_src = nullptr;
 
     if (add_tensor->src[0] == mul_tensor) {
-        add_d   = (float *) add_tensor->src[1]->data;
+        add_d   = (float *) tensor_data(add_tensor->src[1]);
         add_src = add_tensor->src[1];
     } else if (add_tensor->src[1] == mul_tensor) {
-        add_d   = (float *) add_tensor->src[0]->data;
+        add_d   = (float *) tensor_data(add_tensor->src[0]);
         add_src = add_tensor->src[0];
     } else {
         GGML_ASSERT(false);
     }
 
-    float *      dst_d  = (float *) add_tensor->data;
+    float *      dst_d  = (float *) tensor_data(add_tensor);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
@@ -683,9 +683,9 @@ void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
     const ggml_tensor * grad  = dst->src[0]; // gradients
     const ggml_tensor * src0f = dst->src[1]; // src0 from forward pass
 
-    const float * grad_d  = (const float *) grad->data;
-    const float * src0f_d = (const float *) src0f->data;
-    float       * dst_d   = (float       *) dst->data;
+    const float * grad_d  = (const float *) tensor_data(grad);
+    const float * src0f_d = (const float *) tensor_data(src0f);
+    float       * dst_d   = (float       *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
 
@@ -707,8 +707,8 @@ void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
 
 void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const float * src0_d = (const float *) src0->data;
-    float * dst_d = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    float * dst_d = (float *) tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

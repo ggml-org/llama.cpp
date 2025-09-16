@@ -75,10 +75,10 @@ void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, ggml_tensor
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     const ggml_tensor *src0 = dst->src[0];
     const ggml_tensor *src1 = dst->src[1];
-    const float * src0_d = (const float *)src0->data;
-    const float * src1_d = (const float *)src1->data;
+    const float * src0_d = (const float *)tensor_data(src0);
+    const float * src1_d = (const float *)tensor_data(src1);
 
-    float * dst_d = (float *)dst->data;
+    float * dst_d = (float *)tensor_data(dst);
     dpct::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

@@ -391,11 +391,11 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
         GGML_ASSERT(n_dims == ne00/2);
     }
 
-    const int32_t * pos = (const int32_t *) dst->src[1]->data;
+    const int32_t * pos = (const int32_t *) tensor_data(dst->src[1]);
 
     const float * freq_factors = nullptr;
     if (dst->src[2] != nullptr) {
-        freq_factors = (const float *) dst->src[2]->data;
+        freq_factors = (const float *) tensor_data(dst->src[2]);
     }
 
     rope_corr_dims corr_dims;
@@ -408,10 +408,10 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     if (is_neox) {
         GGML_SYCL_DEBUG("%s: neox path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_neox_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, s01, s02, n_dims, nr,
+            rope_neox_sycl((const float *) tensor_data(dst->src[0]), (float *) tensor_data(dst), ne00, ne01, s01, s02, n_dims, nr,
                            pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_neox_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, s01, s02,
+            rope_neox_sycl((const sycl::half *) tensor_data(dst->src[0]), (sycl::half *) tensor_data(dst), ne00, ne01, s01, s02,
                            n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors,
                            main_stream);
         } else {
@@ -420,11 +420,11 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     } else if (is_mrope && !is_vision) {
         GGML_SYCL_DEBUG("%s: mrope path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_multi_sycl((const sycl::half *)dst->src[0]->data, (sycl::half *)dst->data, ne00, ne01, ne02, s01,
+            rope_multi_sycl((const sycl::half *)tensor_data(dst->src[0]), (sycl::half *)tensor_data(dst), ne00, ne01, ne02, s01,
                 s02, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims,
                 freq_factors, sections, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_multi_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, ne02, s01, s02, n_dims,
+            rope_multi_sycl((const float *) tensor_data(dst->src[0]), (float *) tensor_data(dst), ne00, ne01, ne02, s01, s02, n_dims,
                              nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections,
                              main_stream);
         } else {
@@ -433,11 +433,11 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     } else if (is_vision) {
         GGML_SYCL_DEBUG("%s: vision path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_vision_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, ne02, s01,
+            rope_vision_sycl((const sycl::half *) tensor_data(dst->src[0]), (sycl::half *) tensor_data(dst), ne00, ne01, ne02, s01,
                              s02, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims,
                              freq_factors, sections, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_vision_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, ne02, s01, s02, n_dims,
+            rope_vision_sycl((const float *) tensor_data(dst->src[0]), (float *) tensor_data(dst), ne00, ne01, ne02, s01, s02, n_dims,
                              nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections,
                              main_stream);
         } else {
@@ -446,10 +446,10 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     } else {
         GGML_SYCL_DEBUG("%s: norm path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_norm_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, s01, s02, n_dims, nr,
+            rope_norm_sycl((const float *) tensor_data(dst->src[0]), (float *) tensor_data(dst), ne00, ne01, s01, s02, n_dims, nr,
                            pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_norm_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, s01, s02,
+            rope_norm_sycl((const sycl::half *) tensor_data(dst->src[0]), (sycl::half *) tensor_data(dst), ne00, ne01, s01, s02,
                            n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors,
                            main_stream);
         } else {

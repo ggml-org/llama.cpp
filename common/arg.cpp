@@ -1518,6 +1518,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--cpu-use-hyperthreading"},
+        "use both physical CPU cores and their hyperthread siblings (default: physical cores only)",
+        [](common_params & params) {
+            params.cpuparams.mask_valid = true;
+            if (!cpu_mask_set_physical_cores_with_hyperthreading(params.cpuparams.cpumask)) {
+                LOG_WRN("Failed to detect CPU topology, using all available CPUs\n");
+            }
+        }
+    ));
+    add_opt(common_arg(
         {"--prio"}, "N",
         string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
@@ -2495,12 +2505,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- distribute: spread execution evenly over all nodes\n"
         "- isolate: only spawn threads on CPUs on the node that execution started on\n"
         "- numactl: use the CPU map provided by numactl\n"
+        "- mirror: enable NUMA-aware model mirroring (requires OpenMP)\n"
         "if run without this previously, it is recommended to drop the system page cache before using this\n"
         "see https://github.com/ggml-org/llama.cpp/issues/1437",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "distribute" || value == "") { params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE; }
             else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
             else if (value == "numactl") { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
+            else if (value == "mirror") { 
+#ifndef GGML_USE_OPENMP
+                throw std::invalid_argument("--numa mirror requires OpenMP support (compile with -DGGML_OPENMP=ON)");
+#endif
+                params.numa = GGML_NUMA_STRATEGY_MIRROR; 
+            }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_NUMA"));

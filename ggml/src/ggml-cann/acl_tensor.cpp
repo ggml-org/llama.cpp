@@ -87,7 +87,7 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
     aclTensor* acl_tensor = aclCreateTensor(
         acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride,
         elem_offset, format, &acl_storage_len, 1,
-        tensor->data);
+        tensor_data(tensor));
 
     return acl_tensor;
 }

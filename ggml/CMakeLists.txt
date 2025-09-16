@@ -378,6 +378,19 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
 
+# Always enable NUMA support
+find_library(NUMA_LIBRARY NAMES numa)
+if (NUMA_LIBRARY)
+    message(STATUS "libnuma: ${NUMA_LIBRARY}")
+    message(STATUS "NUMA support enabled")
+
+    foreach(lib "ggml" "ggml-base")
+        target_link_libraries(${lib} PUBLIC ${NUMA_LIBRARY})
+    endforeach()
+else()
+    message(STATUS "libnuma not found - NUMA features will be disabled")
+endif()
+
 if (MSVC)
     set(MSVC_WARNING_FLAGS
         /wd4005  # Macro redefinition

@@ -15,7 +15,7 @@ static void arange_f32_cuda(float * dst, const int ne0, const float start, const
 }
 
 void ggml_cuda_op_arange(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    float * dst_d = (float *)dst->data;
+    float * dst_d = (float *)tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(dst->type == GGML_TYPE_F32);

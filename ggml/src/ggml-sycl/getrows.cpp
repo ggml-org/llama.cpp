@@ -176,36 +176,36 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[1]->nb[0] == ggml_type_size(dst->src[1]->type));
     GGML_ASSERT(dst->nb[0] == ggml_type_size(dst->type));
 
-    const int32_t * src1_i32 = (const int32_t *) dst->src[1]->data;
+    const int32_t * src1_i32 = (const int32_t *) tensor_data(dst->src[1]);
     /* TODO: Refactor and remove duplicates */
     switch (dst->src[0]->type) {
         case GGML_TYPE_F16:
-            get_rows_sycl_float(ctx, dst->src[0], dst->src[1], dst, (const sycl::half *)dst->src[0]->data,
-                                src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl_float(ctx, dst->src[0], dst->src[1], dst, (const sycl::half *)tensor_data(dst->src[0]),
+                                src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_F32:
-            get_rows_sycl_float(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl_float(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_Q4_0:
-            get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_Q4_1:
-            get_rows_sycl<QK4_1, QR4_1, dequantize_q4_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl<QK4_1, QR4_1, dequantize_q4_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_Q5_0:
-            get_rows_sycl<QK5_0, QR5_0, dequantize_q5_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl<QK5_0, QR5_0, dequantize_q5_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_Q5_1:
-            get_rows_sycl<QK5_1, QR5_1, dequantize_q5_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl<QK5_1, QR5_1, dequantize_q5_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         case GGML_TYPE_Q8_0:
-            get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
-            src1_i32, (float *)dst->data, ctx.stream());
+            get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)tensor_data(dst->src[0]),
+            src1_i32, (float *)tensor_data(dst), ctx.stream());
             break;
         default:
             // TODO: k-quants

@@ -33,6 +33,7 @@ extern "C" {
 
     GGML_BACKEND_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_BACKEND_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
+    GGML_BACKEND_API enum ggml_numa_strategy ggml_numa_get_strategy(void); // get current NUMA strategy
 
     GGML_BACKEND_API struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value);
     GGML_BACKEND_API struct ggml_tensor * ggml_new_f32(struct ggml_context * ctx, float value);
@@ -103,6 +104,13 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_vxe        (void);
     GGML_BACKEND_API int ggml_cpu_has_wasm_simd  (void);
     GGML_BACKEND_API int ggml_cpu_has_llamafile  (void);
+
+    //
+    // NUMA work buffer allocation
+    //
+
+    GGML_BACKEND_API void * ggml_numa_alloc_work_buffer (size_t size);
+    GGML_BACKEND_API void   ggml_numa_free_work_buffer  (void * ptr);
 
     // Internal types and functions exposed for tests and benchmarks
 

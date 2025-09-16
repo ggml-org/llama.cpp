@@ -241,18 +241,18 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     memcpy(&scale, dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, dst->op_params + 1, sizeof(float));
 
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float * dst_dd = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float * dst_dd = static_cast<float *>(tensor_data(dst));
 
     ggml_sycl_set_device(ctx.device);
     dpct::queue_ptr main_stream = ctx.stream();
 
     if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F16) {
-        const sycl::half * src1_dd = static_cast<sycl::half *>(dst->src[1]->data);
+        const sycl::half * src1_dd = static_cast<sycl::half *>(tensor_data(dst->src[1]));
         soft_max_f32_sycl<sycl::half>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias,
                           main_stream, ctx.device);
     } else if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F32) {
-        const float * src1_dd = static_cast<const float *>(dst->src[1]->data);
+        const float * src1_dd = static_cast<const float *>(tensor_data(dst->src[1]));
         soft_max_f32_sycl<float>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
     } else {
         /* mask unavailable */

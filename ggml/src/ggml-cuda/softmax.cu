@@ -255,10 +255,10 @@ void ggml_cuda_op_soft_max(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
-    const float * src0_d = (const float *) src0->data;
-    const void  * src1_d = src1 ? (const void *) src1->data : nullptr;
-    const void  * src2_d = src2 ? (const void *) src2->data : nullptr;
-    float       *  dst_d = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const void  * src1_d = src1 ? (const void *) tensor_data(src1) : nullptr;
+    const void  * src2_d = src2 ? (const void *) tensor_data(src2) : nullptr;
+    float       *  dst_d = (float *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
 
@@ -325,9 +325,9 @@ void ggml_cuda_op_soft_max_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
     const ggml_tensor * src0 = dst->src[0]; // grad
     const ggml_tensor * src1 = dst->src[1]; // forward pass output
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       * dst_d  = (float       *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float       * dst_d  = (float       *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
 

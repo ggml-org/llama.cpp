@@ -76,13 +76,13 @@ static struct ggml_tensor * get_random_tensor_f32(
     switch (ndims) {
         case 1:
             for (int i0 = 0; i0 < ne[0]; i0++) {
-                ((float *)result->data)[i0] = frand()*(fmax - fmin) + fmin;
+                ((float *)tensor_data(result))[i0] = frand()*(fmax - fmin) + fmin;
             }
             break;
         case 2:
             for (int i1 = 0; i1 < ne[1]; i1++) {
                 for (int i0 = 0; i0 < ne[0]; i0++) {
-                    ((float *)result->data)[i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
+                    ((float *)tensor_data(result))[i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
                 }
             }
             break;
@@ -90,7 +90,7 @@ static struct ggml_tensor * get_random_tensor_f32(
             for (int i2 = 0; i2 < ne[2]; i2++) {
                 for (int i1 = 0; i1 < ne[1]; i1++) {
                     for (int i0 = 0; i0 < ne[0]; i0++) {
-                        ((float *)result->data)[i2*ne[1]*ne[0] + i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
+                        ((float *)tensor_data(result))[i2*ne[1]*ne[0] + i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
                     }
                 }
             }
@@ -100,7 +100,7 @@ static struct ggml_tensor * get_random_tensor_f32(
                 for (int i2 = 0; i2 < ne[2]; i2++) {
                     for (int i1 = 0; i1 < ne[1]; i1++) {
                         for (int i0 = 0; i0 < ne[0]; i0++) {
-                            ((float *)result->data)[i3*ne[2]*ne[1]*ne[0] + i2*ne[1]*ne[0] + i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
+                            ((float *)tensor_data(result))[i3*ne[2]*ne[1]*ne[0] + i2*ne[1]*ne[0] + i1*ne[0] + i0] = frand()*(fmax - fmin) + fmin;
                         }
                     }
                 }
@@ -159,9 +159,9 @@ int main(int /*argc*/, const char ** /*argv*/) {
             struct ggml_tensor * p2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2]);
 
             for (int i = 0; i < ne[2]; ++i) {
-                ((int32_t *) p0->data)[i] = n_past_0 + i;
-                ((int32_t *) p1->data)[i] = n_past_2 - n_past_0;
-                ((int32_t *) p2->data)[i] = n_past_2 + i;
+                ((int32_t *) tensor_data(p0))[i] = n_past_0 + i;
+                ((int32_t *) tensor_data(p1))[i] = n_past_2 - n_past_0;
+                ((int32_t *) tensor_data(p2))[i] = n_past_2 + i;
             }
             // test mode 0, 2, 4 (standard, GPT-NeoX, GLM)
             mode = m == 0 ? 0 : m == 1 ? 2 : 4;
@@ -184,9 +184,9 @@ int main(int /*argc*/, const char ** /*argv*/) {
 
             for (int i = 0; i < ne[2]; ++i) {
                 for (int j = 0; j < 4; ++j) {
-                    ((int32_t *) p0->data)[i + ne[2] * j] = n_past_0 + i + j;
-                    ((int32_t *) p1->data)[i + ne[2] * j] = n_past_2 - n_past_0;
-                    ((int32_t *) p2->data)[i + ne[2] * j] = n_past_2 + i + j;
+                    ((int32_t *) tensor_data(p0))[i + ne[2] * j] = n_past_0 + i + j;
+                    ((int32_t *) tensor_data(p1))[i + ne[2] * j] = n_past_2 - n_past_0;
+                    ((int32_t *) tensor_data(p2))[i + ne[2] * j] = n_past_2 + i + j;
                 }
             }
 
@@ -225,8 +225,8 @@ int main(int /*argc*/, const char ** /*argv*/) {
             double sum1 = 0.0f;
             double diff = 0.0f;
 
-            const float * r1_data = (float *) r1->data;
-            const float * r2_data = (float *) r2->data;
+            const float * r1_data = (float *) tensor_data(r1);
+            const float * r2_data = (float *) tensor_data(r2);
 
             const int n_elements = ggml_nelements(r1);
 

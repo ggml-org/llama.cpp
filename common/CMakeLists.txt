@@ -89,6 +89,11 @@ if (LLAMA_CURL)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
 endif ()
 
+# Check if OpenMP is enabled in ggml-cpu and add the definition
+if (GGML_OPENMP_ENABLED)
+    target_compile_definitions(${TARGET} PRIVATE GGML_USE_OPENMP)
+endif ()
+
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)
     set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)

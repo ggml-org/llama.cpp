@@ -77,11 +77,11 @@ static void gated_linear_attn_f32_kernel(const dpct::queue_ptr stream, u_int B, 
 
 void ggml_sycl_op_gated_linear_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/5);
-    const float * k_d  = static_cast<const float *>(dst->src[0]->data);
-    const float * v_d  = static_cast<const float *>(dst->src[1]->data);
-    const float * r_d  = static_cast<const float *>(dst->src[2]->data);
-    const float * td_d = static_cast<const float *>(dst->src[3]->data);
-    const float * s_d  = static_cast<const float *>(dst->src[4]->data);
+    const float * k_d  = static_cast<const float *>(tensor_data(dst->src[0]));
+    const float * v_d  = static_cast<const float *>(tensor_data(dst->src[1]));
+    const float * r_d  = static_cast<const float *>(tensor_data(dst->src[2]));
+    const float * td_d = static_cast<const float *>(tensor_data(dst->src[3]));
+    const float * s_d  = static_cast<const float *>(tensor_data(dst->src[4]));
 
     const int64_t B = dst->src[4]->ne[1];
     const int64_t T = dst->src[0]->ne[2];
@@ -96,7 +96,7 @@ void ggml_sycl_op_gated_linear_attn(ggml_backend_sycl_context & ctx, ggml_tensor
     float scale;
     memcpy(&scale, dst->op_params, sizeof(float));
 
-    float * dst_d = (float *) dst->data;
+    float * dst_d = (float *) tensor_data(dst);
 
     if (C / H == 64) {
         gated_linear_attn_f32_kernel<64>(stream, B, T, C, H, scale, k_d, v_d, r_d, td_d, s_d, dst_d);

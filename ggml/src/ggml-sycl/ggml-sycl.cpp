@@ -368,7 +368,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
 
         if (padded_size > original_size && tensor->view_src == nullptr) {
             SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(
-                (char *)tensor->data + original_size, 0,
+                (char *)tensor_data(tensor) + original_size, 0,
                 padded_size - original_size).wait()));
         }
     }
@@ -396,10 +396,10 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // This function will be called during load model from disk. Use memory buffer replace dynamic won't save more time and brings potential memory leak risk here.
     char * host_buf = (char *) malloc(size);
     memcpy(host_buf, data, size);
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
+    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor_data(tensor) + offset, host_buf, size).wait()));
     free(host_buf);
 #else
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
+    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor_data(tensor) + offset, data, size).wait()));
 #endif
 }
 catch (sycl::exception const &exc) {
@@ -421,7 +421,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
 
     SYCL_CHECK(CHECK_TRY_ERROR(
-        stream.memcpy(data, (const char *)tensor->data + offset, size)
+        stream.memcpy(data, (const char *)tensor_data(tensor) + offset, size)
             .wait()));
 }
 catch (sycl::exception const &exc) {
@@ -478,12 +478,12 @@ ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
         size_t size = ggml_nbytes(src);
 
         //todo. it's dirty solutino to walkaroud known issue:device2device cross GPUs.
-        dev2dev_memcpy(*stream_dst, *stream_src, dst->data, src->data, size);
+        dev2dev_memcpy(*stream_dst, *stream_src, tensor_data(dst), tensor_data(src), size);
 
 //todo, it's known issue：error in device2device cross GPUs. reused when the issue is fixed. DON"T remove
 #if 0
         SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(
-            (char *)dst->data, (const char *)src->data, size).wait()));
+            (char *)tensor_data(dst), (const char *)tensor_data(src), size).wait()));
 
         /*
         DPCT1009:201: SYCL uses exceptions to report errors and does not use the
@@ -533,10 +533,10 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     if (size == 0) {
         return;  // Nothing to do
     }
-    if (tensor->data == nullptr) {
+    if (tensor_data(tensor) == nullptr) {
         GGML_ABORT("Error: Tensor data pointer is null.\n");
     }
-    void * target_ptr = static_cast<char *>(tensor->data) + offset;
+    void * target_ptr = static_cast<char *>(tensor_data(tensor)) + offset;
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memset(target_ptr, value, size)));
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).wait()));
 }
@@ -865,7 +865,7 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
                     .wait()));
         }
 
-        extra->data_device[i] = buf;
+        tensor_data(extra)_device[i] = buf;
 
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
             /*
@@ -932,7 +932,7 @@ ggml_backend_sycl_split_buffer_set_tensor(ggml_backend_buffer_t buffer,
         const queue_ptr stream = ctx->streams[i];
         SYCL_CHECK(CHECK_TRY_ERROR(
             (*stream)
-                .memcpy(extra->data_device[i], buf_host, original_size)
+                .memcpy(tensor_data(extra)_device[i], buf_host, original_size)
                 .wait()));
     }
 }
@@ -988,7 +988,7 @@ ggml_backend_sycl_split_buffer_get_tensor(ggml_backend_buffer_t buffer,
         const queue_ptr stream = ctx->streams[i];
         SYCL_CHECK(CHECK_TRY_ERROR(
             (*stream)
-                .memcpy(buf_host, extra->data_device[i], original_size)
+                .memcpy(buf_host, tensor_data(extra)_device[i], original_size)
                 .wait()));
     }
 }
@@ -1856,13 +1856,13 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *dst,
     if (ggml_backend_buffer_is_host(src->buffer)) {
         kind = dpct::host_to_device;
         //GGML_SYCL_DEBUG("%s: Host buffer type src tensor\n", __func__);
-        src_ptr = (char *) src->data;
+        src_ptr = (char *) tensor_data(src);
         // GGML_SYCL_DEBUG("ggml_sycl_cpy_tensor_2d  GGML_BACKEND_TYPE_CPU src_ptr %p\n", src_ptr);
     } else if (ggml_backend_buffer_is_sycl(src->buffer)) {
         // If buffer is a SYCL buffer
         //GGML_SYCL_DEBUG("%s: SYCL buffer type src tensor\n", __func__);
         kind    = dpct::device_to_device;
-        src_ptr = (char *) src->data;
+        src_ptr = (char *) tensor_data(src);
     } else if (ggml_backend_buffer_is_sycl_split(src->buffer)) {
         /*
         If buffer is a SYCL split buffer
@@ -1875,7 +1875,7 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *dst,
         SYCL_CHECK(CHECK_TRY_ERROR(
             id = get_current_device_id()));
         // GGML_SYCL_DEBUG("current device index %d\n", id);
-        src_ptr = (char *) extra->data_device[id];
+        src_ptr = (char *) tensor_data(extra)_device[id];
     } else {
         // GGML_SYCL_DEBUG("GGML_ABORT("fatal error")\n");
         GGML_ABORT("fatal error");
@@ -1984,7 +1984,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
             to_fp16_sycl(src1_ddf_i, src1_as_f16.get(), ne, stream);
         }
         const sycl::half *src1_ptr = src1->type == GGML_TYPE_F16
-                ? (const sycl::half *)src1->data + src1_padded_row_size
+                ? (const sycl::half *)tensor_data(src1) + src1_padded_row_size
                                          : src1_as_f16.get();
 
 #if GGML_SYCL_DNNL
@@ -2066,8 +2066,8 @@ static void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * d
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     const int32_t * opts = (const int32_t *)dst->op_params;
     enum ggml_op_pool op = static_cast<ggml_op_pool>(opts[0]);
@@ -2105,8 +2105,8 @@ inline void ggml_sycl_op_sum(ggml_backend_sycl_context & ctx, ggml_tensor *dst) 
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     const int64_t ne = ggml_nelements(dst->src[0]);
 
@@ -2118,8 +2118,8 @@ inline void ggml_sycl_op_sum_rows(ggml_backend_sycl_context & ctx, ggml_tensor *
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     const int64_t ncols = dst->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(dst->src[0]);
@@ -2132,8 +2132,8 @@ inline void ggml_sycl_op_argsort(ggml_backend_sycl_context & ctx, ggml_tensor * 
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    int32_t *       dst_dd  = static_cast<int32_t *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    int32_t *       dst_dd  = static_cast<int32_t *>(tensor_data(dst));
 
 
     const int64_t ncols = dst->src[0]->ne[0];
@@ -2150,8 +2150,8 @@ inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * d
 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    int32_t *       dst_dd  = static_cast<int32_t *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    int32_t *       dst_dd  = static_cast<int32_t *>(tensor_data(dst));
 
     const int64_t ncols = dst->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(dst->src[0]);
@@ -2164,8 +2164,8 @@ inline void ggml_sycl_op_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_ten
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     const int64_t ne00 = dst->src[0]->ne[0];
     const int64_t ne01 = dst->src[0]->ne[1];
@@ -2181,8 +2181,8 @@ inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    const float * src0_dd = static_cast<const float *>(tensor_data(dst->src[0]));
+    float *       dst_dd  = static_cast<float *>(tensor_data(dst));
 
     float scale;
     float bias;
@@ -2352,13 +2352,13 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
         queue_ptr stream = ctx.stream(i, 0);
 
         if (src0_is_contiguous) {
-            dev[i].src0_dd = (char *) src0->data;
+            dev[i].src0_dd = (char *) tensor_data(src0);
         } else {
             dev[i].src0_dd = dev[i].src0_dd_alloc.alloc(ctx.pool(i), ggml_nbytes(src0));
         }
 
         if (src1_on_device && src1_is_contiguous) {
-            dev[i].src1_ddf = (float *) src1->data;
+            dev[i].src1_ddf = (float *) tensor_data(src1);
         } else {
             dev[i].src1_ddf = dev[i].src1_ddf_alloc.alloc(ctx.pool(i), ggml_nelements(src1));
         }
@@ -2380,7 +2380,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
         }
 
         if (dst_on_device) {
-            dev[i].dst_dd = (float *) dst->data;
+            dev[i].dst_dd = (float *) tensor_data(dst);
         } else {
             const size_t size_dst_ddf = split ? (dev[i].row_high - dev[i].row_low)*ne1 : ggml_nelements(dst);
             dev[i].dst_dd = dev[i].dst_dd_alloc.alloc(ctx.pool(i), size_dst_ddf);
@@ -2447,7 +2447,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                                                              src1_ncols * src1_padded_col_size * q8_1_ts / q8_1_bs)
                                                     .wait()));
                         } else {
-                            float * src1_ddf_i_source = (float *) src1_extra->data_device[ctx.device];
+                            float * src1_ddf_i_source = (float *) tensor_data(src1_extra)_device[ctx.device];
                             src1_ddf_i_source += (i0 * ne11 + src1_col_0) * ne10;
 
                             SYCL_CHECK(
@@ -2489,7 +2489,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
 
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
-                    void * dst_off_device = dst->data;
+                    void * dst_off_device = tensor_data(dst);
                     if (split) {
                         // src0 = weight matrix is saved as a transposed matrix for better memory layout.
                         // dst is NOT transposed.
@@ -2593,9 +2593,9 @@ static void ggml_sycl_mul_mat_vec_p021(ggml_backend_sycl_context & ctx, const gg
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();
 
-    void  * src0_ddq = src0->data;
-    float * src1_ddf = (float *) src1->data;
-    float * dst_ddf  = (float *) dst->data;
+    void  * src0_ddq = tensor_data(src0);
+    float * src1_ddf = (float *) tensor_data(src1);
+    float * dst_ddf  = (float *) tensor_data(dst);
 
     ggml_mul_mat_p021_f16_f32_sycl(src0_ddq, src1_ddf, dst_ddf, ne00, ne01, ne02, ne12, main_stream);
 }
@@ -2630,9 +2630,9 @@ static void ggml_sycl_mul_mat_vec_nc(ggml_backend_sycl_context & ctx, const ggml
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();
 
-    void  * src0_ddq = src0->data;
-    float * src1_ddf = (float *) src1->data;
-    float * dst_ddf  = (float *) dst->data;
+    void  * src0_ddq = tensor_data(src0);
+    float * src1_ddf = (float *) tensor_data(src1);
+    float * dst_ddf  = (float *) tensor_data(dst);
 
     const int64_t row_stride_x = nb01 / sizeof(sycl::half);
     const int64_t channel_stride_x = nb02 / sizeof(sycl::half);
@@ -2688,10 +2688,10 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
 
     dpct::has_capability_or_fail(queue->get_device(), { sycl::aspect::fp16 });
 
-    const sycl::half * src0_f16 = static_cast<const sycl::half *>(src0->data);
-    float *            dst_ddf  = static_cast<float *>(dst->data);
+    const sycl::half * src0_f16 = static_cast<const sycl::half *>(tensor_data(src0));
+    float *            dst_ddf  = static_cast<float *>(tensor_data(dst));
 
-    const sycl::half * src1_f16       = static_cast<const sycl::half *>(src1->data);
+    const sycl::half * src1_f16       = static_cast<const sycl::half *>(tensor_data(src1));
     const size_t       type_size_src0 = ggml_type_size(src0->type);
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
@@ -3085,7 +3085,7 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
 }
 
 static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
-    uint8_t * data_device = (uint8_t *) src0->data;
+    uint8_t * data_device = (uint8_t *) tensor_data(src0);
     size_t ncols = src0->ne[0];
     size_t nrows = src0->ne[1];
     size_t size = ggml_nbytes(src0);
@@ -3321,7 +3321,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     const int64_t n_ids = ids->ne[0];
 
     std::vector<char> ids_host(ggml_nbytes(ids));
-    const char * ids_dev = (const char *) ids->data;
+    const char * ids_dev = (const char *) tensor_data(ids);
 
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream->memcpy(ids_host.data(), ids_dev, ggml_nbytes(ids))));
@@ -3331,9 +3331,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     ggml_tensor src1_row = *src1;
     ggml_tensor dst_row = *dst;
 
-    char *src0_original = (char *)src0->data;
-    char *src1_original = (char *)src1->data;
-    char *dst_original = (char *)dst->data;
+    char *src0_original = (char *)tensor_data(src0);
+    char *src1_original = (char *)tensor_data(src1);
+    char *dst_original = (char *)tensor_data(dst);
 
     src0_row.ne[2] = 1;
     src0_row.ne[3] = 1;
@@ -3850,7 +3850,7 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
     GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR(
-        (stream)->memcpy((char *)tensor->data + offset, data, size)));
+        (stream)->memcpy((char *)tensor_data(tensor) + offset, data, size)));
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -3871,7 +3871,7 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
     GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-        data, (const char *)tensor->data + offset, size)));
+        data, (const char *)tensor_data(tensor) + offset, size)));
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -3897,7 +3897,7 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
         */
         const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
         SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-            dst->data, src->data, ggml_nbytes(dst))));
+            tensor_data(dst), tensor_data(src), ggml_nbytes(dst))));
         return true;
     }
 

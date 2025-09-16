@@ -157,13 +157,13 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    const int64_t * src1_dd = static_cast<const int64_t *>(src1->data);
+    const int64_t * src1_dd = static_cast<const int64_t *>(tensor_data(src1));
 
     dpct::queue_ptr stream = ctx.stream();
     switch (dst->type) {
         case GGML_TYPE_F32:
             set_rows_sycl<float, float>(
-                (const char *)src0->data, src1_dd, (char *)dst->data,
+                (const char *)tensor_data(src0), src1_dd, (char *)tensor_data(dst),
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -176,7 +176,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_F16:
             dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
             set_rows_sycl<float, sycl::half>(
-                (const char *)src0->data, src1_dd, (char *)dst->data,
+                (const char *)tensor_data(src0), src1_dd, (char *)tensor_data(dst),
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -188,7 +188,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_BF16:
             set_rows_sycl<float, sycl::ext::oneapi::bfloat16>(
-                (const char *)src0->data, src1_dd, (char *)dst->data,
+                (const char *)tensor_data(src0), src1_dd, (char *)tensor_data(dst),
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -199,22 +199,22 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             );
             break;
         case GGML_TYPE_Q8_0:
-            set_rows_sycl_q<block_q8_0, QK8_0, cpy_blck_f32_q8_0>((const char *)src0->data, src1_dd, (block_q8_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_q8_0, QK8_0, cpy_blck_f32_q8_0>((const char *)tensor_data(src0), src1_dd, (block_q8_0 *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_1:
-            set_rows_sycl_q<block_q5_1, QK5_1, cpy_blck_f32_q5_1>((const char *)src0->data, src1_dd, (block_q5_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_q5_1, QK5_1, cpy_blck_f32_q5_1>((const char *)tensor_data(src0), src1_dd, (block_q5_1 *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_0:
-            set_rows_sycl_q<block_q5_0, QK5_0, cpy_blck_f32_q5_0>((const char *)src0->data, src1_dd, (block_q5_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_q5_0, QK5_0, cpy_blck_f32_q5_0>((const char *)tensor_data(src0), src1_dd, (block_q5_0 *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_1:
-            set_rows_sycl_q<block_q4_1, QK4_1, cpy_blck_f32_q4_1>((const char *)src0->data, src1_dd, (block_q4_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_q4_1, QK4_1, cpy_blck_f32_q4_1>((const char *)tensor_data(src0), src1_dd, (block_q4_1 *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_0:
-            set_rows_sycl_q<block_q4_0, QK4_0, cpy_blck_f32_q4_0>((const char *)src0->data, src1_dd, (block_q4_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_q4_0, QK4_0, cpy_blck_f32_q4_0>((const char *)tensor_data(src0), src1_dd, (block_q4_0 *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            set_rows_sycl_q<block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>((const char *)src0->data, src1_dd, (block_iq4_nl *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>((const char *)tensor_data(src0), src1_dd, (block_iq4_nl *)tensor_data(dst), ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
 
         default:
