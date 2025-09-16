@@ -2,8 +2,7 @@
 #include "ggml-sycl/presets.hpp"
 #include "ggml.h"
 #include "element_wise.hpp"
-#include <cstring>  
-
+#include <cstring>
 #define SYCL_GLOBAL_ID_LOOP(K, ITEM) \
     for (auto i = ITEM.get_global_id(0); i < (size_t)K; i += ITEM.get_global_range(0))
 
@@ -939,8 +938,7 @@ static inline void ggml_sycl_op_set(ggml_backend_sycl_context & ctx, ggml_tensor
 #else
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_I32);
 #endif
-    const size_t ts = ggml_type_size(dst->type); 
-
+    const size_t ts = ggml_type_size(dst->type);
     dpct::queue_ptr q = ctx.stream();
     {
         const bool same_type = (src0->type == dst->type);
@@ -1003,9 +1001,8 @@ static inline void ggml_sycl_op_set(ggml_backend_sycl_context & ctx, ggml_tensor
         void       *p_dst  = dst->data;
 
         const size_t sb0 = src1->nb[0], sb1 = src1->nb[1], sb2 = src1->nb[2], sb3 = src1->nb[3];
-        const size_t db0 = dst->nb[0]; 
+        const size_t db0 = dst->nb[0];
         const int64_t ne0 = src1->ne[0], ne1 = src1->ne[1], ne2 = src1->ne[2], ne3 = src1->ne[3];
-
         if (ggml_is_contiguous(src1) && db0 == ts) {
             const size_t row_bytes = (size_t) ne0 * ts;
             const char *s_base = (const char*) p_src1;
@@ -1028,11 +1025,10 @@ static inline void ggml_sycl_op_set(ggml_backend_sycl_context & ctx, ggml_tensor
                 }
             }
         } else {
-        
+
             const size_t N  = (size_t) (ne0 * ne1 * ne2 * ne3);
             const size_t WG = 256;
             const size_t NG = ((N + WG - 1) / WG) * WG;
-
             const size_t ge0 = (size_t) ne0;
             const size_t ge1 = ge0 * (size_t) ne1;
             const size_t ge2 = ge1 * (size_t) ne2;
