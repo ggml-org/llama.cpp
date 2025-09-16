@@ -3555,7 +3555,7 @@ struct test_ceil : public test_case {
     }
 
     float grad_eps() override {
-        return 1.0f; 
+        return 1.0f;
     }
 
     bool grad_precise() override {

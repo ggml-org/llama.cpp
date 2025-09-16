@@ -65,8 +65,8 @@ static inline float op_log(float x) {
 }
 
 static inline float op_ceil(float x) {
-    return ceilf(x); 
-} 
+    return ceilf(x);
+}
 
 template <float (*op)(float), typename src0_t, typename dst_t>
 static inline void vec_unary_op(int64_t n, dst_t * y, const src0_t * x) {

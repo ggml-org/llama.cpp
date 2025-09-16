@@ -1148,7 +1148,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
-            
+
     GGML_API struct ggml_tensor * ggml_ceil(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
