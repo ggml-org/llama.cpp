@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, updateConfig } from '$lib/stores/settings.svelte';
-	import { goto } from '$app/navigation';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { serverProps, serverLoading, serverError, modelName } from '$lib/stores/server.svelte';
 
 	interface Props {

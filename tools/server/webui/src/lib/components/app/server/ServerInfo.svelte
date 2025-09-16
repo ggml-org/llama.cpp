@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Badge } from '$lib/components/ui/badge';
 	import { Server, Eye, Mic } from '@lucide/svelte';
+	import { Badge } from '$lib/components/ui/badge';
 	import { serverStore } from '$lib/stores/server.svelte';
 
 	let modalities = $derived(serverStore.supportedModalities);

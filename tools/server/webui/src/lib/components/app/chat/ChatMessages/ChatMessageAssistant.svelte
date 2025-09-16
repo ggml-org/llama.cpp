@@ -6,7 +6,7 @@
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { inputClasses } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 
@@ -98,7 +98,7 @@
 			<textarea
 				bind:this={textareaElement}
 				bind:value={editedContent}
-				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {inputClasses}"
+				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
 				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
 				placeholder="Edit assistant message..."

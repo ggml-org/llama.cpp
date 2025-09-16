@@ -3,7 +3,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList } from '$lib/components/app';
-	import { inputClasses } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
@@ -64,7 +64,7 @@
 			<textarea
 				bind:this={textareaElement}
 				bind:value={editedContent}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {inputClasses}"
+				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
 				oninput={(e) => onEditedContentChange(e.currentTarget.value)}
 				placeholder="Edit your message..."

@@ -7,7 +7,7 @@
 		ChatFormHelperText,
 		ChatFormTextarea
 	} from '$lib/components/app';
-	import { inputClasses } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
 	import {
 		AudioRecorder,
@@ -219,7 +219,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{inputClasses} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
 >
 	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
 
