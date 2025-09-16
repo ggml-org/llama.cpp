@@ -14,7 +14,7 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 // max memory buffers that can be mapped to the device
-#define GGML_METAL_MAX_BUFFERS 128
+#define GGML_METAL_MAX_BUFFERS 32
 
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
