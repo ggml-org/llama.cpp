@@ -989,7 +989,7 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
             } else {
                 res->buffers[0].metal = [res->device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
 
-                res->all_data = (void *) (res->buffers[0].metal.gpuAddress);
+                res->all_data = (void *) (res->buffers[0].metal.contents);
             }
         }
 
