@@ -227,7 +227,7 @@ void main() {
             uint32_t B_ly    = r_offset + Ar;
             uint32_t B_lx    = Ac;
             uint32_t K_idx   = B_idx_K * BS_K + B_ly; /* Global K_idx (row index of A)*/
-			float    val;
+            float    val;
             if (K_idx >= K || CRS_idx_a >= CRS) {
                 val = 0.0;
             } else {
