@@ -78,13 +78,22 @@ void add_token_len(TensorMap& tensor_map) {
 }
 
 void add_sliced_mask(TensorMap& tensor_map) {
-    auto mask = tensor_map.at("KQ_mask").get_node_shared_ptr();
     auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
-    auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-    auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    std::shared_ptr<ov::Node> mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
-    mask_sliced->set_friendly_name("KQ_mask_sliced");
-    tensor_map.insert({"KQ_mask_sliced", mask_sliced->output(0)});
+
+    auto create_sliced_mask = [&](const std::string& mask_name, const std::string& sliced_name) {
+        if (tensor_map.find(mask_name) != tensor_map.end()) {
+            auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+            auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
+            std::shared_ptr<ov::Node> mask_sliced =
+                std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
+            mask_sliced->set_friendly_name(sliced_name);
+            tensor_map.insert({sliced_name, mask_sliced->output(0)});
+        }
+    };
+
+    create_sliced_mask("KQ_mask", "KQ_mask_sliced");
+    create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced");
 }
 
 void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {

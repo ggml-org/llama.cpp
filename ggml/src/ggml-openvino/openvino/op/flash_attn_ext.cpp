@@ -6,6 +6,7 @@
 #include <openvino/op/scaled_dot_product_attention.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
+#include <string>
 
 #include "../node_context.hpp"
 #include "../op_table.hpp"
@@ -32,8 +33,12 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f16, ov::Shape{}, std::vector<float>{scale});
 
     ov::Output<ov::Node> mask_sliced;
-    if (context.has_input("KQ_mask_sliced")) {
-        mask_sliced = context.get_input("KQ_mask_sliced");
+    std::string mask_name = "KQ_mask_sliced";
+    if (context.get_input_names()[3].find("swa") != std::string::npos) {
+        mask_name = "KQ_mask_swa_sliced";
+    }
+    if (context.has_input(mask_name)) {
+        mask_sliced = context.get_input(mask_name);
     } else {
         auto token_len = get_dimensions(q, {1});
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});

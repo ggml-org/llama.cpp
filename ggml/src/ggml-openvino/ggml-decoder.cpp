@@ -30,17 +30,21 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-quants.hpp"
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
-                             int context_size, int num_heads, int num_heads_kv, int head_size) :
+                             int context_size, int context_size_swa, int num_heads, int num_heads_kv, int head_size,
+                             const std::vector<int>& swa_layers) :
     m_cgraph(cgraph),
     m_node(node),
     m_op_name(std::string(node->name)),
     m_context_size(context_size),
+    m_context_size_swa(context_size_swa),
+    m_swa_layers(swa_layers),
     m_num_heads(num_heads),
     m_num_heads_kv(num_heads_kv),
     m_head_size(head_size),
@@ -204,11 +208,14 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             if (node->src[0]->op != GGML_OP_VIEW) {
                 m_op_case = 1;
             } else if (ggml_is_contiguous(node->src[0])) {
-                // Permute cache_k (view)
-                m_op_case = 2;
-            } else {
-                // Permute cache_v (view), deprecated, cache_v will also fall to case 2
-                m_op_case = 3;
+                // Permute kv cache (view)
+                std::string src_name(node->view_src->name);
+                int layer = extract_layer_from_name(src_name);
+                if (!is_swa_layer(layer)) {
+                    m_op_case = 2;
+                } else {
+                    m_op_case = 3;
+                }
             }
             break;
         }
@@ -239,13 +246,34 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
     }
 }
 
+int extract_layer_from_name(const std::string& name) {
+    size_t pos1 = name.find("_l");
+    assert(pos1 != std::string::npos);
+    pos1 += 2;
+    size_t pos2 = name.find(' ', pos1);
+    if (pos2 == std::string::npos) {
+        pos2 = name.length();
+    }
+    std::string layer_str = name.substr(pos1, pos2 - pos1);
+    int layer = std::stoi(layer_str);
+    return layer;
+}
+
 void GgmlOvDecoder::set_llm_params() {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         auto* node = m_cgraph->nodes[i];
         std::string name = std::string(node->name);
-        if (node->op == GGML_OP_VIEW && std::string(node->name) == "cache_k_l0 (view)") {
-            auto* cache_k = node->src[0];
-            m_context_size = cache_k->ne[1];
+        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            auto* cache_k = node->src[1];
+            cache_k = cache_k->view_src ? cache_k->view_src : cache_k;
+            int layer = extract_layer_from_name(cache_k->name);
+
+            if (std::string(node->src[3]->name).find("swa") != std::string::npos) {
+                m_swa_layers.push_back(layer);
+                m_context_size_swa = cache_k->ne[1];
+            } else {
+                m_context_size = cache_k->ne[1];
+            }
         } else if (node->op == GGML_OP_ROPE &&
                    (name.find("Qcur-0") == 0 || std::string(node->src[0]->name).find("Qcur-0") == 0)) {
             m_head_size = node->ne[0];
@@ -269,11 +297,11 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
                 input_shape = ov::PartialShape{1, 1, 1};
             }
         } else {
-            input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_context_size)};
+            input_shape = ov::PartialShape{1, 1, -1};
         }
     } else if (name == "inp_out_ids" && !m_is_static) {
-        input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_context_size)};
-    } else if (name == "KQ_mask") {
+        input_shape = ov::PartialShape{1, 1, -1};
+    } else if (name.find("KQ_mask") == 0) {
         if (m_is_static) {
             if (m_is_first_token) {
                 input_shape = ov::PartialShape{1, m_context_size, m_context_size};
@@ -281,13 +309,12 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
                 input_shape = ov::PartialShape{1, 1, m_context_size};
             }
         } else {
-            auto max_mask_size = GGML_PAD(m_context_size, GGML_KQ_MASK_PAD);
-            input_shape = ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
+            input_shape = ov::PartialShape{1, -1, -1};
         }
-    } else if (name.find("cache_k") == 0) {
-        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
-    } else if (name.find("cache_v") == 0) {
-        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
+    } else if (name.find("cache_") == 0) {
+        int layer = extract_layer_from_name(name);
+        bool is_swa = is_swa_layer(layer);
+        input_shape = ov::PartialShape{is_swa ? m_context_size_swa : m_context_size, m_num_heads_kv, m_head_size};
     } else if (const auto* op = get_tensor_used_op(src); op && op->op == GGML_OP_SET_ROWS) {
         input_shape = ov::PartialShape{1, 1, m_is_static ? 1 : -1};
     } else if (src->op == GGML_OP_VIEW) {
@@ -305,35 +332,35 @@ void GgmlOvDecoder::add_extra_inputs() {
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
     //     Not used for NPU
     int64_t attention_size = -1;
+    int64_t attention_size_swa = -1;
     for (const auto& node : m_nodes) {
-        if (node->op == GGML_OP_SOFT_MAX) {
-            auto* mask = node->src[1];
-            if (std::string(mask->name).find("KQ_mask") != 0) {
-                throw std::runtime_error("Unexpected softmax node: " + std::string(mask->name));
-            }
-            attention_size = mask->ne[0];
-            break;
-        }
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
             auto* mask = node->src[3];
-            if (std::string(mask->name).find("KQ_mask") != 0) {
+            std::string mask_name(mask->name);
+            if (mask_name.find("KQ_mask") != 0) {
                 throw std::runtime_error("Unexpected flash attention node: " + std::string(mask->name));
             }
-            attention_size = mask->ne[0];
+            if (mask_name.find("swa") != std::string::npos) {
+                attention_size_swa = mask->ne[0];
+            } else {
+                attention_size = mask->ne[0];
+            }
         }
     }
 
-    {
-        std::string name = "attention_size";
+    auto create_attention_size_input = [this](const std::string& name, int64_t size) {
         auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
         param_node->set_friendly_name(name);
         param_node->output(0).get_tensor().set_names({name});
         m_model_extra_inputs[name] = param_node;
 
         auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
-        *tensor->data<int64_t>() = attention_size;
+        *tensor->data<int64_t>() = size;
         m_model_extra_input_values[name] = tensor;
-    }
+    };
+
+    create_attention_size_input("attention_size", attention_size);
+    create_attention_size_input("attention_size_swa", attention_size_swa);
 }
 
 const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) const {
@@ -706,8 +733,16 @@ int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const {
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
     for (const auto& node : m_nodes) {
-        auto decoder = std::make_shared<GgmlOvDecoder>(
-            node, m_cgraph, m_is_static, m_is_first_token, m_context_size, m_num_heads, m_num_heads_kv, m_head_size);
+        auto decoder = std::make_shared<GgmlOvDecoder>(node,
+                                                       m_cgraph,
+                                                       m_is_static,
+                                                       m_is_first_token,
+                                                       m_context_size,
+                                                       m_context_size_swa,
+                                                       m_num_heads,
+                                                       m_num_heads_kv,
+                                                       m_head_size,
+                                                       m_swa_layers);
         node_visitor(decoder);
     }
 }
