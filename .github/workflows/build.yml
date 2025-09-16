@@ -711,6 +711,7 @@ jobs:
 
   macOS-latest-swift:
     runs-on: macos-latest
+    needs: ios-xcode-build
 
     strategy:
       matrix:
@@ -726,6 +727,12 @@ jobs:
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
+
+      - name: Download xcframework artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: llama-xcframework
+          path: build-apple/llama.xcframework/
 
       - name: Dependencies
         id: depends
@@ -747,11 +754,6 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: xcodebuild for swift package
-        id: xcodebuild
-        run: |
-          ./build-xcframework.sh
 
   windows-msys2:
     runs-on: windows-2025
@@ -1169,6 +1171,13 @@ jobs:
         id: xcodebuild
         run: |
           ./build-xcframework.sh
+
+      - name: Upload xcframework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-xcframework
+          path: build-apple/llama.xcframework/
+          retention-days: 1
 
       - name: Build Xcode project
         run: |
