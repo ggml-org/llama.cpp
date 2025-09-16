@@ -13,8 +13,9 @@ import {
 	MimeTypeAudio,
 	MimeTypeImage,
 	MimeTypeApplication,
-	MimeTypeText
-} from '$lib/types/files.d';
+	MimeTypeText,
+	FileTypeCategory
+} from '$lib/enums/files';
 
 /**
  * Check if a file type is supported by the current model's modalities

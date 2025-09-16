@@ -3,6 +3,8 @@
  * Handles text file detection, reading, and validation
  */
 
+import { FileExtensionText } from '$lib/enums/files';
+
 /**
  * Check if a filename indicates a text file based on its extension
  * @param filename - The filename to check

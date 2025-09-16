@@ -43,3 +43,8 @@ export { default as ServerStatus } from './server/ServerStatus.svelte';
 export { default as ServerErrorSplash } from './server/ServerErrorSplash.svelte';
 export { default as ServerLoadingSplash } from './server/ServerLoadingSplash.svelte';
 export { default as ServerInfo } from './server/ServerInfo.svelte';
+
+// Shared components
+export { default as ActionButton } from './misc/ActionButton.svelte';
+export { default as ActionDropdown } from './misc/ActionDropdown.svelte';
+export { default as ConfirmationDialog } from './dialogs/ConfirmationDialog.svelte';

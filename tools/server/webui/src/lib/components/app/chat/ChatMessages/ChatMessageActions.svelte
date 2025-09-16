@@ -1,9 +1,6 @@
 <script lang="ts">
 	import { Edit, Copy, RefreshCw, Trash2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { Component } from 'svelte';
+	import { ActionButton, ConfirmationDialog } from '$lib/components/app';
 	import ChatMessageBranchingControls from './ChatMessageBranchingControls.svelte';
 
 	interface Props {
@@ -73,95 +70,33 @@
 		<div
 			class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
 		>
-			{@render actionButton({ icon: Copy, tooltip: 'Copy', onclick: onCopy })}
+			<ActionButton icon={Copy} tooltip="Copy" onclick={onCopy} />
 
 			{#if onEdit}
-				{@render actionButton({ icon: Edit, tooltip: 'Edit', onclick: onEdit })}
+				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
 			{/if}
 
 			{#if role === 'assistant' && onRegenerate}
-				{@render actionButton({ icon: RefreshCw, tooltip: 'Regenerate', onclick: onRegenerate })}
+				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={onRegenerate} />
 			{/if}
 
-			{@render actionButton({ icon: Trash2, tooltip: 'Delete', onclick: onDelete })}
+			<ActionButton icon={Trash2} tooltip="Delete" onclick={onDelete} />
 		</div>
 	</div>
 </div>
 
-{#snippet actionButton(config: { icon: Component; tooltip: string; onclick: () => void })}
-	<Tooltip.Root>
-		<Tooltip.Trigger>
-			<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={config.onclick}>
-				{@const IconComponent = config.icon}
-
-				<IconComponent class="h-3 w-3" />
-			</Button>
-		</Tooltip.Trigger>
-
-		<Tooltip.Content>
-			<p>{config.tooltip}</p>
-		</Tooltip.Content>
-	</Tooltip.Root>
-{/snippet}
-
-<AlertDialog.Root bind:open={showDeleteDialog}>
-	<AlertDialog.Content
-		onkeydown={(e) => {
-			if (e.key === 'Enter') {
-				e.preventDefault();
-				handleConfirmDelete();
-			}
-		}}
-	>
-		<AlertDialog.Header>
-			<AlertDialog.Title>Delete Message</AlertDialog.Title>
-
-			<AlertDialog.Description>
-				{#if deletionInfo && deletionInfo.totalCount > 1}
-					<div class="space-y-2">
-						<p>This will delete <strong>{deletionInfo.totalCount} messages</strong> including:</p>
-
-						<ul class="ml-4 list-inside list-disc space-y-1 text-sm">
-							{#if deletionInfo.userMessages > 0}
-								<li>
-									{deletionInfo.userMessages} user message{deletionInfo.userMessages > 1 ? 's' : ''}
-								</li>
-							{/if}
-
-							{#if deletionInfo.assistantMessages > 0}
-								<li>
-									{deletionInfo.assistantMessages} assistant response{deletionInfo.assistantMessages >
-									1
-										? 's'
-										: ''}
-								</li>
-							{/if}
-						</ul>
-
-						<p class="mt-2 text-sm text-muted-foreground">
-							All messages in this branch and their responses will be permanently removed. This
-							action cannot be undone.
-						</p>
-					</div>
-				{:else}
-					Are you sure you want to delete this message? This action cannot be undone.
-				{/if}
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-
-			<AlertDialog.Action
-				onclick={handleConfirmDelete}
-				class="bg-destructive text-white hover:bg-destructive/80"
-			>
-				{#if deletionInfo && deletionInfo.totalCount > 1}
-					Delete {deletionInfo.totalCount} Messages
-				{:else}
-					Delete
-				{/if}
-			</AlertDialog.Action>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+<ConfirmationDialog
+	bind:open={showDeleteDialog}
+	title="Delete Message"
+	description={deletionInfo && deletionInfo.totalCount > 1
+		? `This will delete ${deletionInfo.totalCount} messages including: ${deletionInfo.userMessages} user message${deletionInfo.userMessages > 1 ? 's' : ''} and ${deletionInfo.assistantMessages} assistant response${deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
+		: 'Are you sure you want to delete this message? This action cannot be undone.'}
+	confirmText={deletionInfo && deletionInfo.totalCount > 1
+		? `Delete ${deletionInfo.totalCount} Messages`
+		: 'Delete'}
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleConfirmDelete}
+	onCancel={() => onShowDeleteDialogChange(false)}
+/>

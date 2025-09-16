@@ -35,22 +35,6 @@ import type {
 } from '$lib/types/database';
 
 import type {
-	FileTypeCategory,
-	FileTypeImage,
-	FileTypeAudio,
-	FileTypePdf,
-	FileTypeText,
-	FileExtensionImage,
-	FileExtensionAudio,
-	FileExtensionPdf,
-	FileExtensionText,
-	MimeTypeApplication,
-	MimeTypeAudio,
-	MimeTypeImage,
-	MimeTypeText
-} from '$lib/types/files';
-
-import type {
 	SettingsConfigValue,
 	SettingsFieldConfig,
 	SettingsConfigType
@@ -89,19 +73,6 @@ declare global {
 		DatabaseMessageExtraImageFile,
 		DatabaseMessageExtraTextFile,
 		DatabaseMessageExtraPdfFile,
-		FileTypeCategory,
-		FileTypeImage,
-		FileTypeAudio,
-		FileTypePdf,
-		FileTypeText,
-		FileExtensionImage,
-		FileExtensionAudio,
-		FileExtensionPdf,
-		FileExtensionText,
-		MimeTypeApplication,
-		MimeTypeAudio,
-		MimeTypeImage,
-		MimeTypeText,
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,

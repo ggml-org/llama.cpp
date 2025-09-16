@@ -1,6 +1,7 @@
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
+import { FileTypeCategory } from '$lib/enums/files';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { supportsVision } from '$lib/stores/server.svelte';
 import { getFileTypeCategory } from '$lib/utils/file-type';

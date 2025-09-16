@@ -2,6 +2,7 @@
 	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { formatFileSize, getFileTypeLabel, getPreviewText } from '$lib/utils/file-preview';
+	import { FileTypeCategory, MimeTypeText } from '$lib/enums/files';
 
 	interface Props {
 		class?: string;

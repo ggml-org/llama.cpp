@@ -7,7 +7,8 @@
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
 		ServerInfo,
-		ServerLoadingSplash
+		ServerLoadingSplash,
+		ConfirmationDialog
 	} from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
@@ -37,6 +38,7 @@
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
+	import { Trash2 } from '@lucide/svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
 	let { showCenteredEmpty = false } = $props();
@@ -82,13 +84,6 @@
 			await deleteConversation(conversation.id);
 		}
 		showDeleteDialog = false;
-	}
-
-	function handleDeleteDialogKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			handleDeleteConfirm();
-		}
 	}
 
 	function handleDragEnter(event: DragEvent) {
@@ -431,29 +426,17 @@
 	</AlertDialog.Portal>
 </AlertDialog.Root>
 
-<AlertDialog.Root bind:open={showDeleteDialog}>
-	<AlertDialog.Portal>
-		<AlertDialog.Overlay />
-		<AlertDialog.Content class="max-w-md" onkeydown={handleDeleteDialogKeydown}>
-			<AlertDialog.Header>
-				<AlertDialog.Title>Delete Chat</AlertDialog.Title>
-				<AlertDialog.Description class="text-sm text-muted-foreground">
-					Are you sure you want to delete this chat? This action cannot be undone.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
-
-			<AlertDialog.Footer>
-				<AlertDialog.Cancel onclick={() => (showDeleteDialog = false)}>Cancel</AlertDialog.Cancel>
-				<AlertDialog.Action
-					onclick={handleDeleteConfirm}
-					class="bg-destructive text-white hover:bg-destructive/80"
-				>
-					Delete
-				</AlertDialog.Action>
-			</AlertDialog.Footer>
-		</AlertDialog.Content>
-	</AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmationDialog
+	bind:open={showDeleteDialog}
+	title="Delete Conversation"
+	description="Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all messages in this conversation."
+	confirmText="Delete"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleDeleteConfirm}
+	onCancel={() => (showDeleteDialog = false)}
+/>
 
 <EmptyFileAlertDialog
 	bind:open={showEmptyFileDialog}

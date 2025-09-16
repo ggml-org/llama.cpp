@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import ChatFormActionFileAttachments from './ChatFormActionFileAttachments.svelte';
 	import ChatFormActionRecord from './ChatFormActionRecord.svelte';
+	import type { FileTypeCategory } from '$lib/enums/files';
 
 	interface Props {
 		canSend?: boolean;

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { FileText, Image, Music, FileIcon, Eye } from '@lucide/svelte';
+	import { FileTypeCategory, MimeTypeApplication } from '$lib/enums/files';
 	import { convertPDFToImage } from '$lib/utils/pdf-processing';
 	import { Button } from '$lib/components/ui/button';
 	import { getFileTypeCategory } from '$lib/utils/file-type';

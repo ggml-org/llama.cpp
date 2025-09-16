@@ -1,3 +1,5 @@
+import { FileExtensionImage, MimeTypeImage } from '$lib/enums/files';
+
 /**
  * Convert a WebP base64 data URL to a PNG data URL
  * @param base64UrlWebp - The WebP base64 data URL to convert

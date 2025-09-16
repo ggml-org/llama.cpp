@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
+	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
 

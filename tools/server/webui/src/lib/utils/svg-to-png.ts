@@ -1,3 +1,5 @@
+import { MimeTypeImage } from '$lib/enums/files';
+
 /**
  * Convert an SVG base64 data URL to a PNG data URL
  * @param base64UrlSvg - The SVG base64 data URL to convert

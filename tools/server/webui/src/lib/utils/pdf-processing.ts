@@ -4,6 +4,7 @@
  */
 
 import { browser } from '$app/environment';
+import { MimeTypeApplication, MimeTypeImage } from '$lib/enums/files';
 import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {

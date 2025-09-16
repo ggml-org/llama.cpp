@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
+	import { KeyboardShortcutInfo, ActionDropdown, ConfirmationDialog } from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { onMount } from 'svelte';
 
@@ -101,79 +100,42 @@
 	</div>
 
 	<div class="actions flex items-center">
-		<DropdownMenu.Root bind:open={showDropdown}>
-			<DropdownMenu.Trigger
-				class="{showDropdown
-					? 'show-dropdown'
-					: ''} flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
-			>
-				<MoreHorizontal class="h-3 w-3" />
-
-				<span class="sr-only">More actions</span>
-			</DropdownMenu.Trigger>
-
-			<DropdownMenu.Content align="end" class="z-999 w-48">
-				<DropdownMenu.Item
-					onclick={handleEdit}
-					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
-				>
-					<div class="flex items-center gap-2">
-						<Pencil class="h-4 w-4" />
-						Edit
-					</div>
-
-					<KeyboardShortcutInfo keys={['shift', 'cmd', 'e']} />
-				</DropdownMenu.Item>
-
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					variant="destructive"
-					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
-					onclick={(e) => {
+		<ActionDropdown
+			triggerIcon={MoreHorizontal}
+			triggerTooltip="More actions"
+			bind:open={showDropdown}
+			actions={[
+				{
+					icon: Pencil,
+					label: 'Edit',
+					onclick: handleEdit,
+					shortcut: ['shift', 'cmd', 'e']
+				},
+				{
+					icon: Trash2,
+					label: 'Delete',
+					onclick: (e) => {
 						e.stopPropagation();
 						showDeleteDialog = true;
-					}}
-				>
-					<div class="flex items-center gap-2">
-						<Trash2 class="h-4 w-4 text-destructive" />
-						Delete
-					</div>
+					},
+					variant: 'destructive',
+					shortcut: ['shift', 'cmd', 'd'],
+					separator: true
+				}
+			]}
+		/>
 
-					<KeyboardShortcutInfo keys={['shift', 'cmd', 'd']} variant="destructive" />
-				</DropdownMenu.Item>
-			</DropdownMenu.Content>
-		</DropdownMenu.Root>
-
-		<AlertDialog.Root bind:open={showDeleteDialog}>
-			<AlertDialog.Content
-				onkeydown={(e) => {
-					if (e.key === 'Enter') {
-						e.preventDefault();
-						handleConfirmDelete();
-						showDeleteDialog = false;
-					}
-				}}
-			>
-				<AlertDialog.Header>
-					<AlertDialog.Title>Delete Conversation</AlertDialog.Title>
-
-					<AlertDialog.Description>
-						Are you sure you want to delete "{conversation.name}"? This action cannot be undone and
-						will permanently remove all messages in this conversation.
-					</AlertDialog.Description>
-				</AlertDialog.Header>
-
-				<AlertDialog.Footer>
-					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-
-					<AlertDialog.Action
-						class="bg-destructive text-white hover:bg-destructive/80 "
-						onclick={handleConfirmDelete}>Delete</AlertDialog.Action
-					>
-				</AlertDialog.Footer>
-			</AlertDialog.Content>
-		</AlertDialog.Root>
+		<ConfirmationDialog
+			bind:open={showDeleteDialog}
+			title="Delete Conversation"
+			description={`Are you sure you want to delete "${conversation.name}"? This action cannot be undone and will permanently remove all messages in this conversation.`}
+			confirmText="Delete"
+			cancelText="Cancel"
+			variant="destructive"
+			icon={Trash2}
+			onConfirm={handleConfirmDelete}
+			onCancel={() => (showDeleteDialog = false)}
+		/>
 
 		<AlertDialog.Root bind:open={showEditDialog}>
 			<AlertDialog.Content>
