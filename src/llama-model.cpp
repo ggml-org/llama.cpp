@@ -12314,8 +12314,7 @@ struct llm_build_olmo2 : public llm_graph_context {
                         n_rot, rope_type, n_ctx_orig, freq_base, 1.0,
                         0.0, 1.0, beta_fast, beta_slow
                         );
-                }
-                else {
+                } else {
                     Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
