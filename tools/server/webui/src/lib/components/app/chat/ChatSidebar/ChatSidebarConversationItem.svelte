@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import { KeyboardShortcutInfo, ActionDropdown, ConfirmationDialog } from '$lib/components/app';
+	import { ActionDropdown, ConfirmationDialog } from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { onMount } from 'svelte';
