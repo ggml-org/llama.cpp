@@ -1,6 +1,7 @@
 #import "ggml-metal-device.h"
 
 #import "ggml-impl.h"
+#import "ggml-threading.h"
 
 #include <Foundation/Foundation.h>
 
@@ -29,292 +30,537 @@ static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 @end
 #endif
 
+//
+// MTLFunctionConstantValues wrapper
+//
+
+struct ggml_metal_cv {
+    MTLFunctionConstantValues * obj;
+};
+
+ggml_metal_cv_t ggml_metal_cv_init(void) {
+    ggml_metal_cv_t res = calloc(1, sizeof(struct ggml_metal_cv));
+
+    res->obj = [[MTLFunctionConstantValues alloc] init];
+
+    return res;
+}
+
+void ggml_metal_cv_free(ggml_metal_cv_t cv) {
+    [cv->obj release];
+    free(cv);
+}
+
+void ggml_metal_cv_set_int32(ggml_metal_cv_t cv, int32_t value, int32_t idx) {
+    [cv->obj setConstantValue:&value type:MTLDataTypeInt atIndex:idx];
+}
+
+void ggml_metal_cv_set_bool(ggml_metal_cv_t cv, bool value, int32_t idx) {
+    [cv->obj setConstantValue:&value type:MTLDataTypeBool atIndex:idx];
+}
+
+//
+// MTLComputePipelineState wrapper
+//
+
+struct ggml_metal_pipeline {
+    id<MTLComputePipelineState> obj;
+
+    // suggested dispatch sizes
+    int nsg;
+
+    int nr0;
+    int nr1;
+
+    size_t smem;
+};
+
+ggml_metal_pipeline_t ggml_metal_pipeline_init(void) {
+    ggml_metal_pipeline_t res = calloc(1, sizeof(struct ggml_metal_pipeline));
+
+    *res = (struct ggml_metal_pipeline) {
+        /*.obj  =*/ nil,
+        /*.nsg  =*/ 0,
+        /*.nr0  =*/ 0,
+        /*.nr1  =*/ 0,
+        /*.smem =*/ 0,
+    };
+
+    return res;
+}
+
+void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
+    [pipeline->obj release];
+
+    free(pipeline);
+}
+
+void ggml_metal_pipeline_set_nsg(ggml_metal_pipeline_t pipeline, int nsg) {
+    pipeline->nsg = nsg;
+}
+
+int ggml_metal_pipeline_get_nsg(ggml_metal_pipeline_t pipeline) {
+    return pipeline->nsg;
+}
+
+void ggml_metal_pipeline_set_nr0(ggml_metal_pipeline_t pipeline, int nr0) {
+    pipeline->nr0 = nr0;
+}
+
+int ggml_metal_pipeline_get_nr0(ggml_metal_pipeline_t pipeline) {
+    return pipeline->nr0;
+}
+
+void ggml_metal_pipeline_set_nr1(ggml_metal_pipeline_t pipeline, int nr1) {
+    pipeline->nr1 = nr1;
+}
+
+int ggml_metal_pipeline_get_nr1(ggml_metal_pipeline_t pipeline) {
+    return pipeline->nr1;
+}
+
+void   ggml_metal_pipeline_set_smem(ggml_metal_pipeline_t pipeline, size_t smem) {
+    pipeline->smem = smem;
+}
+
+size_t ggml_metal_pipeline_get_smem(ggml_metal_pipeline_t pipeline) {
+    return pipeline->smem;
+}
+
+int ggml_metal_pipeline_max_theads_per_threadgroup(ggml_metal_pipeline_t pipeline) {
+    return pipeline->obj.maxTotalThreadsPerThreadgroup;
+}
+
+struct ggml_metal_library {
+    id<MTLLibrary> obj;
+    id<MTLDevice> device;
+
+    ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
+};
+
+ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+
+    res->device = ggml_metal_device_get_obj(dev);
+
+    res->pipelines = ggml_metal_pipelines_init();
+
+    // load library
+    //
+    // - first check if the library is embedded
+    // - then check if the library is in the bundle
+    // - if not found, load the source and compile it
+    // - if that fails, return NULL
+    //
+    // TODO: move to a function
+    {
+        const int64_t t_start = ggml_time_us();
+
+        NSError * error = nil;
+        NSString * src = nil;
+
+#if GGML_METAL_EMBED_LIBRARY
+        GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
+
+        extern const char ggml_metallib_start[];
+        extern const char ggml_metallib_end[];
+
+        src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
+
+#else
+
+#ifdef SWIFT_PACKAGE
+        NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
+#else
+        NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
+#endif
+
+        NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
+        if (path_lib == nil) {
+            // Try to find the resource in the directory where the current binary located.
+            NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+            NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+
+            NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
+            if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+                GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+
+                NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
+                if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
+                    // Optionally, if this is a symlink, try to resolve it.
+                    path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+                    if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
+                        // It is a relative path, adding the binary directory as directory prefix.
+                        path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
+                    }
+                    if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+                        // Link to the resource could not be resolved.
+                        path_lib_default = nil;
+                    } else {
+                        GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
+                    }
+                }
+            } else {
+                // The resource couldn't be found in the binary's directory.
+                path_lib_default = nil;
+            }
+
+            path_lib = path_lib_default;
+        }
+
+        if (path_lib != nil) {
+            // pre-compiled library found
+            NSURL * libURL = [NSURL fileURLWithPath:path_lib];
+            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
+
+            res->obj = [res->device newLibraryWithURL:libURL error:&error];
+            if (error) {
+                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+            }
+        } else {
+            GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
+
+            NSString * path_source;
+            NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
+
+            GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
+
+            if (path_resource) {
+                path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
+            } else {
+                path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
+            }
+
+            if (path_source == nil) {
+                GGML_LOG_WARN("%s: error: could not use bundle path to find ggml-metal.metal, falling back to trying cwd\n", __func__);
+                path_source = @"ggml-metal.metal";
+            }
+
+            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
+
+            src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
+            if (error) {
+                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+            }
+        }
+#endif
+
+        if (!res->obj) {
+            @autoreleasepool {
+                // dictionary of preprocessor macros
+                NSMutableDictionary * prep = [NSMutableDictionary dictionary];
+
+                if (ggml_metal_device_get_props(dev)->has_bfloat) {
+                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
+                }
+
+#if GGML_METAL_EMBED_LIBRARY
+                [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
+#endif
+
+                MTLCompileOptions * options = [MTLCompileOptions new];
+                options.preprocessorMacros = prep;
+
+                //[options setFastMathEnabled:false];
+
+                res->obj = [res->device newLibraryWithSource:src options:options error:&error];
+                if (error) {
+                    GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                }
+
+#if !__has_feature(objc_arc)
+                [options release];
+#endif
+            }
+        }
+
+#if GGML_METAL_EMBED_LIBRARY
+        [src release];
+#endif // GGML_METAL_EMBED_LIBRARY
+
+        GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+    }
+
+    return res;
+}
+
+void ggml_metal_library_free(ggml_metal_library_t lib) {
+    if (lib) {
+        [lib->obj release];
+
+        ggml_metal_pipelines_free(lib->pipelines);
+    }
+
+    free(lib);
+}
+
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline(ggml_metal_library_t lib, const char * name) {
+    return ggml_metal_pipelines_get(lib->pipelines, name);
+}
+
+ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv) {
+    // note: the pipelines are cached in the library per device, so they are shared across all metal contexts
+    ggml_critical_section_start();
+
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
+    if (res) {
+        ggml_critical_section_end();
+
+        return res;
+    }
+
+    res = ggml_metal_pipeline_init();
+
+    @autoreleasepool {
+        NSError * error = nil;
+
+        NSString * base_func = [NSString stringWithUTF8String:base];
+
+        GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
+
+        id<MTLFunction> mtl_function = [lib->obj newFunctionWithName:base_func constantValues:(cv ? cv->obj : nil) error:&error];
+        if (!mtl_function) {
+            GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+
+            return nil;
+        }
+
+        res->obj = [lib->device newComputePipelineStateWithFunction:mtl_function error:&error];
+
+        ggml_metal_pipelines_add(lib->pipelines, name, res);
+
+        [mtl_function release];
+
+        GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name, (void *) res->obj,
+                (int) res->obj.maxTotalThreadsPerThreadgroup,
+                (int) res->obj.threadExecutionWidth);
+    }
+
+    ggml_critical_section_end();
+
+    return res;
+}
+
+//
+// MTLComputeCommandEncoder wrapper
+//
+
+struct ggml_metal_encoder {
+    id<MTLComputeCommandEncoder> obj;
+};
+
+ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent) {
+    ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    if (concurrent) {
+        res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
+    } else {
+        res->obj = [cmd_buf computeCommandEncoder];
+    }
+
+    [res->obj retain];
+
+    return res;
+}
+
+void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
+    [encoder->obj release];
+    free(encoder);
+}
+
+void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name) {
+    [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
+}
+
+void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
+    [encoder->obj popDebugGroup];
+}
+
+void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, ggml_metal_pipeline_t pipeline) {
+    [encoder->obj setComputePipelineState:pipeline->obj];
+}
+
+void ggml_metal_encoder_set_bytes(ggml_metal_encoder_t encoder, void * data, size_t size, int idx) {
+    [encoder->obj setBytes:data length:size atIndex:idx];
+}
+
+void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_metal_buffer_id buffer, int idx) {
+    [encoder->obj setBuffer:buffer.metal offset:buffer.offs atIndex:idx];
+}
+
+void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
+    [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
+}
+
+void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int tg0, int tg1, int tg2, int tptg0, int tptg1, int tptg2) {
+    [encoder->obj dispatchThreadgroups:MTLSizeMake(tg0, tg1, tg2) threadsPerThreadgroup:MTLSizeMake(tptg0, tptg1, tptg2)];
+}
+
+void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
+    [encoder->obj memoryBarrierWithScope:MTLBarrierScopeBuffers];
+}
+
+void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
+    [encoder->obj endEncoding];
+}
+
 struct ggml_metal_device {
-    id<MTLDevice>  mtl_device;
-    id<MTLLibrary> mtl_library;
+    id<MTLDevice> mtl_device;
 
     // a single global queue shared by all Metal backends
     // technically not needed for devices with unified memory, but enables discrete GPUs support
     // ref: https://github.com/ggml-org/llama.cpp/pull/15906
     id<MTLCommandQueue> mtl_queue;
 
+    ggml_metal_library_t library;
+
     struct ggml_metal_device_props props;
 };
 
 ggml_metal_device_t ggml_metal_device_init(void) {
-    ggml_metal_device_t ctx = calloc(1, sizeof(struct ggml_metal_device));
+    ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
-    assert(ctx != NULL);
+    assert(dev != NULL);
 
-    if (ctx->mtl_device == nil) {
-        ctx->mtl_device = MTLCreateSystemDefaultDevice();
+    if (dev->mtl_device == nil) {
+        dev->mtl_device = MTLCreateSystemDefaultDevice();
 
-        if (ctx->mtl_device) {
-            ctx->mtl_queue = [ctx->mtl_device newCommandQueue];
-            if (ctx->mtl_queue == nil) {
+        if (dev->mtl_device) {
+            dev->mtl_queue = [dev->mtl_device newCommandQueue];
+            if (dev->mtl_queue == nil) {
                 GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
             }
 
-            ctx->props.has_simdgroup_reduction  = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            ctx->props.has_simdgroup_reduction |= [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+            dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+            dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
-            ctx->props.has_simdgroup_mm = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            ctx->props.has_unified_memory = ctx->mtl_device.hasUnifiedMemory;
+            dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+            dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
 
-            ctx->props.has_bfloat  = [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
-            ctx->props.has_bfloat |= [ctx->mtl_device supportsFamily:MTLGPUFamilyApple6];
+            dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+            dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
 
-            ctx->props.use_residency_sets = true;
+            dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
-            ctx->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
+            dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
 #endif
 
-            ctx->props.use_shared_buffers = ctx->props.has_unified_memory;
+            dev->props.use_shared_buffers = dev->props.has_unified_memory;
 
             if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
-                ctx->props.use_shared_buffers = false;
+                dev->props.use_shared_buffers = false;
             }
 
-            ctx->props.supports_gpu_family_apple7 = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
+            dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
-            ctx->props.max_buffer_size            = ctx->mtl_device.maxBufferLength;
-            ctx->props.max_working_set_size       = ctx->mtl_device.recommendedMaxWorkingSetSize;
-            ctx->props.max_theadgroup_memory_size = ctx->mtl_device.maxThreadgroupMemoryLength;
+            dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
+            dev->props.max_working_set_size       = dev->mtl_device.recommendedMaxWorkingSetSize;
+            dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
 
-            strncpy(ctx->props.name, [[ctx->mtl_device name] UTF8String], sizeof(ctx->props.name) - 1);
+            strncpy(dev->props.name, [[dev->mtl_device name] UTF8String], sizeof(dev->props.name) - 1);
 
-            // load library
-            //
-            // - first check if the library is embedded
-            // - then check if the library is in the bundle
-            // - if not found, load the source and compile it
-            // - if that fails, return NULL
-            //
-            // TODO: move to a function
-            {
-                const int64_t t_start = ggml_time_us();
-
-                NSError * error = nil;
-                NSString * src = nil;
-
-#if GGML_METAL_EMBED_LIBRARY
-                GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
-
-                extern const char ggml_metallib_start[];
-                extern const char ggml_metallib_end[];
-
-                src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
-
-#else
-
-#ifdef SWIFT_PACKAGE
-                NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
-#else
-                NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
-#endif
-
-                NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
-                if (path_lib == nil) {
-                    // Try to find the resource in the directory where the current binary located.
-                    NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
-                    NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
-
-                    NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
-                    if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                       GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
-
-                       NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
-                       if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
-                           // Optionally, if this is a symlink, try to resolve it.
-                           path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
-                           if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
-                               // It is a relative path, adding the binary directory as directory prefix.
-                               path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
-                           }
-                           if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                               // Link to the resource could not be resolved.
-                               path_lib_default = nil;
-                           } else {
-                               GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
-                           }
-                       }
-                    } else {
-                        // The resource couldn't be found in the binary's directory.
-                        path_lib_default = nil;
-                    }
-
-                    path_lib = path_lib_default;
-                }
-
-                if (path_lib != nil) {
-                    // pre-compiled library found
-                    NSURL * libURL = [NSURL fileURLWithPath:path_lib];
-                    GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
-
-                    ctx->mtl_library = [ctx->mtl_device newLibraryWithURL:libURL error:&error];
-                    if (error) {
-                        GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                    }
-                } else {
-                    GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
-
-                    NSString * path_source;
-                    NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
-
-                    GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
-
-                    if (path_resource) {
-                        path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
-                    } else {
-                        path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
-                    }
-
-                    if (path_source == nil) {
-                        GGML_LOG_WARN("%s: error: could not use bundle path to find ggml-metal.metal, falling back to trying cwd\n", __func__);
-                        path_source = @"ggml-metal.metal";
-                    }
-
-                    GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
-
-                    src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
-                    if (error) {
-                        GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                    }
-                }
-#endif
-
-                if (!ctx->mtl_library) {
-                    @autoreleasepool {
-                        // dictionary of preprocessor macros
-                        NSMutableDictionary * prep = [NSMutableDictionary dictionary];
-
-                        if (ctx->props.has_bfloat) {
-                            [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
-                        }
-
-#if GGML_METAL_EMBED_LIBRARY
-                        [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
-#endif
-
-                        MTLCompileOptions * options = [MTLCompileOptions new];
-                        options.preprocessorMacros = prep;
-
-                        //[options setFastMathEnabled:false];
-
-                        ctx->mtl_library = [ctx->mtl_device newLibraryWithSource:src options:options error:&error];
-                        if (error) {
-                            GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                        }
-
-#if !__has_feature(objc_arc)
-                        [options release];
-#endif
-                    }
-                }
-
-#if GGML_METAL_EMBED_LIBRARY
-                [src release];
-#endif // GGML_METAL_EMBED_LIBRARY
-
-                GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+            dev->library = ggml_metal_library_init(dev);
+            if (!dev->library) {
+                GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+                return NULL;
             }
 
             // --------------------------------------------------
 
             // print MTL GPU family:
-            GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, ctx->props.name);
+            GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, dev->props.name);
 
             // determine max supported GPU family
             // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
             // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
             {
                 for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
-                    if ([ctx->mtl_device supportsFamily:i]) {
+                    if ([dev->mtl_device supportsFamily:i]) {
                         GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, i - (int) MTLGPUFamilyApple1 + 1, i);
                         break;
                     }
                 }
 
                 for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
-                    if ([ctx->mtl_device supportsFamily:i]) {
+                    if ([dev->mtl_device supportsFamily:i]) {
                         GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
                         break;
                     }
                 }
 
                 for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
-                    if ([ctx->mtl_device supportsFamily:i]) {
+                    if ([dev->mtl_device supportsFamily:i]) {
                         GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyMetal%d  (%d)\n", __func__, i - (int) MTLGPUFamilyMetal3_GGML + 3, i);
                         break;
                     }
                 }
             }
 
-            GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, ctx->props.has_simdgroup_reduction ? "true" : "false");
-            GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, ctx->props.has_simdgroup_mm        ? "true" : "false");
-            GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, ctx->props.has_unified_memory      ? "true" : "false");
-            GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, ctx->props.has_bfloat              ? "true" : "false");
-            GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, ctx->props.use_residency_sets      ? "true" : "false");
-            GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, ctx->props.use_shared_buffers      ? "true" : "false");
+            GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, dev->props.has_simdgroup_reduction ? "true" : "false");
+            GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
+            GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
+            GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
+            GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
+            GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
             if (@available(macOS 10.12, iOS 16.0, *)) {
-                GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, ctx->props.max_working_set_size / 1e6);
+                GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
             }
 #endif
         }
     }
 
-    return ctx;
+    return dev;
 }
 
-void ggml_metal_device_free(ggml_metal_device_t ctx) {
-    assert(ctx != NULL);
+void ggml_metal_device_free(ggml_metal_device_t dev) {
+    assert(dev != NULL);
 
-    if (ctx->mtl_library) {
-        [ctx->mtl_library release];
-        ctx->mtl_library = nil;
+    ggml_metal_library_free(dev->library);
+    dev->library = NULL;
+
+    if (dev->mtl_queue) {
+        [dev->mtl_queue release];
+        dev->mtl_queue = nil;
     }
 
-    if (ctx->mtl_queue) {
-        [ctx->mtl_queue release];
-        ctx->mtl_queue = nil;
+    if (dev->mtl_device) {
+        [dev->mtl_device release];
+        dev->mtl_device = nil;
     }
 
-    if (ctx->mtl_device) {
-        [ctx->mtl_device release];
-        ctx->mtl_device = nil;
-    }
-
-    free(ctx);
+    free(dev);
 }
 
-void * ggml_metal_device_get_device(ggml_metal_device_t ctx) {
-    return ctx->mtl_device;
+void * ggml_metal_device_get_obj(ggml_metal_device_t dev) {
+    return dev->mtl_device;
 }
 
-void * ggml_metal_device_get_library(ggml_metal_device_t ctx) {
-    return ctx->mtl_library;
+void * ggml_metal_device_get_queue(ggml_metal_device_t dev) {
+    return dev->mtl_queue;
 }
 
-void * ggml_metal_device_get_queue(ggml_metal_device_t ctx) {
-    return ctx->mtl_queue;
+ggml_metal_library_t ggml_metal_device_get_library(ggml_metal_device_t dev) {
+    return dev->library;
 }
 
-void ggml_metal_device_get_memory(ggml_metal_device_t ctx, size_t * free, size_t * total) {
+void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
-        *total = ctx->mtl_device.recommendedMaxWorkingSetSize;
-        *free  = *total - ctx->mtl_device.currentAllocatedSize;
+        *total = dev->mtl_device.recommendedMaxWorkingSetSize;
+        *free  = *total - dev->mtl_device.currentAllocatedSize;
     } else {
         *free = 0;
         *total = 0;
     }
 }
 
-bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_tensor * op) {
-    const bool has_simdgroup_mm        = ctx->props.has_simdgroup_mm;
-    const bool has_simdgroup_reduction = ctx->props.has_simdgroup_reduction;
-    const bool has_bfloat              = ctx->props.has_bfloat;
+bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
+    const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
+    const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
+    const bool has_bfloat              = dev->props.has_bfloat;
 
     if (!has_bfloat) {
         if (op->type == GGML_TYPE_BF16) {
@@ -537,8 +783,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t ctx, const struct ggml_te
     }
 }
 
-const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t ctx) {
-    return &ctx->props;
+const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev) {
+    return &dev->props;
 }
 
 //
@@ -603,10 +849,10 @@ static void ggml_metal_log_allocated_size(id<MTLDevice> device, size_t size_alig
 }
 
 // rset init
-static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t ctx) {
-    ctx->rset = nil;
+static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t buf) {
+    buf->rset = nil;
 
-    if (!ctx->use_residency_sets) {
+    if (!buf->use_residency_sets) {
         return true;
     }
 
@@ -614,10 +860,10 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t ctx) {
     if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
         MTLResidencySetDescriptor * desc = [[MTLResidencySetDescriptor alloc] init];
         desc.label = @"ggml_metal";
-        desc.initialCapacity = ctx->n_buffers;
+        desc.initialCapacity = buf->n_buffers;
 
         NSError * error;
-        ctx->rset = [ctx->device newResidencySetWithDescriptor:desc error:&error];
+        buf->rset = [buf->device newResidencySetWithDescriptor:desc error:&error];
         if (error) {
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
             [desc release];
@@ -626,12 +872,12 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t ctx) {
 
         [desc release];
 
-        for (int i = 0; i < ctx->n_buffers; i++) {
-            [ctx->rset addAllocation:ctx->buffers[i].metal];
+        for (int i = 0; i < buf->n_buffers; i++) {
+            [buf->rset addAllocation:buf->buffers[i].metal];
         }
 
-        [ctx->rset commit];
-        [ctx->rset requestResidency];
+        [buf->rset commit];
+        [buf->rset requestResidency];
 
         return true;
     }
@@ -641,17 +887,17 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t ctx) {
 }
 
 // rset free
-static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t ctx) {
+static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
     if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
-        if (ctx->rset) {
-            [ctx->rset endResidency];
-            [ctx->rset removeAllAllocations];
-            [ctx->rset release];
+        if (buf->rset) {
+            [buf->rset endResidency];
+            [buf->rset removeAllAllocations];
+            [buf->rset release];
         }
     }
 #else
-    GGML_UNUSED(ctx);
+    GGML_UNUSED(buf);
 #endif
 }
 
@@ -675,7 +921,7 @@ static void * ggml_metal_host_malloc(size_t n) {
     return data;
 }
 
-ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size, bool shared) {
+ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size, bool shared) {
     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
 
     const size_t size_page = sysconf(_SC_PAGESIZE);
@@ -685,7 +931,7 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     shared = shared && props_dev->use_shared_buffers;
 
@@ -700,8 +946,8 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
     }
     res->all_size = size_aligned;
 
-    res->device = ggml_metal_device_get_device(ctx);
-    res->queue  = ggml_metal_device_get_queue (ctx);
+    res->device = ggml_metal_device_get_obj(dev);
+    res->queue  = ggml_metal_device_get_queue(dev);
 
     res->n_buffers = 1;
 
@@ -744,7 +990,7 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t ctx, size_t size,
     return res;
 }
 
-ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, size_t size, size_t max_tensor_size) {
+ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, size_t size, size_t max_tensor_size) {
     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
 
     res->all_data = ptr;
@@ -768,10 +1014,10 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, s
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    res->device = ggml_metal_device_get_device(ctx);
-    res->queue  = ggml_metal_device_get_queue (ctx);
+    res->device = ggml_metal_device_get_obj(dev);
+    res->queue  = ggml_metal_device_get_queue(dev);
 
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     // the buffer fits into the max buffer size allowed by the device
     if (size_aligned <= props_dev->max_buffer_size) {
@@ -837,44 +1083,44 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t ctx, void * ptr, s
     return res;
 }
 
-void ggml_metal_buffer_free(ggml_metal_buffer_t ctx) {
-    for (int i = 0; i < ctx->n_buffers; i++) {
-        [ctx->buffers[i].metal release];
+void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
+    for (int i = 0; i < buf->n_buffers; i++) {
+        [buf->buffers[i].metal release];
     }
 
-    ggml_metal_buffer_rset_free(ctx);
+    ggml_metal_buffer_rset_free(buf);
 
-    if (ctx->is_shared) {
+    if (buf->is_shared) {
 #if TARGET_OS_OSX
-        vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ctx->all_data, ctx->all_size);
+        vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)buf->all_data, buf->all_size);
 #else
-        free(ctx->all_data);
+        free(buf->all_data);
 #endif
     }
 
-    free(ctx);
+    free(buf);
 }
 
-void * ggml_metal_buffer_get_base(ggml_metal_buffer_t ctx) {
-    return ctx->all_data;
+void * ggml_metal_buffer_get_base(ggml_metal_buffer_t buf) {
+    return buf->all_data;
 }
 
-bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t ctx) {
-    return ctx->is_shared;
+bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
+    return buf->is_shared;
 }
 
-void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-    if (ctx->is_shared) {
+void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    if (buf->is_shared) {
         memset((char *)tensor->data + offset, value, size);
         return;
     }
 
     @autoreleasepool {
         // dst
-        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(buf, tensor);
         buf_dst.offs += offset;
 
-        id<MTLCommandQueue>  queue   = ctx->queue;
+        id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -892,8 +1138,8 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor
     }
 }
 
-void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    if (ctx->is_shared) {
+void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    if (buf->is_shared) {
         memcpy((char *)tensor->data + offset, data, size);
         return;
     }
@@ -901,20 +1147,20 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * 
     @autoreleasepool {
         // src
         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-        id<MTLBuffer> buf_src = [ctx->device newBufferWithBytesNoCopy:data_ptr
+        id<MTLBuffer> buf_src = [buf->device newBufferWithBytesNoCopy:data_ptr
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
         // dst
-        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(buf, tensor);
         buf_dst.offs += offset;
 
         // note: for experimentation purposes, here we use a semaphore to wait for the copy to complete
         //       this is alternative to waitUntilCompleted, which should be faster, but don't seem to make much difference
         dispatch_semaphore_t completion_semaphore = dispatch_semaphore_create(0);
 
-        id<MTLCommandQueue>  queue   = ctx->queue;
+        id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -943,24 +1189,24 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t ctx, struct ggml_tensor * 
     }
 }
 
-void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    if (ctx->is_shared) {
+void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (buf->is_shared) {
         memcpy(data, (const char *)tensor->data + offset, size);
         return;
     }
 
     @autoreleasepool {
         // src
-        struct ggml_metal_buffer_id buf_src = ggml_metal_buffer_get_id(ctx, tensor);
+        struct ggml_metal_buffer_id buf_src = ggml_metal_buffer_get_id(buf, tensor);
         buf_src.offs += offset;
 
         // dst
-        id<MTLBuffer> buf_dst = [ctx->device newBufferWithBytesNoCopy:data
+        id<MTLBuffer> buf_dst = [buf->device newBufferWithBytesNoCopy:data
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
-        id<MTLCommandQueue>  queue   = ctx->queue;
+        id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
@@ -980,21 +1226,21 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t ctx, const struct ggml_ten
     }
 }
 
-void ggml_metal_buffer_clear(ggml_metal_buffer_t ctx, uint8_t value) {
-    if (ctx->is_shared) {
-        memset(ctx->all_data, value, ctx->all_size);
+void ggml_metal_buffer_clear(ggml_metal_buffer_t buf, uint8_t value) {
+    if (buf->is_shared) {
+        memset(buf->all_data, value, buf->all_size);
         return;
     }
 
     @autoreleasepool {
-        id<MTLCommandQueue>  queue   = ctx->queue;
+        id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            [encoder fillBuffer:ctx->buffers[0].metal
-                          range:NSMakeRange(0, ctx->buffers[0].size)
+            [encoder fillBuffer:buf->buffers[0].metal
+                          range:NSMakeRange(0, buf->buffers[0].size)
                           value:value];
 
             [encoder endEncoding];
@@ -1005,18 +1251,18 @@ void ggml_metal_buffer_clear(ggml_metal_buffer_t ctx, uint8_t value) {
     }
 }
 
-struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t ctx, const struct ggml_tensor * t) {
+struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t) {
     struct ggml_metal_buffer_id res = { nil, 0 };
 
     const int64_t tsize = ggml_nbytes(t);
 
     // find the view that contains the tensor fully
-    for (int i = 0; i < ctx->n_buffers; ++i) {
-        const int64_t ioffs = (int64_t) t->data - (int64_t) ctx->buffers[i].data;
+    for (int i = 0; i < buf->n_buffers; ++i) {
+        const int64_t ioffs = (int64_t) t->data - (int64_t) buf->buffers[i].data;
 
-        //GGML_LOG_INFO("ioffs = %10ld, tsize = %10ld, sum = %10ld, ctx->buffers[%d].size = %10ld\n", ioffs, tsize, ioffs + tsize, i, ctx->buffers[i].size);
-        if (ioffs >= 0 && ioffs + tsize <= (int64_t) ctx->buffers[i].size) {
-            res.metal = ctx->buffers[i].metal;
+        //GGML_LOG_INFO("ioffs = %10ld, tsize = %10ld, sum = %10ld, buf->buffers[%d].size = %10ld\n", ioffs, tsize, ioffs + tsize, i, buf->buffers[i].size);
+        if (ioffs >= 0 && ioffs + tsize <= (int64_t) buf->buffers[i].size) {
+            res.metal = buf->buffers[i].metal;
             res.offs  = (size_t) ioffs;
 
             //GGML_LOG_INFO("%s: tensor '%16s', offs = %8ld\n", __func__, t->name, *offs);

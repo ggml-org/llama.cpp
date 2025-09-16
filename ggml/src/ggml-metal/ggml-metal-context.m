@@ -16,171 +16,6 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-//
-// MTLComputePipelineState wrapper
-//
-
-struct ggml_metal_cv {
-    MTLFunctionConstantValues * obj;
-};
-
-ggml_metal_cv_t ggml_metal_cv_init(void) {
-    ggml_metal_cv_t res = calloc(1, sizeof(struct ggml_metal_cv));
-
-    res->obj = [[MTLFunctionConstantValues alloc] init];
-
-    return res;
-}
-
-void ggml_metal_cv_free(ggml_metal_cv_t cv) {
-    [cv->obj release];
-    free(cv);
-}
-
-void ggml_metal_cv_set_int32(ggml_metal_cv_t cv, int32_t value, int32_t idx) {
-    [cv->obj setConstantValue:&value type:MTLDataTypeInt atIndex:idx];
-}
-
-void ggml_metal_cv_set_bool(ggml_metal_cv_t cv, bool value, int32_t idx) {
-    [cv->obj setConstantValue:&value type:MTLDataTypeBool atIndex:idx];
-}
-
-//
-// MTLComputePipelineState wrapper
-//
-
-struct ggml_metal_pipeline {
-    id<MTLComputePipelineState> obj;
-
-    // suggested dispatch sizes
-    int nsg;
-
-    int nr0;
-    int nr1;
-
-    size_t smem;
-};
-
-ggml_metal_pipeline_t ggml_metal_pipeline_init(void) {
-    ggml_metal_pipeline_t res = calloc(1, sizeof(struct ggml_metal_pipeline));
-
-    *res = (struct ggml_metal_pipeline) {
-        /*.obj  =*/ nil,
-        /*.nsg  =*/ 0,
-        /*.nr0  =*/ 0,
-        /*.nr1  =*/ 0,
-        /*.smem =*/ 0,
-    };
-
-    return res;
-}
-
-void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
-    [pipeline->obj release];
-    free(pipeline);
-}
-
-void ggml_metal_pipeline_set_nsg(ggml_metal_pipeline_t pipeline, int nsg) {
-    pipeline->nsg = nsg;
-}
-
-int ggml_metal_pipeline_get_nsg(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nsg;
-}
-
-void ggml_metal_pipeline_set_nr0(ggml_metal_pipeline_t pipeline, int nr0) {
-    pipeline->nr0 = nr0;
-}
-
-int ggml_metal_pipeline_get_nr0(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nr0;
-}
-
-void ggml_metal_pipeline_set_nr1(ggml_metal_pipeline_t pipeline, int nr1) {
-    pipeline->nr1 = nr1;
-}
-
-int ggml_metal_pipeline_get_nr1(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nr1;
-}
-
-void   ggml_metal_pipeline_set_smem(ggml_metal_pipeline_t pipeline, size_t smem) {
-    pipeline->smem = smem;
-}
-
-size_t ggml_metal_pipeline_get_smem(ggml_metal_pipeline_t pipeline) {
-    return pipeline->smem;
-}
-
-int ggml_metal_pipeline_max_theads_per_threadgroup(ggml_metal_pipeline_t pipeline) {
-    return pipeline->obj.maxTotalThreadsPerThreadgroup;
-}
-
-//
-// MTLComputeCommandEncoder wrapper
-//
-
-struct ggml_metal_encoder {
-    id<MTLComputeCommandEncoder> obj;
-};
-
-ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent) {
-    ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
-
-    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
-
-    if (concurrent) {
-        res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
-    } else {
-        res->obj = [cmd_buf computeCommandEncoder];
-    }
-
-    [res->obj retain];
-
-    return res;
-}
-
-void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
-    [encoder->obj release];
-    free(encoder);
-}
-
-void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name) {
-    [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
-}
-
-void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
-    [encoder->obj popDebugGroup];
-}
-
-void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, ggml_metal_pipeline_t pipeline) {
-    [encoder->obj setComputePipelineState:pipeline->obj];
-}
-
-void ggml_metal_encoder_set_bytes(ggml_metal_encoder_t encoder, void * data, size_t size, int idx) {
-    [encoder->obj setBytes:data length:size atIndex:idx];
-}
-
-void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_metal_buffer_id buffer, int idx) {
-    [encoder->obj setBuffer:buffer.metal offset:buffer.offs atIndex:idx];
-}
-
-void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
-    [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
-}
-
-void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int tg0, int tg1, int tg2, int tptg0, int tptg1, int tptg2) {
-    [encoder->obj dispatchThreadgroups:MTLSizeMake(tg0, tg1, tg2) threadsPerThreadgroup:MTLSizeMake(tptg0, tptg1, tptg2)];
-}
-
-void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
-    [encoder->obj memoryBarrierWithScope:MTLBarrierScopeBuffers];
-}
-
-void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
-    [encoder->obj endEncoding];
-}
-
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
 
@@ -193,10 +28,10 @@ struct ggml_metal_command_buffer {
 
 struct ggml_metal {
     id<MTLDevice>       device;
-    id<MTLLibrary>      library;
     id<MTLCommandQueue> queue; // currently a pointer to the device queue, but might become separate queue [TAG_QUEUE_PER_BACKEND]
 
-    ggml_metal_device_t ctx_dev;
+    ggml_metal_device_t  dev;
+    ggml_metal_library_t lib;
 
     dispatch_queue_t d_queue;
 
@@ -245,7 +80,7 @@ struct ggml_metal {
     void *              abort_callback_data;
 };
 
-ggml_metal_t ggml_metal_init(ggml_metal_device_t ctx_dev) {
+ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
 
 #if TARGET_OS_OSX && !GGML_METAL_NDEBUG
@@ -260,28 +95,27 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t ctx_dev) {
     // init context
     ggml_metal_t res = calloc(1, sizeof(struct ggml_metal));
 
-    res->device = ggml_metal_device_get_device(ctx_dev);
+    res->device = ggml_metal_device_get_obj(dev);
 
     GGML_LOG_INFO("%s: picking default device: %s\n", __func__, [[res->device name] UTF8String]);
-
-    res->library = ggml_metal_device_get_library(ctx_dev);
-    if (res->library == nil) {
-        GGML_LOG_ERROR("%s: error: metal library is nil\n", __func__);
-        return NULL;
-    }
 
     // TODO: would it be better to have one queue for the backend and one queue for the device?
     //       the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
     //res->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
-    res->queue = ggml_metal_device_get_queue(ctx_dev);
+    res->queue = ggml_metal_device_get_queue(dev);
     if (res->queue == nil) {
         GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
         return NULL;
     }
 
-    res->ctx_dev = ctx_dev;
+    res->dev = dev;
+    res->lib = ggml_metal_device_get_library(dev);
+    if (res->lib == NULL) {
+        GGML_LOG_ERROR("%s: error: failed to initialize Metal library\n", __func__);
+        return NULL;
+    }
 
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
@@ -381,42 +215,6 @@ void ggml_metal_free(ggml_metal_t ctx) {
     dispatch_release(ctx->d_queue);
 
     free(ctx);
-}
-
-ggml_metal_pipeline_t ggml_metal_get_pipeline(ggml_metal_t ctx, const char * name) {
-    return ggml_metal_pipelines_get(ctx->pipelines_ext, name);
-}
-
-ggml_metal_pipeline_t ggml_metal_compile_pipeline(ggml_metal_t ctx, const char * base, const char * name, ggml_metal_cv_t cv) {
-    ggml_metal_pipeline_t res = ggml_metal_pipeline_init();
-
-    @autoreleasepool {
-        NSError * error = nil;
-
-        NSString * base_func = [NSString stringWithUTF8String:base];
-
-        GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
-
-        // TODO: make sure it is thread-safe to compile pipelines in parallel
-        id<MTLFunction> mtl_function = [ctx->library newFunctionWithName:base_func constantValues:(cv ? cv->obj : nil) error:&error];
-        if (!mtl_function) {
-            GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-
-            return nil;
-        }
-
-        res->obj = [ctx->device newComputePipelineStateWithFunction:mtl_function error:&error];
-
-        ggml_metal_pipelines_add(ctx->pipelines_ext, name, res);
-
-        [mtl_function release];
-
-        GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name, (void *) res->obj,
-                (int) res->obj.maxTotalThreadsPerThreadgroup,
-                (int) res->obj.threadExecutionWidth);
-    }
-
-    return res;
 }
 
 void ggml_metal_synchronize(ggml_metal_t ctx) {
@@ -550,12 +348,70 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
     }
 }
 
+struct ggml_metal_graph_encoder {
+    const struct ggml_metal_device_props * props_dev;
+
+    ggml_metal_device_t dev;
+
+    ggml_metal_library_t lib;
+
+    ggml_metal_encoder_t enc;
+
+    ggml_mem_ranges_t mem_ranges;
+
+    struct ggml_cgraph * gf;
+
+    int idx_start;
+    int idx_end;
+
+    bool use_fusion;
+
+    int debug_graph;
+    int debug_fusion;
+};
+
+ggml_metal_library_t ggml_metal_graph_encoder_get_lib(ggml_metal_graph_encoder_t ctx) {
+    return ctx->lib;
+}
+
+ggml_metal_encoder_t ggml_metal_graph_encoder_get_enc(ggml_metal_graph_encoder_t ctx) {
+    return ctx->enc;
+}
+
+struct ggml_cgraph * ggml_metal_graph_encoder_get_gf(ggml_metal_graph_encoder_t ctx) {
+    return ctx->gf;
+}
+
+const struct ggml_metal_device_props * ggml_metal_graph_encoder_get_props_dev(ggml_metal_graph_encoder_t ctx) {
+    return ctx->props_dev;
+}
+
+int ggml_metal_graph_encoder_get_idx_start(ggml_metal_graph_encoder_t ctx) {
+    return ctx->idx_start;
+}
+
+int ggml_metal_graph_encoder_get_idx_end(ggml_metal_graph_encoder_t ctx) {
+    return ctx->idx_end;
+}
+
+bool ggml_metal_graph_encoder_get_use_fusion(ggml_metal_graph_encoder_t ctx) {
+    return ctx->use_fusion;
+}
+
+int ggml_metal_graph_encoder_get_debug_fusion(ggml_metal_graph_encoder_t ctx) {
+    return ctx->debug_fusion;
+}
+
+int ggml_metal_graph_encoder_get_debug_graph(ggml_metal_graph_encoder_t ctx) {
+    return ctx->debug_graph;
+}
+
 bool ggml_metal_graph_encoder_concurrency_reset(ggml_metal_graph_encoder_t ctx) {
     if (!ctx->mem_ranges) {
         return true;
     }
 
-    ggml_metal_encoder_memory_barrier(ctx->encoder);
+    ggml_metal_encoder_memory_barrier(ctx->enc);
 
     ggml_mem_ranges_reset(ctx->mem_ranges);
 
@@ -579,9 +435,7 @@ bool ggml_metal_graph_encoder_concurrency_add(ggml_metal_graph_encoder_t ctx, co
 }
 
 static int ggml_metal_graph_encoder_node(ggml_metal_graph_encoder_t ctx_enc, int idx) {
-    ggml_metal_t ctx = ctx_enc->ctx;
-
-    struct ggml_cgraph * gf = ctx->gf;
+    struct ggml_cgraph * gf = ctx_enc->gf;
 
     struct ggml_tensor ** nodes = ggml_graph_nodes(gf) + idx;
     struct ggml_tensor *  node  = nodes[0];
@@ -606,7 +460,7 @@ static int ggml_metal_graph_encoder_node(ggml_metal_graph_encoder_t ctx_enc, int
             } break;
     }
 
-    if (!ggml_metal_device_supports_op(ctx->ctx_dev, node)) {
+    if (!ggml_metal_device_supports_op(ctx_enc->dev, node)) {
         GGML_LOG_ERROR("%s: error: unsupported op '%s'\n", __func__, ggml_op_desc(node));
         GGML_ABORT("unsupported op");
     }
@@ -628,10 +482,10 @@ static int ggml_metal_graph_encoder_node(ggml_metal_graph_encoder_t ctx_enc, int
             ggml_metal_graph_encoder_concurrency_reset(ctx_enc);
         }
 
-        if (ctx->debug_graph > 0) {
+        if (ctx_enc->debug_graph > 0) {
             GGML_LOG_DEBUG("%s: node[%5d] - %-12s %s\n", __func__, idx, ggml_op_name(node->op), is_concurrent ? "(concurrent)" : "");
         }
-        if (ctx->debug_graph > 1) {
+        if (ctx_enc->debug_graph > 1) {
             GGML_TENSOR_LOCALS( int64_t, ne0, node->src[0], ne);
             GGML_TENSOR_LOCALS(uint64_t, nb0, node->src[0], nb);
             GGML_TENSOR_LOCALS( int64_t, ne1, node->src[1], ne);
@@ -817,7 +671,7 @@ static int ggml_metal_graph_encoder_node(ggml_metal_graph_encoder_t ctx_enc, int
             }
     }
 
-    if (ctx->debug_graph > 0) {
+    if (ctx_enc->debug_graph > 0) {
         if (n_fuse > 1) {
             GGML_LOG_DEBUG("%s:               fuse %d ops\n", __func__, n_fuse);
         }
@@ -1040,20 +894,22 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
         const bool should_capture = ctx->capture_next_compute;
 
         struct ggml_metal_graph_encoder ctx_enc = {
-            /*.ctx          =*/ ctx,
-            /*.props_dev    =*/ ggml_metal_device_get_props(ctx->ctx_dev),
-            /*.encoder      =*/ ggml_metal_encoder_init(cmd_buf, ctx->use_concurrency),
+            /*.props_dev    =*/ ggml_metal_device_get_props(ctx->dev),
+            /*.dev          =*/ ctx->dev,
+            /*.lib          =*/ ctx->lib,
+            /*.en    c      =*/ ggml_metal_encoder_init(cmd_buf, ctx->use_concurrency),
             /*.mem_ranges   =*/ mem_ranges,
             /*.gf           =*/ ctx->gf,
             /*.idx_start    =*/ idx_start,
             /*.idx_end      =*/ idx_end,
             /*.use_fusion   =*/ ctx->use_fusion,
+            /*.debug_graph  =*/ ctx->debug_graph,
             /*.debug_fusion =*/ ctx->debug_fusion,
         };
 
         for (int idx = idx_start; idx < idx_end;) {
             if (should_capture) {
-                ggml_metal_encoder_debug_group_push(ctx_enc.encoder, ggml_op_desc(ggml_graph_node(ctx->gf, idx)));
+                ggml_metal_encoder_debug_group_push(ctx_enc.enc, ggml_op_desc(ggml_graph_node(ctx->gf, idx)));
             }
 
             const int res = ggml_metal_graph_encoder_node(&ctx_enc, idx);
@@ -1063,7 +919,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             }
 
             if (should_capture) {
-                ggml_metal_encoder_debug_group_pop(ctx_enc.encoder);
+                ggml_metal_encoder_debug_group_pop(ctx_enc.enc);
             }
 
             if (res == 0) {
@@ -1073,8 +929,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx += res;
         }
 
-        ggml_metal_encoder_end_encoding(ctx_enc.encoder);
-        ggml_metal_encoder_free(ctx_enc.encoder);
+        ggml_metal_encoder_end_encoding(ctx_enc.enc);
+        ggml_metal_encoder_free(ctx_enc.enc);
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];
