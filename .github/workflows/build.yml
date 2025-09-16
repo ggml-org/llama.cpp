@@ -138,7 +138,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   macOS-latest-cmake-arm64-webgpu:
-    runs-on: latest
+    runs-on: macos-latest
 
     steps:
       - name: Clone
