@@ -29,43 +29,29 @@ OutputVector translate_permute(const NodeContext& context) {
                                                       ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
     } else {
         auto src = context.get_input(0);
-        auto attention_size = context.get_input("attention_size");
+        Output<Node> attention_size;
         if (context.is_static()) {
             attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
+        } else if (op_case == 2) {
+            attention_size = context.get_input("attention_size");
+        } else {
+            attention_size = context.get_input("attention_size_swa");
         }
 
         auto src_shape_ = context.get_input_shape(0).to_shape();
         std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
 
-        std::shared_ptr<ov::Node> src_reshaped;
-        if (op_case == 2) {
-            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-                src,
-                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
-                false);
-        } else {
-            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
-                src,
-                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{src_shape[1], src_shape[0], -1}),
-                false);
-        }
+        auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+            src,
+            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
+            false);
 
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        std::shared_ptr<ov::Node> slice_axis;
-        if (op_case == 2) {
-            slice_axis = zero;
-        } else {
-            slice_axis = two;
-        }
-        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, slice_axis);
+        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, zero);
 
-        if (op_case == 2) {
-            res = std::make_shared<ov::op::v1::Transpose>(src_slice, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
-        } else {
-            res = src_slice;
-        }
+        res = std::make_shared<ov::op::v1::Transpose>(src_slice,
+                                                      ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
