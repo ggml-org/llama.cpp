@@ -65,12 +65,12 @@
 		<Tooltip.Root>
 			<Tooltip.Trigger>
 				<Button
-					variant="ghost"
-					size="sm"
-					class="h-5 w-5 p-0 {!hasNext ? 'cursor-not-allowed opacity-30' : ''}"
-					onclick={handleNext}
-					disabled={!hasNext}
 					aria-label="Next message version"
+					class="h-5 w-5 p-0 {!hasNext ? 'cursor-not-allowed opacity-30' : ''}"
+					disabled={!hasNext}
+					onclick={handleNext}
+					size="sm"
+					variant="ghost"
 				>
 					<ChevronRight class="h-3 w-3" />
 				</Button>

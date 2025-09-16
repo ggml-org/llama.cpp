@@ -1,10 +1,5 @@
 <script lang="ts">
-	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
-	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { isFileTypeSupported } from '$lib/utils/file-type';
-	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
-	import { supportsVision, supportsAudio, serverLoading } from '$lib/stores/server.svelte';
+	import { afterNavigate } from '$app/navigation';
 	import {
 		ChatForm,
 		ChatScreenHeader,
@@ -14,38 +9,48 @@
 		ServerInfo,
 		ServerLoadingSplash
 	} from '$lib/components/app';
-	import {
-		activeMessages,
-		activeConversation,
-		isLoading,
-		sendMessage,
-		stopGeneration,
-		setMaxContextError
-	} from '$lib/stores/chat.svelte';
-	import { contextService } from '$lib/services';
-	import { fade, fly, slide } from 'svelte/transition';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
 		AUTO_SCROLL_INTERVAL,
 		INITIAL_SCROLL_DELAY
 	} from '$lib/constants/auto-scroll';
-	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { deleteConversation } from '$lib/stores/chat.svelte';
-	import { afterNavigate } from '$app/navigation';
+	import {
+		activeMessages,
+		activeConversation,
+		deleteConversation,
+		isLoading,
+		sendMessage,
+		stopGeneration,
+		setMaxContextError
+	} from '$lib/stores/chat.svelte';
+	import {
+		supportsVision,
+		supportsAudio,
+		serverLoading,
+		serverStore
+	} from '$lib/stores/server.svelte';
+	import { contextService } from '$lib/services';
+	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
+	import { isFileTypeSupported } from '$lib/utils/file-type';
+	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
+	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { onMount } from 'svelte';
+	import { fade, fly, slide } from 'svelte/transition';
+	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
 	let { showCenteredEmpty = false } = $props();
-	let chatScrollContainer: HTMLDivElement | undefined = $state();
-	let scrollInterval: ReturnType<typeof setInterval> | undefined;
+
 	let autoScrollEnabled = $state(true);
-	let lastScrollTop = $state(0);
-	let userScrolledUp = $state(false);
-	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
-	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-	let isDragOver = $state(false);
+	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
+	let isDragOver = $state(false);
+	let lastScrollTop = $state(0);
+	let scrollInterval: ReturnType<typeof setInterval> | undefined;
+	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let showFileErrorDialog = $state(false);
+	let uploadedFiles = $state<ChatUploadedFile[]>([]);
+	let userScrolledUp = $state(false);
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -62,6 +67,7 @@
 	let showDeleteDialog = $state(false);
 
 	let showEmptyFileDialog = $state(false);
+
 	let emptyFileNames = $state<string[]>([]);
 
 	let isEmpty = $derived(
@@ -69,6 +75,21 @@
 	);
 
 	let isServerLoading = $derived(serverLoading());
+
+	async function handleDeleteConfirm() {
+		const conversation = activeConversation();
+		if (conversation) {
+			await deleteConversation(conversation.id);
+		}
+		showDeleteDialog = false;
+	}
+
+	function handleDeleteDialogKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			handleDeleteConfirm();
+		}
+	}
 
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
@@ -97,21 +118,6 @@
 
 		if (event.dataTransfer?.files) {
 			processFiles(Array.from(event.dataTransfer.files));
-		}
-	}
-
-	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
-		if (conversation) {
-			await deleteConversation(conversation.id);
-		}
-		showDeleteDialog = false;
-	}
-
-	function handleDeleteDialogKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			handleDeleteConfirm();
 		}
 	}
 

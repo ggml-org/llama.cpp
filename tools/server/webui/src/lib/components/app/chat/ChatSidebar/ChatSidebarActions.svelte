@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import { Search, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -18,16 +18,16 @@
 
 	let searchInput: HTMLInputElement | null = $state(null);
 
+	function handleSearchModeDeactivate() {
+		isSearchModeActive = false;
+		searchQuery = '';
+	}
+
 	$effect(() => {
 		if (isSearchModeActive) {
 			searchInput?.focus();
 		}
 	});
-
-	function handleSearchModeDeactivate() {
-		isSearchModeActive = false;
-		searchQuery = '';
-	}
 </script>
 
 <div class="space-y-0.5">

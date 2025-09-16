@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Settings, Filter, AlertTriangle, Brain, Cog, Monitor, Sun, Moon } from '@lucide/svelte';
+	import { Settings, Funnel, AlertTriangle, Brain, Cog, Monitor, Sun, Moon } from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsSection } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
+	import Label from '$lib/components/ui/label/label.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -12,7 +13,6 @@
 	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -22,9 +22,9 @@
 	let { onOpenChange, open = false }: Props = $props();
 
 	const settingSections: Array<{
-		title: string;
-		icon: Component;
 		fields: SettingsFieldConfig[];
+		icon: Component;
+		title: string;
 	}> = [
 		{
 			title: 'General',
@@ -75,7 +75,7 @@
 		},
 		{
 			title: 'Samplers',
-			icon: Filter,
+			icon: Funnel,
 			fields: [
 				{
 					key: 'samplers',
@@ -218,27 +218,17 @@
 	];
 
 	let activeSection = $state('General');
-	let localConfig: SettingsConfigType = $state({ ...config() });
-	let originalTheme: string = $state('');
-
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
-
-	$effect(() => {
-		if (open) {
-			localConfig = { ...config() };
-			originalTheme = config().theme as string;
-		}
-	});
+	let localConfig: SettingsConfigType = $state({ ...config() });
+	let originalTheme: string = $state('');
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
 
 		setMode(newTheme as 'light' | 'dark' | 'system');
 	}
-
-	const defaultConfig = SETTING_CONFIG_DEFAULT;
 
 	function handleClose() {
 		if (localConfig.theme !== originalTheme) {
@@ -307,6 +297,13 @@
 		updateMultipleConfig(processedConfig);
 		onOpenChange?.(false);
 	}
+
+	$effect(() => {
+		if (open) {
+			localConfig = { ...config() };
+			originalTheme = config().theme as string;
+		}
+	});
 </script>
 
 <Dialog.Root {open} onOpenChange={handleClose}>
@@ -346,7 +343,7 @@
 										id={field.key}
 										value={String(localConfig[field.key] || '')}
 										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
-										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
+										placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
 										class="max-w-md"
 									/>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -363,7 +360,7 @@
 										id={field.key}
 										value={String(localConfig[field.key] || '')}
 										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
-										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
+										placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
 										class="min-h-[100px] max-w-2xl"
 									/>
 									{#if field.help || SETTING_CONFIG_INFO[field.key]}

@@ -1,8 +1,9 @@
 <script lang="ts">
+	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants/processing-info';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { slotsService } from '$lib/services/slots';
 	import { isLoading, activeMessages, activeConversation } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { slotsService } from '$lib/services/slots';
 
 	const processingState = useProcessingState();
 
@@ -22,7 +23,7 @@
 				if (!config().keepStatsVisible) {
 					processingState.stopMonitoring();
 				}
-			}, 2000); // 2 second delay to ensure we get final updates
+			}, PROCESSING_INFO_TIMEOUT);
 		}
 	});
 

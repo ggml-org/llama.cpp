@@ -3,6 +3,21 @@
  * Organized by category with TypeScript enums for better type safety
  */
 
+import {
+	FileExtensionAudio,
+	FileExtensionImage,
+	FileExtensionPdf,
+	FileExtensionText,
+	FileTypeAudio,
+	FileTypeImage,
+	FileTypePdf,
+	FileTypeText,
+	MimeTypeAudio,
+	MimeTypeImage,
+	MimeTypeApplication,
+	MimeTypeText
+} from '$lib/types/files.d';
+
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {
 	[FileTypeAudio.MP3]: {

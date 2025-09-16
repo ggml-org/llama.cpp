@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
+	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Input from '$lib/components/ui/input/input.svelte';
-	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
