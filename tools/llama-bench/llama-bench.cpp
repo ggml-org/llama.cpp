@@ -733,7 +733,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                ggml_backend_load_all();
                 try {
                     auto devices = register_rpc_device_list(argv[i]);
                     params.rpc_servers.push_back(argv[i]);
@@ -2052,7 +2051,6 @@ int main(int argc, char ** argv) {
     cmd_params params = parse_cmd_params(argc, argv);
 
     if (params.list_devices) {
-        ggml_backend_load_all();
         for (const auto & rpc : params.rpc_servers) {
             if (!rpc.empty()) {
                 try {
