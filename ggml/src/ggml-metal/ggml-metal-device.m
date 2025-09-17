@@ -139,11 +139,8 @@ struct ggml_metal_library {
 };
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
-    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
-
-    res->device = ggml_metal_device_get_obj(dev);
-
-    res->pipelines = ggml_metal_pipelines_init();
+    id<MTLLibrary> library = nil;
+    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
 
     // load library
     //
@@ -166,7 +163,6 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         extern const char ggml_metallib_end[];
 
         src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
-
 #else
 
 #ifdef SWIFT_PACKAGE
@@ -213,9 +209,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             NSURL * libURL = [NSURL fileURLWithPath:path_lib];
             GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
 
-            res->obj = [res->device newLibraryWithURL:libURL error:&error];
+            library = [device newLibraryWithURL:libURL error:&error];
             if (error) {
                 GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                return nil;
             }
         } else {
             GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
@@ -241,11 +238,12 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
             if (error) {
                 GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                return nil;
             }
         }
 #endif
 
-        if (!res->obj) {
+        if (!library) {
             @autoreleasepool {
                 // dictionary of preprocessor macros
                 NSMutableDictionary * prep = [NSMutableDictionary dictionary];
@@ -263,9 +261,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
                 //[options setFastMathEnabled:false];
 
-                res->obj = [res->device newLibraryWithSource:src options:options error:&error];
+                library = [device newLibraryWithSource:src options:options error:&error];
                 if (error) {
                     GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                    return nil;
                 }
 
 #if !__has_feature(objc_arc)
@@ -281,15 +280,25 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
     }
 
+    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+
+    res->obj = library;
+    res->device = device;
+    res->pipelines = ggml_metal_pipelines_init();
+
     return res;
 }
 
 void ggml_metal_library_free(ggml_metal_library_t lib) {
-    if (lib) {
-        [lib->obj release];
-
-        ggml_metal_pipelines_free(lib->pipelines);
+    if (!lib) {
+        return;
     }
+
+    if (lib->obj) {
+        [lib->obj release];
+    }
+
+    ggml_metal_pipelines_free(lib->pipelines);
 
     free(lib);
 }
@@ -322,6 +331,7 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
         if (!mtl_function) {
             ggml_critical_section_end();
 
+            GGML_LOG_ERROR("%s: error: failed to compile pipeline: base = '%s', name = '%s'\n", __func__, base, name);
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
 
             return nil;
@@ -466,7 +476,6 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             dev->library = ggml_metal_library_init(dev);
             if (!dev->library) {
                 GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
-                return NULL;
             }
 
             // --------------------------------------------------

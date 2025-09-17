@@ -108,8 +108,17 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     res->dev = dev;
     res->lib = ggml_metal_device_get_library(dev);
     if (res->lib == NULL) {
-        GGML_LOG_ERROR("%s: error: failed to initialize Metal library\n", __func__);
-        return NULL;
+        GGML_LOG_WARN("%s: the device does not have a precompiled Metal library - this is unexpected\n", __func__);
+        GGML_LOG_WARN("%s: will try to compile it on the fly\n", __func__);
+
+        res->lib = ggml_metal_library_init(dev);
+        if (res->lib == NULL) {
+            GGML_LOG_ERROR("%s: error: failed to initialize the Metal library\n", __func__);
+
+            free(res);
+
+            return NULL;
+        }
     }
 
     const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
