@@ -205,7 +205,7 @@ void ggml_compute_forward_xielu(const ggml_compute_params * params, ggml_tensor 
     float alpha_p = ggml_get_op_params_f32(dst, 2);
     const float beta = ggml_get_op_params_f32(dst, 3);
     const float eps = ggml_get_op_params_f32(dst, 4);
-    
+
     const auto xielu_op_params = [alpha_n, alpha_p, beta, eps](float f) {
         return op_xielu(f, alpha_n, alpha_p, beta, eps);
     };
