@@ -360,7 +360,9 @@ void GgmlOvDecoder::add_extra_inputs() {
     };
 
     create_attention_size_input("attention_size", attention_size);
-    create_attention_size_input("attention_size_swa", attention_size_swa);
+    if (attention_size_swa != -1) {
+        create_attention_size_input("attention_size_swa", attention_size_swa);
+    }
 }
 
 const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) const {
