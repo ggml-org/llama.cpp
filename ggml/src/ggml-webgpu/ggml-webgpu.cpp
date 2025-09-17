@@ -9,6 +9,10 @@
 #include "ggml-impl.h"
 #include "ggml-wgsl-shaders.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #include <webgpu/webgpu_cpp.h>
 
 #include <condition_variable>
@@ -1172,8 +1176,12 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     ctx->adapter.GetInfo(&info);
 
     // Initialize device
-    std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
-                                                         wgpu::FeatureName::ImplicitDeviceSynchronization };
+    std::vector<wgpu::FeatureName> required_features = {
+        wgpu::FeatureName::ShaderF16,
+#ifndef __EMSCRIPTEN__
+        wgpu::FeatureName::ImplicitDeviceSynchronization,
+#endif
+    };
     wgpu::DeviceDescriptor         dev_desc;
     dev_desc.requiredLimits       = &ctx->limits;
     dev_desc.requiredFeatures     = required_features.data();
@@ -1286,6 +1294,13 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     instance_descriptor.requiredFeatures                     = instance_features.data();
     instance_descriptor.requiredFeatureCount                 = instance_features.size();
     webgpu_ctx->instance                                     = wgpu::CreateInstance(&instance_descriptor);
+
+#ifdef __EMSCRIPTEN__
+    if (webgpu_ctx->instance == nullptr) {
+        GGML_LOG_ERROR("ggml_webgpu: Failed to create WebGPU instance. Make sure either -sASYNCIFY or -sJSPI is set\n");
+        return nullptr;
+    }
+#endif
     GGML_ASSERT(webgpu_ctx->instance != nullptr);
 
     static ggml_backend_reg reg = {
