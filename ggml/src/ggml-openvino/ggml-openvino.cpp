@@ -319,12 +319,8 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
             return true;
         }
         float freq_scale;
-        memcpy(&freq_scale, op_params + 6, sizeof(float));
-        if (freq_scale != 0.0f && freq_scale != 1.0f) {
-            GGML_LOG_WARN("OpenVINO backend does not support ROPE with freq_scale %f != 1.0f\n", freq_scale);
-            return true;
-        }
         float ext_factor;
+        memcpy(&freq_scale, op_params + 6, sizeof(float));
         memcpy(&ext_factor, op_params + 7, sizeof(float));
         if (ext_factor != 0.0f) {
             GGML_LOG_WARN("OpenVINO backend does not support ROPE with ext_factor %f != 0.0f\n", ext_factor);
