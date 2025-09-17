@@ -39,11 +39,11 @@ jobs:
           # Note: the arm64 images are failing, which prevents the amd64 images from being built
           # https://github.com/ggml-org/llama.cpp/issues/11888
           #- { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: false }
-          #- { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          #- { tag: "cuda", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          #- { tag: "musa", dockerfile: ".devops/musa.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          #- { tag: "intel", dockerfile: ".devops/intel.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          #- { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
+          - { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
+          - { tag: "cuda", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
+          - { tag: "musa", dockerfile: ".devops/musa.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
+          - { tag: "intel", dockerfile: ".devops/intel.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
+          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
           - { tag: "arm64", dockerfile: ".devops/arm64.Dockerfile", platforms: "linux/arm64", full: true, light: true, server: true, free_disk_space: false }
           # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
           #- {tag: "rocm", dockerfile: ".devops/rocm.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: true }
@@ -57,7 +57,7 @@ jobs:
       #  uses: docker/setup-qemu-action@v3
       #  with:
       #    image: tonistiigi/binfmt:qemu-v7.0.0-28
-      
+
       - name: Set up QEMU
         if: matrix.config.platforms != 'linux/arm64'
         uses: docker/setup-qemu-action@v3
