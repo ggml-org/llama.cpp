@@ -227,14 +227,8 @@ static ggml_backend_t create_backend(const rpc_server_params & params) {
         }
     }
 
-    // try to initialize a GPU backend first
     if (!backend) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
-    }
-
-    // if there aren't GPU backends fallback to CPU backend
-    if (!backend) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        backend = ggml_backend_init_best();
     }
 
     if (backend) {

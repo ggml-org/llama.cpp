@@ -14,14 +14,11 @@ from utils import *
 
 server: ServerProcess
 
-TIMEOUT_SERVER_START = 15*60
-
 @pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
     server.model_alias = "tinyllama-2"
-    server.server_port = 8081
     server.n_slots = 1
 
 
@@ -45,7 +42,7 @@ def test_reasoning_budget(template_name: str, reasoning_budget: int | None, expe
     server.jinja = True
     server.reasoning_budget = reasoning_budget
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
 
     res = server.make_request("POST", "/apply-template", data={
         "messages": [
@@ -68,7 +65,7 @@ def test_date_inside_prompt(template_name: str, format: str, tools: list[dict]):
     global server
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
 
     res = server.make_request("POST", "/apply-template", data={
         "messages": [
@@ -91,7 +88,7 @@ def test_add_generation_prompt(template_name: str, expected_generation_prompt: s
     global server
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
 
     res = server.make_request("POST", "/apply-template", data={
         "messages": [
