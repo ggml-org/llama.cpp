@@ -12,17 +12,17 @@ interface TierDetection {
  * ARM optimization tiers supported by the Kleidi-Llama library.
  * Higher tiers provide better performance on supported hardware.
  */
-enum class LLamaTier(val rawValue: Int, val libraryName: String, val description: String) {
-    NONE(-404, "", "No valid Arm® optimization available!"),
-    T0(0, "llama_android_t0", "ARMv8-a baseline with ASIMD"),
-    T1(1, "llama_android_t1", "ARMv8.2-a with DotProd"),
-    T2(2, "llama_android_t2", "ARMv8.6-a with DotProd + I8MM"),
-    T3(3, "llama_android_t3", "ARMv9-a with DotProd + I8MM + SVE/SVE2"),
-    T4(4, "llama_android_t4", "ARMv9.2-a with DotProd + I8MM + SVE/SVE2 + SME/SME2");
+enum class LLamaTier(val rawValue: Int, val description: String) {
+    NONE(0, "No valid Arm® optimization available!"),
+    T1(1, "ARMv8-a baseline with ASIMD"),
+    T2(2, "ARMv8.2-a with DotProd"),
+    T3(3, "ARMv8.6-a with DotProd + I8MM"),
+    T4(4, "ARMv9-a with DotProd + I8MM + SVE/SVE2"),
+    T5(5, "ARMv9.2-a with DotProd + I8MM + SVE/SVE2 + SME/SME2");
 
     companion object {
         fun fromRawValue(value: Int): LLamaTier? = entries.find { it.rawValue == value }
 
-        val maxSupportedTier = T3
+        val maxSupportedTier = T5
     }
 }

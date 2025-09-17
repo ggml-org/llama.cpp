@@ -81,10 +81,10 @@ object ArmFeaturesMapper {
     private fun getSupportedFeatures(tier: LLamaTier?): List<Boolean>? =
         when (tier) {
             LLamaTier.NONE, null -> null                              // No tier detected
-            LLamaTier.T0 -> listOf(true, false, false, false, false)  // ASIMD only
-            LLamaTier.T1 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
-            LLamaTier.T2 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
-            LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE/2
-            LLamaTier.T4 -> listOf(true, true, true, true, true)     // ASIMD + DOTPROD + I8MM + SVE/2 + SME/2
+            LLamaTier.T1 -> listOf(true, false, false, false, false)  // ASIMD only
+            LLamaTier.T2 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
+            LLamaTier.T3 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
+            LLamaTier.T4 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE/2
+            LLamaTier.T5 -> listOf(true, true, true, true, true)     // ASIMD + DOTPROD + I8MM + SVE/2 + SME/2
         }
 }

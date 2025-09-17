@@ -17,7 +17,7 @@ android {
         consumerProguardFiles("consumer-rules.pro")
 
         ndk {
-             abiFilters += listOf("arm64-v8a")
+             abiFilters += listOf("arm64-v8a", "x86_64")
         }
         externalNativeBuild {
             cmake {
@@ -29,12 +29,9 @@ android {
                 arguments += "-DLLAMA_BUILD_COMMON=ON"
                 arguments += "-DLLAMA_CURL=OFF"
 
-                arguments += "-DGGML_SYSTEM_ARCH=ARM"  // Undocumented before 3.21
                 arguments += "-DGGML_NATIVE=OFF"
                 arguments += "-DGGML_BACKEND_DL=ON"
                 arguments += "-DGGML_CPU_ALL_VARIANTS=ON"
-                arguments += "-DGGML_CPU_KLEIDIAI=ON"
-                arguments += "-DGGML_OPENMP=ON"
                 arguments += "-DGGML_LLAMAFILE=OFF"
             }
         }
