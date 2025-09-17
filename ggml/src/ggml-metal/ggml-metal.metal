@@ -1468,6 +1468,20 @@ kernel void kernel_cos_f32_4(
     dst[tpig] = cos(src0[tpig]);
 }
 
+kernel void kernel_log_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = log(src0[tpig]);
+}
+
+kernel void kernel_log_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = log(src0[tpig]);
+}
+
 kernel void kernel_neg_f32(
         device const float * src0,
         device       float * dst,

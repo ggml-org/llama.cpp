@@ -188,6 +188,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_unary(ggml_metal_library_t
         case GGML_OP_SQRT:       op_str = "sqrt";       break;
         case GGML_OP_SIN:        op_str = "sin";        break;
         case GGML_OP_COS:        op_str = "cos";        break;
+        case GGML_OP_LOG:        op_str = "log";        break;
         case GGML_OP_LEAKY_RELU: op_str = "leaky_relu"; break;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {

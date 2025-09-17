@@ -219,6 +219,7 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
+        case GGML_OP_LOG:
         case GGML_OP_UNARY:
             {
                 n_fuse = ggml_metal_op_unary(ctx, idx);
