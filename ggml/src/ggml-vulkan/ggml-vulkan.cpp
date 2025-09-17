@@ -3603,26 +3603,25 @@ static void ggml_vk_load_shaders(vk_device& device) {
             device, device->pipeline_##name##type_suffix[s], #name #type_suffix, \
             name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
             sizeof(vk_op_##name##_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+#define CREATE_CONVS(spv_suffix) \
+        CREATE_CONV(conv2d, _f32, spv_suffix) \
+        CREATE_CONV(conv2d, _f16_f32, spv_suffix) \
+        if (device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_conv_transpose_2d_push_constants)) { \
+            CREATE_CONV(conv_transpose_2d, _f32, spv_suffix) \
+            CREATE_CONV(conv_transpose_2d, _f16_f32, spv_suffix) \
+        }
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
         if (device->coopmat2) {
-            CREATE_CONV(conv2d, _f32, _cm2)
-            CREATE_CONV(conv2d, _f16_f32, _cm2)
-            CREATE_CONV(conv_transpose_2d, _f32, _cm2)
-            CREATE_CONV(conv_transpose_2d, _f16_f32, _cm2)
+            CREATE_CONVS(_cm2)
         } else
 #endif
         if (conv2d_UNROLL) {
-            CREATE_CONV(conv2d, _f32, _unroll)
-            CREATE_CONV(conv2d, _f16_f32, _unroll)
-            CREATE_CONV(conv_transpose_2d, _f32, _unroll)
-            CREATE_CONV(conv_transpose_2d, _f16_f32, _unroll)
+            CREATE_CONVS(_unroll)
         } else {
-            CREATE_CONV(conv2d, _f32, )
-            CREATE_CONV(conv2d, _f16_f32, )
-            CREATE_CONV(conv_transpose_2d, _f32, )
-            CREATE_CONV(conv_transpose_2d, _f16_f32, )
+            CREATE_CONVS( )
         }
 #undef CREATE_CONV
+#undef CREATE_CONVS
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -12722,6 +12721,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 const vk_device& device = ggml_vk_get_device(ctx->device);
+                if (op->op == GGML_OP_CONV_TRANSPOSE_2D && !device->pipeline_conv_transpose_2d_f32[0]) {
+                    return false;
+                }
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
