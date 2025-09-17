@@ -140,7 +140,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t* rope_params,
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
     std::vector<float> factor(n_dims / 2);
-    factor[0] = freq_scale;
+    factor[0] = 1.0f;
     for (size_t i = 1; i < factor.size(); i++) {
         factor[i] = theta_scale * factor[i - 1];
     }
