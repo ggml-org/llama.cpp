@@ -407,8 +407,6 @@ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 // xIELU
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
-
-    const float * op_params = (const float*)dst->op_params;
     float alpha_n = ggml_get_op_params_f32(dst, 1);
     float alpha_p = ggml_get_op_params_f32(dst, 2);
     const float beta = ggml_get_op_params_f32(dst, 3);

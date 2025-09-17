@@ -201,12 +201,11 @@ static float softplus(float input, float beta=1.0f, float threshold=20.0f) {
 
 void ggml_compute_forward_xielu(const ggml_compute_params * params, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
-    const float * op_params = (const float*)dst->op_params;
-    float alpha_n = op_params[0];
-    float alpha_p = op_params[1];
-    const float beta = op_params[2];
-    const float eps = op_params[3];
-
+    float alpha_n = ggml_get_op_params_f32(dst, 1);
+    float alpha_p = ggml_get_op_params_f32(dst, 2);
+    const float beta = ggml_get_op_params_f32(dst, 3);
+    const float eps = ggml_get_op_params_f32(dst, 4);
+    
     const auto xielu_op_params = [alpha_n, alpha_p, beta, eps](float f) {
         return op_xielu(f, alpha_n, alpha_p, beta, eps);
     };
