@@ -149,7 +149,7 @@ struct llama_hparams {
     bool causal_attn   = true;
     bool use_alibi     = false;
     bool attn_soft_cap = false;
-    bool use_kq_norm   = true;
+    bool use_kq_norm   = false;
 
     // for Classifiers
     uint32_t n_cls_out = 1;
