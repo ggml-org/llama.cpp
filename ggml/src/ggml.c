@@ -1127,7 +1127,6 @@ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
 static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "ABS",
-    "ROUND",
     "SGN",
     "NEG",
     "STEP",
@@ -1142,6 +1141,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSIGMOID",
     "EXP",
     "GELU_ERF",
+    "TRUNC",
 };
 
 static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
