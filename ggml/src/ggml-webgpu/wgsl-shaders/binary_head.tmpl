@@ -1,0 +1,45 @@
+struct Params {
+    ne: u32,
+
+    // offsets in elements
+    offset_src0: u32,
+    offset_src1: u32,
+    offset_dst: u32,
+
+    stride_src1_0: u32,
+    stride_src1_1: u32,
+    stride_src1_2: u32,
+    stride_src1_3: u32,
+
+    a_ne0: u32,
+    a_ne1: u32,
+    a_ne2: u32,
+
+    b_ne0: u32,
+    b_ne1: u32,
+    b_ne2: u32,
+    b_ne3: u32,
+};
+
+fn src1_index(_i: u32) -> u32 {
+    var i = _i;
+    let a_i3 = i / (params.a_ne2 * params.a_ne1 * params.a_ne0);
+    i = i % (params.a_ne2 * params.a_ne1 * params.a_ne0);
+    let a_i2 = i / (params.a_ne1 * params.a_ne0);
+    i = i % (params.a_ne1 * params.a_ne0);
+    let a_i1 = i / params.a_ne0;
+    let a_i0 = i % params.a_ne0;
+
+    // handle repetition of b
+    // index loops back to the beginning and repeats after elements are exhausted = modulo
+    let b_i0 = a_i0 % params.b_ne0;
+    let b_i1 = a_i1 % params.b_ne1;
+    let b_i2 = a_i2 % params.b_ne2;
+    let b_i3 = a_i3 % params.b_ne3;
+
+    // compute index for position in b's flat array
+    return b_i0 * params.stride_src1_0 +
+           b_i1 * params.stride_src1_1 +
+           b_i2 * params.stride_src1_2 +
+           b_i3 * params.stride_src1_3;
+}
