@@ -83,17 +83,28 @@ export class ChatService {
 		this.abortController = new AbortController();
 
 		// Convert database messages with attachments to API format if needed
-		const normalizedMessages: ApiChatMessageData[] = messages.map((msg) => {
-			// Check if this is a DatabaseMessage by checking for DatabaseMessage-specific fields
-			if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-				// This is a DatabaseMessage, convert it
-				const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-				return ChatService.convertMessageToChatServiceData(dbMsg);
-			} else {
-				// This is already an ApiChatMessageData object
-				return msg as ApiChatMessageData;
-			}
-		});
+		const normalizedMessages: ApiChatMessageData[] = messages
+			.map((msg) => {
+				// Check if this is a DatabaseMessage by checking for DatabaseMessage-specific fields
+				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+					// This is a DatabaseMessage, convert it
+					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+					return ChatService.convertMessageToChatServiceData(dbMsg);
+				} else {
+					// This is already an ApiChatMessageData object
+					return msg as ApiChatMessageData;
+				}
+			})
+			.filter((msg) => {
+				// Filter out empty system messages
+				if (msg.role === 'system') {
+					const content = typeof msg.content === 'string' ? msg.content : '';
+
+					return content.trim().length > 0;
+				}
+
+				return true;
+			});
 
 		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(normalizedMessages);
