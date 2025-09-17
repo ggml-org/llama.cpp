@@ -96,11 +96,12 @@ RUN apt-get update \
     python3 \
     python3-pip
 
-RUN pip install --upgrade pip setuptools wheel --break-system-packages
-RUN pip install -r requirements.txt --break-system-packages
-RUN apt autoremove -y
-RUN apt clean -y
-RUN rm -rf /tmp/* /var/tmp/*
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel --break-system-packages
+RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
+
+# Clean up unnecessary files to reduce image size
+RUN rm -rf /root/.cache/pip && rm -rf /root/.cache/build && rm -rf /tmp/* && rm -rf /var/tmp/*
+RUN apt autoremove -y && apt clean -y
 RUN find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete
 RUN find /var/cache -type f -delete
 
