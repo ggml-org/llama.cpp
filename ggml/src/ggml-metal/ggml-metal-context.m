@@ -21,9 +21,6 @@
 
 struct ggml_metal_command_buffer {
     id<MTLCommandBuffer> obj;
-
-    // used to enable concurrent execution of ops in the command buffers
-    ggml_mem_ranges_t mem_ranges;
 };
 
 struct ggml_metal {
@@ -154,10 +151,6 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     res->encode_async = nil;
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         res->cmd_bufs[i].obj = nil;
-
-        if (res->use_concurrency) {
-            res->cmd_bufs[i].mem_ranges = ggml_mem_ranges_init(res->debug_graph);
-        }
     }
 
     res->cmd_bufs_ext = [[NSMutableArray alloc] init];
@@ -175,10 +168,6 @@ void ggml_metal_free(ggml_metal_t ctx) {
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
             [ctx->cmd_bufs[i].obj release];
-        }
-
-        if (ctx->cmd_bufs[i].mem_ranges) {
-            ggml_mem_ranges_free(ctx->cmd_bufs[i].mem_ranges);
         }
     }
 
@@ -348,345 +337,6 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
     }
 }
 
-struct ggml_metal_graph_encoder {
-    const struct ggml_metal_device_props * props_dev;
-
-    ggml_metal_device_t dev;
-
-    ggml_metal_library_t lib;
-
-    ggml_metal_encoder_t enc;
-
-    ggml_mem_ranges_t mem_ranges;
-
-    struct ggml_cgraph * gf;
-
-    int idx_start;
-    int idx_end;
-
-    bool use_fusion;
-
-    int debug_graph;
-    int debug_fusion;
-};
-
-ggml_metal_library_t ggml_metal_graph_encoder_get_lib(ggml_metal_graph_encoder_t ctx) {
-    return ctx->lib;
-}
-
-ggml_metal_encoder_t ggml_metal_graph_encoder_get_enc(ggml_metal_graph_encoder_t ctx) {
-    return ctx->enc;
-}
-
-struct ggml_cgraph * ggml_metal_graph_encoder_get_gf(ggml_metal_graph_encoder_t ctx) {
-    return ctx->gf;
-}
-
-const struct ggml_metal_device_props * ggml_metal_graph_encoder_get_props_dev(ggml_metal_graph_encoder_t ctx) {
-    return ctx->props_dev;
-}
-
-int ggml_metal_graph_encoder_get_idx_start(ggml_metal_graph_encoder_t ctx) {
-    return ctx->idx_start;
-}
-
-int ggml_metal_graph_encoder_get_idx_end(ggml_metal_graph_encoder_t ctx) {
-    return ctx->idx_end;
-}
-
-bool ggml_metal_graph_encoder_get_use_fusion(ggml_metal_graph_encoder_t ctx) {
-    return ctx->use_fusion;
-}
-
-int ggml_metal_graph_encoder_get_debug_fusion(ggml_metal_graph_encoder_t ctx) {
-    return ctx->debug_fusion;
-}
-
-int ggml_metal_graph_encoder_get_debug_graph(ggml_metal_graph_encoder_t ctx) {
-    return ctx->debug_graph;
-}
-
-bool ggml_metal_graph_encoder_concurrency_reset(ggml_metal_graph_encoder_t ctx) {
-    if (!ctx->mem_ranges) {
-        return true;
-    }
-
-    ggml_metal_encoder_memory_barrier(ctx->enc);
-
-    ggml_mem_ranges_reset(ctx->mem_ranges);
-
-    return true;
-}
-
-bool ggml_metal_graph_encoder_concurrency_check(ggml_metal_graph_encoder_t ctx, const struct ggml_tensor * node) {
-    if (!ctx->mem_ranges) {
-        return false;
-    }
-
-    return ggml_mem_ranges_check(ctx->mem_ranges, node);
-}
-
-bool ggml_metal_graph_encoder_concurrency_add(ggml_metal_graph_encoder_t ctx, const struct ggml_tensor * node) {
-    if (!ctx->mem_ranges) {
-        return true;
-    }
-
-    return ggml_mem_ranges_add(ctx->mem_ranges, node);
-}
-
-static int ggml_metal_graph_encoder_node(ggml_metal_graph_encoder_t ctx_enc, int idx) {
-    struct ggml_cgraph * gf = ctx_enc->gf;
-
-    struct ggml_tensor ** nodes = ggml_graph_nodes(gf) + idx;
-    struct ggml_tensor *  node  = nodes[0];
-
-    //GGML_LOG_INFO("%s: encoding node %3d, op = %8s\n", __func__, idx, ggml_op_name(node->op));
-
-    if (ggml_is_empty(node)) {
-        return 1;
-    }
-
-    switch (node->op) {
-        case GGML_OP_NONE:
-        case GGML_OP_RESHAPE:
-        case GGML_OP_VIEW:
-        case GGML_OP_TRANSPOSE:
-        case GGML_OP_PERMUTE:
-            {
-                // noop -> next node
-            } return 1;
-        default:
-            {
-            } break;
-    }
-
-    if (!ggml_metal_device_supports_op(ctx_enc->dev, node)) {
-        GGML_LOG_ERROR("%s: error: unsupported op '%s'\n", __func__, ggml_op_desc(node));
-        GGML_ABORT("unsupported op");
-    }
-
-    int n_fuse = 1;
-
-    // check if the current node can run concurrently with other nodes before it
-    // the condition is that:
-    //  - the current node cannot write to any previous src or dst ranges
-    //  - the current node cannot read from any previous dst ranges
-    //
-    // if the condition is not satisfied, we put a memory barrier and clear all ranges
-    // otherwise, we add the new ranges to the encoding context and process the node concurrently
-    //
-    {
-        const bool is_concurrent = ggml_metal_graph_encoder_concurrency_check(ctx_enc, node);
-
-        if (!is_concurrent) {
-            ggml_metal_graph_encoder_concurrency_reset(ctx_enc);
-        }
-
-        if (ctx_enc->debug_graph > 0) {
-            GGML_LOG_DEBUG("%s: node[%5d] - %-12s %s\n", __func__, idx, ggml_op_name(node->op), is_concurrent ? "(concurrent)" : "");
-        }
-        if (ctx_enc->debug_graph > 1) {
-            GGML_TENSOR_LOCALS( int64_t, ne0, node->src[0], ne);
-            GGML_TENSOR_LOCALS(uint64_t, nb0, node->src[0], nb);
-            GGML_TENSOR_LOCALS( int64_t, ne1, node->src[1], ne);
-            GGML_TENSOR_LOCALS(uint64_t, nb1, node->src[1], nb);
-            GGML_TENSOR_LOCALS( int64_t, ne,  node,         ne);
-            GGML_TENSOR_LOCALS(uint64_t, nb,  node,         nb);
-
-            if (node->src[0]) {
-                GGML_LOG_DEBUG("%s: src0 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(node->src[0]->type), ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03,
-                        ggml_is_contiguous(node->src[0]), node->src[0]->name);
-            }
-            if (node->src[1]) {
-                GGML_LOG_DEBUG("%s: src1 - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], %d, %s\n", __func__, ggml_type_name(node->src[1]->type), ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
-                        ggml_is_contiguous(node->src[1]), node->src[1]->name);
-            }
-            if (node) {
-                GGML_LOG_DEBUG("%s: node  - %4s [%5lld, %5lld, %5lld, %5lld] [%5lld, %5lld, %5lld, %5lld], 1, %s\n", __func__, ggml_type_name(node->type), ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3,
-                        node->name);
-            }
-        }
-    }
-
-    switch (node->op) {
-        case GGML_OP_CONCAT:
-            {
-                n_fuse = ggml_metal_op_concat(ctx_enc, idx);
-            } break;
-        case GGML_OP_ADD:
-        case GGML_OP_SUB:
-        case GGML_OP_MUL:
-        case GGML_OP_DIV:
-            {
-                n_fuse = ggml_metal_op_bin(ctx_enc, idx);
-            } break;
-        case GGML_OP_ADD_ID:
-            {
-                n_fuse = ggml_metal_op_add_id(ctx_enc, idx);
-            } break;
-        case GGML_OP_REPEAT:
-            {
-                n_fuse = ggml_metal_op_repeat(ctx_enc, idx);
-            } break;
-        case GGML_OP_ACC:
-            {
-                n_fuse = ggml_metal_op_acc(ctx_enc, idx);
-            } break;
-        case GGML_OP_SCALE:
-            {
-                n_fuse = ggml_metal_op_scale(ctx_enc, idx);
-            } break;
-        case GGML_OP_CLAMP:
-            {
-                n_fuse = ggml_metal_op_clamp(ctx_enc, idx);
-            } break;
-        case GGML_OP_SQR:
-        case GGML_OP_SQRT:
-        case GGML_OP_SIN:
-        case GGML_OP_COS:
-        case GGML_OP_UNARY:
-            {
-                n_fuse = ggml_metal_op_unary(ctx_enc, idx);
-            } break;
-        case GGML_OP_GLU:
-            {
-                n_fuse = ggml_metal_op_glu(ctx_enc, idx);
-            } break;
-        case GGML_OP_SUM_ROWS:
-        case GGML_OP_MEAN:
-            {
-                n_fuse = ggml_metal_op_sum_rows(ctx_enc, idx);
-            } break;
-        case GGML_OP_SOFT_MAX:
-            {
-                n_fuse = ggml_metal_op_soft_max(ctx_enc, idx);
-            } break;
-        case GGML_OP_SSM_CONV:
-            {
-                n_fuse = ggml_metal_op_ssm_conv(ctx_enc, idx);
-            } break;
-        case GGML_OP_SSM_SCAN:
-            {
-                n_fuse = ggml_metal_op_ssm_scan(ctx_enc, idx);
-            } break;
-        case GGML_OP_RWKV_WKV6:
-        case GGML_OP_RWKV_WKV7:
-            {
-                n_fuse = ggml_metal_op_rwkv(ctx_enc, idx);
-            } break;
-        case GGML_OP_MUL_MAT:
-            {
-                n_fuse = ggml_metal_op_mul_mat(ctx_enc, idx);
-            } break;
-        case GGML_OP_MUL_MAT_ID:
-            {
-                n_fuse = ggml_metal_op_mul_mat_id(ctx_enc, idx);
-            } break;
-        case GGML_OP_GET_ROWS:
-            {
-                n_fuse = ggml_metal_op_get_rows(ctx_enc, idx);
-            } break;
-        case GGML_OP_SET_ROWS:
-            {
-                n_fuse = ggml_metal_op_set_rows(ctx_enc, idx);
-            } break;
-        case GGML_OP_RMS_NORM:
-            {
-                n_fuse = ggml_metal_op_rms_norm(ctx_enc, idx);
-            } break;
-        case GGML_OP_L2_NORM:
-            {
-                n_fuse = ggml_metal_op_l2_norm(ctx_enc, idx);
-            } break;
-        case GGML_OP_GROUP_NORM:
-            {
-                n_fuse = ggml_metal_op_group_norm(ctx_enc, idx);
-            } break;
-        case GGML_OP_NORM:
-            {
-                n_fuse = ggml_metal_op_norm(ctx_enc, idx);
-            } break;
-        case GGML_OP_ROPE:
-            {
-                n_fuse = ggml_metal_op_rope(ctx_enc, idx);
-            } break;
-        case GGML_OP_IM2COL:
-            {
-                n_fuse = ggml_metal_op_im2col(ctx_enc, idx);
-            } break;
-        case GGML_OP_CONV_TRANSPOSE_1D:
-            {
-                n_fuse = ggml_metal_op_conv_transpose_1d(ctx_enc, idx);
-            } break;
-        case GGML_OP_UPSCALE:
-            {
-                n_fuse = ggml_metal_op_upscale(ctx_enc, idx);
-            } break;
-        case GGML_OP_PAD:
-            {
-                n_fuse = ggml_metal_op_pad(ctx_enc, idx);
-            } break;
-        case GGML_OP_PAD_REFLECT_1D:
-            {
-                n_fuse = ggml_metal_op_pad_reflect_1d(ctx_enc, idx);
-            } break;
-        case GGML_OP_ARANGE:
-            {
-                n_fuse = ggml_metal_op_arange(ctx_enc, idx);
-            } break;
-        case GGML_OP_TIMESTEP_EMBEDDING:
-            {
-                n_fuse = ggml_metal_op_timestep_embedding(ctx_enc, idx);
-            } break;
-        case GGML_OP_ARGSORT:
-            {
-                n_fuse = ggml_metal_op_argsort(ctx_enc, idx);
-            } break;
-        case GGML_OP_LEAKY_RELU:
-            {
-                n_fuse = ggml_metal_op_leaky_relu(ctx_enc, idx);
-            } break;
-        case GGML_OP_FLASH_ATTN_EXT:
-            {
-                n_fuse = ggml_metal_op_flash_attn_ext(ctx_enc, idx);
-            } break;
-        case GGML_OP_DUP:
-        case GGML_OP_CPY:
-        case GGML_OP_CONT:
-            {
-                n_fuse = ggml_metal_op_cpy(ctx_enc, idx);
-            } break;
-        case GGML_OP_POOL_2D:
-            {
-                n_fuse = ggml_metal_op_pool_2d(ctx_enc, idx);
-            } break;
-        case GGML_OP_ARGMAX:
-            {
-                n_fuse = ggml_metal_op_argmax(ctx_enc, idx);
-            } break;
-       default:
-            {
-                GGML_LOG_ERROR("%s: error: node %3d, op = %8s not implemented\n", __func__, idx, ggml_op_name(node->op));
-                GGML_ABORT("fatal error");
-            }
-    }
-
-    if (ctx_enc->debug_graph > 0) {
-        if (n_fuse > 1) {
-            GGML_LOG_DEBUG("%s:               fuse %d ops\n", __func__, n_fuse);
-        }
-    }
-
-    // update the mem ranges in the encoding context
-    for (int i = 0; i < n_fuse; ++i) {
-        if (!ggml_metal_graph_encoder_concurrency_add(ctx_enc, nodes[i])) {
-            ggml_metal_graph_encoder_concurrency_reset(ctx_enc);
-        }
-    }
-
-    return n_fuse;
-}
-
 enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph * gf) {
     // number of nodes encoded by the main thread (empirically determined)
     const int n_main = 64;
@@ -709,8 +359,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
 
-        const bool should_capture = ctx->capture_next_compute;
-        if (should_capture) {
+        const bool use_capture = ctx->capture_next_compute;
+        if (use_capture) {
             ctx->capture_next_compute = false;
 
             // make sure all previous computations have finished before starting the capture
@@ -786,7 +436,7 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         // enter here only when capturing in order to wait for all computation to finish
         // otherwise, we leave the graph to compute asynchronously
-        if (!should_capture && ctx->capture_started) {
+        if (!use_capture && ctx->capture_started) {
             // wait for completion and check status of each command buffer
             // needed to detect if the device ran out-of-memory for example (#1881)
             {
@@ -876,13 +526,6 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
 
         const int n_nodes_per_cb = ctx->n_nodes_per_cb;
 
-        id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
-
-        ggml_mem_ranges_t mem_ranges = ctx->cmd_bufs[cb_idx].mem_ranges;
-        if (mem_ranges) {
-            ggml_mem_ranges_reset(mem_ranges);
-        }
-
         int idx_start = 0;
         int idx_end   = n_nodes_0;
 
@@ -891,37 +534,22 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
         }
 
-        const bool should_capture = ctx->capture_next_compute;
+        id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
 
-        struct ggml_metal_graph_encoder ctx_enc = {
-            /*.props_dev    =*/ ggml_metal_device_get_props(ctx->dev),
-            /*.dev          =*/ ctx->dev,
-            /*.lib          =*/ ctx->lib,
-            /*.en    c      =*/ ggml_metal_encoder_init(cmd_buf, ctx->use_concurrency),
-            /*.mem_ranges   =*/ mem_ranges,
-            /*.gf           =*/ ctx->gf,
-            /*.idx_start    =*/ idx_start,
-            /*.idx_end      =*/ idx_end,
-            /*.use_fusion   =*/ ctx->use_fusion,
-            /*.debug_graph  =*/ ctx->debug_graph,
-            /*.debug_fusion =*/ ctx->debug_fusion,
-        };
+        ggml_metal_op_t ctx_op = ggml_metal_op_init(
+            ctx->dev,
+            cmd_buf,
+            ctx->gf,
+            idx_start,
+            idx_end,
+            ctx->use_fusion,
+            ctx->use_concurrency,
+            ctx->capture_next_compute,
+            ctx->debug_graph,
+            ctx->debug_fusion);
 
         for (int idx = idx_start; idx < idx_end;) {
-            if (should_capture) {
-                ggml_metal_encoder_debug_group_push(ctx_enc.enc, ggml_op_desc(ggml_graph_node(ctx->gf, idx)));
-            }
-
-            const int res = ggml_metal_graph_encoder_node(&ctx_enc, idx);
-            if (idx + res > idx_end) {
-                GGML_ABORT("fusion error: nodes spanning multiple encoders have been fused. this indicates a bug in the fusion logic %s",
-                        "https://github.com/ggml-org/llama.cpp/pull/14849");
-            }
-
-            if (should_capture) {
-                ggml_metal_encoder_debug_group_pop(ctx_enc.enc);
-            }
-
+            const int res = ggml_metal_op_encode(ctx_op, idx);
             if (res == 0) {
                 break;
             }
@@ -929,8 +557,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx += res;
         }
 
-        ggml_metal_encoder_end_encoding(ctx_enc.enc);
-        ggml_metal_encoder_free(ctx_enc.enc);
+        ggml_metal_op_free(ctx_op);
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];

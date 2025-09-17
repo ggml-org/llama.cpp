@@ -320,6 +320,8 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
 
         id<MTLFunction> mtl_function = [lib->obj newFunctionWithName:base_func constantValues:(cv ? cv->obj : nil) error:&error];
         if (!mtl_function) {
+            ggml_critical_section_end();
+
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
 
             return nil;
