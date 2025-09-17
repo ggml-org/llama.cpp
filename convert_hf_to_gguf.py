@@ -6009,8 +6009,33 @@ class SeedOssModel(TextModel):
 
 
 @ModelBase.register("Olmo2ForCausalLM")
+@ModelBase.register("Olmo3ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_attn_factors(rope_scaling["attention_factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+        if "sliding_window" in self.hparams:
+            self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+
+            sliding_window_pattern = []
+            if "layer_types" in self.hparams:
+                sliding_window_pattern = [t == "sliding_attention" for t in self.hparams["layer_types"]]
+            else:
+                # Olmo2 does not use sliding window attention.
+                # Olmo3 defaults to using sliding window for all layers except every 4th.
+                for i in range(self.hparams["num_hidden_layers"]):
+                    sliding_window_pattern.append((i + 1) % 4 != 0)
+
+            self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
 
 @ModelBase.register("OlmoeForCausalLM")
