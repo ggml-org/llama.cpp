@@ -15,4 +15,5 @@ exclude =
     build,
     # This contains builds that we don't want to check
     dist  # This is generated with `python build .` for package releases
+    scripts/tune
 # max-complexity = 10

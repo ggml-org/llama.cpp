@@ -19,4 +19,7 @@
       "pythonVersion": "3.10",
     },
   ],
+  "exclude": [
+    "scripts/tune"
+  ]
  }
