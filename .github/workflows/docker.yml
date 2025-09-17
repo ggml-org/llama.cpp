@@ -57,10 +57,7 @@ jobs:
       #  uses: docker/setup-qemu-action@v3
       #  with:
       #    image: tonistiigi/binfmt:qemu-v7.0.0-28
-
-      #- name: Set up Docker Buildx
-      #  uses: docker/setup-buildx-action@v3
-
+      
       - name: Set up QEMU
         if: matrix.config.platforms != 'linux/arm64'
         uses: docker/setup-qemu-action@v3
@@ -68,7 +65,6 @@ jobs:
           image: tonistiigi/binfmt:qemu-v7.0.0-28
 
       - name: Set up Docker Buildx
-        if: matrix.config.platforms != 'linux/arm64'
         uses: docker/setup-buildx-action@v3
 
 
