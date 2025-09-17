@@ -156,6 +156,11 @@ static void unary_op_sgn_kernel(const T * x, T * dst, const int k, const sycl::n
         dst[i] = op_sgn(x[i]);
     }
 }
+template<typename T>
+static __dpct_inline__ T op_ceil(T x) {
+    return sycl::ceil(x);
+}
+
 
 template<typename T>
 static void unary_op_abs_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
@@ -301,6 +306,13 @@ template<typename T>
 static void unary_op_clamp_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1, float min_val, float max_val) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_clamp(x[i], min_val, max_val);
+    }
+}
+
+template<typename T>
+static void unary_op_ceil_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_ceil(x[i]);
     }
 }
 
@@ -944,6 +956,19 @@ static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tens
         }, min_val, max_val);
 }
 
+static inline void ggml_sycl_op_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_ceil_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
 static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32);
@@ -1167,4 +1192,8 @@ void ggml_sycl_geglu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_geglu_quick(ctx, dst);
+}
+void ggml_sycl_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_ceil(ctx, dst);
 }
