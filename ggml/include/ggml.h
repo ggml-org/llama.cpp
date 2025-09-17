@@ -665,8 +665,9 @@ extern "C" {
 
     // Tensor data accessor functions for NUMA model mirroring compatibility:
     
-    // External thread-local variable set at OMP threadpool creation time
+    // External thread-local variables set at OMP threadpool creation time
     extern __thread int ggml_current_numa_node;
+    extern __thread int ggml_numa_nodes_active;
     
     static inline void * tensor_data(const struct ggml_tensor * tensor) {
         // Fast path: if no NUMA mirrors exist, avoid thread-local access entirely

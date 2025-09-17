@@ -29,8 +29,9 @@
 #include <string.h>
 #include <stdint.h>
 
-// External thread-local variable for NUMA node binding
+// External thread-local variables for NUMA node binding
 extern __thread int ggml_current_numa_node;
+extern __thread int ggml_numa_nodes_active;
 #include <inttypes.h>
 #include <stdio.h>
 #include <float.h>
@@ -615,13 +616,10 @@ static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
     // Cache strategy check to avoid repeated calls
     static bool strategy_checked = false;
     static bool is_numa_mirror = false;
-    static int num_numa_nodes = 0;
+    static int num_numa_nodes = 1;
     
     if (!strategy_checked) {
         is_numa_mirror = (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR);
-        if (is_numa_mirror) {
-            num_numa_nodes = numa_max_node() + 1;
-        }
         strategy_checked = true;
     }
     
@@ -634,6 +632,9 @@ static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
     if (ggml_thread_numa_initialized) {
         return;
     }
+
+    // Set the numa_nodes_active for all threads, regardless of NUMA mode
+    ggml_numa_nodes_active = numa_max_node() + 1;
 
     // Round-robin assignment of threads to NUMA nodes
     int target_numa_node = thread_id % num_numa_nodes;
@@ -669,8 +670,9 @@ static void ggml_openmp_bind_thread_to_numa_node(int thread_id, int n_threads) {
             ggml_thread_numa_node = target_numa_node;
             ggml_thread_numa_initialized = true;
             
-            // Update the global thread-local variable for tensor data access
+            // Update the global thread-local variables for tensor data access
             ggml_current_numa_node = target_numa_node;
+            ggml_numa_nodes_active = num_numa_nodes;
             
             // Debug output using standard GGML logging
             GGML_LOG_DEBUG("NUMA: Bound OpenMP thread %d to NUMA node %d (total threads: %d)\n", 

@@ -20,8 +20,9 @@
 #include <alloca.h>
 #endif
 
-// Thread-local variable for NUMA node binding (used by tensor_data())
+// Thread-local variables for NUMA node binding (used by tensor_data())
 __thread int ggml_current_numa_node = 0;
+__thread int ggml_numa_nodes_active = 1;
 
 #include <assert.h>
 #include <errno.h>
