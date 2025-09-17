@@ -109,12 +109,14 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
-        if (offload) {
-            auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
-        }
+        // Always use CPU for KV cache tensors to avoid issues with operations
+        // that are not supported by the offloaded backend (e.g., SET_ROWS)
+        // if (offload) {
+        //     auto * dev = model.dev_layer(il);
+        //     buft = ggml_backend_dev_buffer_type(dev);
+        //
+        //     dev_name = ggml_backend_dev_name(dev);
+        // }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
 
