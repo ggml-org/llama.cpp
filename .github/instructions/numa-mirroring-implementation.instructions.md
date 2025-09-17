@@ -1,3 +1,7 @@
+---
+applyTo: '**'
+---
+
 # NUMA Mirroring Implementation for llama.cpp
 
 ## Overview
