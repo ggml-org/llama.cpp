@@ -4424,7 +4424,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
-static bool ggml_vk_device_is_supported(const vk::PhysicalDevice vkdev);
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
@@ -12738,7 +12738,7 @@ static bool ggml_vk_instance_debug_utils_ext_available(
     UNUSED(instance_extensions);
 }
 
-static bool ggml_vk_device_is_supported(const vk::PhysicalDevice vkdev) {
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
     VkPhysicalDeviceFeatures2 device_features2;
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
