@@ -1,0 +1,42 @@
+name: Update Winget Package
+
+on:
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    - cron: '28 5 * * *' # Update every day at 5:28 UTC
+
+jobs:
+  update:
+    name: Update Winget Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@268643a6b5ea099f5718ee5cd3ff7dc89a5eb49b
+
+      - name: Install komac
+        run: |
+          cargo binstall komac@2.11.2 -y
+
+      - name: Find latest release
+        id: find_latest_release
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            console.log("Latest release:", releases[0].tag_name);
+            return releases[0].tag_name;
+
+      - name: Update manifest
+        env:
+          VERSION: ${{ steps.find_latest_release.outputs.result }}
+        run: |
+          echo "Updating manifest..."
+          komac update --version ${{ env.VERSION }} \
+            --urls "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.VERSION }}/llama-${{ env.VERSION }}-bin-win-vulkan-x64.zip" \
+            --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
+            --submit \
+            ggml.llamacpp

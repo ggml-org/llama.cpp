@@ -1,5 +1,14 @@
 numpy~=1.26.4
 sentencepiece~=0.2.0
-transformers>=4.45.1,<5.0.0
+
+# Embedding Gemma is currently a preview release:
+# https://github.com/huggingface/transformers/releases/tag/v4.56.0-Embedding-Gemma-preview
+
+# The version is needed to be able to convert Embedding Gemma models to GGUF format:
+git+https://github.com/huggingface/transformers@v4.56.0-Embedding-Gemma-preview
+
+# Once Embedding Gemma is officially released, we can switch to:
+#transformers>=4.57.1,<5.0.0
+
 gguf>=0.1.0
 protobuf>=4.21.0,<5.0.0

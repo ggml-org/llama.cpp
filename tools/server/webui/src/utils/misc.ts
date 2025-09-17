@@ -89,6 +89,14 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
           type: 'image_url',
           image_url: { url: extra.base64Url },
         });
+      } else if (extra.type === 'audioFile') {
+        contentArr.push({
+          type: 'input_audio',
+          input_audio: {
+            data: extra.base64Data,
+            format: /wav/.test(extra.mimeType) ? 'wav' : 'mp3',
+          },
+        });
       } else {
         throw new Error('Unknown extra type');
       }
@@ -122,7 +130,10 @@ export function filterThoughtFromMsgs(messages: APIMessage[]) {
       role: msg.role,
       content:
         msg.role === 'assistant'
-          ? contentStr.split('</think>').at(-1)!.trim()
+          ? contentStr
+              .split(/<\/think>|<\|end\|>/)
+              .at(-1)!
+              .trim()
           : contentStr,
     } as APIMessage;
   });

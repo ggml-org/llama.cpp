@@ -6,8 +6,10 @@ from utils import *
 
 server = ServerPreset.tinyllama2()
 
+JSON_MULTIMODAL_KEY = "multimodal_data"
+JSON_PROMPT_STRING_KEY = "prompt_string"
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
@@ -121,6 +123,30 @@ def test_completion_stream_with_openai_library():
     assert match_regex("(going|bed)+", output_text)
 
 
+# Test case from https://github.com/ggml-org/llama.cpp/issues/13780
+@pytest.mark.slow
+def test_completion_stream_with_openai_library_stops():
+    global server
+    server.model_hf_repo = "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.start()
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.completions.create(
+        model="davinci-002",
+        prompt="System: You are helpfull assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
+        stop=["User:\n", "Assistant:\n"],
+        max_tokens=200,
+        stream=True,
+    )
+    output_text = ''
+    for data in res:
+        choice = data.choices[0]
+        if choice.finish_reason is None:
+            assert choice.text is not None
+            output_text += choice.text
+    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+
+
 @pytest.mark.parametrize("n_slots", [1, 2])
 def test_consistent_result_same_seed(n_slots: int):
     global server
@@ -205,8 +231,30 @@ def test_nocache_long_input_prompt():
         "temperature": 1.0,
         "cache_prompt": False,
     })
+    assert res.status_code == 400
+
+def test_json_prompt_no_mtmd():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": { JSON_PROMPT_STRING_KEY: "I believe the meaning of life is" },
+        "seed": 42,
+        "temperature": 1.0,
+        "cache_prompt": False,
+    })
     assert res.status_code == 200
 
+def test_json_prompt_mtm_error_when_not_supported():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": { JSON_PROMPT_STRING_KEY: "I believe the meaning of life is <__media__>", JSON_MULTIMODAL_KEY: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" },
+        "seed": 42,
+        "temperature": 1.0,
+        "cache_prompt": False,
+    })
+    # MTMD is disabled on this model, so this should fail.
+    assert res.status_code != 200
 
 def test_completion_with_tokens_input():
     global server
@@ -239,6 +287,20 @@ def test_completion_with_tokens_input():
     # mixed string and tokens
     res = server.make_request("POST", "/completion", data={
         "prompt": [tokens, prompt_str],
+    })
+    assert res.status_code == 200
+    assert type(res.body) == list
+    assert len(res.body) == 2
+    assert res.body[0]["content"] == res.body[1]["content"]
+
+    # mixed JSON and tokens
+    res = server.make_request("POST", "/completion", data={
+        "prompt": [
+            tokens,
+            {
+                JSON_PROMPT_STRING_KEY: "I believe the meaning of life is",
+            },
+        ],
     })
     assert res.status_code == 200
     assert type(res.body) == list
@@ -418,6 +480,39 @@ def test_n_probs_post_sampling():
             assert "bytes" in prob and type(prob["bytes"]) == list
         # because the test model usually output token with either 100% or 0% probability, we need to check all the top_probs
         assert any(prob["prob"] == 1.0 for prob in tok["top_probs"])
+
+
+@pytest.mark.parametrize("tokenize,openai_style", [(False, False), (False, True), (True, False), (True, True)])
+def test_logit_bias(tokenize, openai_style):
+    global server
+    server.start()
+
+    exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
+
+    logit_bias = []
+    if tokenize:
+        res = server.make_request("POST", "/tokenize", data={
+            "content": " " + " ".join(exclude) + " ",
+        })
+        assert res.status_code == 200
+        tokens = res.body["tokens"]
+        logit_bias = [[tok, -100] for tok in tokens]
+
+    else:
+        logit_bias = [[" " + tok + " ", -100] for tok in exclude]
+
+    if openai_style:
+        logit_bias = {el[0]: -100 for el in logit_bias}
+
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 64,
+        "prompt": "What is the best book",
+        "logit_bias": logit_bias,
+        "temperature": 0.0
+    })
+    assert res.status_code == 200
+    output_text = res.body["content"]
+    assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
 
 
 def test_cancel_request():
