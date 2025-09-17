@@ -7151,6 +7151,8 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
 }
 
 static void list_cpu_variants() {
+    ggml_backend_load_all();
+
     std::unordered_map<std::string, std::string> variant_names;
     for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
         ggml_backend_reg_t reg = ggml_backend_reg_get(i);
@@ -7203,7 +7205,6 @@ int main(int argc, char ** argv) {
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
     const char * cpu_variant_name = nullptr;
-    bool list_variants_flag = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -7251,7 +7252,8 @@ int main(int argc, char ** argv) {
             list_all_ops();
             return 0;
         } else if (strcmp(argv[i], "--list") == 0) {
-            list_variants_flag = true;
+            list_cpu_variants();
+            return 0;
         } else if (strcmp(argv[i], "--variant") == 0) {
             if (i + 1 < argc) {
                 cpu_variant_name = argv[++i];
@@ -7278,11 +7280,6 @@ int main(int argc, char ** argv) {
     }
 
     if (mode == MODE_CPU_VARIANTS) {
-        if (list_variants_flag) {
-            list_cpu_variants();
-            return 0;
-        }
-
         if (cpu_variant_name == nullptr) {
             printf("Error: cpu-variants mode requires --variant <name> or --list\n");
             usage(argv);
