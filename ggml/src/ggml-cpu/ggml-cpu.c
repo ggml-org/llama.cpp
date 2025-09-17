@@ -780,45 +780,204 @@ enum ggml_numa_strategy ggml_numa_get_strategy(void) {
 }
 
 //
-// NUMA-aware work buffer allocation:
-// Based on empirical testing, allocating work buffers on node 0 provides
-// the best speed. Interleaving actually slows things down considerably.
-// If we optimised kernels for Numa awareness, this could be revisited.
+// NUMA-aware work buffer allocation with interleaved default:
 //
+// By default, work buffers are allocated using an interleaved first-touch strategy
+// to distribute memory across all NUMA nodes. This can improve aggregate memory
+// bandwidth when the buffer is accessed uniformly by threads across all nodes.
+//
+// Override this behavior to force allocation on a specific node using:
+// GGML_NUMA_WORK_NODE=<node_number> (e.g., GGML_NUMA_WORK_NODE=0)
+//
+
+// Helper function to capture current thread affinity
+static void ggml_numa_affinity_capture(cpu_set_t * original_affinity) {
+#if defined(__gnu_linux__)
+    if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), original_affinity) != 0) {
+        // If capture fails, just zero the set as a fallback
+        CPU_ZERO(original_affinity);
+    }
+#else
+    // Non-Linux platforms: initialize to empty set
+    CPU_ZERO(original_affinity);
+#endif
+}
+
+// Helper function to bind current thread to a specific CPU
+static bool ggml_numa_affinity_bind_single(uint32_t cpu_id, cpu_set_t * backup_affinity) {
+#if defined(__gnu_linux__)
+    UNUSED(backup_affinity); // Reserved for future use
+    
+    cpu_set_t cpu_mask;
+    CPU_ZERO(&cpu_mask);
+    CPU_SET(cpu_id, &cpu_mask);
+    
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_mask) == 0) {
+        return true;
+    } else {
+        GGML_LOG_DEBUG("NUMA: Failed to bind thread to CPU %u: %s\n", cpu_id, strerror(errno));
+        return false;
+    }
+#else
+    UNUSED(cpu_id);
+    UNUSED(backup_affinity);
+    return false;
+#endif
+}
+
+// Helper function to restore thread affinity
+static void ggml_numa_affinity_restore(const cpu_set_t * original_affinity) {
+#if defined(__gnu_linux__)
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), original_affinity);
+#else
+    UNUSED(original_affinity);
+#endif
+}
+
+// Helper function to perform interleaved first-touch allocation
+static bool ggml_numa_alloc_interleaved_first_touch(void * ptr, size_t size) {
+    if (g_state.numa.n_nodes <= 1) {
+        return false;
+    }
+    
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        GGML_LOG_DEBUG("NUMA: Could not determine page size for interleaving\n");
+        return false;
+    }
+    
+    const size_t page_size_t = (size_t)page_size;
+    const size_t n_pages = (size + page_size_t - 1) / page_size_t;
+    char * base = (char *)ptr;
+    
+    // Capture original thread affinity to restore later
+    cpu_set_t original_affinity;
+    ggml_numa_affinity_capture(&original_affinity);
+    
+    bool success = true;
+    
+    // Touch each page on a different NUMA node in round-robin fashion
+    for (size_t page_idx = 0; page_idx < n_pages; ++page_idx) {
+        const uint32_t node_idx = page_idx % g_state.numa.n_nodes;
+        const struct ggml_numa_node * node = &g_state.numa.nodes[node_idx];
+        
+        if (node->n_cpus == 0) {
+            // Skip nodes with no CPUs, fall back to default allocation for this page
+            continue;
+        }
+        
+        // Bind to the first CPU of the target node for first-touch
+        const uint32_t cpu_id = node->cpus[0];
+        if (ggml_numa_affinity_bind_single(cpu_id, &original_affinity)) {
+            // First-touch the page to allocate it on the current NUMA node
+            volatile char * page_start = (volatile char *)(base + page_idx * page_size_t);
+            page_start[0] = 0;
+            
+            GGML_LOG_DEBUG("NUMA: Page %zu touched on node %u (CPU %u)\n", 
+                           page_idx, node_idx, cpu_id);
+        } else {
+            // Could not bind to target CPU, skip this optimization for this page
+            GGML_LOG_DEBUG("NUMA: Could not bind to CPU %u for page %zu, using default allocation\n", 
+                           cpu_id, page_idx);
+            success = false;
+        }
+    }
+    
+    // Restore original thread affinity
+    ggml_numa_affinity_restore(&original_affinity);
+    
+    return success;
+}
+
 void* ggml_numa_alloc_work_buffer(size_t size) {
     void* ptr = malloc(size);
     if (!ptr) {
         return NULL;
     }
 
-    if (ggml_is_numa()) {
-        // Bind to NUMA node 0 using first-touch policy
+    // Check if NUMA is available and we have multiple nodes
+    if (!ggml_is_numa()) {
+        // No NUMA support, just initialize the buffer
+        memset(ptr, 0, size);
+        return ptr;
+    }
+
+#if defined(__gnu_linux__)
+    // Check allocation strategy preference (one-time check with caching)
+    static int allocation_strategy_checked = 0;
+    static bool use_specific_node_allocation = false;
+    static uint32_t target_numa_node = 0;
+    
+    if (!allocation_strategy_checked) {
+        const char * env_value = getenv("GGML_NUMA_WORK_NODE");
+        if (env_value != NULL && env_value[0] != '\0') {
+            // Parse the node number
+            char * endptr;
+            long node_num = strtol(env_value, &endptr, 10);
+            
+            if (endptr != env_value && *endptr == '\0' && node_num >= 0 && 
+                node_num < (long)g_state.numa.n_nodes) {
+                use_specific_node_allocation = true;
+                target_numa_node = (uint32_t)node_num;
+                GGML_LOG_INFO("NUMA: Work buffer allocation forced to node %u via GGML_NUMA_WORK_NODE\n", 
+                              target_numa_node);
+            } else {
+                GGML_LOG_WARN("NUMA: Invalid node number '%s' in GGML_NUMA_WORK_NODE, using default interleaving\n", 
+                              env_value);
+            }
+        } else {
+            GGML_LOG_DEBUG("NUMA: Using default interleaved work buffer allocation\n");
+        }
+        allocation_strategy_checked = 1;
+    }
+
+    if (use_specific_node_allocation) {
+        // Force allocation to specific node using memory policy
         if (numa_available() >= 0) {
-            // Set memory policy to bind to node 0
-            unsigned long nodemask = 1UL; // Only node 0
+            unsigned long nodemask = 1UL << target_numa_node;
             if (set_mempolicy(MPOL_BIND, &nodemask, sizeof(nodemask) * 8) == 0) {
-                // Touch all pages to allocate them on node 0
+                // Touch all pages to ensure allocation on target node
                 memset(ptr, 0, size);
                 
                 // Reset memory policy to default
                 set_mempolicy(MPOL_DEFAULT, NULL, 0);
                 
-                GGML_LOG_DEBUG("NUMA: Work buffer allocated on node 0 (size: %zu bytes)\n", size);
+                GGML_LOG_DEBUG("NUMA: Work buffer allocated on node %u (size: %zu bytes)\n", 
+                               target_numa_node, size);
+                return ptr;
             } else {
-                // Fallback: just touch the pages without specific binding
-                memset(ptr, 0, size);
-                GGML_LOG_DEBUG("NUMA: Work buffer allocated with first-touch (size: %zu bytes)\n", size);
+                GGML_LOG_DEBUG("NUMA: Failed to set MPOL_BIND policy for node %u: %s\n", 
+                               target_numa_node, strerror(errno));
             }
-        } else {
-            // NUMA not available, just use regular allocation
-            memset(ptr, 0, size);
         }
-    } else {
-        // No NUMA, just touch the pages for consistency
+        
+        // Fallback: first-touch initialization without specific node binding
         memset(ptr, 0, size);
+        GGML_LOG_DEBUG("NUMA: Work buffer allocated with first-touch fallback (size: %zu bytes)\n", size);
+        return ptr;
     }
 
+    // Default strategy: interleaved allocation across all nodes
+    if (g_state.numa.n_nodes > 1) {
+        if (ggml_numa_alloc_interleaved_first_touch(ptr, size)) {
+            GGML_LOG_DEBUG("NUMA: Work buffer interleaved across %u nodes (size: %zu bytes)\n", 
+                           g_state.numa.n_nodes, size);
+            return ptr;
+        } else {
+            GGML_LOG_DEBUG("NUMA: Interleaved allocation failed, falling back to default initialization\n");
+        }
+    }
+
+    // Final fallback: simple initialization
+    memset(ptr, 0, size);
+    GGML_LOG_DEBUG("NUMA: Work buffer allocated with fallback initialization (size: %zu bytes)\n", size);
     return ptr;
+    
+#else
+    // Non-Linux platforms: simple initialization
+    memset(ptr, 0, size);
+    return ptr;
+#endif
 }
 
 void ggml_numa_free_work_buffer(void* ptr) {
