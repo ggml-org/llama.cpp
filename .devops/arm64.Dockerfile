@@ -68,7 +68,7 @@ RUN mkdir -p /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
 # Stage 2: Runtime
-FROM --platform=$BUILDPLATFORM_runner debian:bookworm-slim As base
+FROM --platform=$BUILDPLATFORM_runner debian:bookworm-slim AS base
 
 #FROM ubuntu:$UBUNTU_VERSION AS base
 
