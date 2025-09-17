@@ -559,7 +559,6 @@ extern "C" {
 
     enum ggml_unary_op {
         GGML_UNARY_OP_ABS,
-        GGML_UNARY_OP_TRUNC,
         GGML_UNARY_OP_SGN,
         GGML_UNARY_OP_NEG,
         GGML_UNARY_OP_STEP,
@@ -574,6 +573,7 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_TRUNC,
 
         GGML_UNARY_OP_COUNT,
     };
