@@ -77,23 +77,28 @@ void add_token_len(TensorMap& tensor_map) {
     tensor_map.insert({"token_len", token_len->output(0)});
 }
 
-void add_sliced_mask(TensorMap& tensor_map) {
+void add_sliced_mask(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
 
-    auto create_sliced_mask = [&](const std::string& mask_name, const std::string& sliced_name) {
+    auto create_sliced_mask = [&](const std::string& mask_name, const std::string& sliced_name, bool is_static) {
         if (tensor_map.find(mask_name) != tensor_map.end()) {
-            auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-            auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
             auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
-            std::shared_ptr<ov::Node> mask_sliced =
-                std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
-            mask_sliced->set_friendly_name(sliced_name);
+            std::shared_ptr<ov::Node> mask_sliced;
+            if (is_static) {
+                mask_sliced = mask;
+            } else {
+                auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+                auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, one);
+                mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
+                mask_sliced->set_friendly_name(sliced_name);
+            }
             tensor_map.insert({sliced_name, mask_sliced->output(0)});
         }
     };
 
-    create_sliced_mask("KQ_mask", "KQ_mask_sliced");
-    create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced");
+    create_sliced_mask("KQ_mask", "KQ_mask_sliced", ggml_model_decoder.is_static());
+    create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
 }
 
 void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
@@ -117,7 +122,7 @@ void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 // Create common patterns
 void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     add_token_len(tensor_map);
-    add_sliced_mask(tensor_map);
+    add_sliced_mask(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 

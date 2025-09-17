@@ -253,6 +253,7 @@ ov::AnyMap get_npu_base_config() {
         {"NPUW_FOLD",                         "YES"                                                                     },
         {"NPUW_WEIGHTS_BANK",                 "shared"                                                                  },
         {"NPUW_FUNCALL_FOR_ALL",              "YES"                                                                     },
+        {"NPUW_FUNCALL_ASYNC",                "YES"                                                                     },
         {"NPUW_DQ",                           "YES"                                                                     },
         {"NPUW_DQ_FULL",                      "NO"                                                                      },
         {"NPUW_CACHE_DIR",                    getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
@@ -262,15 +263,11 @@ ov::AnyMap get_npu_base_config() {
 
 ov::AnyMap get_npu_prefill_config() {
     auto config = get_npu_base_config();
-    config.emplace("NPUW_FUNCALL_ASYNC", "NO");
-    config.emplace("NPUW_ACC_CHECK", "YES");
-    config.emplace("NPUW_ACC_DEVICE", "CPU");
     return config;
 }
 
 ov::AnyMap get_npu_generate_config() {
     auto config = get_npu_base_config();
-    config.emplace("NPUW_FUNCALL_ASYNC", "YES");
     return config;
 }
 
