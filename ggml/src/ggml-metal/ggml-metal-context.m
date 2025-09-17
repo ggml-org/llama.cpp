@@ -234,17 +234,6 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
     }
 }
 
-// TODO: temporary shim
-static id<MTLBuffer> ggml_metal_get_buffer(const struct ggml_tensor * t, size_t * offs) {
-    ggml_backend_buffer_t buffer = t->view_src ? t->view_src->buffer : t->buffer;
-
-    struct ggml_metal_buffer_id res = ggml_metal_buffer_get_id(buffer->context, t);
-
-    *offs = res.offs;
-
-    return res.metal;
-}
-
 static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_tensor * t) {
     if (!t) {
         return (struct ggml_metal_buffer_id) { nil, 0 };
@@ -262,14 +251,12 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
                                                          length:size
                                                         options:MTLResourceStorageModeShared];
 
-        size_t buf_dst_offset = 0;
-        id<MTLBuffer> buf_dst = ggml_metal_get_buffer(tensor, &buf_dst_offset);
-
-        if (buf_dst == nil) {
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(tensor);
+        if (bid_dst.metal == nil) {
             GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
         }
 
-        buf_dst_offset += offset;
+        bid_dst.offs += offset;
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
@@ -278,8 +265,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
         [encoder copyFromBuffer:buf_src
                    sourceOffset:0
-                       toBuffer:buf_dst
-              destinationOffset:buf_dst_offset
+                       toBuffer:bid_dst.metal
+              destinationOffset:bid_dst.offs
                            size:size];
 
         [encoder endEncoding];
@@ -303,22 +290,20 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
-        size_t buf_src_offset = 0;
-        id<MTLBuffer> buf_src = ggml_metal_get_buffer(tensor, &buf_src_offset);
-
-        if (buf_src == nil) {
+        struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(tensor);
+        if (bid_src.metal == nil) {
             GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
         }
 
-        buf_src_offset += offset;
+        bid_src.offs += offset;
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        [encoder copyFromBuffer:buf_src
-                   sourceOffset:buf_src_offset
+        [encoder copyFromBuffer:bid_src.metal
+                   sourceOffset:bid_src.offs
                        toBuffer:buf_dst
               destinationOffset:0
                            size:size];

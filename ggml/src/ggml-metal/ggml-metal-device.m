@@ -1119,8 +1119,8 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
 
     @autoreleasepool {
         // dst
-        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(buf, tensor);
-        buf_dst.offs += offset;
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensor);
+        bid_dst.offs += offset;
 
         id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
@@ -1128,8 +1128,8 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            [encoder fillBuffer:buf_dst.metal
-                          range:NSMakeRange(buf_dst.offs, buf_dst.offs + size)
+            [encoder fillBuffer:bid_dst.metal
+                          range:NSMakeRange(bid_dst.offs, bid_dst.offs + size)
                           value:value];
 
             [encoder endEncoding];
@@ -1155,8 +1155,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
                                                           deallocator:nil];
 
         // dst
-        struct ggml_metal_buffer_id buf_dst = ggml_metal_buffer_get_id(buf, tensor);
-        buf_dst.offs += offset;
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensor);
+        bid_dst.offs += offset;
 
         // note: for experimentation purposes, here we use a semaphore to wait for the copy to complete
         //       this is alternative to waitUntilCompleted, which should be faster, but don't seem to make much difference
@@ -1170,8 +1170,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
 
             [encoder copyFromBuffer:buf_src
                        sourceOffset:0
-                           toBuffer:buf_dst.metal
-                  destinationOffset:buf_dst.offs
+                           toBuffer:bid_dst.metal
+                  destinationOffset:bid_dst.offs
                                size:size];
 
             [encoder endEncoding];
@@ -1187,6 +1187,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         [cmd_buf commit];
 
         dispatch_semaphore_wait(completion_semaphore, DISPATCH_TIME_FOREVER);
+        dispatch_release(completion_semaphore);
+
         //[cmd_buf waitUntilCompleted];
     }
 }
@@ -1199,8 +1201,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
     @autoreleasepool {
         // src
-        struct ggml_metal_buffer_id buf_src = ggml_metal_buffer_get_id(buf, tensor);
-        buf_src.offs += offset;
+        struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf, tensor);
+        bid_src.offs += offset;
 
         // dst
         id<MTLBuffer> buf_dst = [buf->device newBufferWithBytesNoCopy:data
@@ -1214,8 +1216,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-            [encoder copyFromBuffer:buf_src.metal
-                       sourceOffset:buf_src.offs
+            [encoder copyFromBuffer:bid_src.metal
+                       sourceOffset:bid_src.offs
                            toBuffer:buf_dst
                   destinationOffset:0
                                size:size];
