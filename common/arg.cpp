@@ -2559,7 +2559,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- N1,N2,...: keep specific layers in CPU (comma-separated)",
         [](common_params & params, const std::string & value) {
             std::vector<int> layers_to_override;
-            
+
             std::stringstream ss(value);
             std::string item;
             while (std::getline(ss, item, ',')) {
@@ -2590,7 +2590,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                 }
             }
-            
+
             for (int layer_idx : layers_to_override) {
                 // keep strings alive and avoid leaking memory by storing them in a static vector
                 static std::list<std::string> buft_overrides;
