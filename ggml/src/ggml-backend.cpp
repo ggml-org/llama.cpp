@@ -740,15 +740,6 @@ static int ggml_backend_sched_backend_id(ggml_backend_sched_t sched, ggml_backen
     return -1;
 }
 
-static int ggml_backend_sched_buft_id(ggml_backend_sched_t sched, ggml_backend_buffer_type_t buft) {
-    for (int i = 0; i < sched->n_backends; i++) {
-        if (sched->bufts[i] == buft) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, const struct ggml_tensor * tensor, const struct ggml_tensor * op) {
     ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
     if (buffer == NULL) {
@@ -1802,15 +1793,20 @@ ggml_backend_t ggml_backend_sched_get_backend(ggml_backend_sched_t sched, int i)
     return sched->backends[i];
 }
 
-size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_buffer_type_t buft) {
+ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend) {
     GGML_ASSERT(sched);
-    int buft_index = ggml_backend_sched_buft_id(sched, buft);
-    if (buft_index == -1) {
-        return 0;
-    }
-    GGML_ASSERT(buft_index < sched->n_backends);
+    int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
 
-    return ggml_gallocr_get_buffer_size(sched->galloc, buft_index);
+    return sched->bufts[backend_index];
+}
+
+size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    GGML_ASSERT(sched);
+    int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
+
+    return ggml_gallocr_get_buffer_size(sched->galloc, backend_index);
 }
 
 void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend) {

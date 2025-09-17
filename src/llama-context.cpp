@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "ggml-backend.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -374,8 +375,9 @@ llama_context::llama_context(
         }
 
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-            ggml_backend_buffer_type_t buft = backend_buft[i];
-            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), buft);
+            ggml_backend_t             backend = backend_ptrs[i];
+            ggml_backend_buffer_type_t buft    = backend_buft[i];
+            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
             if (size > 1) {
                 LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
@@ -2029,26 +2031,23 @@ void llama_context::perf_reset() {
 std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
 
-    auto get_memory_breakdown = [&](ggml_backend_buffer_type_t buft) {
-        llama_memory_breakdown_data data;
-        data.model   = model.memory_use(buft);
-        data.context = memory->memory_use(buft);
-        data.compute = ggml_backend_sched_get_buffer_size(sched.get(), buft);
-        return data;
-    };
-
     for (const auto & backend_ptr : backends) {
-        ggml_backend_t     backend = backend_ptr.get();
-        ggml_backend_dev_t dev     = ggml_backend_get_device(backend);
-
-        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
-        ret[buft] = get_memory_breakdown(buft);
-
-        ggml_backend_buffer_type_t buft_host = ggml_backend_dev_host_buffer_type(dev);
-        if (!buft_host) {
-            continue;
+        ggml_backend_t backend = backend_ptr.get();
+        { // memory allocated statically on device of the backend itself
+            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+            ret[buft] = {model.memory_use(buft), memory->memory_use(buft), 0};
         }
-        ret[buft_host] = get_memory_breakdown(buft_host);
+        { // memory allocated on host for backend
+            ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend));
+            if (ret.count(buft) != 0) {
+                continue; // multiple backends may use the same host buffer type
+            }
+            ret[buft] = {model.memory_use(buft), memory->memory_use(buft), 0};
+        }
+    }
+    for (const auto & backend_ptr : backends) {
+        ggml_backend_t backend = backend_ptr.get();
+        ret[ggml_backend_sched_get_buffer_type(sched.get(), backend)].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
     }
     return ret;
 }
@@ -2808,10 +2807,9 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
     const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
 
     // "free" host memory is poorly defined, instead track only memory that we know is being used:
-    size_t model_host   = 0;
-    size_t context_host = 0;
-    size_t compute_host = 0;
-    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types; // track seen host buffer types to avoid double counting
+    llama_memory_breakdown_data mb_host_acc = memory_breakdown[ggml_backend_cpu_buffer_type()];
+    // track seen host buffer types to avoid double counting:
+    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types = {ggml_backend_cpu_buffer_type()};
 
     for (const ggml_backend_dev_t & dev : devices) {
         ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
@@ -2847,9 +2845,9 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             if (seen_host_buffer_types.count(buft) == 1) {
                 continue;
             }
-            model_host   += mb.model;
-            context_host += mb.context;
-            compute_host += mb.compute;
+            mb_host_acc.model   += mb.model;
+            mb_host_acc.context += mb.context;
+            mb_host_acc.compute += mb.compute;
             seen_host_buffer_types.insert(buft);
         }
 
@@ -2861,21 +2859,21 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             continue;
         }
         const llama_memory_breakdown_data & mb_host = memory_breakdown[buft_host];
-        model_host   += mb_host.model;
-        context_host += mb_host.context;
-        compute_host += mb_host.compute;
+        mb_host_acc.model   += mb_host.model;
+        mb_host_acc.context += mb_host.context;
+        mb_host_acc.compute += mb_host.compute;
         seen_host_buffer_types.insert(buft_host);
     }
-    const size_t self_host = model_host + context_host + compute_host;
+    const size_t self_host = mb_host_acc.model + mb_host_acc.context + mb_host_acc.compute;
     table_data.push_back({
         template_host,
         "  - Host",
         "", // total
         "", // free
         std::to_string(self_host / MiB),
-        std::to_string(model_host / MiB),
-        std::to_string(context_host / MiB),
-        std::to_string(compute_host / MiB),
+        std::to_string(mb_host_acc.model / MiB),
+        std::to_string(mb_host_acc.context / MiB),
+        std::to_string(mb_host_acc.compute / MiB),
         ""}); // unaccounted
 
     for (size_t j = 1; j < table_data[0].size(); j++) {

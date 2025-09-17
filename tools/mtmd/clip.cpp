@@ -2812,8 +2812,9 @@ struct clip_model_loader {
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
 
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
+            ggml_backend_t backend = ctx_clip.backend_ptrs[i];
             ggml_backend_buffer_type_t buft = ctx_clip.backend_buft[i];
-            size_t size = ggml_backend_sched_get_buffer_size(ctx_clip.sched.get(), buft);
+            size_t size = ggml_backend_sched_get_buffer_size(ctx_clip.sched.get(), backend);
             if (size > 1) {
                 LOG_INF("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
