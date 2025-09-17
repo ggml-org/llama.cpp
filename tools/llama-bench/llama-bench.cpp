@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_set>
 
 #include "common.h"
 #include "ggml.h"
@@ -184,13 +185,26 @@ static std::vector<ggml_backend_dev_t> register_rpc_device_list(const std::strin
         throw std::invalid_argument("failed to find RPC device add function");
     }
 
+    static std::unordered_set<std::string> registered;
     std::vector<ggml_backend_dev_t> devices;
     for (const auto & server : rpc_servers) {
-        ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
-        if (!dev) {
-            throw std::invalid_argument(string_format("failed to add RPC device for server '%s'", server.c_str()));
+        ggml_backend_dev_t dev = nullptr;
+
+        std::string name = string_format("RPC[%s]", server.c_str());
+
+        if (registered.find(server) != registered.end()) {
+            dev = ggml_backend_dev_by_name(name.c_str());
         }
-        ggml_backend_device_register(dev);
+
+        if (!dev) {
+            dev = ggml_backend_rpc_add_device_fn(server.c_str());
+            if (!dev) {
+                throw std::invalid_argument(string_format("failed to add RPC device for server '%s'", server.c_str()));
+            }
+            ggml_backend_device_register(dev);
+            registered.insert(server);
+        }
+
         devices.push_back(dev);
     }
 
@@ -382,6 +396,7 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    bool                             list_devices;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -421,6 +436,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
+    /* list_devices         */ false,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -545,6 +561,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.list_devices         = cmd_params_defaults.list_devices;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -668,7 +685,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
             } else if (arg == "--list-devices") {
-                print_available_devices_and_exit();
+                params.list_devices = true;
             } else if (arg == "-t" || arg == "--threads") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1005,9 +1022,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.rpc_device_sets.empty()) {
         params.rpc_device_sets = cmd_params_defaults.rpc_device_sets;
-    }
-    if (params.rpc_device_sets.size() < params.rpc_servers.size()) {
-        params.rpc_device_sets.resize(params.rpc_servers.size());
     }
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
@@ -2036,6 +2050,20 @@ int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+
+    if (params.list_devices) {
+        ggml_backend_load_all();
+        for (const auto & rpc : params.rpc_servers) {
+            if (!rpc.empty()) {
+                try {
+                    register_rpc_device_list(rpc);
+                } catch (const std::exception & e) {
+                    fprintf(stderr, "warning: %s\n", e.what());
+                }
+            }
+        }
+        print_available_devices_and_exit();
+    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
