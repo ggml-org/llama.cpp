@@ -928,7 +928,7 @@ void write_output_files() {
     std::vector<std::string> btypes = {"f16", "f32"};
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
-    btypes.push_back("q8_1");
+   btypes.push_back("q8_1");
 #endif
 
     for (const std::string& btype : btypes) {
