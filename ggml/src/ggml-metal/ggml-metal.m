@@ -9,6 +9,8 @@
 
 #import <Metal/Metal.h>
 
+#include <stdatomic.h>
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -40,6 +42,9 @@ static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 // initialized in ggml_backend_metal_reg
 static struct ggml_backend_reg    g_ggml_backend_metal_reg;
 static struct ggml_backend_device g_ggml_backend_metal_device;
+
+// virtual address for GPU memory allocations
+static atomic_uintptr_t g_addr_device = 0x000000400ULL;
 
 // information about a Metal device
 // note: assumes single GPU device - the default one
@@ -1574,8 +1579,10 @@ struct ggml_backend_metal_buffer {
 };
 
 struct ggml_backend_metal_buffer_context {
-    void * all_data;
+    void * all_data; // for shared buffers
     size_t all_size;
+
+    void * base_addr;
 
     // if false, the Metal buffer data is allocated in private GPU memory and is not shared with the host
     bool is_shared;
@@ -5729,33 +5736,42 @@ static void ggml_backend_metal_buffer_shared_free_buffer(ggml_backend_buffer_t b
 }
 
 static void * ggml_backend_metal_buffer_shared_get_base(ggml_backend_buffer_t buffer) {
-    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
+    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *) buffer->context;
 
-    return ctx->all_data;
+    return ctx->base_addr;
 }
 
 static void ggml_backend_metal_buffer_shared_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
+    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *) tensor->buffer->context;
 
     GGML_ASSERT(ctx->is_shared);
 
-    memset((char *)tensor->data + offset, value, size);
+    const ptrdiff_t base_offset = (char *)tensor->data - (char *)ctx->base_addr;
+    memset((char *) ctx->all_data + base_offset + offset, value, size);
+
+    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_shared_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
+    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *) tensor->buffer->context;
 
     GGML_ASSERT(ctx->is_shared);
 
-    memcpy((char *)tensor->data + offset, data, size);
+    const ptrdiff_t base_offset = (char *)tensor->data - (char *)ctx->base_addr;
+    memcpy((char *) ctx->all_data + base_offset + offset, data, size);
+
+    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_metal_buffer_shared_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
+    struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *) tensor->buffer->context;
 
     GGML_ASSERT(ctx->is_shared);
 
-    memcpy(data, (const char *)tensor->data + offset, size);
+    const ptrdiff_t base_offset = (char *)tensor->data - (char *)ctx->base_addr;
+    memcpy(data, (const char *) ctx->all_data + base_offset + offset, size);
+
+    GGML_UNUSED(buffer);
 }
 
 static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
@@ -5805,7 +5821,7 @@ static void ggml_backend_metal_buffer_private_free_buffer(ggml_backend_buffer_t 
 static void * ggml_backend_metal_buffer_private_get_base(ggml_backend_buffer_t buffer) {
     struct ggml_backend_metal_buffer_context * ctx = (struct ggml_backend_metal_buffer_context *)buffer->context;
 
-    return ctx->all_data;
+    return ctx->base_addr;
 }
 
 static void ggml_backend_metal_buffer_private_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
@@ -6023,11 +6039,13 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         ctx->all_data = ggml_metal_host_malloc(size_aligned);
         ctx->is_shared = true;
     } else {
-        // dummy, non-NULL value - we'll populate this after creating the Metal buffer below
+        // dummy, non-NULL value - not used
         ctx->all_data = (void *) 0x000000400ULL;
         ctx->is_shared = false;
     }
     ctx->all_size = size_aligned;
+
+    ctx->base_addr = (void *) atomic_fetch_add_explicit(&g_addr_device, size_aligned, memory_order_relaxed);
 
     ctx->device = device;
     ctx->queue = ctx_dev->mtl_queue;
@@ -6039,7 +6057,7 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
         ctx->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (ctx_dev->use_shared_buffers) {
+            if (ctx_dev->use_shared_buffers && shared) {
                 ctx->buffers[0].metal = [device newBufferWithBytesNoCopy:ctx->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
@@ -6047,11 +6065,14 @@ static ggml_backend_buffer_t ggml_backend_metal_buffer_type_alloc_buffer(ggml_ba
             } else {
                 ctx->buffers[0].metal = [device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
 
-                ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
+                // MTLBuffer.gpuAddress is not available on early OSes, so we use a virtual address instead
+                //if (@available(macOS 10.13, iOS 16.0, *)) {
+                //    ctx->all_data = (void *) (ctx->buffers[0].metal.gpuAddress);
+                //}
             }
         }
 
-        ctx->buffers[0].data = ctx->all_data;
+        ctx->buffers[0].data = ctx->base_addr;
     }
 
     if (size_aligned > 0 && (ctx->all_data == NULL || ctx->buffers[0].metal == nil)) {
@@ -6685,6 +6706,13 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
+    // note: I think this is preferred because we want to have both the mapped and non-mapped buffers in the same
+    //       address space. not sure if there are any side-effects from this though.
+    //ctx->base_addr = (void *) atomic_fetch_add_explicit(&g_addr_device, size_aligned, memory_order_relaxed);
+    //
+    // note2: the above does not actually work
+    ctx->base_addr = ptr;
+
     struct ggml_backend_metal_device_context * ctx_dev = (struct ggml_backend_metal_device_context *)dev->context;
 
     GGML_ASSERT(ctx_dev->mtl_device != nil);
@@ -6696,7 +6724,7 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
 
     // the buffer fits into the max buffer size allowed by the device
     if (size_aligned <= device.maxBufferLength) {
-        ctx->buffers[ctx->n_buffers].data  = ptr;
+        ctx->buffers[ctx->n_buffers].data  = ctx->base_addr;
         ctx->buffers[ctx->n_buffers].size  = size;
         ctx->buffers[ctx->n_buffers].metal = nil;
 
@@ -6722,7 +6750,7 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
         for (size_t i = 0; i < size; i += size_step) {
             const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
 
-            ctx->buffers[ctx->n_buffers].data  = (void *) ((uint8_t *) ptr + i);
+            ctx->buffers[ctx->n_buffers].data  = (void *) ((uint8_t *) ctx->base_addr + i);
             ctx->buffers[ctx->n_buffers].size  = size_step_aligned;
             ctx->buffers[ctx->n_buffers].metal = nil;
 
