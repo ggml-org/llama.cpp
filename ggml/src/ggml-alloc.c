@@ -345,7 +345,7 @@ static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment, size_t m
         /*.alignment       = */ alignment,
         /*.n_free_blocks   = */ 0,
         /*.n_chunks        = */ 0,
-        /*.free_blocks     = */ {{0}},
+        /*.free_blocks     = */ {{{0}, 0}},
         /*.max_size        = */ {0},
         /*.max_chunk_size  = */ max_buffer_size,
 #ifdef GGML_ALLOCATOR_DEBUG
@@ -363,7 +363,11 @@ static void ggml_dyn_tallocr_free(struct ggml_dyn_tallocr * alloc) {
 }
 
 static size_t ggml_dyn_tallocr_max_size(struct ggml_dyn_tallocr * alloc) {
-    return alloc->max_size[alloc->n_chunks - 1];
+    size_t max_size = 0;
+    for (int i = 0; i < alloc->n_chunks; i++) {
+        max_size += alloc->max_size[i];
+    }
+    return max_size;
 }
 
 
