@@ -4,6 +4,10 @@ static inline float op_abs(float x) {
     return fabsf(x);
 }
 
+static inline float op_floor(float x) {
+    return floorf(x);
+}
+
 static inline float op_sgn(float x) {
     return (x > 0.f) ? 1.f : ((x < 0.f) ? -1.f : 0.f);
 }
@@ -123,6 +127,10 @@ static void unary_op(const ggml_compute_params * params, ggml_tensor * dst) {
 
 void ggml_compute_forward_abs(const ggml_compute_params * params, ggml_tensor * dst) {
     unary_op<op_abs>(params, dst);
+}
+
+void ggml_compute_forward_floor(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<op_floor>(params, dst);
 }
 
 void ggml_compute_forward_sgn(const ggml_compute_params * params, ggml_tensor * dst) {
