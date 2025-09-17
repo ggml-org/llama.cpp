@@ -1350,6 +1350,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa > 0) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.set_swa_pattern(4);
+                } else {
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+                }
+
                 switch (hparams.n_layer) {
                     case 16: type = LLM_TYPE_1B; break;
                     case 32: type = LLM_TYPE_7B; break;
@@ -12233,6 +12241,7 @@ struct llm_build_olmo : public llm_graph_context {
     }
 };
 
+template <bool iswa>
 struct llm_build_olmo2 : public llm_graph_context {
     llm_build_olmo2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -12248,7 +12257,14 @@ struct llm_build_olmo2 : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv();
+        using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+        inp_attn_type * inp_attn = nullptr;
+
+        if constexpr (iswa) {
+            inp_attn = build_attn_inp_kv_iswa();
+        } else {
+            inp_attn = build_attn_inp_kv();
+        }
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -12281,17 +12297,36 @@ struct llm_build_olmo2 : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                Qcur = ggml_rope_ext(
+                const bool is_swa = hparams.is_swa(il);
+
+                if (is_swa) {
+                    // For sliding window layers, Olmo3 use regular rope with no yarn rope scaling.
+                    // This is achieved here by setting freq_scale and attn_factor to 1.
+                    // We also set ext_factor to 0 to avoid a few unnecessary computations.
+                    Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, 1.0,
+                        0.0, 1.0, beta_fast, beta_slow
+                        );
+
+                    Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, 1.0,
+                        0.0, 1.0, beta_fast, beta_slow
+                        );
+                } else {
+                    Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
-                Kcur = ggml_rope_ext(
+                    Kcur = ggml_rope_ext(
                         ctx0, Kcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
+                }
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
@@ -19131,7 +19166,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_OLMO2:
             {
-                llm = std::make_unique<llm_build_olmo2>(*this, params);
+                if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                    llm = std::make_unique<llm_build_olmo2<true>>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_olmo2<false>>(*this, params);
+                }
             } break;
         case LLM_ARCH_OLMOE:
             {
