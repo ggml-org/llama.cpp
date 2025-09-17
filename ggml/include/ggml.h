@@ -554,7 +554,6 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
-        GGML_OP_XIELU,
 
         GGML_OP_COUNT,
     };
@@ -575,6 +574,7 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_XIELU,
 
         GGML_UNARY_OP_COUNT,
     };

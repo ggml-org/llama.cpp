@@ -1017,10 +1017,9 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
-    "XIELU",
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1122,10 +1121,9 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
-    "xielu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1145,9 +1143,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSIGMOID",
     "EXP",
     "GELU_ERF",
+    "XIELU",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
+static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2662,11 +2661,13 @@ struct ggml_tensor * ggml_xielu(
         float eps) {
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
-    // Store the parameters as operation parameters
-    float params[] = { beta + softplus(alpha_n), softplus(alpha_p), beta, eps };
-    ggml_set_op_params(result, params, sizeof(params));
+    ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
+    ggml_set_op_params_f32(result, 1, beta + softplus(alpha_n));
+    ggml_set_op_params_f32(result, 2, softplus(alpha_p));
+    ggml_set_op_params_f32(result, 3, beta);
+    ggml_set_op_params_f32(result, 4, eps);
 
-    result->op     = GGML_OP_XIELU;
+    result->op     = GGML_OP_UNARY;
     result->src[0] = a;
 
     return result;

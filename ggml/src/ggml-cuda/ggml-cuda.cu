@@ -2333,6 +2333,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_ELU:
                     ggml_cuda_op_elu(ctx, dst);
                     break;
+                case GGML_UNARY_OP_XIELU:
+                    ggml_cuda_op_xielu(ctx, dst);
+                    break;
                 default:
                     return false;
             }
@@ -2516,9 +2519,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_OPT_STEP_SGD:
             ggml_cuda_opt_step_sgd(ctx, dst);
-            break;
-        case GGML_OP_XIELU:
-            ggml_cuda_op_xielu(ctx, dst);
             break;
         default:
             return false;

@@ -9767,6 +9767,10 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_exp(params, dst);
             } break;
+        case GGML_UNARY_OP_XIELU:
+            {
+                ggml_compute_forward_xielu(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");

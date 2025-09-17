@@ -407,11 +407,12 @@ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 // xIELU
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
+
     const float * op_params = (const float*)dst->op_params;
-    float alpha_n = op_params[0];
-    float alpha_p = op_params[1];
-    const float beta = op_params[2];
-    const float eps = op_params[3];
+    float alpha_n = ggml_get_op_params_f32(dst, 1);
+    float alpha_p = ggml_get_op_params_f32(dst, 2);
+    const float beta = ggml_get_op_params_f32(dst, 3);
+    const float eps = ggml_get_op_params_f32(dst, 4);
 
     op_xielu_functor op(alpha_n, alpha_p, beta, eps);
     ggml_cuda_op_unary(ctx, dst, op);
