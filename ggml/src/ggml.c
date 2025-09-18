@@ -2646,11 +2646,13 @@ struct ggml_tensor * ggml_silu(
     return ggml_unary(ctx, a, GGML_UNARY_OP_SILU);
 }
 
-// ggml_xielu
-static float softplus(float input) {
-    if (input > 20.0f) return input;
-    return logf(1 + expf(input));
+struct ggml_tensor * ggml_silu_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SILU);
 }
+
+// ggml_xielu
 
 struct ggml_tensor * ggml_xielu(
         struct ggml_context * ctx,
@@ -2671,12 +2673,6 @@ struct ggml_tensor * ggml_xielu(
     result->src[0] = a;
 
     return result;
-}
-
-struct ggml_tensor * ggml_silu_inplace(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a) {
-    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SILU);
 }
 
 // ggml_silu_back

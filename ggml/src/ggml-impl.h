@@ -89,6 +89,10 @@ static bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml
     return true;
 }
 
+static inline float softplus(float input) {
+    return (input > 20.0f) ? input : logf(1 + expf(input));
+}
+
 //
 // logging
 //

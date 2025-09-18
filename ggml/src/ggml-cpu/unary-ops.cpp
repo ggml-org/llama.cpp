@@ -194,11 +194,6 @@ void ggml_compute_forward_log(const ggml_compute_params * params, ggml_tensor * 
     unary_op(op_log, params, dst);
 }
 
-static float softplus(float input, float beta=1.0f, float threshold=20.0f) {
-    if (input * beta > threshold) return input;
-    return (1/beta) * logf(1 + expf(beta * input));
-}
-
 void ggml_compute_forward_xielu(const ggml_compute_params * params, ggml_tensor * dst) {
     // Get the XIELU parameters from the operation
     float alpha_n = ggml_get_op_params_f32(dst, 1);

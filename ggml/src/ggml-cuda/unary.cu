@@ -211,7 +211,6 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 }
 
-// Functor for XIELU operation with parameters
 struct op_xielu_functor {
     float alpha_n, alpha_p, beta, eps;
 
@@ -219,14 +218,14 @@ struct op_xielu_functor {
         : alpha_n(a_n), alpha_p(a_p), beta(b), eps(e) {}
 
     __device__ __forceinline__ float operator()(float x) const {
-        float gate_pos = (x > 0.0f);        // positive branch gate
+        const float gate_pos = (x > 0.0f);        // positive branch gate
 
         // Positive branch: alpha_p * v^2 + beta * v
-        float y_pos = alpha_p * x * x + beta * x;
+        const float y_pos = alpha_p * x * x + beta * x;
 
         // Negative branch:
-        float min_v_eps = fminf(x, eps);  // works fine even if eps < 0
-        float y_neg = (expm1f(min_v_eps) - x) * alpha_n + beta * x;
+        const float min_v_eps = fminf(x, eps);  // works fine even if eps < 0
+        const float y_neg = (expm1f(min_v_eps) - x) * alpha_n + beta * x;
 
         // Select the appropriate branch based on the gate
         return gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
@@ -234,7 +233,6 @@ struct op_xielu_functor {
 };
 
 // swiglu_oai
-
 template <typename T>
 static __global__ void swiglu_oai_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, float alpha, float limit) {
     const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;

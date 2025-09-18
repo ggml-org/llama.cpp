@@ -18852,19 +18852,6 @@ struct llm_build_smallthinker : public llm_graph_context{
     }
 };
 
-// TODO: maybe put this as a general helper in ggml.c?
-static float get_scalar_f32_val(const ggml_tensor *t) {
-    float onef;
-    if (t->buffer) {
-        ggml_backend_tensor_get(t, &onef, 0, sizeof(float));
-    } else {
-        GGML_ASSERT(t->data);
-        onef = *((float *) t->data);
-    }
-    return onef;
-}
-
-// Apertus model graph builder with xIELU activation
 struct llm_build_apertus : public llm_graph_context {
     llm_build_apertus(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
