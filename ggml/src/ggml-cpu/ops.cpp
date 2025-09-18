@@ -9766,6 +9766,22 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_exp(params, dst);
             } break;
+        case GGML_UNARY_OP_FLOOR:
+            {
+                ggml_compute_forward_floor(params, dst);
+            } break;
+        case GGML_UNARY_OP_CEIL:
+            {
+                ggml_compute_forward_ceil(params, dst);
+            } break;
+        case GGML_UNARY_OP_ROUND:
+            {
+                ggml_compute_forward_round(params, dst);
+            } break;
+        case GGML_UNARY_OP_TRUNC:
+            {
+                ggml_compute_forward_trunc(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
