@@ -15,7 +15,7 @@ import kotlinx.coroutines.runBlocking
 /**
  * Internal [LLamaTier] detection implementation
  */
-internal class TierDetectionImpl(
+internal class TierDetectionImpl private constructor(
     private val context: Context
 ): TierDetection {
 
@@ -30,6 +30,19 @@ internal class TierDetectionImpl(
 
         private val DETECTION_VERSION = intPreferencesKey("detection_version")
         private val DETECTED_TIER = intPreferencesKey("detected_tier")
+
+        @Volatile
+        private var instance: TierDetection? = null
+
+        /**
+         * Create or obtain [TierDetectionImpl]'s single instance.
+         *
+         * @param Context for obtaining the data store
+         */
+        internal fun getInstance(context: Context) =
+            instance ?: synchronized(this) {
+                instance ?: TierDetectionImpl(context).also { instance = it }
+            }
     }
 
     private external fun getOptimalTier(): Int

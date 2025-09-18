@@ -1,7 +1,7 @@
 package android.llama.cpp
 
 import android.content.Context
-import android.llama.cpp.internal.InferenceEngineFactory
+import android.llama.cpp.internal.InferenceEngineImpl
 import android.llama.cpp.internal.TierDetectionImpl
 
 /**
@@ -10,12 +10,12 @@ import android.llama.cpp.internal.TierDetectionImpl
  */
 object KleidiLlama {
     /**
-     * Create an inference engine instance with automatic tier detection.
+     * Get the inference engine single instance.
      */
-    fun createInferenceEngine(context: Context) = InferenceEngineFactory.getInstance(context)
+    fun getInferenceEngine(context: Context) = InferenceEngineImpl.getInstance(context)
 
     /**
-     * Get tier detection information for debugging/settings.
+     * Get tier detection single instance.
      */
-    fun getTierDetection(context: Context): TierDetection = TierDetectionImpl(context)
+    fun getTierDetection(context: Context): TierDetection = TierDetectionImpl.getInstance(context)
 }

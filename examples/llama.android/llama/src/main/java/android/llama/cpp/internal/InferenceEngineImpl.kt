@@ -29,7 +29,7 @@ import java.io.IOException
  * with the underlying C++ native code.
  *
  * The typical usage flow is:
- * 1. Get instance via [instance]
+ * 1. Get instance via [getInstance]
  * 2. Load a model with [loadModel]
  * 3. Send prompts with [sendUserPrompt]
  * 4. Generate responses as token streams
@@ -47,30 +47,29 @@ internal class InferenceEngineImpl private constructor(
     companion object {
         private val TAG = InferenceEngineImpl::class.java.simpleName
 
-        private var initialized = false
+        @Volatile
+        private var instance: InferenceEngine? = null
 
         /**
-         * Create [InferenceEngineImpl] instance at runtime
+         * Create or obtain [InferenceEngineImpl]'s single instance.
          *
          * @param Context for obtaining native library directory
          * @throws IllegalArgumentException if native library path is invalid
          * @throws UnsatisfiedLinkError if library failed to load
          */
-        internal fun create(context: Context): InferenceEngineImpl {
-            assert(!initialized) { "Inference Engine has already been initialized!" }
+        internal fun getInstance(context: Context) =
+            instance ?: synchronized(this) {
+                val nativeLibDir = context.applicationInfo.nativeLibraryDir
+                require(nativeLibDir.isNotBlank()) { "Expected a valid native library path!" }
 
-            val nativeLibDir = context.applicationInfo.nativeLibraryDir
-            require(nativeLibDir.isNotBlank()) { "Expected native library" }
-
-            return try {
-                Log.i(TAG, "Instantiating InferenceEngineImpl,,,")
-                InferenceEngineImpl(nativeLibDir).also { initialized = true }
-
-            } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "Failed to load native library from $nativeLibDir", e)
-                throw e
+                try {
+                    Log.i(TAG, "Instantiating InferenceEngineImpl,,,")
+                    InferenceEngineImpl(nativeLibDir).also { instance = it }
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.e(TAG, "Failed to load native library from $nativeLibDir", e)
+                    throw e
+                }
             }
-        }
     }
 
     /**

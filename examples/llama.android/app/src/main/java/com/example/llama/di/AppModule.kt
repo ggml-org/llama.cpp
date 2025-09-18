@@ -76,8 +76,7 @@ internal abstract class AppModule {
             return if (USE_STUB_ENGINE) {
                 StubInferenceEngine()
             } else {
-                KleidiLlama.createInferenceEngine(context)
-                    ?: throw InstantiationException("Cannot instantiate InferenceEngine!")
+                KleidiLlama.getInferenceEngine(context)
             }
         }
 
