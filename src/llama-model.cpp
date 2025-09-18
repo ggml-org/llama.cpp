@@ -8530,6 +8530,9 @@ struct llm_build_qwen2 : public llm_graph_context {
 
         // lm_head
         cur = build_lora_mm(model.output, cur);
+        if (cur->type != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx0 ,cur, GGML_TYPE_F32);
+        }
 
         if (model.output_b != nullptr) {
             cur = ggml_add(ctx0, cur, model.output_b);

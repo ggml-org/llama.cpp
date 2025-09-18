@@ -322,3 +322,7 @@ Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. Whe
 ### GGML_CANN_PREFILL_USE_GRAPH
 
 Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.
+
+### GGML_CANN_HIGH_PERF_MODE
+
+Enable high performance mode. Intermediate computation states are stored in FP16, which improves speed but may slightly reduce precision. 

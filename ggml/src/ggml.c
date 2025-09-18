@@ -32,6 +32,7 @@
 #include <float.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include <signal.h>
 #if defined(__gnu_linux__)
 #include <syscall.h>
@@ -3006,6 +3007,32 @@ struct ggml_tensor * ggml_l2_norm_inplace(
     return ggml_l2_norm_impl(ctx, a, eps, true);
 }
 
+static int get_env_as_bool(const char *name) {
+    const char *val = getenv(name);
+    if (val == NULL) {
+        return 0;
+    }
+
+    char buf[64];
+    size_t len = strlen(val);
+    if (len >= sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        buf[i] = (char)tolower((unsigned char)val[i]);
+    }
+    buf[len] = '\0';
+
+    const char *truthy[] = {"on", "1", "yes", "y", "enable", "true"};
+    for (size_t i = 0; i < sizeof(truthy) / sizeof(truthy[0]); i++) {
+        if (strcmp(buf, truthy[i]) == 0) {
+            return 1; // true
+        }
+    }
+
+    return 0; // false
+}
+
 // ggml_mul_mat
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
@@ -3024,7 +3051,12 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result;
+    if(get_env_as_bool("GGML_CANN_HIGH_PERF_MODE") && b->type == GGML_TYPE_F16){
+        result = ggml_new_tensor(ctx, b->type, 4, ne);
+    } else {
+        result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    }
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
@@ -3629,6 +3661,9 @@ struct ggml_tensor * ggml_get_rows(
 
     // TODO: implement non F32 return
     enum ggml_type type = GGML_TYPE_F32;
+    if(get_env_as_bool("GGML_CANN_HIGH_PERF_MODE") && a->type == GGML_TYPE_F16){
+        type = a->type;
+    }
     if (a->type == GGML_TYPE_I32) {
         type = a->type;
     }
@@ -3676,7 +3711,7 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    // GGML_ASSERT(b->type == GGML_TYPE_F32);
     GGML_ASSERT(c->type == GGML_TYPE_I64);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -5003,7 +5038,13 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     // permute(0, 2, 1, 3)
     int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    struct ggml_tensor * result;
+    if(get_env_as_bool("GGML_CANN_HIGH_PERF_MODE") && q->type == GGML_TYPE_F16){
+        result = ggml_new_tensor(ctx, q->type, 4, ne);
+    } else {
+        result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    }
 
     float params[] = { scale, max_bias, logit_softcap };
     ggml_set_op_params(result, params, sizeof(params));
