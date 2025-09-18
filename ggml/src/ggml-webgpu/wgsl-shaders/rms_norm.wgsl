@@ -23,7 +23,7 @@ struct Params {
     ne2: u32,
     ne3: u32,
 
-    eps: u32
+    eps: f32
 };
 
 @group(0) @binding(2)
@@ -49,8 +49,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var j: u32 = 0; j < params.ne0; j++) {
         sum += src[i_src_row + j] * src[i_src_row + j];
     }
-    let eps = bitcast<f32>(params.eps);
-    let scale = 1.0/sqrt(sum/f32(params.ne0) + eps);
+    let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
     for (var j: u32 = 0; j < params.ne0; j++) {
         dst[i_dst_row + j] = scale * src[i_src_row + j];
     }

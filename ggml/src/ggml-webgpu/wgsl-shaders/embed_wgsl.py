@@ -88,14 +88,14 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                     raise ValueError(f"DECLS key '{key}' not found.")
                 decls_code += decls_map[key] + "\n\n"
 
-            shader_variant = replace_placeholders(shader_template, variant["REPLS"])
-            final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
+            final_shader = re.sub(r'\bDECLS\b', decls_code, shader_template)
+            final_shader = replace_placeholders(final_shader, variant["REPLS"])
             final_shader = expand_includes(final_shader, input_dir)
 
             if "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
-            elif "TYPE_SUFFIX" in variant["REPLS"]:
-                output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE_SUFFIX"]
+            elif "SHADER_SUFFIX" in variant:
+                output_name = f"{shader_base_name}_" + variant["SHADER_SUFFIX"]
             elif "TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
             else:
