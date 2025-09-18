@@ -111,6 +111,7 @@ static bool server_task_type_need_logits(server_task_type task_type) {
 
 struct slot_params {
     bool stream          = true;
+    bool include_usage   = false;
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
     bool return_tokens   = false;
     bool return_progress = false;
@@ -310,17 +311,19 @@ struct server_task {
         params.verbose           = params_base.verbosity > 9;
         params.timings_per_token = json_value(data, "timings_per_token", false);
 
-        params.stream           = json_value(data, "stream",             false);
-        params.cache_prompt     = json_value(data, "cache_prompt",       true);
-        params.return_tokens    = json_value(data, "return_tokens",      false);
-        params.return_progress  = json_value(data, "return_progress",    false);
-        params.n_predict        = json_value(data, "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
-        params.n_indent         = json_value(data, "n_indent",           defaults.n_indent);
-        params.n_keep           = json_value(data, "n_keep",             defaults.n_keep);
-        params.n_discard        = json_value(data, "n_discard",          defaults.n_discard);
-      //params.t_max_prompt_ms  = json_value(data, "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
-        params.t_max_predict_ms = json_value(data, "t_max_predict_ms",   defaults.t_max_predict_ms);
-        params.response_fields  = json_value(data, "response_fields",   std::vector<std::string>());
+        params.stream           = json_value(data,       "stream",             false);
+        auto stream_opt         = json_value(data,       "stream_options",     json::object());
+        params.include_usage    = json_value(stream_opt, "include_usage",      false);
+        params.cache_prompt     = json_value(data,       "cache_prompt",       true);
+        params.return_tokens    = json_value(data,       "return_tokens",      false);
+        params.return_progress  = json_value(data,       "return_progress",    false);
+        params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
+        params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
+        params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
+        params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+      //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
+        params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
+        params.response_fields  = json_value(data,       "response_fields",   std::vector<std::string>());
 
         params.sampling.top_k              = json_value(data, "top_k",              defaults.sampling.top_k);
         params.sampling.top_p              = json_value(data, "top_p",              defaults.sampling.top_p);
@@ -775,6 +778,7 @@ struct server_task_result_cmpl_final : server_task_result {
     llama_tokens tokens;
 
     bool stream;
+    bool include_usage;
     result_timings timings;
     std::string prompt;
 
@@ -982,21 +986,23 @@ struct server_task_result_cmpl_final : server_task_result {
             {"object",             "chat.completion.chunk"},
         });
 
-        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
-        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
-        deltas.push_back({
-            {"choices", json::array()},
-            {"created",            t},
-            {"id",                 oaicompat_cmpl_id},
-            {"model",              oaicompat_model},
-            {"system_fingerprint", build_info},
-            {"object",             "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
-        });
+        if (include_usage) {
+            // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
+            // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+            deltas.push_back({
+                {"choices", json::array()},
+                {"created",            t},
+                {"id",                 oaicompat_cmpl_id},
+                {"model",              oaicompat_model},
+                {"system_fingerprint", build_info},
+                {"object",             "chat.completion.chunk"},
+                {"usage", json {
+                    {"completion_tokens", n_decoded},
+                    {"prompt_tokens",     n_prompt_tokens},
+                    {"total_tokens",      n_decoded + n_prompt_tokens},
+                }},
+            });
+        }
 
         if (timings.prompt_n >= 0) {
             deltas.back().push_back({"timings", timings.to_json()});
@@ -2815,6 +2821,7 @@ struct server_context {
 
         res->verbose               = slot.params.verbose;
         res->stream                = slot.params.stream;
+        res->include_usage         = slot.params.include_usage;
         res->oaicompat             = slot.params.oaicompat;
         res->oaicompat_model       = slot.params.oaicompat_model;
         res->oaicompat_cmpl_id     = slot.params.oaicompat_cmpl_id;
