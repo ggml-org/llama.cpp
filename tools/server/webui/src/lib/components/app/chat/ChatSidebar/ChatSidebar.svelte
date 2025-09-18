@@ -13,6 +13,7 @@
 		updateConversationName
 	} from '$lib/stores/chat.svelte';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
+	import ModelSelector from './ModelSelector.svelte';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -109,6 +110,8 @@
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
 		</a>
+
+		<ModelSelector />
 
 		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 	</Sidebar.Header>

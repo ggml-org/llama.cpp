@@ -1,4 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { slotsService } from './slots';
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
@@ -116,6 +117,11 @@ export class ChatService {
 			})),
 			stream
 		};
+
+		const activeModel = selectedModelName();
+		if (activeModel) {
+			requestBody.model = activeModel;
+		}
 
 		requestBody.reasoning_format = 'auto';
 

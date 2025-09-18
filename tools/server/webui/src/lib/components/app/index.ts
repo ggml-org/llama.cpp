@@ -29,6 +29,7 @@ export { default as ChatSettingsFields } from './chat/ChatSettings/ChatSettingsF
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
+export { default as ChatSidebarModelSelector } from './chat/ChatSidebar/ModelSelector.svelte';
 
 export { default as EmptyFileAlertDialog } from './dialogs/EmptyFileAlertDialog.svelte';
 
