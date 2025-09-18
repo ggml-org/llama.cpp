@@ -2030,20 +2030,11 @@ void llama_context::perf_reset() {
 
 std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
-
-    for (const auto & backend_ptr : backends) {
-        ggml_backend_t backend = backend_ptr.get();
-        { // memory allocated statically on device of the backend itself
-            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
-            ret[buft] = {model.memory_use(buft), memory->memory_use(buft), 0};
-        }
-        { // memory allocated on host for backend
-            ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend));
-            if (ret.count(buft) != 0) {
-                continue; // multiple backends may use the same host buffer type
-            }
-            ret[buft] = {model.memory_use(buft), memory->memory_use(buft), 0};
-        }
+    for (const auto & buft_size : model.memory_breakdown()) {
+        ret[buft_size.first].model += buft_size.second;
+    }
+    for (const auto & buft_size : memory->memory_breakdown()) {
+        ret[buft_size.first].context += buft_size.second;
     }
     for (const auto & backend_ptr : backends) {
         ggml_backend_t backend = backend_ptr.get();
@@ -2806,74 +2797,70 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
     constexpr size_t MiB = 1024 * 1024;
     const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
 
-    // "free" host memory is poorly defined, instead track only memory that we know is being used:
-    llama_memory_breakdown_data mb_host_acc = memory_breakdown[ggml_backend_cpu_buffer_type()];
     // track seen host buffer types to avoid double counting:
-    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types = {ggml_backend_cpu_buffer_type()};
+    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types;
 
+    // GPU devices have their own memory, print a breakdown for each GPU on a single line:
     for (const ggml_backend_dev_t & dev : devices) {
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            continue;
+        }
         ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
-
         const llama_memory_breakdown_data & mb = memory_breakdown[buft];
 
-        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-            const std::string name = ggml_backend_buft_name(buft);
-            std::string desc = ggml_backend_dev_description(dev);
-            for (const std::string & prefix : desc_prefixes_strip) {
-                if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
-                    desc = desc.substr(prefix.length());
-                }
+        const std::string name = ggml_backend_buft_name(buft);
+        std::string desc = ggml_backend_dev_description(dev);
+        for (const std::string & prefix : desc_prefixes_strip) {
+            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
+                desc = desc.substr(prefix.length());
             }
-
-            size_t free, total;
-            ggml_backend_dev_memory(dev, &free, &total);
-
-            const size_t self = mb.model + mb.context + mb.compute;
-            const size_t unaccounted = total - self - free;
-
-            table_data.push_back({
-                template_gpu,
-                "  - " + name + " (" + desc + ")",
-                std::to_string(total / MiB),
-                std::to_string(free / MiB),
-                std::to_string(self / MiB),
-                std::to_string(mb.model / MiB),
-                std::to_string(mb.context / MiB),
-                std::to_string(mb.compute / MiB),
-                std::to_string(unaccounted / MiB)});
-        } else {
-            if (seen_host_buffer_types.count(buft) == 1) {
-                continue;
-            }
-            mb_host_acc.model   += mb.model;
-            mb_host_acc.context += mb.context;
-            mb_host_acc.compute += mb.compute;
-            seen_host_buffer_types.insert(buft);
         }
 
-        ggml_backend_buffer_type_t buft_host = ggml_backend_dev_host_buffer_type(dev);
-        if (!buft_host) {
-            continue;
-        }
-        if (seen_host_buffer_types.count(buft_host) == 1) {
-            continue;
-        }
-        const llama_memory_breakdown_data & mb_host = memory_breakdown[buft_host];
-        mb_host_acc.model   += mb_host.model;
-        mb_host_acc.context += mb_host.context;
-        mb_host_acc.compute += mb_host.compute;
-        seen_host_buffer_types.insert(buft_host);
+        size_t free, total;
+        ggml_backend_dev_memory(dev, &free, &total);
+
+        const size_t self = mb.model + mb.context + mb.compute;
+        const size_t unaccounted = total - self - free;
+
+        table_data.push_back({
+            template_gpu,
+            "  - " + name + " (" + desc + ")",
+            std::to_string(total / MiB),
+            std::to_string(free / MiB),
+            std::to_string(self / MiB),
+            std::to_string(mb.model / MiB),
+            std::to_string(mb.context / MiB),
+            std::to_string(mb.compute / MiB),
+            std::to_string(unaccounted / MiB)});
+        seen_host_buffer_types.insert(buft);
     }
-    const size_t self_host = mb_host_acc.model + mb_host_acc.context + mb_host_acc.compute;
+
+    // "free" host memory is poorly defined, instead track only memory that we know is being used:
+    llama_memory_breakdown_data mb_host = {0, 0, 0};
+
+    // consolidate all memory buffers not on any of the models GPU devices as host memory:
+    for (const auto & buft_mb : memory_breakdown) {
+        ggml_backend_buffer_type_t          buft = buft_mb.first;
+        const llama_memory_breakdown_data & mb   = buft_mb.second;
+        if (seen_host_buffer_types.count(buft) == 1) {
+            continue;
+        }
+        mb_host.model   += mb.model;
+        mb_host.context += mb.context;
+        mb_host.compute += mb.compute;
+        seen_host_buffer_types.insert(buft);
+    }
+
+    const size_t self_host = mb_host.model + mb_host.context + mb_host.compute;
     table_data.push_back({
         template_host,
         "  - Host",
         "", // total
         "", // free
         std::to_string(self_host / MiB),
-        std::to_string(mb_host_acc.model / MiB),
-        std::to_string(mb_host_acc.context / MiB),
-        std::to_string(mb_host_acc.compute / MiB),
+        std::to_string(mb_host.model / MiB),
+        std::to_string(mb_host.context / MiB),
+        std::to_string(mb_host.compute / MiB),
         ""}); // unaccounted
 
     for (size_t j = 1; j < table_data[0].size(); j++) {

@@ -5903,15 +5903,12 @@ size_t llama_model::n_devices() const {
     return devices.size();
 }
 
-size_t llama_model::memory_use(ggml_backend_buffer_type_t buft) const {
-    size_t n_bytes = 0;
+std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
+    std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const ggml_backend_buffer_ptr & buf_ptr : pimpl->bufs) {
-        if (ggml_backend_buffer_get_type(buf_ptr.get()) != buft) {
-            continue;
-        }
-        n_bytes += ggml_backend_buffer_get_size(buf_ptr.get());
+        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
     }
-    return n_bytes;
+    return ret;
 }
 
 uint64_t llama_model::n_elements() const {

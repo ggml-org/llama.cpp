@@ -1,5 +1,6 @@
 #include "llama-memory-recurrent.h"
 
+#include "ggml-alloc.h"
 #include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-batch.h"
@@ -359,15 +360,12 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-size_t llama_memory_recurrent::memory_use(ggml_backend_buffer_type_t buft) const {
-    size_t n_bytes = 0;
+std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
+    std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const ggml_backend_buffer_ptr & buf_ptr : bufs) {
-        if (ggml_backend_buffer_get_type(buf_ptr.get()) != buft) {
-            continue;
-        }
-        n_bytes += ggml_backend_buffer_get_size(buf_ptr.get());
+        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
     }
-    return n_bytes;
+    return ret;
 }
 
 llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {

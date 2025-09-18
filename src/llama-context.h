@@ -23,9 +23,9 @@ struct llama_memory_context_i;
 
 // "memory" as in physical memory for a buffer type, in bytes
 struct llama_memory_breakdown_data {
-    size_t model;   // memory allocated for the model
-    size_t context; // memory allocated for the context
-    size_t compute; // memory allocated for temporary compute buffers
+    size_t model   = 0; // memory allocated for the model
+    size_t context = 0; // memory allocated for the context
+    size_t compute = 0; // memory allocated for temporary compute buffers
 };
 
 struct llama_context {
