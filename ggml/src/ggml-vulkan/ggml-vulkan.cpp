@@ -1398,7 +1398,7 @@ static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
 static uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
     if (tensor->view_src) {
-        return (uint8_t *) tensor->tensor_data(view_src) - (uint8_t *) vk_ptr_base;
+        return (uint8_t *) tensor_data(tensor->view_src) - (uint8_t *) vk_ptr_base;
     }
     return (uint8_t *) tensor_data(tensor) - (uint8_t *) vk_ptr_base;
 }
@@ -7356,7 +7356,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     if (ctx->device->uma) {
         ggml_vk_host_get(ctx->device, tensor_data(q), d_Q, q_buf_offset);
         ggml_vk_host_get(ctx->device, tensor_data(k), d_K, k_buf_offset);
-        ggml_vk_host_get(ctx->device, v->data(), d_V, v_buf_offset);
+        ggml_vk_host_get(ctx->device, tensor_data(v), d_V, v_buf_offset);
         ggml_vk_host_get(ctx->device, tensor_data(dst), d_D, d_buf_offset);
         Q_uma = d_Q != nullptr;
         K_uma = d_K != nullptr;
@@ -8555,7 +8555,7 @@ static void ggml_vk_multi_add(ggml_backend_vk_context * ctx, vk_context& subctx,
         uma[i] = false;
 
         if (ctx->device->uma) {
-            ggml_vk_host_get(ctx->device, tensors[i]->data, buf[i], offset[i]);
+            ggml_vk_host_get(ctx->device, tensor_data(tensors[i]), buf[i], offset[i]);
             uma[i] = buf[i] != nullptr;
         }
         if (!uma[i]) {
@@ -8708,7 +8708,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
 
     if (ctx->device->uma) {
         for (int i = 0; i < num_srcs; i++) {
-            ggml_vk_host_get(ctx->device, dst->src[i]->data, d_srcs[i], src_offsets[i]);
+            ggml_vk_host_get(ctx->device, tensor_data(dst->src[i]), d_srcs[i], src_offsets[i]);
             srcs_uma[i] = d_srcs[i] != nullptr;
         }
 

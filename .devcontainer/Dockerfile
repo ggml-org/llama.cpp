@@ -3,6 +3,7 @@ FROM ubuntu:24.04
 # Build arguments for optional components (default: disabled)
 ARG INSTALL_CUDA=false
 ARG INSTALL_ROCM=false
+ARG INSTALL_VULKAN=false
 ARG INSTALL_PYTHON_DEPS=false
 
 # Avoid prompts from apt
@@ -82,6 +83,18 @@ RUN if [ "$INSTALL_ROCM" = "true" ]; then \
         apt-get clean; \
     else \
         echo "Skipping ROCm installation"; \
+    fi
+
+# Install Vulkan SDK (conditional)
+RUN if [ "$INSTALL_VULKAN" = "true" ]; then \
+        wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | tee /etc/apt/trusted.gpg.d/lunarg.asc && \
+        wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list && \
+        apt-get update && \
+        apt-get install -y vulkan-sdk && \
+        apt-get autoremove -y && \
+        apt-get clean; \
+    else \
+        echo "Skipping Vulkan SDK installation"; \
     fi
 
 # Install Python dependencies for gguf conversion tools (conditional)
