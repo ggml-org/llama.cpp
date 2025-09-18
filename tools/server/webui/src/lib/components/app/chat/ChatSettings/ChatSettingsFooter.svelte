@@ -25,9 +25,5 @@
 <div class="flex justify-between border-t border-border/30 p-6">
 	<Button variant="outline" onclick={handleReset}>Reset to default</Button>
 
-	<div class="flex gap-2">
-		<Button variant="outline" onclick={handleClose}>Close</Button>
-
-		<Button onclick={handleSave}>Save</Button>
-	</div>
+	<Button onclick={handleSave}>Save settings</Button>
 </div>
