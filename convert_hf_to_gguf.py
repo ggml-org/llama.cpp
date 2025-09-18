@@ -4197,6 +4197,7 @@ class Plamo2Model(TextModel):
                     is_mamba = (i % mamba_step) != (mamba_step // 2)
                 if is_mamba:
                     num_key_value_heads.append(0)
+                    num_attention_heads.append(0)
                 else:
                     num_key_value_heads.append(hparams.get("num_key_value_heads", 4))
                     num_attention_heads.append(hparams.get("num_attention_heads", 32))
