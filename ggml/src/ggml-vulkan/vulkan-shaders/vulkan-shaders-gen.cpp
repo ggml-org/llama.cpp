@@ -41,7 +41,7 @@ std::string input_dir = "vulkan-shaders";
 std::string output_dir = "/tmp";
 std::string target_hpp = "ggml-vulkan-shaders.hpp";
 std::string target_cpp = "ggml-vulkan-shaders.cpp";
-std::string ninja_build_file = "";
+std::string target_cmake = "";
 bool no_clean = false;
 bool no_embed = false;
 
@@ -245,41 +245,56 @@ struct compile_command {
     std::string name;
     std::string input_filepath;
     std::string output_filepath;
-    std::string flags;
+    std::vector<std::string> flags;
 };
 
-// Code for writing a ninja build file
+// Code for writing a CMake build file
 
-static std::stringstream ninja_build;
+std::stringstream cmake_lists;
 
-std::string ninja_escape(const std::string& str) {
-    std::string result;
-    for (char c : str) {
-        if (c == ' ' || c == '$' || c == ':') {
-            result += '$';
+struct cmake_escape { const std::string& str; };
+std::ostream& operator<<(std::ostream& os, const cmake_escape& to_escape) {
+    for (char c : to_escape.str) {
+        if (c == '"' || c == '\\') {
+            os << '\\';
         }
-        result += c;
+        os << c;
     }
-    return result;
+    return os;
 }
 
-void ninja_init() {
-    ninja_build = make_generic_stringstream();
-    ninja_build << "ninja_required_version = 1.3\n\n";
-    ninja_build << "rule glslc\n";
-    ninja_build << "  command = " << GLSLC << " $FLAGS -MD -MF $out.d $in -o $out\n";
-    ninja_build << "  depfile = $out.d\n";
-    ninja_build << "  deps = gcc\n";
-    ninja_build << "  description = Building Vulkan shader ${NAME}.spv\n\n";
+void cmake_add_header() {
+    cmake_lists = make_generic_stringstream();
+    cmake_lists << "cmake_minimum_required(VERSION 3.14)\n";
+    cmake_lists << "project(ggml-vulkan-shaders)\n\n";
+    cmake_lists << "set(GLSLC \"" << GLSLC << "\")\n\n";
+    cmake_lists << "function(compile_shader name in_file out_file flags)\n";
+    cmake_lists << "  add_custom_command(\n";
+    cmake_lists << "    OUTPUT ${out_file}\n";
+    cmake_lists << "    COMMAND ${GLSLC} ${flags} ${ARGN} -MD -MF ${out_file}.d ${in_file} -o ${out_file}\n";
+    cmake_lists << "    DEPENDS ${in_file}\n";
+    cmake_lists << "    DEPFILE ${out_file}.d\n";
+    cmake_lists << "    COMMENT \"Building Vulkan shader ${name}.spv\"\n";
+    cmake_lists << "  )\n";
+    cmake_lists << "endfunction()\n\n";
 }
 
-void ninja_add_build_command(const compile_command& cmd) {
-    ninja_build << "build " << ninja_escape(cmd.output_filepath) << ": glslc " << ninja_escape(cmd.input_filepath) << "\n";
-    ninja_build << "  NAME = " << cmd.name << "\n";
-    ninja_build << "  FLAGS = " << cmd.flags << "\n\n";
+void cmake_add_build_command(const compile_command& cmd) {
+    cmake_lists << "compile_shader(" << cmd.name << " \"" << cmd.input_filepath  << "\" \"" << cmd.output_filepath << "\" ";
+    for (const std::string& flag : cmd.flags) {
+        cmake_lists << "\"" << cmake_escape{flag} << "\" ";
+    }
+    cmake_lists << ")\n";
     shader_fnames.push_back(std::make_pair(cmd.name, cmd.output_filepath));
 }
 
+void cmake_add_target() {
+    cmake_lists << "\nadd_custom_target(ggml-vulkan-shaders ALL DEPENDS\n";
+    for (const auto& pair : shader_fnames) {
+        cmake_lists << "  \"" << pair.second << "\"\n";
+    }
+    cmake_lists << ")\n";
+}
 
 // variables to track number of compiles in progress
 static uint32_t compile_count = 0;
@@ -307,11 +322,7 @@ compile_command create_compile_command(const std::string& _name, const std::stri
         flags.push_back("-D" + define.first + "=" + define.second);
     }
 
-    std::string flags_str;
-    for (const auto& part : flags) {
-        flags_str += part + " ";
-    }
-    return {std::move(name), std::move(in_path), std::move(out_path), std::move(flags_str)};
+    return {std::move(name), std::move(in_path), std::move(out_path), std::move(flags)};
 }
 
 void execute_compile_command(compile_command cmd) {
@@ -323,10 +334,15 @@ void execute_compile_command(compile_command cmd) {
         // }
         // std::cout << std::endl;
 
+        std::string flags_str;
+        for (const auto& part : cmd.flags) {
+            flags_str += part + " ";
+        }
+
         #ifdef _WIN32
-            std::string command = GLSLC + " " + cmd.flags + " \"" + cmd.input_filepath + "\" -o \"" + cmd.output_filepath + "\"";
+            std::string command = GLSLC + " " + flags_str + " \"" + cmd.input_filepath + "\" -o \"" + cmd.output_filepath + "\"";
         #else
-            std::string command = GLSLC + " " + cmd.flags + " " + cmd.input_filepath + " -o " + cmd.output_filepath;
+            std::string command = GLSLC + " " + flags_str + " " + cmd.input_filepath + " -o " + cmd.output_filepath;
         #endif
         execute_command(command, stdout_str, stderr_str);
 
@@ -358,8 +374,8 @@ static std::vector<std::future<void>> compiles;
 void string_to_spv(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
     compile_command cmd = create_compile_command(_name, in_fname, defines, fp16, coopmat, coopmat2, f16acc);
 
-    if (!ninja_build_file.empty()) {
-        ninja_add_build_command(cmd);
+    if (!target_cmake.empty()) {
+        cmake_add_build_command(cmd);
         return;
     }
     {
@@ -1001,8 +1017,9 @@ void write_output_files() {
     } else {
         write_binary_file(target_cpp, src.str());
     }
-    if (!ninja_build_file.empty()) {
-        write_file_if_changed(ninja_build_file, ninja_build.str());
+    if (!target_cmake.empty()) {
+        cmake_add_target();
+        write_file_if_changed(target_cmake, cmake_lists.str());
     }
 }
 
@@ -1043,9 +1060,9 @@ int main(int argc, char** argv) {
     if (args.find("--no-embed") != args.end()) {
         no_embed = true; // Do not embed SPIR-V binaries into C++ source files, only write stubs to header
     }
-    if (args.find("--ninja") != args.end()) {
-        ninja_build_file = args["--ninja"]; // Write a ninja build file instead of invoking glslc directly
-        ninja_init();
+    if (args.find("--cmake") != args.end()) {
+        target_cmake = args["--cmake"]; // Write a CMakeLists.txt file instead of invoking glslc directly
+        cmake_add_header();
     }
 
     if (!directory_exists(input_dir)) {
