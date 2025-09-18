@@ -1077,6 +1077,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         break;
                     default: type = LLM_TYPE_UNKNOWN;
                }
+
+               // Load attention parameters
+               ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH,   hparams.n_embd_head_k);
+               ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v);
             } break;
         case LLM_ARCH_GPT2:
             {
@@ -17521,6 +17525,7 @@ private:
             const int64_t n_embd_head_q = hparams.n_embd_head_k;
             const int64_t n_embd_head_k = hparams.n_embd_head_k;
             const int64_t n_embd_head_v = hparams.n_embd_head_v;
+            int32_t n_head = hparams.n_head(il);
             int32_t n_head_kv = hparams.n_head_kv(il);
 
             const int64_t q_offset = 0;
