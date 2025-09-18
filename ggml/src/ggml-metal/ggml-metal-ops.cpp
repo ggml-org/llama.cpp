@@ -1444,7 +1444,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 GGML_ABORT("unsupported ne11");
         };
 
-        ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, r1ptg);
+        ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, nsg, nxpsg, r1ptg);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -1465,9 +1465,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             /*.ne1   =*/ ne1,
             /*.r2    =*/ r2,
             /*.r3    =*/ r3,
-            /*.nsg   =*/ nsg,
-            /*.nxpsg =*/ nxpsg,
-            /*.r1ptg =*/ r1ptg,
         };
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
