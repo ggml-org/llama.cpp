@@ -6,28 +6,85 @@
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["NO_FREQ_FAC"]
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NORM", "ROTATE"]
+  },
+  {
+    "SHADER_SUFFIX": "f32_norm_inplace",
+    "REPLS": {
+      "TYPE" : "f32",
+    },
+    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "NORM", "ROTATE_INPLACE"]
   },
   {
     "SHADER_SUFFIX": "f16_norm",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["NO_FREQ_FAC"]
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NORM", "ROTATE"]
+  },
+  {
+    "SHADER_SUFFIX": "f16_norm_inplace",
+    "REPLS": {
+      "TYPE" : "f16",
+    },
+    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "NORM", "ROTATE_INPLACE"]
   },
   {
    "SHADER_SUFFIX": "f32_norm_ff",
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["FREQ_FAC"]
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NORM", "ROTATE"]
+  },
+  {
+   "SHADER_SUFFIX": "f32_norm_ff_inplace",
+    "REPLS": {
+      "TYPE" : "f32",
+    },
+    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "NORM", "ROTATE_INPLACE"]
   },
   {
     "SHADER_SUFFIX": "f16_norm_ff",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["FREQ_FAC"]
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NORM", "ROTATE"]
+  },
+  {
+    "SHADER_SUFFIX": "f16_norm_ff_inplace",
+    "REPLS": {
+      "TYPE" : "f16",
+    },
+    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "NORM", "ROTATE_INPLACE"]
+  },
+
+  {
+    "SHADER_SUFFIX": "f32_neox",
+    "REPLS": {
+      "TYPE" : "f32",
+    },
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NEOX", "ROTATE"]
+  },
+  {
+    "SHADER_SUFFIX": "f16_neox",
+    "REPLS": {
+      "TYPE" : "f16",
+    },
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NEOX", "ROTATE"]
+  },
+  {
+   "SHADER_SUFFIX": "f32_neox_ff",
+    "REPLS": {
+      "TYPE" : "f32",
+    },
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NEOX", "ROTATE"]
+  },
+  {
+    "SHADER_SUFFIX": "f16_neox_ff",
+    "REPLS": {
+      "TYPE" : "f16",
+    },
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NEOX", "ROTATE"]
   }
 ]
 
@@ -35,11 +92,33 @@
 
 #define(DECLS)
 
-#decl(NO_FREQ_FAC)
+#decl(ROTATE)
+fn rotate(i_dst: u32, out0: f32, out1: f32) {
+    dst[i_dst] = {{TYPE}}(out0);
+    dst[i_dst + pair_offset()] = {{TYPE}}(out1);
+}
+#enddecl(ROTATE)
 
+#decl(ROTATE_INPLACE)
+fn rotate(i_dst: u32, out0: f32, out1: f32) {
+    src0[i_dst] = {{TYPE}}(out0);
+    src0[i_dst + pair_offset()] = {{TYPE}}(out1);
+}
+#enddecl(ROTATE_INPLACE)
+
+#decl(NO_FF_FUNC)
 fn freq_factor(i: u32) -> f32 {
     return 1.0f;
 }
+#enddecl(NO_FF_FUNC)
+
+#decl(FF_FUNC)
+fn freq_factor(i: u32) -> f32 {
+    return src2[i/2];
+}
+#enddecl(FF_FUNC)
+
+#decl(NO_FF_BINDINGS)
 
 @group(0) @binding(2)
 var<storage, read_write> dst: array<{{TYPE}}>;
@@ -47,13 +126,16 @@ var<storage, read_write> dst: array<{{TYPE}}>;
 @group(0) @binding(3)
 var<uniform> params: Params;
 
-#enddecl(NO_FREQ_FAC)
+#enddecl(NO_FF_BINDINGS)
 
-#decl(FREQ_FAC)
+#decl(NO_FF_BINDINGS_INPLACE)
 
-fn freq_factor(i: u32) -> f32 {
-    return src2[i/2];
-}
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+#enddecl(NO_FF_BINDINGS_INPLACE)
+
+#decl(FF_BINDINGS)
 
 @group(0) @binding(2)
 var<storage, read_write> src2: array<f32>;
@@ -64,7 +146,29 @@ var<storage, read_write> dst: array<{{TYPE}}>;
 @group(0) @binding(4)
 var<uniform> params: Params;
 
-#enddecl(FREQ_FAC)
+#enddecl(FF_BINDINGS)
+
+#decl(FF_BINDINGS_INPLACE)
+
+@group(0) @binding(2)
+var<storage, read_write> src2: array<f32>;
+
+@group(0) @binding(3)
+var<uniform> params: Params;
+
+#enddecl(FF_BINDINGS_INPLACE)
+
+#decl(NORM)
+fn pair_offset() -> u32 {
+    return 1;
+}
+#enddecl(NORM)
+
+#decl(NEOX)
+fn pair_offset() -> u32 {
+    return params.n_dims / 2;
+}
+#enddecl(NEOX)
 
 #end(DECLS)
 
@@ -146,8 +250,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_dst = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1 + i0;
 
     if (i0 >= params.n_dims) {
-        dst[i_dst] = src0[i_src];
-        dst[i_dst + 1] = src0[i_src + 1];
+        rotate(i_dst, f32(src0[i_src]), f32(src0[i_src + 1]));
         return;
     }
 
@@ -155,9 +258,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let thetas = rope_yarn(theta_base/freq_factor(i0), i0);
 
     let x0 = f32(src0[i_src]);
-    let x1 = f32(src0[i_src + 1]);
-    dst[i_dst] = {{TYPE}}(x0 * thetas.x - x1 * thetas.y);
-    dst[i_dst + 1] = {{TYPE}}(x0 * thetas.y + x1 * thetas.x);
+    let x1 = f32(src0[i_src + pair_offset()]);
+    rotate(i_dst, x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
 }
 
 #end(SHADER)
