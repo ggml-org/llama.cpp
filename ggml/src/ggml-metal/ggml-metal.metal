@@ -2883,7 +2883,8 @@ static inline void helper_mv_reduce_and_write(
     }
 }
 
-constant short FC_mul_mv_nsg  [[function_constant(FC_MUL_MV + 0)]];
+constant short FC_mul_mv_nsg   [[function_constant(FC_MUL_MV + 0)]];
+constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
 
 template<typename block_q_type, short NR0, short NW, typename args_t>
 void mul_vec_q_n_f32_impl(
@@ -3108,7 +3109,7 @@ kernel void kernel_mul_mv_q8_0_f32(
 
 // mat-vec kernel processing in chunks of float4
 // chpb - chunks per quantization block
-template<short nxpsg, short r1ptg, typename q_t, short chpb, void (*deq_t4)(device const q_t *, short, thread float4 &) >
+template<short r1ptg, typename q_t, short chpb, void (*deq_t4)(device const q_t *, short, thread float4 &) >
 void kernel_mul_mv_ext_q4_f32_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -3117,6 +3118,9 @@ void kernel_mul_mv_ext_q4_f32_impl(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    const short NSG   = FC_mul_mv_nsg;
+    const short nxpsg = FC_mul_mv_nxpsg;
+
     const short chpt = 4; // chunks per thread
 
   //const short nxpsg = (32);
@@ -3125,7 +3129,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
     const short tx = tiisg%nxpsg;
     const short ty = tiisg/nxpsg;
 
-    const int i01 = tgpig.x*(nypsg*args.nsg) + nypsg*sgitg + ty;
+    const int i01 = tgpig.x*(nypsg*NSG) + nypsg*sgitg + ty;
     const int i11 = tgpig.y*r1ptg;
     const int i1m = tgpig.z;
 
@@ -3208,7 +3212,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
 }
 
 // mat-vec kernel processing in chunks of float4x4
-template<short nxpsg, short r1ptg, typename q_t, short chpb, void (*deq_t4x4)(device const q_t *, short, thread float4x4 &) >
+template<short r1ptg, typename q_t, short chpb, void (*deq_t4x4)(device const q_t *, short, thread float4x4 &) >
 void kernel_mul_mv_ext_q4x4_f32_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -3217,6 +3221,9 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    const short NSG   = FC_mul_mv_nsg;
+    const short nxpsg = FC_mul_mv_nxpsg;
+
     const short chpt = 1;
 
   //const short nxpsg = (32);
@@ -3225,7 +3232,7 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
     const short tx = tiisg%nxpsg;
     const short ty = tiisg/nxpsg;
 
-    const int i01 = tgpig.x*(nypsg*args.nsg) + nypsg*sgitg + ty;
+    const int i01 = tgpig.x*(nypsg*NSG) + nypsg*sgitg + ty;
     const int i11 = tgpig.y*r1ptg;
     const int i1m = tgpig.z;
 
@@ -3322,12 +3329,7 @@ kernel void kernel_mul_mv_ext_q4_f32_disp(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-    switch (args.nxpsg) {
-        case 4:  kernel_mul_mv_ext_q4_f32_impl<4,  r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 8:  kernel_mul_mv_ext_q4_f32_impl<8,  r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 16: kernel_mul_mv_ext_q4_f32_impl<16, r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 32: kernel_mul_mv_ext_q4_f32_impl<32, r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-    }
+    kernel_mul_mv_ext_q4_f32_impl<r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
 template<short r1ptg, typename q_t, short epb, void (*deq_t4x4)(device const q_t *, short, thread float4x4 &)>
@@ -3339,12 +3341,7 @@ kernel void kernel_mul_mv_ext_q4x4_f32_disp(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-    switch (args.nxpsg) {
-        case 4:  kernel_mul_mv_ext_q4x4_f32_impl<4,  r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 8:  kernel_mul_mv_ext_q4x4_f32_impl<8,  r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 16: kernel_mul_mv_ext_q4x4_f32_impl<16, r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-        case 32: kernel_mul_mv_ext_q4x4_f32_impl<32, r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg); break;
-    }
+    kernel_mul_mv_ext_q4x4_f32_impl<r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
 typedef decltype(kernel_mul_mv_ext_q4_f32_disp  <2, block_q8_0, 32,  dequantize_q8_0_t4>) mul_mv_ext_q4_f32_t;

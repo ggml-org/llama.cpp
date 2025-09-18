@@ -374,9 +374,6 @@ typedef struct {
     int32_t  ne1;
     int16_t  r2;
     int16_t  r3;
-    int16_t  nsg;
-    int16_t  nxpsg;
-    int16_t  r1ptg;
 } ggml_metal_kargs_mul_mv_ext;
 
 typedef struct {
