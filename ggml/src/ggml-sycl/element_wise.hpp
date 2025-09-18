@@ -83,6 +83,4 @@ void ggml_sycl_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_geglu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-void ggml_sycl_set(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
 #endif // GGML_SYCL_ELEMENTWISE_HPP
