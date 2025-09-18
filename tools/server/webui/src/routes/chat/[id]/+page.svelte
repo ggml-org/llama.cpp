@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { beforeNavigate } from '$app/navigation';
@@ -44,7 +45,7 @@
 				const success = await chatStore.loadConversation(chatId);
 
 				if (!success) {
-					await goto('/');
+					await goto(`${base}/`);
 				}
 			})();
 		}

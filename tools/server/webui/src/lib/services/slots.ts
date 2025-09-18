@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { config } from '$lib/stores/settings.svelte';
 
 /**
@@ -138,7 +139,7 @@ export class SlotsService {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch('/slots', {
+			const response = await fetch(`${base}/slots`, {
 				headers: {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}

@@ -8,6 +8,11 @@ const config = {
 	// for more information about preprocessors
 	preprocess: [vitePreprocess(), mdsvex()],
 	kit: {
+		paths: {
+			// Base path for deployment in subdirectories (e.g., '/llama' for hosting at example.com/llama)
+			// Leave empty ('') for root deployment (default behavior)
+			base: ''
+		},
 		adapter: adapter({
 			pages: '../public',
 			assets: '../public',

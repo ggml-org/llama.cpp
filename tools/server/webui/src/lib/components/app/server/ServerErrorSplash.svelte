@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
@@ -64,7 +65,7 @@
 			updateConfig('apiKey', apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch('/props', {
+			const response = await fetch('${base}/props', {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`
@@ -77,7 +78,7 @@
 
 				// Show success state briefly, then navigate to home
 				setTimeout(() => {
-					goto('/');
+					goto(`${base}/`);
 				}, 1000);
 			} else {
 				// API key is invalid - User Story A

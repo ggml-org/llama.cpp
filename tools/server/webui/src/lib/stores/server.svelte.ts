@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
@@ -98,7 +99,7 @@ class ServerStore {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch('/slots', {
+			const response = await fetch(`${base}/slots`, {
 				headers: {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}

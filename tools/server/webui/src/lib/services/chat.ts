@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { config } from '$lib/stores/settings.svelte';
 import { slotsService } from './slots';
 /**
@@ -164,7 +165,7 @@ export class ChatService {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch(`/v1/chat/completions`, {
+			const response = await fetch(`${base}/v1/chat/completions`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -531,7 +532,7 @@ export class ChatService {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch(`/props`, {
+			const response = await fetch(`${base}/props`, {
 				headers: {
 					'Content-Type': 'application/json',
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})

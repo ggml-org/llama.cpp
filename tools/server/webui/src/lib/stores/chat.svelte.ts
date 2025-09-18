@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -100,7 +101,7 @@ class ChatStore {
 
 		this.maxContextError = null;
 
-		await goto(`/chat/${conversation.id}`);
+		await goto(`${base}/chat/${conversation.id}`);
 
 		return conversation.id;
 	}
@@ -910,7 +911,7 @@ class ChatStore {
 			if (this.activeConversation?.id === convId) {
 				this.activeConversation = null;
 				this.activeMessages = [];
-				await goto('/?new_chat=true');
+				await goto(`${base}/?new_chat=true`);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
