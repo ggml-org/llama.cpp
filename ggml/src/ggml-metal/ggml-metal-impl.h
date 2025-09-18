@@ -8,6 +8,9 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
+#define N_R0_F 2
+#define N_SG_F 4
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 
@@ -72,6 +75,7 @@
 #define FC_FLASH_ATTN_EXT              100
 #define FC_FLASH_ATTN_EXT_VEC          200
 #define FC_FLASH_ATTN_EXT_VEC_REDUCE   300
+#define FC_MUL_MV                      400
 
 // kernel argument structs
 //

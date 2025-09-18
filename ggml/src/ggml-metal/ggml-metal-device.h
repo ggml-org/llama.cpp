@@ -22,6 +22,7 @@ typedef struct ggml_metal_cv * ggml_metal_cv_t;
 ggml_metal_cv_t ggml_metal_cv_init(void);
 void ggml_metal_cv_free(ggml_metal_cv_t cv);
 
+void ggml_metal_cv_set_int16(ggml_metal_cv_t cv, int16_t value, int32_t idx);
 void ggml_metal_cv_set_int32(ggml_metal_cv_t cv, int32_t value, int32_t idx);
 void ggml_metal_cv_set_bool (ggml_metal_cv_t cv, bool    value, int32_t idx);
 

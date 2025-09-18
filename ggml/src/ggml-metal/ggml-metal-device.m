@@ -51,6 +51,10 @@ void ggml_metal_cv_free(ggml_metal_cv_t cv) {
     free(cv);
 }
 
+void ggml_metal_cv_set_int16(ggml_metal_cv_t cv, int16_t value, int32_t idx) {
+    [cv->obj setConstantValue:&value type:MTLDataTypeShort atIndex:idx];
+}
+
 void ggml_metal_cv_set_int32(ggml_metal_cv_t cv, int32_t value, int32_t idx) {
     [cv->obj setConstantValue:&value type:MTLDataTypeInt atIndex:idx];
 }
