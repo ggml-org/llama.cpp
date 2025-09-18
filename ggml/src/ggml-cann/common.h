@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <functional>
 #include <optional>
+#include <list>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
@@ -106,6 +107,7 @@ int32_t ggml_cann_get_device();
 
 std::optional<std::string> get_env(const std::string& name);
 bool parse_bool(const std::string& value);
+int parse_integer(const std::string& value);
 
 /**
  * @brief Abstract base class for memory pools used by CANN.
@@ -350,7 +352,7 @@ struct ggml_graph_node_properties {
 struct ggml_cann_graph {
     ~ggml_cann_graph() {
         if (graph != nullptr) {
-            aclmdlRIDestroy(graph);
+            ACL_CHECK(aclmdlRIDestroy(graph));
         }
     }
 
@@ -358,7 +360,104 @@ struct ggml_cann_graph {
 
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 };
+
+/**
+ * @brief LRU cache for managing ggml_cann_graph objects.
+ *
+ * This class maintains a list of shared_ptr to ggml_cann_graph objects
+ * and enforces a maximum capacity. It provides methods to push new graphs,
+ * move existing graphs to the front (most recently used), and clear the cache.
+ */
+struct ggml_cann_graph_lru_cache {
+    size_t capacity;  /**< Maximum number of graphs in the cache. */
+
+    std::list<ggml_cann_graph*> cache_list; /**< List storing cached graphs as raw pointers. */
+
+    ggml_cann_graph_lru_cache() {
+        capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12"));
+    }
+
+    /**
+     * @brief Push a new graph to the front of the cache.
+     * If the cache exceeds capacity, the least recently used graph is deleted.
+     * @param new_node Pointer to the new ggml_cann_graph to cache.
+     *        Ownership is transferred to the cache (cache will delete it).
+     */
+    void push(ggml_cann_graph* new_node) {
+        if (cache_list.size() >= capacity) {
+            ggml_cann_graph* old = cache_list.back();
+            cache_list.pop_back();
+            delete old; // free the old graph
+        }
+        cache_list.push_front(new_node);
+    }
+
+    /**
+     * @brief Move an existing graph to the front of the cache.
+     * @param node Pointer to the ggml_cann_graph to move.
+     */
+    void move_to_front(ggml_cann_graph* node) {
+        cache_list.remove(node);
+        cache_list.push_front(node);
+    }
+
+    /**
+     * @brief Clear all graphs from the cache (also frees memory).
+     */
+    void clear() {
+        for (auto ptr : cache_list) {
+            delete ptr;
+        }
+        cache_list.clear();
+    }
+
+    /**
+     * @brief Destructor that clears the cache and frees all cached graphs.
+     */
+    ~ggml_cann_graph_lru_cache() {
+        clear();
+    }
+};
 #endif  // USE_ACL_GRAPH
+
+struct ggml_cann_rope_cache {
+    ~ggml_cann_rope_cache() {
+        if(theta_scale_cache != nullptr) {
+            ACL_CHECK(aclrtFree(theta_scale_cache));
+        }
+        if(sin_cache != nullptr) {
+            ACL_CHECK(aclrtFree(sin_cache));
+        }
+        if(cos_cache != nullptr) {
+            ACL_CHECK(aclrtFree(cos_cache));
+        }
+    }
+
+    void* theta_scale_cache = nullptr;
+    int64_t theta_scale_length = 0;
+    // sin/cos cache, used only to accelerate first layer on each device
+    void* sin_cache = nullptr;
+    void* cos_cache = nullptr;
+    int64_t position_length = 0;
+    // Properties to check before reusing the sincos cache
+    bool cached = false;
+    float ext_factor = 0.0f;
+    float theta_scale = 0.0f;
+    float freq_scale = 0.0f;
+    float attn_factor = 0.0f;
+    bool is_neox = false;
+};
+
+struct ggml_cann_tensor_cache {
+    ~ggml_cann_tensor_cache() {
+        if(cache != nullptr) {
+            ACL_CHECK(aclrtFree(cache));
+        }
+    }
+
+    void* cache = nullptr;
+    int64_t size = 0;
+};
 
 /**
  * @brief Context for managing CANN backend operations.
@@ -370,11 +469,16 @@ struct ggml_backend_cann_context {
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
-    std::unique_ptr<ggml_cann_graph> cann_graph;
+    ggml_cann_graph_lru_cache graph_lru_cache;
+    bool acl_graph_mode = true;
 #endif
     cann_task_queue task_queue;
     bool async_mode;
-    bool support_set_rows;
+    // Rope Cache
+    ggml_cann_rope_cache rope_cache;
+    // Constant Pool
+    ggml_cann_tensor_cache rms_norm_one_tensor_cache;
+    ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -390,14 +494,13 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-
-        support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
-        GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
-
-        if (!support_set_rows) {
-            GGML_LOG_INFO("%s: CANN Graph currently only supports execution when LLAMA_SET_ROWS is ON. "
-                    "Falling back to eager mode.\n", __func__);
-        }
+#ifdef USE_ACL_GRAPH
+        acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
+        GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n",
+              __func__, device,
+              acl_graph_mode ? "GRAPH" : "EAGER",
+              acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
+#endif
     }
 
     /**
@@ -423,7 +526,10 @@ struct ggml_backend_cann_context {
      */
     aclrtStream stream(int stream) {
         if (streams[stream] == nullptr) {
-            ggml_cann_set_device(device);
+            // If the device is not set here, destroying the stream later may cause a mismatch
+            // between the thread contexts where the stream was created and destroyed.
+            // However, I printed the device_id, thread_id, and stream, and they are all consistent.
+            ACL_CHECK(aclrtSetDevice(device));
             ACL_CHECK(aclrtCreateStream(&streams[stream]));
         }
         return streams[stream];

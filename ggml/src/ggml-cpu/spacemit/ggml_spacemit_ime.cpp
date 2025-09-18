@@ -29,7 +29,7 @@
 #error "riscv v extension or v_intrinsic not enabled"
 #endif
 
-#if !defined(__riscv_zfh) || !defined(GGML_RV_ZFH)
+#if !defined(__riscv_zfh)
 #error "riscv zfh extension not enabled"
 #endif
 

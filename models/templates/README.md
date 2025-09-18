@@ -22,4 +22,5 @@ These templates can be updated with the following commands:
 ./scripts/get_chat_template.py Qwen/QwQ-32B                                  > models/templates/Qwen-QwQ-32B.jinja
 ./scripts/get_chat_template.py Qwen/Qwen3-0.6B                               > models/templates/Qwen-Qwen3-0.6B.jinja
 ./scripts/get_chat_template.py zai-org/GLM-4.5                               > models/templates/zai-org-GLM-4.5.jinja
+./scripts/get_chat_template.py deepseek-ai/DeepSeek-V3.1                     > models/templates/deepseek-ai-DeepSeek-V3.1.jinja
 ```

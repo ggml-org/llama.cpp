@@ -84,6 +84,22 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         }
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);
+    #elif defined(__riscv_v_intrinsic)
+        int vl = __riscv_vsetvlmax_e32m8();
+        vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+        vfloat32m8_t vsum;
+        vfloat32m8_t ax;
+        vfloat32m8_t ay;
+        vsum = __riscv_vfmv_v_f_f32m8_tu(vsum, 0.0f, vl);
+        for (int i = 0; i < n; i += vl) {
+            vl = __riscv_vsetvl_e32m8(n - i);
+            ax = __riscv_vle32_v_f32m8_tu(ax, &x[i], vl);
+            ay = __riscv_vle32_v_f32m8_tu(ay, &y[i], vl);
+            vsum = __riscv_vfmacc_vv_f32m8_tu(vsum, ax, ay, vl);
+        }
+        vl = __riscv_vsetvlmax_e32m8();
+        vs = __riscv_vfredusum_vs_f32m8_f32m1(vsum, vs, vl);
+        sumf += __riscv_vfmv_f_s_f32m1_f32(vs);
     #else
         const int np = (n & ~(GGML_F32_STEP - 1));
 
@@ -109,28 +125,6 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
             sumf += x[i]*y[i];
         }
     #endif
-#elif defined(__riscv) && defined(__riscv_v)
-    float sumf = 0.0f;
-    __asm__ volatile(
-        "vsetvli         t0,       zero,     e32, m4,tu,mu      \n\t"
-        "vxor.vv         v16,      v16,      v16                \n\t"
-        "LOOP%=:                                                \n\t"
-        "vsetvli         t0,       %[n],     e32, m4,tu,mu      \n\t"
-        "slli            t1,       t0,       2                  \n\t"
-        "vle32.v         v0,       (%[lhs])                     \n\t"
-        "add             %[lhs],   %[lhs],   t1                 \n\t"
-        "vle32.v         v8,       (%[rhs])                     \n\t"
-        "add             %[rhs],   %[rhs],   t1                 \n\t"
-        "vfmacc.vv       v16,       v0,      v8                 \n\t"
-        "sub             %[n],     %[n],     t0                 \n\t"
-        "bnez            %[n],     LOOP%=                       \n\t"
-        "vsetvli         t0,       zero,     e32, m4,tu,mu      \n\t"
-        "vxor.vv         v24,      v24,      v24                \n\t"
-        "vfredusum.vs    v24,      v16,      v24                \n\t"
-        "vfmv.f.s        %[res],   v24                          \n\t"
-        : [ n ] "+r"(n), [ lhs ] "+r"(x), [ rhs ] "+r"(y), [ res ] "=f"(sumf)
-        :
-        : "cc", "t0", "t1");
 #else
     // scalar
     ggml_float sumf = 0.0;
@@ -219,64 +213,125 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 
     ggml_float sumf = 0.0;
 
+
 #if defined(GGML_SIMD)
-    const int np = (n & ~(GGML_F16_STEP - 1));
+    #if defined(__ARM_FEATURE_SVE)
+        const int sve_register_length = svcntb() * 8; //get vector length
+        const int ggml_f16_epr = sve_register_length / 16; // running when 16
+        const int ggml_f16_step = 8 * ggml_f16_epr; // choose 8 SVE registers
 
-    GGML_F16_VEC sum[GGML_F16_ARR] = { GGML_F16_VEC_ZERO };
+        const int np= (n & ~(ggml_f16_step - 1));
+        svfloat16_t sum1 = svdup_n_f16(0.0f);
+        svfloat16_t sum2 = svdup_n_f16(0.0f);
+        svfloat16_t sum3 = svdup_n_f16(0.0f);
+        svfloat16_t sum4 = svdup_n_f16(0.0f);
 
-    GGML_F16_VEC ax[GGML_F16_ARR];
-    GGML_F16_VEC ay[GGML_F16_ARR];
+        svfloat16_t ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8;
+        svfloat16_t ay1, ay2, ay3, ay4, ay5, ay6, ay7, ay8;
+        for (int i = 0; i < np; i += ggml_f16_step) {
+            ax1 = GGML_F16x_VEC_LOAD(x + i + 0 * ggml_f16_epr, 0);
+            ay1 = GGML_F16x_VEC_LOAD(y + i + 0 * ggml_f16_epr, 0);
+            sum1 = GGML_F16x_VEC_FMA(sum1, ax1, ay1);
 
-    for (int i = 0; i < np; i += GGML_F16_STEP) {
-        for (int j = 0; j < GGML_F16_ARR; j++) {
-            ax[j] = GGML_F16_VEC_LOAD(x + i + j*GGML_F16_EPR, j);
-            ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+            ax2 = GGML_F16x_VEC_LOAD(x + i + 1 * ggml_f16_epr, 1);
+            ay2 = GGML_F16x_VEC_LOAD(y + i + 1 * ggml_f16_epr, 1);
+            sum2 = GGML_F16x_VEC_FMA(sum2, ax2, ay2);
 
-            sum[j] = GGML_F16_VEC_FMA(sum[j], ax[j], ay[j]);
+            ax3 = GGML_F16x_VEC_LOAD(x + i + 2 * ggml_f16_epr, 2);
+            ay3 = GGML_F16x_VEC_LOAD(y + i + 2 * ggml_f16_epr, 2);
+            sum3 = GGML_F16x_VEC_FMA(sum3, ax3, ay3);
+
+            ax4 = GGML_F16x_VEC_LOAD(x + i + 3 * ggml_f16_epr, 3);
+            ay4 = GGML_F16x_VEC_LOAD(y + i + 3 * ggml_f16_epr, 3);
+            sum4 = GGML_F16x_VEC_FMA(sum4, ax4, ay4);
+
+            ax5 = GGML_F16x_VEC_LOAD(x + i + 4 * ggml_f16_epr, 4);
+            ay5 = GGML_F16x_VEC_LOAD(y + i + 4 * ggml_f16_epr, 4);
+            sum1 = GGML_F16x_VEC_FMA(sum1, ax5, ay5);
+
+            ax6 = GGML_F16x_VEC_LOAD(x + i + 5 * ggml_f16_epr, 5);
+            ay6 = GGML_F16x_VEC_LOAD(y + i + 5 * ggml_f16_epr, 5);
+            sum2 = GGML_F16x_VEC_FMA(sum2, ax6, ay6);
+
+            ax7 = GGML_F16x_VEC_LOAD(x + i + 6 * ggml_f16_epr, 6);
+            ay7 = GGML_F16x_VEC_LOAD(y + i + 6 * ggml_f16_epr, 6);
+            sum3 = GGML_F16x_VEC_FMA(sum3, ax7, ay7);
+
+            ax8 = GGML_F16x_VEC_LOAD(x + i + 7 * ggml_f16_epr, 7);
+            ay8 = GGML_F16x_VEC_LOAD(y + i + 7 * ggml_f16_epr, 7);
+            sum4 = GGML_F16x_VEC_FMA(sum4, ax8, ay8);
         }
-    }
 
-    // reduce sum0..sum3 to sum0
-    GGML_F16_VEC_REDUCE(sumf, sum);
+        const int np2 = (n & ~(ggml_f16_epr - 1)); // round down to multiple of 8
+        for (int k = np; k < np2; k += ggml_f16_epr) {
+            svfloat16_t rx = GGML_F16x_VEC_LOAD(x + k, 0);
+            svfloat16_t ry = GGML_F16x_VEC_LOAD(y + k, 0);
+            sum1 = GGML_F16x_VEC_FMA(sum1, rx, ry);
+        }
 
-    // leftovers
-    for (int i = np; i < n; ++i) {
-        sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*GGML_CPU_FP16_TO_FP32(y[i]));
-    }
+        if (np2 < n) {
+            svbool_t pg = svwhilelt_b16(np2, n);
+            svfloat16_t hx = svld1_f16(pg, (const __fp16 *)(x + np2));
+            svfloat16_t hy = svld1_f16(pg, (const __fp16 *)(y + np2));
 
-    // if you hit this, you are likely running outside the FP range
-    assert(!isnan(sumf) && !isinf(sumf));
-#elif defined(__riscv) && defined(__riscv_v)
-    float result = 0.0f;
-    __asm__ volatile(
-        "vsetvli         t0,       zero,     e32,    m4,tu,mu       \n\t"
-        "vxor.vv         v16,      v16,      v16                    \n\t"
-        "LOOP%=:                                                    \n\t"
-        "vsetvli         t0,       %[n],     e16,    m2,tu,mu       \n\t"
-        "slli            t1,       t0,       1                      \n\t"
-        "vle16.v         v0,       (%[lhs])                         \n\t"
-        "add             %[lhs],   %[lhs],   t1                     \n\t"
-        "vle16.v         v2,       (%[rhs])                         \n\t"
-        "add             %[rhs],   %[rhs],   t1                     \n\t"
-        "vfwcvt.f.f.v    v4,       v0                               \n\t"
-        "vfwcvt.f.f.v    v8,       v2                               \n\t"
-        "vsetvli         t0,       %[n],     e32,    m4,tu,mu       \n\t"
-        "vfmacc.vv       v16,      v4,       v8                     \n\t"
-        "sub             %[n],     %[n],     t0                     \n\t"
-        "bnez            %[n],     LOOP%=                           \n\t"
-        "vsetvli         t0,       zero,     e32,    m4,tu,mu       \n\t"
-        "vxor.vv         v24,      v24,      v24                    \n\t"
-        "vfredusum.vs    v24,      v16,      v24                    \n\t"
-        "vfmv.f.s        %[res],   v24                              \n\t"
-        : [ n ] "+r"(n), [ lhs ] "+r"(x), [ rhs ] "+r"(y), [ res ] "=f"(result)
-        :
-        : "cc", "t0", "t1");
-    sumf += result;
+            sum1 = svmad_f16_x(pg, hx, hy, sum1);
+        }
+        GGML_F16x_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4);
+    #elif defined(__riscv_v_intrinsic)
+        #if defined(__riscv_zvfh)
+            int vl = __riscv_vsetvlmax_e32m2();
+            vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+            vfloat32m2_t vsum;
+            vfloat16m1_t ax;
+            vfloat16m1_t ay;
+            vsum = __riscv_vreinterpret_v_u32m2_f32m2(__riscv_vmv_v_x_u32m2(0, vl));
+            for (int i = 0; i < n; i += vl) {
+                vl = __riscv_vsetvl_e16m1(n - i);
+                ax = __riscv_vle16_v_f16m1_tu(ax, (const _Float16 *)&x[i], vl);
+                ay = __riscv_vle16_v_f16m1_tu(ay, (const _Float16 *)&y[i], vl);
+                vsum = __riscv_vfwmacc_vv_f32m2_tu(vsum, ax, ay, vl);
+            }
+            vl = __riscv_vsetvlmax_e32m1();
+            vfloat32m1_t ac0 = __riscv_vfadd_vv_f32m1(__riscv_vget_v_f32m2_f32m1(vsum, 0), __riscv_vget_v_f32m2_f32m1(vsum, 1), vl);
+            vs = __riscv_vfredusum_vs_f32m1_f32m1(ac0, vs, vl);
+            sumf += __riscv_vfmv_f_s_f32m1_f32(vs);
+        #else
+            for (int i = 0; i < n; ++i) {
+                sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*GGML_CPU_FP16_TO_FP32(y[i]));
+            }
+        #endif // __riscv_zvfh
+    #else
+        const int np = (n & ~(GGML_F16_STEP - 1));
+
+        GGML_F16_VEC sum[GGML_F16_ARR] = { GGML_F16_VEC_ZERO };
+
+        GGML_F16_VEC ax[GGML_F16_ARR];
+        GGML_F16_VEC ay[GGML_F16_ARR];
+
+        for (int i = 0; i < np; i += GGML_F16_STEP) {
+            for (int j = 0; j < GGML_F16_ARR; j++) {
+                ax[j] = GGML_F16_VEC_LOAD(x + i + j*GGML_F16_EPR, j);
+                ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+
+                sum[j] = GGML_F16_VEC_FMA(sum[j], ax[j], ay[j]);
+            }
+        }
+
+        // reduce sum0..sum3 to sum0
+        GGML_F16_VEC_REDUCE(sumf, sum);
+
+        // leftovers
+        for (int i = np; i < n; ++i) {
+            sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*GGML_CPU_FP16_TO_FP32(y[i]));
+        }
+        // if you hit this, you are likely running outside the FP range
+        assert(!isnan(sumf) && !isinf(sumf));
+    #endif
 #else
     for (int i = 0; i < n; ++i) {
         sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*GGML_CPU_FP16_TO_FP32(y[i]));
     }
-#endif
+#endif // GGML_SIMD
 
     *s = sumf;
 }
@@ -295,97 +350,16 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     for (; i + 3 < n; i += 4) {
         _mm_storeu_ps(y + i, ggml_v_silu(_mm_loadu_ps(x + i)));
     }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, ggml_v_silu(pg, svld1_f32(pg, x + i)));
+    }
 #elif defined(__ARM_NEON) && defined(__aarch64__)
     for (; i + 3 < n; i += 4) {
         vst1q_f32(y + i, ggml_v_silu(vld1q_f32(x + i)));
     }
-#elif defined(__riscv) && defined(__riscv_v)
-    int N = n;
-    i += n;
-    constexpr struct {
-    float LowerRange;
-    float UpperRange;
-    float alpha_9;
-    float alpha_7;
-    float alpha_5;
-    float alpha_3;
-    float alpha_1;
-    float beta_10;
-    float beta_8;
-    float beta_6;
-    float beta_4;
-    float beta_2;
-    float beta_0;
-    float one_half;
-    } LogisticConstants = {
-        -18.0f,
-        18.0f,
-        4.37031012579801e-11f,
-        1.15627324459942e-07f,
-        6.08574864600143e-05f,
-        8.51377133304701e-03f,
-        2.48287947061529e-01f,
-        6.10247389755681e-13f,
-        5.76102136993427e-09f,
-        6.29106785017040e-06f,
-        1.70198817374094e-03f,
-        1.16817656904453e-01f,
-        9.93151921023180e-01f,
-        0.5f,
-    };
-    __asm__ volatile(
-        "LOOP%=:                                            \n\t"
-        "vsetvli  t0,       %[n],     e32,     m1,tu,mu     \n\t"
-        "sub      %[n],     %[n],     t0                    \n\t"
-        "slli     t0,       t0,       2                     \n\t"
-        "vfmv.v.f v20,      %[b0]                           \n\t"
-        "vfmv.v.f v21,      %[a1]                           \n\t"
-        "vfmv.v.f v22,      %[b2]                           \n\t"
-        "vfmv.v.f v23,      %[a3]                           \n\t"
-        "vfmv.v.f v24,      %[b4]                           \n\t"
-        "vfmv.v.f v25,      %[a5]                           \n\t"
-        "vfmv.v.f v26,      %[b6]                           \n\t"
-        "vfmv.v.f v27,      %[a7]                           \n\t"
-        "vfmv.v.f v28,      %[b8]                           \n\t"
-        "vle32.v  v0,       (%[x])                          \n\t"
-        "add      %[x],     %[x],     t0                    \n\t"
-        "vfmax.vf v1,       v0,       %[lr]                 \n\t"
-        "vfmin.vf v1,       v1,       %[ur]                 \n\t"
-        "vfmul.vv v4,       v1,       v1                    \n\t"
-        "vmv.v.v   v8,       v4                             \n\t"
-        "vfmadd.vf v8,      %[a9],    v27                   \n\t"
-        "vfmadd.vv v8,      v4,       v25                   \n\t"
-        "vfmadd.vv v8,      v4,       v23                   \n\t"
-        "vfmadd.vv v8,      v4,       v21                   \n\t"
-        "vfmul.vv v8,       v8,       v1                    \n\t"
-        "vmv.v.v   v12,      v4                             \n\t"
-        "vfmadd.vf v12,     %[b10],   v28                   \n\t"
-        "vfmadd.vv v12,     v4,       v26                   \n\t"
-        "vfmadd.vv v12,     v4,       v24                   \n\t"
-        "vfmadd.vv v12,     v4,       v22                   \n\t"
-        "vfmadd.vv v12,     v4,       v20                   \n\t"
-        "vfdiv.vv v12,      v8,       v12                   \n\t"
-        "vfadd.vf v12,      v12,      %[onehalf]            \n\t"
-        "vfmul.vv v12,      v12,      v0                    \n\t"  // sigmo
-        "vse32.v  v12,      (%[y])                          \n\t"
-        "add      %[y],     %[y],     t0                    \n\t"
-        "bnez     %[n],     LOOP%=                          \n\t"
-        : [ n ] "+r"(N), [ x ] "+r"(x), [ y ] "+r"(y)
-        : [ lr ] "f"(LogisticConstants.LowerRange),
-            [ ur ] "f"(LogisticConstants.UpperRange),
-            [ a1 ] "f"(LogisticConstants.alpha_1),
-            [ a3 ] "f"(LogisticConstants.alpha_3),
-            [ a5 ] "f"(LogisticConstants.alpha_5),
-            [ a7 ] "f"(LogisticConstants.alpha_7),
-            [ a9 ] "f"(LogisticConstants.alpha_9),
-            [ b0 ] "f"(LogisticConstants.beta_0),
-            [ b2 ] "f"(LogisticConstants.beta_2),
-            [ b4 ] "f"(LogisticConstants.beta_4),
-            [ b6 ] "f"(LogisticConstants.beta_6),
-            [ b8 ] "f"(LogisticConstants.beta_8),
-            [ b10 ] "f"(LogisticConstants.beta_10),
-            [ onehalf ] "f"(LogisticConstants.one_half)
-        : "cc", "t0");
 #endif
     for (; i < n; ++i) {
         y[i] = ggml_silu_f32(x[i]);
@@ -406,9 +380,23 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
     for (; i + 3 < n; i += 4) {
         _mm_storeu_ps(y + i, _mm_mul_ps(ggml_v_silu(_mm_loadu_ps(x + i)), _mm_loadu_ps(g + i)));
     }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, svmul_f32_x(pg, ggml_v_silu(pg, svld1_f32(pg, x + i)), svld1_f32(pg, g + i)));
+    }
 #elif defined(__ARM_NEON) && defined(__aarch64__)
     for (; i + 3 < n; i += 4) {
         vst1q_f32(y + i, vmulq_f32(ggml_v_silu(vld1q_f32(x + i)), vld1q_f32(g + i)));
+    }
+#elif defined(__riscv_v_intrinsic)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vg = __riscv_vle32_v_f32m2(&g[i], vl);
+        vfloat32m2_t vy = __riscv_vfmul_vv_f32m2(ggml_v_silu_m2(vx, vl), vg, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
     }
 #endif
     for (; i < n; ++i) {
@@ -453,6 +441,15 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
 #endif
         sum += (ggml_float)_mm_cvtss_f32(val);
     }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svfloat32_t val = ggml_v_expf(pg, svsub_f32_x(pg, svld1_f32(pg, x + i),
+                                                svdup_n_f32_x(pg, max)));
+        svst1_f32(pg, y + i, val);
+        sum += (ggml_float)svaddv_f32(pg, val);
+    }
 #elif defined(__ARM_NEON) && defined(__aarch64__)
     for (; i + 3 < n; i += 4) {
         float32x4_t val = ggml_v_expf(vsubq_f32(vld1q_f32(x + i),
@@ -460,119 +457,15 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         vst1q_f32(y + i, val);
         sum += (ggml_float)vaddvq_f32(val);
     }
-#elif defined(__riscv) && defined(__riscv_v) && defined(__riscv_zba)
-    int N = n;
-    i += n;
-    float* src = const_cast<float*>(reinterpret_cast<const float*>(x));
-    float* dst = reinterpret_cast<float*>(y);
-    float Accumulator = 0.0f;
-    const float Neg_Max = -max;
-
-    const float LowerRange = -103.9720840454f;
-    const float UpperRange = 88.7762626647950f;
-    const float LowerRangeSumExp = -88.3762626647949f;
-    const float UpperRangeSumExp = 88.3762626647949f;
-    const float RoundingBias = 12582912.f;
-    const float Log2Reciprocal = 1.44269504088896341f;
-    const float Log2High = -6.93145752e-1f;
-    const float Log2Low = -1.42860677e-6f;
-    const float poly_0 = 0x1.694000p-10;
-    const float poly_1 = 0x1.125edcp-7;
-    const float poly_2 = 0x1.555b5ap-5;
-    const float poly_3 = 0x1.555450p-3;
-    const float poly_4 = 0x1.fffff6p-2;
-    const float poly_56 = 0x1.000000p+0;
-    // int32_t MinimumExponent = int32_t(0xC1000000);    //unused
-    const int32_t MaximumExponent = int32_t(0x3F800000);
-
-    __asm__ volatile(
-        "mv                   t3, %[LEN]                                  \n\t"
-        "mv                   s1, %[SRC]                                  \n\t"
-        "mv                   s2, %[DST]                                  \n\t"
-
-        /* 2.0 Compute exp() and accumulate and store to cache_buffer */
-        "vsetvli              t0, zero, e32, m4,tu,mu                     \n\t"
-        "vxor.vv              v16, v8, v8                                 \n\t"
-        "vxor.vv              v0, v8, v8                                  \n\t"
-
-        ".align 4                                                         \n\t"
-        "_EXPACC_LEN_LPST:                                                \n\t"
-        "vsetvli              t0, t3, e32, m4,tu,mu                       \n\t"
-
-        "vle32.v              v0, (s1)                                    \n\t"
-        "sh2add               s1, t0, s1                                  \n\t"
-
-        /* 2.1 START exp()  */
-        "vfadd.vf             v0, v0, %[NEG_MAX]                          \n\t"  // v4 = x - max
-
-        // Ensure that q = RN(x/log(2)) >= e_min, so that 2^q can be computed
-        // safely with a simple shift into the exponent field. xmin =
-        // round(-126.5 * log(2), single, RU) ~ -87.68311309814453125 const
-        // float xmin = -0x1.5ebb82p6;
-        "vfmax.vf             v0, v0, %[LowerRangeSumExp]                 \n\t"
-
-        // 2.1.0. Reduction x = s * q ln(2)
-        // const float r_ln2f = 0x1.715476p0f;  // single(1/log(2));
-        // const float l2uf = 0x1.62e4p-1f;     // round(log(2), 24-8, RN);
-        // const float l2lf = 0x1.7f7d1cp-20f;  // round(log(2) - l2uf, single,
-        // RN);
-        "vfmv.v.f             v4, %[RoundingBias]                         \n\t"
-        "vfmacc.vf            v4, %[Log2Reciprocal], v0                   \n\t"  // biased in mlas
-        "vfsub.vf             v8, v4, %[RoundingBias]                     \n\t"  // v12_a = float(x - n);
-
-        // Use Cody-Waite range reduction method (note two constants to
-        // represent log(2)) to improve accuracy.
-        "vfmacc.vf            v0, %[Log2High], v8                         \n\t"
-        "vfmacc.vf            v0, %[Log2Low], v8                          \n\t"
-        "vfcvt.x.f.V          v8, v4                                      \n\t"
-
-        // 2.1.1. Approximate e^s by degree-6 polynomial approximation
-        "vfmv.v.f             v4, %[poly_0]                               \n\t"
-        "vfmv.v.f             v12, %[poly_1]                              \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"
-        "vfmv.v.f             v12, %[poly_2]                              \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"
-        "vfmv.v.f             v12, %[poly_3]                              \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"
-        "vfmv.v.f             v12, %[poly_4]                              \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"
-        "vfmv.v.f             v12, %[poly_56]                             \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"
-        "vfmv.v.f             v12, %[poly_56]                             \n\t"
-        "vfmadd.vv            v4, v0, v12                                 \n\t"  // v8 = poly(input - max)
-
-        // 2.1.2. Reconstruction: compute u = u*2^q
-        // const int16_t p = (24 - 1);
-        // const int16_t bias = (128 - 1);
-        "vsll.vi              v8, v8, 23                                  \n\t"
-        "vadd.vx              v8, v8, %[MaximumExponent]                  \n\t"
-        //"vfcvt.f.x.v          v12, v8                                   \n\t"
-
-        "vfmul.vv             v0, v4, v8                                  \n\t"
-        /* 2.1 END exp()  */
-
-        "vse32.v              v0, (s2)                                    \n\t"  // exp(输入-max)输出
-        "sh2add               s2, t0, s2                                  \n\t"
-        "vfadd.vv             v16, v16, v0                                \n\t"
-        "sub                  t3, t3, t0                                  \n\t"
-        "bgtz                 t3, _EXPACC_LEN_LPST                        \n\t"
-
-        "_EXPACC_LEN_LPND:                                                \n\t"
-
-        "vsetvli              t0, zero, e32, m4,tu,mu                     \n\t"
-        "vxor.vv              v24, v8, v8                                 \n\t"
-        "vfredosum.vs         v24, v16, v24                               \n\t"
-        "vfmv.f.s             %[RTN], v24                                 \n\t"  // ft2 = sum(exp( ))
-
-        : [ RTN ] "=f"(Accumulator), [ SRC ] "+r"(src), [ DST ] "+r"(dst)
-        : [ LEN ] "r"(N), [ NEG_MAX ] "f"(Neg_Max), [ LowerRange ] "f"(LowerRange), [ UpperRange ] "f"(UpperRange),
-          [ LowerRangeSumExp ] "f"(LowerRangeSumExp), [ UpperRangeSumExp ] "f"(UpperRangeSumExp),
-          [ RoundingBias ] "f"(RoundingBias), [ Log2Reciprocal ] "f"(Log2Reciprocal), [ Log2High ] "f"(Log2High),
-          [ Log2Low ] "f"(Log2Low), [ poly_0 ] "f"(poly_0), [ poly_1 ] "f"(poly_1), [ poly_2 ] "f"(poly_2),
-          [ poly_3 ] "f"(poly_3), [ poly_4 ] "f"(poly_4), [ poly_56 ] "f"(poly_56),
-          [ MaximumExponent ] "r"(MaximumExponent)
-        : "cc", "s1", "s2", "t0", "t3");
-    sum += (ggml_float)Accumulator;
+#elif defined(__riscv_v_intrinsic)
+    vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);
+    for (int avl; i < n; i += avl) {
+        avl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t val = ggml_v_expf_m2(__riscv_vfsub_vf_f32m2(__riscv_vle32_v_f32m2(&x[i], avl), max, avl), avl);
+        __riscv_vse32_v_f32m2(&y[i], val, avl);
+        vsum = __riscv_vfwredusum_vs_f32m2_f64m1(val, vsum, avl);
+    }
+    return (ggml_float)__riscv_vfmv_f_s_f64m1_f64(vsum);
 #endif
     for (; i < n; ++i) {
         float val = expf(x[i] - max);

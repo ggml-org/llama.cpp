@@ -12,18 +12,20 @@ wget https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_6
 Below is the build script: it requires utilizing RISC-V vector instructions for acceleration. Ensure the `GGML_CPU_RISCV64_SPACEMIT` compilation option is enabled. The currently supported optimization version is `RISCV64_SPACEMIT_IME1`, corresponding to the `RISCV64_SPACEMIT_IME_SPEC` compilation option. Compiler configurations are defined in the `riscv64-spacemit-linux-gnu-gcc.cmake` file. Please ensure you have installed the RISC-V compiler and set the environment variable via `export RISCV_ROOT_PATH={your_compiler_path}`.
 ```bash
 
-cmake -B build-riscv64-spacemit \
+cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CPU_RISCV64_SPACEMIT=ON \
     -DLLAMA_CURL=OFF \
+    -DGGML_RVV=ON \
     -DGGML_RV_ZFH=ON \
+    -DGGML_RV_ZICBOP=ON \
     -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
     -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake \
-    -DCMAKE_INSTALL_PREFIX=build-riscv64-spacemit/installed
+    -DCMAKE_INSTALL_PREFIX=build/installed
 
-cmake --build build-riscv64-spacemit --parallel $(nproc) --config Release
+cmake --build build --parallel $(nproc) --config Release
 
-pushd build-riscv64-spacemit
+pushd build
 make install
 popd
 ```
@@ -42,7 +44,7 @@ After build your llama.cpp, you can run the executable file via QEMU for simulat
 export QEMU_ROOT_PATH={your QEMU file path}
 export RISCV_ROOT_PATH_IME1={your RISC-V compiler path}
 
-${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,vlen=256,elen=64,vext_spec=v1.0 ${PWD}/build-riscv64-spacemit/bin/llama-cli -m ${PWD}/models/Qwen2.5-0.5B-Instruct-Q4_0.gguf -t 1
+${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,vlen=256,elen=64,vext_spec=v1.0 ${PWD}/build/bin/llama-cli -m ${PWD}/models/Qwen2.5-0.5B-Instruct-Q4_0.gguf -t 1
 ~~~
 ## Performance
 #### Quantization Support For Matrix

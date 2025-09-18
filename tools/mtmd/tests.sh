@@ -68,6 +68,7 @@ add_test_vision "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
 add_test_vision "ggml-org/InternVL2_5-1B-GGUF:Q8_0"
 add_test_vision "ggml-org/InternVL3-1B-Instruct-GGUF:Q8_0"
 add_test_vision "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
+add_test_vision "ggml-org/LFM2-VL-450M-GGUF:Q8_0"
 
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
@@ -85,6 +86,7 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     add_test_vision "ggml-org/InternVL3-14B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
     # add_test_vision "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M" # does not work on my mac M3 Ultra
+    add_test_vision "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF:Q4_K_M"
 
     add_test_audio  "ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF:Q4_K_M"
     add_test_audio  "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
