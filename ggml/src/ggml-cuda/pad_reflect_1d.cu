@@ -47,6 +47,8 @@ static __global__ void pad_reflect_1d_kernel_f32(
 
         *(float *)(dst_ptr + i0 * nb0) = value;
     }
+
+    GGML_UNUSED(ne00);
 }
 
 void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
