@@ -74,7 +74,7 @@ static inline float op_log(float x) {
 }
 
 template <typename Op, typename src0_t, typename dst_t>
-static inline void vec_unary_op(const Op& op, int64_t n, dst_t * y, const src0_t * x) {
+static inline void vec_unary_op(const Op & op, int64_t n, dst_t * y, const src0_t * x) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
     constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
 
