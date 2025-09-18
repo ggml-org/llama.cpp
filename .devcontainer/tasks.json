@@ -1,0 +1,90 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cmake-configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "build",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "-DGGML_OPENMP=ON",
+                "-DCMAKE_C_FLAGS:STRING=-march=native"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [],
+            "detail": "Configure CMake build"
+        },
+        {
+            "label": "cmake-build",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "cmake -B build -DCMAKE_BUILD_TYPE=Debug -DGGML_OPENMP=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_FLAGS:STRING=-march=native && cmake --build build --parallel"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "dependsOn": "cmake-configure",
+            "detail": "Build the project with CMake"
+        },
+        {
+            "label": "cmake-clean",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-rf", "build"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "detail": "Clean build directory"
+        },
+        {
+            "label": "cmake-release",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c", 
+                "cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build --parallel"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "Build release version with NUMA support"
+        }
+    ]
+}

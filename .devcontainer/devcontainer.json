@@ -1,0 +1,47 @@
+{
+	"name": "llama.cpp Development",
+	"dockerFile": "Dockerfile",
+	"build": {
+		"args": {
+			// Enable/disable optional components (set to "true" to install)
+			"INSTALL_CUDA": "true",
+			"INSTALL_ROCM": "true", 
+			"INSTALL_PYTHON_DEPS": "false"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools-extension-pack",
+				"ms-vscode.cmake-tools",
+				"ms-python.python",
+				"ms-python.black-formatter",
+				"github.copilot",
+				"github.copilot-chat"
+			],
+			"settings": {
+				"cmake.configureOnOpen": true,
+				"cmake.buildDirectory": "${workspaceFolder}/build",
+				"C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+				"C_Cpp.default.compilerPath": "/usr/lib/ccache/gcc",
+				"C_Cpp.default.cStandard": "c17",
+				"C_Cpp.default.cppStandard": "c++17",
+				"C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+				"C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json"
+			}
+		}
+	},
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+	],
+	"postCreateCommand": "sudo chown -R developer:developer . && rm -rf ./build && cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_NUMA_MIRROR=ON -DGGML_OPENMP=OFF -DCMAKE_CXX_COMPILER=/usr/lib/ccache/g++ -DCMAKE_C_COMPILER=/usr/lib/ccache/gcc -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+	"forwardPorts": [8080],
+	"runArgs": [
+		"--privileged",
+		"--cap-add=SYS_ADMIN"
+	],
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {}
+	}
+}
