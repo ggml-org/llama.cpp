@@ -24,6 +24,7 @@ RUN apt-get update && \
         ca-certificates \
         cmake \
         git \
+        git-lfs \
         curl \
         wget \
         jq \
