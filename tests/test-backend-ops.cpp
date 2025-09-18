@@ -2850,6 +2850,7 @@ struct test_rms_norm : public test_case {
     const std::array<int64_t, 4> ne;
     const bool v; // whether a is a non-contiguous view
     const float eps;
+    const bool inplace; // whether to do the operation inplace
 
     std::string vars() override {
         return VARS_TO_STR4(type, ne, v, eps);
@@ -2858,8 +2859,9 @@ struct test_rms_norm : public test_case {
     test_rms_norm(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
             bool v = false,
-            float eps = 1e-6f)
-        : type(type), ne(ne), v(v), eps(eps) {}
+            float eps = 1e-6f,
+            bool inplace = false)
+        : type(type), ne(ne), v(v), eps(eps), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
@@ -2871,7 +2873,12 @@ struct test_rms_norm : public test_case {
             ggml_set_name(a, "view of a");
         }
 
-        ggml_tensor * out = ggml_rms_norm(ctx, a, eps);
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_rms_norm_inplace(ctx, a, eps);
+        } else {
+            out = ggml_rms_norm(ctx, a, eps);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -6099,6 +6106,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_rms_norm_back(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_l2_norm      (GGML_TYPE_F32, {64, 5, 4, 3}, eps));
     }
+
+    // in-place tests
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
+
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
