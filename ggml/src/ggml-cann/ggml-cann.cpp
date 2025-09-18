@@ -1728,7 +1728,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_get_rows(ctx, dst);
             break;
         case GGML_OP_SET_ROWS:
-            std::cout << "lcg GGML_OP_SET_ROWS"<< std::endl;
             ggml_cann_set_rows(ctx, dst);
             break;
         case GGML_OP_DUP:
