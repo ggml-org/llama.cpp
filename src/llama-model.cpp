@@ -3371,11 +3371,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     const uint32_t d_state            = hparams.ssm_d_state;
                     const uint32_t num_heads          = hparams.ssm_dt_rank;
                     const uint32_t intermediate_size  = hparams.ssm_d_inner;
-                    const uint32_t head_dim           = intermediate_size / num_heads;
+                    const uint32_t head_dim           = hparams.wkv_head_size;
                     const uint32_t qk_dim             = head_dim;
                     const uint32_t v_dim              = head_dim;
-                    const int64_t num_attention_heads = hparams.n_head();
-                    const int64_t q_num_heads         = num_attention_heads;
                     const int64_t dt_dim              = std::max(64, int(hparams.n_embd / 16));
 
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -3391,6 +3389,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
                         bool is_mamba_layer = hparams.is_recurrent(i);
+
+                        const int64_t num_attention_heads = hparams.n_head_kv_arr[i];
+                        const int64_t q_num_heads         = num_attention_heads;
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
