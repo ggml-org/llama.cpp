@@ -22,7 +22,7 @@
 #include "ggml-sycl.h"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
-
+#include "ggml-sycl/dpct/helper.hpp"   
 
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
