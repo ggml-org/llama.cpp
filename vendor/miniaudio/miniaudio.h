@@ -12106,7 +12106,7 @@ static MA_INLINE void ma_restore_denormals(unsigned int prevState)
 #ifdef MA_ANDROID
 #include <sys/system_properties.h>
 
-int ma_android_sdk_version()
+static int ma_android_sdk_version()
 {
     char sdkVersion[PROP_VALUE_MAX + 1] = {0, };
     if (__system_property_get("ro.build.version.sdk", sdkVersion)) {
