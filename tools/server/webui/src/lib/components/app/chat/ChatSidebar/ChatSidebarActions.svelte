@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { Search, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
@@ -51,7 +52,7 @@
 	{:else}
 		<Button
 			class="w-full justify-between hover:[&>kbd]:opacity-100"
-			href="/?new_chat=true"
+			href="{base}/?new_chat=true"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>
