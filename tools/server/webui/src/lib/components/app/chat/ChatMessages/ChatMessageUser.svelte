@@ -52,11 +52,32 @@
 		onShowDeleteDialogChange,
 		textareaElement = $bindable()
 	}: Props = $props();
+
+	let innerWidth = $state(0);
+	let isMultiline = $state(false);
+	let messageElement: HTMLElement | undefined = $state();
+
+	$effect(() => {
+		if (messageElement && message.content.trim() && innerWidth > 0) {
+			if (message.content.includes('\n')) {
+				isMultiline = true;
+				return;
+			}
+
+			const computedStyle = window.getComputedStyle(messageElement);
+			const lineHeight = parseFloat(computedStyle.lineHeight);
+			const actualHeight = messageElement.scrollHeight;
+
+			isMultiline = actualHeight > lineHeight * 1.2;
+		}
+	});
 </script>
+
+<svelte:window bind:innerWidth />
 
 <div
 	aria-label="User message with actions"
-	class="group flex flex-col items-end gap-2 {className}"
+	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
 	{#if isEditing}
@@ -92,10 +113,13 @@
 		{/if}
 
 		{#if message.content.trim()}
-			<Card class="max-w-[80%] rounded-2xl bg-primary px-2.5 py-1.5 text-primary-foreground">
-				<div class="text-md whitespace-pre-wrap">
+			<Card
+				class="max-w-[80%] rounded-[1.125rem] bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
+				data-multiline={isMultiline ? '' : undefined}
+			>
+				<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
 					{message.content}
-				</div>
+				</span>
 			</Card>
 		{/if}
 
