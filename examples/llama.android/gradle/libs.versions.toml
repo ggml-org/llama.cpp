@@ -2,7 +2,7 @@
 
 # Plugins
 agp = "8.13.0"
-ksp = "2.2.10-2.0.2"
+ksp = "2.2.20-2.0.3"
 kotlin = "2.2.20"
 dagger-hilt = "2.57.1"
 
@@ -99,6 +99,7 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [bundles]
 androidx = [
+    "androidx-activity",
     "androidx-activity-compose",
     "androidx-core-ktx",
     "androidx-datastore-preferences",
