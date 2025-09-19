@@ -1,6 +1,5 @@
 #include "llama-memory-recurrent.h"
 
-#include "ggml-alloc.h"
 #include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-batch.h"

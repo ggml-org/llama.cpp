@@ -1,6 +1,5 @@
 #include "llama-context.h"
 
-#include "ggml-backend.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -2790,7 +2789,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
     table_data.reserve(devices.size());
     const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
     const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
-    const std::string template_host   = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
+    const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
 
     table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
 
@@ -2835,9 +2834,6 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         seen_host_buffer_types.insert(buft);
     }
 
-    // "free" host memory is poorly defined, instead track only memory that we know is being used:
-    llama_memory_breakdown_data mb_host = {0, 0, 0};
-
     // consolidate all memory buffers not on any of the models GPU devices as host memory:
     for (const auto & buft_mb : memory_breakdown) {
         ggml_backend_buffer_type_t          buft = buft_mb.first;
@@ -2845,23 +2841,21 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         if (seen_host_buffer_types.count(buft) == 1) {
             continue;
         }
-        mb_host.model   += mb.model;
-        mb_host.context += mb.context;
-        mb_host.compute += mb.compute;
+        const std::string name = ggml_backend_buft_name(buft);
+        const size_t self = mb.model + mb.context + mb.compute;
+        table_data.push_back({
+            template_other,
+            "  - " + name,
+            "", // total
+            "", // free
+            std::to_string(self / MiB),
+            std::to_string(mb.model / MiB),
+            std::to_string(mb.context / MiB),
+            std::to_string(mb.compute / MiB),
+            ""}); // unaccounted
+        seen_host_buffer_types.insert(buft);
         seen_host_buffer_types.insert(buft);
     }
-
-    const size_t self_host = mb_host.model + mb_host.context + mb_host.compute;
-    table_data.push_back({
-        template_host,
-        "  - Host",
-        "", // total
-        "", // free
-        std::to_string(self_host / MiB),
-        std::to_string(mb_host.model / MiB),
-        std::to_string(mb_host.context / MiB),
-        std::to_string(mb_host.compute / MiB),
-        ""}); // unaccounted
 
     for (size_t j = 1; j < table_data[0].size(); j++) {
         size_t max_len = 0;
