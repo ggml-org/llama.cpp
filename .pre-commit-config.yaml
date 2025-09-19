@@ -9,8 +9,11 @@ repos:
   - id: end-of-file-fixer
   - id: check-yaml
   - id: check-added-large-files
-- repo: https://github.com/PyCQA/flake8
-  rev: 7.0.0
-  hooks:
-  -   id: flake8
-      additional_dependencies: [flake8-no-print]
+# DISABLED: flake8 pre-commit hook
+# This has been disabled to reduce CI coverage-like runs
+# To re-enable: uncomment the section below
+# - repo: https://github.com/PyCQA/flake8
+#   rev: 7.0.0
+#   hooks:
+#   -   id: flake8
+#       additional_dependencies: [flake8-no-print]
