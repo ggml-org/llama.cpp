@@ -1,42 +1,39 @@
-# CI Workflow - Modified to disable coverage-like runs
-# Changes made:
-# 1. Disabled sanitizer builds (ubuntu-latest-cmake-sanitizer) - they add instrumentation
-# 2. Disabled debug testing with leaks in macOS builds
-# 3. Reduced automatic trigger paths to minimize runs
-# 4. Set explicit Release build type to avoid debug instrumentation
-name: CI
+# CI Workflow - DISABLED to prevent coverage-like runs
+# This workflow has been disabled to reduce CI coverage-like runs
+# Original workflow provided comprehensive builds but added significant overhead
+# To re-enable: uncomment the triggers below and restore the original workflow
+
+name: CI-DISABLED
 
 on:
-  workflow_dispatch: # allows manual triggering
-  # Reduced automatic triggers to minimize coverage-like runs
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build.yml',
-      '**/CMakeLists.txt',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh'
-      # Removed some paths to reduce trigger frequency
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build.yml',
-      '**/CMakeLists.txt',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh'
-      # Removed some paths to reduce trigger frequency
-    ]
+  workflow_dispatch: # Only manual triggering allowed, no automatic runs
+  # DISABLED: Automatic triggers removed to prevent coverage-like runs
+  # push:
+  #   branches:
+  #     - master
+  #   paths: [
+  #     '.github/workflows/build.yml',
+  #     '**/CMakeLists.txt',
+  #     '**/*.h',
+  #     '**/*.hpp',
+  #     '**/*.c',
+  #     '**/*.cpp',
+  #     '**/*.cu',
+  #     '**/*.cuh'
+  #   ]
+  # 
+  # pull_request:
+  #   types: [opened, synchronize, reopened]
+  #   paths: [
+  #     '.github/workflows/build.yml',
+  #     '**/CMakeLists.txt',
+  #     '**/*.h',
+  #     '**/*.hpp',
+  #     '**/*.c',
+  #     '**/*.cpp',
+  #     '**/*.cu',
+  #     '**/*.cuh'
+  #   ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -50,8 +47,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
-  macOS-latest-cmake-arm64:
-    runs-on: macos-latest
+  disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Workflow Disabled
+        run: echo "CI workflow has been disabled to reduce CI coverage-like runs"
 
     steps:
       - name: Clone
