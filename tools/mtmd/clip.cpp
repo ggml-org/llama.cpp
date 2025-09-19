@@ -879,10 +879,8 @@ struct clip_graph {
             int n_embd = clip_n_mmproj_embd(ctx);
             const int d_head = 128;
             int n_head = n_embd/d_head;
-
             // Use actual config value if available, otherwise fall back to hardcoded values
             int num_query = ctx->model.hparams.minicpmv_query_num;
-
             ggml_tensor * Q = ggml_add(ctx0,
                 ggml_mul_mat(ctx0, model.mm_model_attn_q_w, q),
                 model.mm_model_attn_q_b);
@@ -3970,8 +3968,11 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     imgs.entries.push_back(std::move(img_copy));
 
 #if defined(ENABLE_COREML)
-    bool ios_ctx = true;
-    if (ios_ctx){
+    const bool can_use_coreml =
+        !ctx->coreml_model_path.empty() &&
+        ctx->model.modality == CLIP_MODALITY_VISION &&
+        ctx->proj_type() == PROJECTOR_TYPE_MINICPMV;
+    if (can_use_coreml){
         printf("clip use coreml\n");
         return clip_image_batch_encode_coreml(ctx, &imgs, vec);
     }

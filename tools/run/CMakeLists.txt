@@ -9,6 +9,7 @@ if (LLAMA_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     set(LLAMA_RUN_EXTRA_LIBS ${LLAMA_RUN_EXTRA_LIBS} ${CURL_LIBRARIES})
 endif ()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
