@@ -33,6 +33,7 @@ options:
   --list-devices                            list available devices and exit
   -v, --verbose                             verbose output
   --progress                                print test progress indicators
+  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)
 
 test parameters:
   -m, --model <filename>                    (default: models/7B/ggml-model-q4_0.gguf)
@@ -50,7 +51,6 @@ test parameters:
   --poll <0...100>                          (default: 50)
   -ngl, --n-gpu-layers <n>                  (default: 99)
   -ncmoe, --n-cpu-moe <n>                   (default: 0)
-  -rpc, --rpc <rpc_servers>                 (default: none)
   -sm, --split-mode <none|layer|row>        (default: layer)
   -mg, --main-gpu <i>                       (default: 0)
   -nkvo, --no-kv-offload <0|1>              (default: 0)

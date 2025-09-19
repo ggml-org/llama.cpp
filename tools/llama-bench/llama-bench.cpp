@@ -211,34 +211,6 @@ static std::vector<ggml_backend_dev_t> register_rpc_device_list(const std::strin
     return devices;
 }
 
-[[noreturn]] static void print_available_devices_and_exit() {
-    std::vector<ggml_backend_dev_t> devices;
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-        auto * dev = ggml_backend_dev_get(i);
-        auto   ty  = ggml_backend_dev_type(dev);
-        if (ty == GGML_BACKEND_DEVICE_TYPE_CPU) {
-            continue;
-        }
-        devices.push_back(dev);
-    }
-
-    printf("Available devices:\n");
-    if (devices.empty()) {
-        printf("  (none)\n");
-    }
-    for (auto * dev : devices) {
-        size_t free = 0;
-        size_t total = 0;
-        ggml_backend_dev_memory(dev, &free, &total);
-        printf("  %s: %s (%zu MiB, %zu MiB free)\n",
-               ggml_backend_dev_name(dev),
-               ggml_backend_dev_description(dev),
-               total / 1024 / 1024,
-               free / 1024 / 1024);
-    }
-    exit(0);
-}
-
 static std::string devices_to_string(const std::vector<ggml_backend_dev_t> & devices) {
     if (devices.empty()) {
         return "auto";
@@ -375,8 +347,6 @@ struct cmd_params {
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
-    std::vector<std::string>         rpc_servers;
-    std::vector<std::vector<ggml_backend_dev_t>> rpc_device_sets;
     std::vector<llama_split_mode>    split_mode;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
@@ -396,7 +366,6 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
-    bool                             list_devices;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -415,13 +384,11 @@ static const cmd_params cmd_params_defaults = {
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { 99 },
     /* n_cpu_moe            */ { 0 },
-    /* rpc_servers          */ { "" },
-    /* rpc_device_sets      */ { std::vector<ggml_backend_dev_t>() },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
-    /* devices              */ { std::vector<ggml_backend_dev_t>() },
+    /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* use_mmap             */ { true },
@@ -436,7 +403,6 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
-    /* list_devices         */ false,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -459,6 +425,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                             verbose output\n");
     printf("  --progress                                print test progress indicators\n");
     printf("  --no-warmup                               skip warmup runs before benchmarking\n");
+    if (llama_supports_rpc()) {
+        printf("  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)\n");
+    }
     printf("\n");
     printf("test parameters:\n");
     printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
@@ -488,10 +457,6 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
            join(cmd_params_defaults.n_cpu_moe, ",").c_str());
-    if (llama_supports_rpc()) {
-        printf("  -rpc, --rpc <rpc_servers>                 (default: %s)\n",
-               join(cmd_params_defaults.rpc_servers, ",").c_str());
-    }
     printf("  -sm, --split-mode <none|layer|row>        (default: %s)\n",
            join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                       (default: %s)\n",
@@ -561,7 +526,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
-    params.list_devices         = cmd_params_defaults.list_devices;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -676,7 +640,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     try {
                         params.devices.push_back(parse_devices_arg(combo));
                     } catch (const std::exception & e) {
-                        fprintf(stderr, "error: %s\\n", e.what());
+                        fprintf(stderr, "error: %s\n", e.what());
                         invalid_param = true;
                         break;
                     }
@@ -685,7 +649,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
             } else if (arg == "--list-devices") {
-                params.list_devices = true;
+                std::vector<ggml_backend_dev_t> devices;
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                        devices.push_back(dev);
+                    }
+                }
+                printf("Available devices:\n");
+                if (devices.empty()) {
+                    printf("  (none)\n");
+                }
+                for (auto * dev : devices) {
+                    size_t free, total;
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                }
+                exit(0);
             } else if (arg == "-t" || arg == "--threads") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -734,9 +714,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 try {
-                    auto devices = register_rpc_device_list(argv[i]);
-                    params.rpc_servers.push_back(argv[i]);
-                    params.rpc_device_sets.push_back(devices);
+                    register_rpc_device_list(argv[i]);
                 } catch (const std::exception & e) {
                     fprintf(stderr, "error: %s\n", e.what());
                     invalid_param = true;
@@ -1016,12 +994,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_cpu_moe.empty()) {
         params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
     }
-    if (params.rpc_servers.empty()) {
-        params.rpc_servers = cmd_params_defaults.rpc_servers;
-    }
-    if (params.rpc_device_sets.empty()) {
-        params.rpc_device_sets = cmd_params_defaults.rpc_device_sets;
-    }
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
     }
@@ -1083,8 +1055,6 @@ struct cmd_params_instance {
     int                poll;
     int                n_gpu_layers;
     int                n_cpu_moe;
-    std::string        rpc_servers_str;
-    std::vector<ggml_backend_dev_t> rpc_devices;
     llama_split_mode   split_mode;
     int                main_gpu;
     bool               no_kv_offload;
@@ -1102,24 +1072,6 @@ struct cmd_params_instance {
         mparams.n_gpu_layers = n_gpu_layers;
         if (!devices.empty()) {
             mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
-        } else if (!rpc_devices.empty()) {
-            static std::vector<ggml_backend_dev_t> merged_devices;
-            merged_devices.clear();
-            merged_devices.insert(merged_devices.end(), rpc_devices.begin(), rpc_devices.end());
-
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                auto dev_type = ggml_backend_dev_type(dev);
-                if (dev_type == GGML_BACKEND_DEVICE_TYPE_CPU || dev_type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-                    continue;
-                }
-                if (std::find(merged_devices.begin(), merged_devices.end(), dev) == merged_devices.end()) {
-                    merged_devices.push_back(dev);
-                }
-            }
-
-            merged_devices.push_back(nullptr);
-            mparams.devices = merged_devices.data();
         }
         mparams.split_mode   = split_mode;
         mparams.main_gpu     = main_gpu;
@@ -1167,7 +1119,7 @@ struct cmd_params_instance {
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
-               rpc_servers_str == other.rpc_servers_str && rpc_devices == other.rpc_devices && split_mode == other.split_mode &&
+               split_mode == other.split_mode &&
                main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
                devices == other.devices &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
@@ -1199,7 +1151,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & m : params.model)
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
-    for (size_t rpc_idx = 0; rpc_idx < params.rpc_servers.size(); ++rpc_idx)
     for (const auto & sm : params.split_mode)
     for (const auto & mg : params.main_gpu)
     for (const auto & devs : params.devices)
@@ -1219,9 +1170,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & cs : params.cpu_strict)
     for (const auto & nd : params.n_depth)
     for (const auto & pl : params.poll) {
-        const auto & rpc = params.rpc_servers[rpc_idx];
-        const auto & rpc_set = params.rpc_device_sets[rpc_idx];
-
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
                 continue;
@@ -1241,8 +1189,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
-                /* .rpc_servers  = */ rpc,
-                /* .rpc_devices  = */ rpc_set,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
@@ -1276,8 +1222,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
-                /* .rpc_servers  = */ rpc,
-                /* .rpc_devices  = */ rpc_set,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
@@ -1311,8 +1255,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
-                /* .rpc_servers  = */ rpc,
-                /* .rpc_devices  = */ rpc_set,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
@@ -2049,19 +1991,6 @@ int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
-
-    if (params.list_devices) {
-        for (const auto & rpc : params.rpc_servers) {
-            if (!rpc.empty()) {
-                try {
-                    register_rpc_device_list(rpc);
-                } catch (const std::exception & e) {
-                    fprintf(stderr, "warning: %s\n", e.what());
-                }
-            }
-        }
-        print_available_devices_and_exit();
-    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
