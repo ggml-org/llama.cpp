@@ -4689,7 +4689,7 @@ int main(int argc, char ** argv) {
                         return server_sent_event(sink, "data", res_json);
                     }
                 }, [&](const json & error_data) {
-                    server_sent_event(sink, "error", error_data);
+                    server_sent_event(sink, "data", json{{"error", error_data}});
                 }, [&sink]() {
                     // note: do not use req.is_connection_closed here because req is already destroyed
                     return !sink.is_writable();
