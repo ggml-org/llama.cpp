@@ -1,7 +1,6 @@
 #include "llama-mmap.h"
 
 #include "llama-impl.h"
-#include "uint8-buff-stream.h"
 
 #include "ggml.h"
 
@@ -11,6 +10,7 @@
 #include <cerrno>
 #include <algorithm>
 #include <map>
+#include <streambuf>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -268,7 +268,7 @@ void llama_file_disk::write_raw(const void * ptr, size_t len) const { pimpl->wri
 void llama_file_disk::write_u32(uint32_t val) const { pimpl->write_u32(val); }
 
 template <bool Writable>
-llama_file_buffer<Writable>::llama_file_buffer(std::unique_ptr<std::basic_streambuf<uint8_t>> && streambuf) :
+llama_file_buffer<Writable>::llama_file_buffer(std::unique_ptr<std::basic_streambuf<char>> && streambuf) :
     streambuf(std::move(streambuf)) {}
 
 template <bool Writable> llama_file_buffer<Writable>::~llama_file_buffer() = default;
@@ -301,7 +301,7 @@ template <bool Writable> void llama_file_buffer<Writable>::seek(size_t offset, i
 }
 
 template <bool Writable> void llama_file_buffer<Writable>::read_raw(void * ptr, size_t len) const {
-    auto bytes_read = streambuf->sgetn(static_cast<uint8_t *>(ptr), len);
+    auto bytes_read = streambuf->sgetn(static_cast<char *>(ptr), len);
     if (bytes_read != static_cast<std::streamsize>(len)) {
         throw std::runtime_error("read beyond end of buffer");
     }
@@ -327,7 +327,7 @@ template <> void llama_file_buffer<false>::write_u32(uint32_t val) const {
 }
 
 template <> void llama_file_buffer<true>::write_raw(const void * ptr, size_t len) const {
-    auto bytes_written = streambuf->sputn(static_cast<const uint8_t *>(ptr), len);
+    auto bytes_written = streambuf->sputn(static_cast<const char *>(ptr), len);
     if (bytes_written != static_cast<std::streamsize>(len)) {
         throw std::runtime_error("write beyond end of buffer");
     }

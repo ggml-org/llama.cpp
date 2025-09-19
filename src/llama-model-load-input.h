@@ -17,7 +17,7 @@ struct fname_load_input {
 };
 
 struct buffer_load_input {
-    std::unique_ptr<std::basic_streambuf<uint8_t>> & streambuf;
+    std::unique_ptr<std::basic_streambuf<char>> & streambuf;
 };
 
 struct buffer_future_load_input {

@@ -1,12 +1,9 @@
 #include "uint8-buff-stream.h"
 
-#ifdef __APPLE__
-std::locale::id std::ctype<uint8_t>::id;
-#endif
-
 Uint8BufferStreamBuf::Uint8BufferStreamBuf(std::vector<uint8_t> && _data) : data(std::move(_data)) {
-    setg(const_cast<uint8_t *>(data.data()), const_cast<uint8_t *>(data.data()),
-         const_cast<uint8_t *>(data.data()) + data.size());
+    // Cast uint8_t* to char* for basic_streambuf<char> - this is safe since both are 1-byte types
+    char* start = reinterpret_cast<char*>(data.data());
+    setg(start, start, start + data.size());
 }
 
 Uint8BufferStreamBuf::int_type Uint8BufferStreamBuf::underflow() {

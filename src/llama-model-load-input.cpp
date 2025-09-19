@@ -1,5 +1,7 @@
 #include "llama-model-load-input.h"
+
 #include <sstream>
+
 #include "llama-mmap.h"
 
 namespace load_input_variant {
@@ -44,17 +46,10 @@ std::optional<std::set<std::string>> parse_tensor_list_from_future(load_input_t 
     llama_future_file_buffer_ro           tensor_file(future_input.tensor_list_file, future_input.context);
     std::unique_ptr<llama_file_buffer_ro> file_buffer = tensor_file.extract();
 
-    // Read the entire buffer as bytes and convert to string
-    std::vector<uint8_t>              buffer;
-    std::basic_istream<uint8_t>       stream(file_buffer->streambuf.get());
-    std::istreambuf_iterator<uint8_t> begin(stream), end;
-    buffer.assign(begin, end);
-
-    // Convert bytes to string and split by newlines
-    std::string        content(reinterpret_cast<const char *>(buffer.data()), buffer.size());
-    std::istringstream line_stream(content);
-    std::string        line;
-    while (std::getline(line_stream, line)) {
+    // Read directly from the stream
+    std::basic_istream<char> stream(file_buffer->streambuf.get());
+    std::string              line;
+    while (std::getline(stream, line)) {
         tensor_names.insert(line);
     }
 

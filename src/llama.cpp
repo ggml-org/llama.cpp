@@ -326,7 +326,7 @@ void override_and_disable_mmap(struct llama_model_params & params) {
 }  // namespace
 
 struct llama_model * llama_model_load_from_buffer(std::vector<uint8_t> && data, struct llama_model_params params) {
-    std::unique_ptr<std::basic_streambuf<uint8_t>> streambuf = std::make_unique<Uint8BufferStreamBuf>(std::move(data));
+    std::unique_ptr<std::basic_streambuf<char>> streambuf = std::make_unique<Uint8BufferStreamBuf>(std::move(data));
     override_and_disable_mmap(params);
     llama_model_loader ml(load_input_variant::buffer_load_input{ streambuf }, params.use_mmap, params.check_tensors,
                           params.kv_overrides, params.tensor_buft_overrides);
@@ -375,7 +375,7 @@ struct llama_model * llama_model_load_from_split_futures(const char ** paths, si
 }
 
 bool llama_model_load_fulfill_split_future(const char * path, const char * context,
-                                           std::unique_ptr<std::basic_streambuf<uint8_t>> && streambuf) {
+                                           std::unique_ptr<std::basic_streambuf<char>> && streambuf) {
     return llama_future_file_buffer_ro::fulfill_promise(path, context,
                                                         std::make_unique<llama_file_buffer_ro>(std::move(streambuf)));
 }
