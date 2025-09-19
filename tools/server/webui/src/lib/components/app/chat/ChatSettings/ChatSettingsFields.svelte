@@ -11,7 +11,7 @@
 	interface Props {
 		fields: SettingsFieldConfig[];
 		localConfig: SettingsConfigType;
-		onConfigChange: (key: string, value: any) => void;
+		onConfigChange: (key: string, value: string | boolean) => void;
 		onThemeChange?: (theme: string) => void;
 		isMobile?: boolean;
 	}

@@ -14,7 +14,7 @@
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
@@ -239,7 +239,7 @@
 		setMode(newTheme as 'light' | 'dark' | 'system');
 	}
 
-	function handleConfigChange(key: string, value: any) {
+	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 	}
 
@@ -470,6 +470,6 @@
 			</ScrollArea>
 		</div>
 
-		<ChatSettingsFooter onClose={handleClose} onReset={handleReset} onSave={handleSave} />
+		<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
 	</Dialog.Content>
 </Dialog.Root>

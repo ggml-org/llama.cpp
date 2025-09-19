@@ -2,16 +2,11 @@
 	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
-		onClose?: () => void;
 		onReset?: () => void;
 		onSave?: () => void;
 	}
 
-	let { onClose, onReset, onSave }: Props = $props();
-
-	function handleClose() {
-		onClose?.();
-	}
+	let { onReset, onSave }: Props = $props();
 
 	function handleReset() {
 		onReset?.();
