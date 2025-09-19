@@ -140,11 +140,19 @@ pre-commit run --all-files
 ## Continuous Integration
 
 ### GitHub Actions Workflows
-Key workflows that run on every PR:
-- `.github/workflows/build.yml`: Multi-platform builds
-- `.github/workflows/server.yml`: Server functionality tests
-- `.github/workflows/python-lint.yml`: Python code quality
-- `.github/workflows/python-type-check.yml`: Python type checking
+**NOTE: Most workflows have been DISABLED to reduce CI coverage-like runs**
+
+**Currently Disabled Workflows:**
+- `.github/workflows/build.yml`: Multi-platform builds (DISABLED - manual trigger only)
+- `.github/workflows/server.yml`: Server functionality tests (DISABLED - manual trigger only)
+- `.github/workflows/python-lint.yml`: Python code quality (DISABLED - manual trigger only)
+- `.github/workflows/python-type-check.yml`: Python type checking (DISABLED - manual trigger only)
+- `.github/workflows/editorconfig.yml`: Code formatting checks (DISABLED - manual trigger only)
+- `.github/workflows/build-riscv-native.yml`: RISCV builds (DISABLED - manual trigger only)
+- `.github/workflows/update-ops-docs.yml`: Documentation validation (DISABLED - manual trigger only)
+- `.github/workflows/python-check-requirements.yml`: Requirements validation (DISABLED - manual trigger only)
+
+**To re-enable any workflow:** Uncomment the triggers and restore the original job definitions in the respective workflow files.
 
 ### Local CI Validation
 **Run full CI locally before submitting PRs:**
