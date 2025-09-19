@@ -75,13 +75,12 @@
  * @param device The device ID to set.
  */
 void ggml_cann_set_device(const int32_t device) {
-    // TODO: uncomment these lines after empty context has fixed.
-    // int current_device;
-    // ACL_CHECK(aclrtGetDevice(&current_device));
+    int current_device = -1;
+    aclrtGetDevice(&current_device);
 
-    // if (device == current_device) {
-    //   return;
-    // }
+    if (device == current_device) {
+      return;
+    }
     ACL_CHECK(aclrtSetDevice(device));
 }
 
@@ -114,6 +113,24 @@ std::optional<std::string> get_env(const std::string& name) {
 bool parse_bool(const std::string& value) {
     std::unordered_set<std::string> valid_values = {"on", "1", "yes", "y", "enable", "true"};
     return valid_values.find(value) != valid_values.end();
+}
+
+/**
+ * @brief Parse a string as an integer, returning 0 if invalid.
+ *
+ * This function attempts to convert the input string `value` to an `int`.
+ * If the string is not a valid integer or is out of the `int` range,
+ * it returns 0.
+ *
+ * @param value The string to parse.
+ * @return The parsed integer, or 0 if conversion fails.
+ */
+int parse_integer(const std::string& value) {
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return 0;
+    }
 }
 
 /**
@@ -1116,30 +1133,65 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
-// ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
-namespace {
-    void* g_nz_workspace = nullptr;
-    size_t g_nz_workspace_allocated = 0;
+/**
+ * @brief Workspace for caching NZ buffers per device.
+ *
+ * This struct manages a device buffer used in NZ computations. It supports
+ * allocation, reallocation, and clearing of cached memory. The struct is
+ * designed to be used with a global array, one per device.
+ */
+struct ggml_cann_nz_workspace {
+    void*  ptr;       // Pointer to allocated device buffer
+    size_t allocated; // Size of currently allocated buffer in bytes
 
-    void release_nz_workspace() {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
-            g_nz_workspace_allocated = 0;
+    /**
+     * @brief Constructor. Initializes the workspace with no allocated memory.
+     */
+    ggml_cann_nz_workspace() : ptr(nullptr), allocated(0) {}
+
+    /**
+     * @brief Free cached memory and reset the workspace.
+     *
+     * If a buffer has been allocated, this function releases it using
+     * aclrtFree and resets internal state.
+     */
+    void clear() {
+        if (ptr) {
+            ACL_CHECK(aclrtFree(ptr));
+            ptr = nullptr;
+            allocated = 0;
         }
     }
 
-    void relloc_nz_workspace(size_t new_size) {
-        if (new_size > g_nz_workspace_allocated) {
-        if (g_nz_workspace) {
-            aclrtFree(g_nz_workspace);
-            g_nz_workspace = nullptr;
+    /**
+     * @brief Allocate or reallocate the workspace buffer.
+     *
+     * If the requested size is larger than the currently allocated size,
+     * the old buffer will be freed and a new buffer of the requested size
+     * will be allocated on the device.
+     *
+     * @param new_size Size in bytes to allocate for the workspace.
+     */
+    void realloc(size_t new_size) {
+        if (new_size > allocated) {
+            clear();
+            ACL_CHECK(aclrtMalloc(&ptr, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+            allocated = new_size;
         }
-        ACL_CHECK(aclrtMalloc(&g_nz_workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
-        g_nz_workspace_allocated = new_size;
     }
-    }
-}
+
+    /**
+     * @brief Get the device buffer pointer.
+     *
+     * @return Pointer to the allocated buffer, or nullptr if not allocated.
+     */
+    void* get() const { return ptr; }
+};
+
+/**
+ * @brief Global array of NZ workspaces, one per device.
+ */
+static ggml_cann_nz_workspace g_nz_workspaces[GGML_CANN_MAX_DEVICES];
 
 /**
  * @brief Convert tensor weights to NZ format using Ascend CANN API.
@@ -1149,13 +1201,13 @@ namespace {
  * improve performance on certain hardware.
  *
  * @param tensor Pointer to the input ggml_tensor containing the weights.
- * @param data Pointer to the raw data buffer for the tensor weights.
  * @param offset Byte offset within the tensor data buffer where weights start.
+ * @param device device id.
  *
  * @note The workspace buffer used in this function is managed globally and reused
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
-static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+static void weight_format_to_nz(ggml_tensor *tensor, size_t offset, int device) {
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1165,7 +1217,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t of
     ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
                                                     &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
-    relloc_nz_workspace(workspaceSize);
+    g_nz_workspaces[device].realloc(workspaceSize);
+
+    void* g_nz_workspace = g_nz_workspaces[device].get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
@@ -1196,14 +1250,14 @@ static void ggml_backend_cann_buffer_set_tensor(
     // Why aclrtSynchronizeDevice?
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
         if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
-            weight_format_to_nz(tensor, data, offset);
+            weight_format_to_nz(tensor, offset, ctx->device);
         }
     } else {
         void *transform_buffer = malloc(size);
@@ -1279,6 +1333,10 @@ static bool ggml_backend_cann_buffer_cpy_tensor(
                                   ACL_MEMCPY_DEVICE_TO_DEVICE));
             return true;
         } else {
+#ifdef ASCEND_310P
+            // TODO: Support 310p P2P copy
+            return false;
+#endif
             // Different device but can access by peer.
             int32_t canAccessPeer = 0;
             ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device,
@@ -1439,7 +1497,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     int64_t ne0 = tensor->ne[0];
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
 
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
@@ -2000,6 +2058,8 @@ static bool ggml_backend_cann_cpy_tensor_async(
     GGML_ASSERT(ggml_backend_is_cann(backend_src) ||
                 ggml_backend_is_cann(backend_dst));
 
+    GGML_ASSERT(!is_matmul_weight((const ggml_tensor*)src));
+
     if (!ggml_backend_buffer_is_cann(src->buffer) ||
         !ggml_backend_buffer_is_cann(dst->buffer)) {
         return false;
@@ -2020,6 +2080,10 @@ static bool ggml_backend_cann_cpy_tensor_async(
         return true;
     }
     if (backend_src != backend_dst) {
+#ifdef ASCEND_310P
+        // TODO: Support 310p P2P copy
+        return false;
+#endif
         ggml_backend_cann_buffer_context* buf_ctx_src =
             (ggml_backend_cann_buffer_context*)buf_src->context;
         ggml_backend_cann_buffer_context* buf_ctx_dst =
@@ -2036,7 +2100,6 @@ static bool ggml_backend_cann_cpy_tensor_async(
         }
 
         // need open both directions for memcpyasync between devices.
-        ggml_cann_set_device(cann_ctx_dst->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_src->device, 0));
         ggml_cann_set_device(cann_ctx_src->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_dst->device, 0));
@@ -2046,9 +2109,17 @@ static bool ggml_backend_cann_cpy_tensor_async(
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
+        // record event on src stream after the copy
+        // TODO: this event is not effective with acl graph mode, change to use aclrtSynchronizeStream
+        // if (!cann_ctx_src->copy_event) {
+        //     ACL_CHECK(aclrtCreateEventWithFlag(&cann_ctx_src->copy_event, ACL_EVENT_SYNC));
+        // }
+        // ACL_CHECK(aclrtRecordEvent(cann_ctx_src->copy_event, cann_ctx_src->stream()));
 
-        //TODO: workaround for Event didn`t work here.
-        aclrtSynchronizeStream(cann_ctx_src->stream());
+        // // wait on dst stream for the copy to complete
+        // ggml_cann_set_device(cann_ctx_dst->device);
+        // ACL_CHECK(aclrtStreamWaitEvent(cann_ctx_dst->stream(), cann_ctx_src->copy_event));
+        ACL_CHECK(aclrtSynchronizeStream(cann_ctx_src->stream()));
     } else {
         // src and dst are on the same backend
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
@@ -2077,30 +2148,52 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_ACL_GRAPH
 /**
- * @brief Populate the internal CANN graph node properties from the ggml computation graph.
+ * @brief Add a new CANN graph to the LRU cache by populating node properties from the ggml graph.
  *
- * This function copies all node attributes (operation type, dimensions, strides, input sources,
- * and operation parameters) into the cached CANN graph structure for later reuse or comparison.
+ * This function creates a new ggml_cann_graph object and fills its node properties
+ * (operation type, dimensions, strides, input sources, and operation parameters)
+ * based on the current ggml computation graph.
  *
- * @param cann_ctx  The CANN backend context.
- * @param cgraph    The ggml computational graph.
+ * Each node in the ggml graph is mapped to a property entry in the new CANN graph:
+ * - node address
+ * - operation type
+ * - shape (ne) and strides (nb)
+ * - source tensor addresses
+ * - operation parameters
+ *
+ * After initialization, the new graph is pushed into the LRU cache owned by the
+ * CANN backend context. The cache takes ownership of the graph and manages its
+ * lifetime (including deletion upon eviction).
+ *
+ * @param cann_ctx  The CANN backend context containing the graph cache.
+ * @param cgraph    The current ggml computation graph.
  */
-static void set_ggml_graph_node_properties(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
-        ggml_tensor * node = cgraph->nodes[node_idx];
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_address = node->data;
-        cann_ctx->cann_graph->ggml_graph_properties[node_idx].node_op = node->op;
+static void add_lru_matched_graph_node_properties(
+        ggml_backend_cann_context * cann_ctx,
+        ggml_cgraph * cgraph) {
+    // Create a new ggml_cann_graph object on the heap (its lifetime is managed by the cache).
+    ggml_cann_graph * new_graph = new ggml_cann_graph();
+    new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
 
-        for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].ne[dim] = node->ne[dim];
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].nb[dim] = node->nb[dim];
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        ggml_tensor * node = cgraph->nodes[node_idx];
+        auto & prop = new_graph->ggml_graph_properties[node_idx];
+
+        prop.node_address = node->data;
+        prop.node_op      = node->op;
+
+        std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
+        std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
+
+        for (int src = 0; src < GGML_MAX_SRC; ++src) {
+            prop.src_address[src] = node->src[src] ? node->src[src]->data : nullptr;
         }
-        for (int src = 0; src < GGML_MAX_SRC; src++) {
-            cann_ctx->cann_graph->ggml_graph_properties[node_idx].src_address[src] =
-                node->src[src] ? node->src[src]->data : nullptr;
-        }
-        memcpy(cann_ctx->cann_graph->ggml_graph_properties[node_idx].op_params, node->op_params, GGML_MAX_OP_PARAMS);
+
+        memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
     }
+
+    // Insert into the LRU cache (cache takes ownership and will delete it when evicted).
+    cann_ctx->graph_lru_cache.push(new_graph);
 }
 
 /**
@@ -2145,30 +2238,45 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 }
 
 /**
- * @brief Determine if the CANN graph needs to be rebuilt due to graph changes.
+ * @brief Check whether there is a cached CANN graph that matches the current ggml graph.
  *
- * This checks whether the number or properties of ggml graph nodes have changed
- * compared to the last captured CANN graph. If so, the CANN graph must be re-captured.
+ * This function iterates through the cached CANN graphs stored in the LRU cache and
+ * compares them against the given ggml computation graph. A match requires that the
+ * number of nodes is the same and that each node’s properties (operation type,
+ * dimensions, strides, inputs, and operation parameters) are identical.
  *
- * @param cann_ctx  The CANN backend context.
+ * If a matching graph is found, it is promoted to the front of the LRU cache and the
+ * function returns true. Otherwise, the function returns false, indicating that a new
+ * CANN graph needs to be captured.
+ *
+ * @param cann_ctx  The CANN backend context containing the graph cache.
  * @param cgraph    The current ggml computation graph.
- * @return true if an update is required; false otherwise.
+ * @return true if a matching cached graph exists; false otherwise.
  */
-static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    // The number of nodes is different, so the graph needs to be reconstructed.
-    if (cann_ctx->cann_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
-        cann_ctx->cann_graph->ggml_graph_properties.resize(cgraph->n_nodes);
-        return true;
-    }
+static bool is_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
+    ggml_cann_graph_lru_cache &lru_cache = cann_ctx->graph_lru_cache;
+    for (auto &graph_ptr : lru_cache.cache_list) {
+        // Skip graphs with a different number of nodes.
+        if (graph_ptr->ggml_graph_properties.size() != static_cast<size_t>(cgraph->n_nodes)) {
+            continue;
+        }
 
-    // The number of nodes is the same; iterate over each node to check whether they match.
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        bool has_matching_properties = ggml_graph_node_has_matching_properties(
-            cgraph->nodes[i], &cann_ctx->cann_graph->ggml_graph_properties[i]);
-        if(!has_matching_properties) {
+        // Check if all nodes match.
+        bool all_match = true;
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            if (!ggml_graph_node_has_matching_properties(cgraph->nodes[i], &graph_ptr->ggml_graph_properties[i])) {
+                all_match = false;
+                break;
+            }
+        }
+
+        if (all_match) {
+            // update cache_list && renturn graph_ptr
+            lru_cache.move_to_front(graph_ptr);
             return true;
         }
     }
+
     return false;
 }
 #endif  // USE_ACL_GRAPH
@@ -2187,17 +2295,13 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
  * @param cann_graph_update_required Whether graph capture is needed due to graph changes.
  */
 static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
-    bool & use_cann_graph, bool & cann_graph_update_required) {
+    bool & use_cann_graph,  bool & cann_graph_update_required) {
 #ifdef USE_ACL_GRAPH
+    ggml_cann_graph* matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
     if (use_cann_graph && cann_graph_update_required) {
-        if (cann_ctx->cann_graph->graph != nullptr) {
-            ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
-            cann_ctx->cann_graph->graph = nullptr;
-        }
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
 #endif // USE_ACL_GRAPH
-
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
     if (!use_cann_graph || cann_graph_update_required) {
@@ -2218,12 +2322,12 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 
 #ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
-        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
+        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
     }
 
     if (use_cann_graph) {
         // Execute graph
-        ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->cann_graph->graph, cann_ctx->stream()));
+        ACL_CHECK(aclmdlRIExecuteAsync(matched_graph->graph, cann_ctx->stream()));
     }
 #endif // USE_ACL_GRAPH
 }
@@ -2246,30 +2350,46 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
-    release_nz_workspace();
+    g_nz_workspaces[cann_ctx->device].clear();
+
+    // calculate rope cache for fist layer in current device.
+    cann_ctx->rope_cache.cached = false;
+
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
-    // check environment LLAMA_SET_ROWS
-    if (!cann_ctx->support_set_rows) {
+    static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
+    if (!prefill_use_graph) {
+        // Do not use acl_graph for prefill.
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->nodes[i];
+            // TODO: Optimize here. Currently, we can only
+            // get seq_len by FA's input.
+            if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+                // Q -> src[0], shape: [B, S, N, D]
+                use_cann_graph = (node->src[0]->ne[1] == 1);
+                break;
+            }
+        }
+    }
+
+    if (!cann_ctx->acl_graph_mode) {
         use_cann_graph = false;
     }
 
     if (use_cann_graph) {
-        if (cann_ctx->cann_graph == nullptr) {
-            cann_ctx->cann_graph.reset(new ggml_cann_graph());
-            cann_graph_update_required = true;
+        // If no matching graph is found, the graph needs to be recaptured.
+        cann_graph_update_required = !is_matched_graph(cann_ctx, cgraph);
+        if (cann_graph_update_required) {
+            // If no matching graph is found, add a new ACL graph.
+            add_lru_matched_graph_node_properties(cann_ctx, cgraph);
         }
-
-        cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
-        set_ggml_graph_node_properties(cann_ctx, cgraph);
     }
 #else
     bool use_cann_graph = false;
     bool cann_graph_update_required = false;
 #endif  // USE_ACL_GRAPH
-
     evaluate_and_capture_cann_graph(
         cann_ctx,
         cgraph,
@@ -2336,7 +2456,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2354,7 +2474,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
-                    // Q4 && Q8 per group is not suppor on 310p device
+                    // Q4 && Q8 per group is not support on 310p device
                     return false;
 #endif
                     // only support contiguous for quantized types.
@@ -2405,14 +2525,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float ext_factor = 0.0f;
-            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
-                return false;
-            }
-            // TODO: ext_factor != 0
-            if (ext_factor != 0) {
                 return false;
             }
 
@@ -2423,10 +2537,11 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (mode & GGML_ROPE_TYPE_VISION) {
                 return false;
             }
-
+#ifdef ASCEND_310P
             if(!ggml_is_contiguous(op->src[0])){
                 return false;
             }
+#endif
             return true;
         }
         case GGML_OP_UPSCALE: {
@@ -2488,15 +2603,17 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARGMAX:
         case GGML_OP_COS:
         case GGML_OP_SIN:
-        case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_LOG:
         case GGML_OP_MEAN:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
+            return (op->src[0]->ne[0] - 1) <= 255;
         case GGML_OP_SCALE:
             float bias;
-            memcpy(&bias, (float*)op->op_params + 1, sizeof(float));
+            memcpy(&bias, (const float *)(op->op_params) + 1, sizeof(float));
             return bias == 0.0f; // TODO: support bias != 0.0f
         case GGML_OP_SOFT_MAX:
             // TODO: support attention sinks [TAG_ATTN_SINKS]
@@ -2505,6 +2622,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         case GGML_OP_FLASH_ATTN_EXT:{
+#ifdef ASCEND_310P
+            // FA not support on 310p device
+            return false;
+#endif
             // derived from [ggml-cuda.cu]
             if(op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16){
                 return false;
@@ -2523,15 +2644,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 // different head sizes of K and V are not supported yet
                 return false;
             }
-            if (op->src[0]->ne[0] == 192) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 576) {
-                // DeepSeek MLA
+            if (op->src[0]->ne[0] % 16 != 0) {
+                // TODO: padding to support
                 return false;
             }
             float logitSoftcap = 0.0f;
-            memcpy(&logitSoftcap,  (float*)op->op_params + 2, sizeof(float));
+            memcpy(&logitSoftcap, (const float *)(op->op_params) + 2, sizeof(float));
             if(logitSoftcap != 0.0f) {
                 return false;
             }
@@ -2638,6 +2756,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
     /* .graph_compute           = */ ggml_backend_cann_graph_compute,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
+    /* .graph_optimize          = */ NULL,
 };
 
 /**

@@ -112,7 +112,9 @@ kernel void kernel_add_f16(
         ulong nb0,
         ulong nb1,
         ulong nb2,
-        ulong nb3
+        ulong nb3,
+        int type_src0,
+        int type_src1
 ) {
     src0 = src0 + offset0;
     src1 = src1 + offset1;
@@ -132,25 +134,57 @@ kernel void kernel_add_f16(
 
     for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
         const int i10 = i0 % ne10;
-        *((global half *)(dst_ptr + i0*nb0)) = *((global half *)(src0_ptr + i0*nb00)) + *((global half *)(src1_ptr + i10*nb10));
+
+        half v0, v1;
+        if (type_src0 == 1) {
+            v0 = convert_half(*((global float *)(src0_ptr + i0*nb00)));
+        } else {
+            v0 = *((global half *)(src0_ptr + i0*nb00));
+        }
+
+        if (type_src1 == 1) {
+            v1 = convert_half(*((global float *)(src1_ptr + i10*nb10)));
+        } else {
+            v1 = *((global half *)(src1_ptr + i10*nb10));
+        }
+
+        *((global half *)(dst_ptr + i0*nb0)) = v0 + v1;
     }
 }
 
 kernel void kernel_add_row_f16(
-        global half4 * src0,
+        global char * src0,
         ulong  offset0,
-        global half4 * src1,
+        global char * src1,
         ulong  offset1,
         global half4 * dst,
         ulong  offsetd,
-        int ne
+        int ne,
+        int type_src0,
+        int type_src1
 ) {
-    src0 = (global half4*)((global char*)src0 + offset0);
-    src1 = (global half4*)((global char*)src1 + offset1);
     dst = (global half4*)((global char*)dst + offsetd);
 
     // This performs better than using %.
     uint gid = get_global_id(0);
     uint idx1 = gid - (gid/ne)*ne; // get_global_id(0) % ne
-    dst[gid] = src0[gid] + src1[idx1];
+
+    half4 v0, v1;
+    if (type_src0 == 1) {
+        global float4* src0_f32 = (global float4*)((global char*)src0 + offset0);
+        v0 = convert_half4(src0_f32[gid]);
+    } else {
+        global half4* src0_f16 = (global half4*)((global char*)src0 + offset0);
+        v0 = src0_f16[gid];
+    }
+
+    if (type_src1 == 1) {
+        global float4* src1_f32 = (global float4*)((global char*)src1 + offset1);
+        v1 = convert_half4(src1_f32[idx1]);
+    } else {
+        global half4* src1_f16 = (global half4*)((global char*)src1 + offset1);
+        v1 = src1_f16[idx1];
+    }
+
+    dst[gid] = v0 + v1;
 }

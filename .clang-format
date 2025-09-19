@@ -22,7 +22,14 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
-BinPackArguments: false
+# Treat CUDA keywords/attributes as "attribute macros" and avoid breaking lines inside them
+AttributeMacros:
+  - __host__
+  - __device__
+  - __global__
+  - __forceinline__
+  - __launch_bounds__
+BinPackArguments: true
 BinPackParameters: false # OnePerLine
 BitFieldColonSpacing: Both
 BreakBeforeBraces: Custom # Attach

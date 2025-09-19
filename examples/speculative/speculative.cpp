@@ -85,6 +85,8 @@ int main(int argc, char ** argv) {
     }
 
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+    params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
+
     common_init_result llama_init_dft = common_init_from_params(params);
 
     model_dft = llama_init_dft.model.get();
@@ -242,7 +244,7 @@ int main(int argc, char ** argv) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
 
-                    auto & dist_tgt = *common_sampler_get_candidates(smpl);
+                    auto & dist_tgt = *common_sampler_get_candidates(smpl, true);
 
                     float p_tgt = 0.0f;
                     float p_dft = 0.0f;
@@ -491,7 +493,7 @@ int main(int argc, char ** argv) {
 
                 common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
 
-                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl);
+                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 
                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
