@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.llama"
+    namespace = "com.arm.aiplayground"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.llama"
+        applicationId = "com.arm.aiplayground"
 
         minSdk = 33
         targetSdk = 36
