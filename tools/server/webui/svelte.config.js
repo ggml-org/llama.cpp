@@ -11,7 +11,7 @@ const config = {
 		paths: {
 			// Base path for deployment in subdirectories (e.g., '/llama' for hosting at example.com/llama)
 			// Leave empty ('') for root deployment (default behavior)
-			base: ''
+			base: process.env.BASE_PATH || ''
 		},
 		adapter: adapter({
 			pages: '../public',
