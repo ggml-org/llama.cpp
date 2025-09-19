@@ -6488,7 +6488,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // single inplace test per type/mode/ff
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
-        for (int mode : {0, 2}) {
+        for (int mode : {0, 2, 8, 24}) {
             for (bool ff : {false, true}) {
                 test_cases.emplace_back(new test_rope(type, {128,  32, 2, 1}, 128, mode, 512, 1.4245f, 0.7465f, 1.4245f, ff, 0, true, true));
             }

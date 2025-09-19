@@ -742,17 +742,20 @@ static void ggml_webgpu_rope(webgpu_context & ctx,
     const int inplace         = ggml_webgpu_tensor_equal(src0, dst);
     const int has_freq_factor = (src2 != nullptr);
 
-    float     freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
     const int n_dims     = ((int32_t *) dst->op_params)[1];
     const int mode       = ((int32_t *) dst->op_params)[2];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
 
+    float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
     memcpy(&freq_base, (int32_t *) dst->op_params + 5, sizeof(float));
     memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
     memcpy(&ext_factor, (int32_t *) dst->op_params + 7, sizeof(float));
     memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
     memcpy(&beta_fast, (int32_t *) dst->op_params + 9, sizeof(float));
     memcpy(&beta_slow, (int32_t *) dst->op_params + 10, sizeof(float));
+
+    int sections[4];
+    memcpy(sections, (int32_t *) dst->op_params + 11, 4 * sizeof(int));
 
     float theta_scale = powf(freq_base, -2.0f / n_dims);
 
@@ -780,7 +783,11 @@ static void ggml_webgpu_rope(webgpu_context & ctx,
         *(uint32_t *) &freq_scale,
         *(uint32_t *) &ext_factor,
         *(uint32_t *) &corr_dims[0],
-        *(uint32_t *) &corr_dims[1]
+        *(uint32_t *) &corr_dims[1],
+        (uint32_t) sections[0],
+        (uint32_t) sections[1],
+        (uint32_t) sections[2],
+        (uint32_t) sections[3]
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -1461,22 +1468,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
             break;
         case GGML_OP_ROPE:
-            {
-                //std::cout << "ROPE op types: dst: " << ggml_type_name(op->type)
-                //          << ", src0: " << (op->src[0] ? ggml_type_name(op->src[0]->type) : "null")
-                //          << ", src1: " << (op->src[1] ? ggml_type_name(op->src[1]->type) : "null")
-                //          << ", src2: " << (op->src[2] ? ggml_type_name(op->src[2]->type) : "null") << std::endl;
-                //std::cout << "ROPE op shapes: dst: op->ne[0]=" << op->ne[0] << ", ne[1]=" << op->ne[1] << ", ne[2]=" << op->ne[2]
-                //          << ", ne[3]=" << op->ne[3] << std::endl;
-                //std::cout << "ROPE op shapes: src0: src0->ne[0]=" << op->src[0]->ne[0] << ", ne[1]=" << op->src[0]->ne[1]
-                //          << ", ne[2]=" << op->src[0]->ne[2] << ", ne[3]=" << op->src[0]->ne[3] << std::endl;
-                //std::cout << "ROPE op shapes: src1: src1->ne[0]=" << op->src[1]->ne[0] << ", ne[1]=" << op->src[1]->ne[1]
-                //          << ", ne[2]=" << op->src[1]->ne[2] << ", ne[3]=" << op->src[1]->ne[3] << std::endl;
-
-                const int mode = ((int32_t *) op->op_params)[2];
-                supports_op    = (mode == 0 || mode == 2) && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
-                break;
-            }
+            supports_op = op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
+            break;
         default:
             break;
     }

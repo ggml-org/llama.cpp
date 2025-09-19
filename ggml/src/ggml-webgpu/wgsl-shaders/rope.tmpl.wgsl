@@ -159,9 +159,12 @@ struct Params {
     freq_scale: f32,
     ext_factor: f32,
     corr_dim0: f32,
-    corr_dim1: f32
+    corr_dim1: f32,
+    sections0: u32,
+    sections1: u32,
+    sections2: u32,
+    sections3: u32
 };
-
 
 @group(0) @binding(0)
 var<storage, read_write> src0: array<{{TYPE}}>;
@@ -189,19 +192,21 @@ fn rope_yarn(theta_extrap: f32, i: u32) -> vec2<f32> {
     return vec2<f32>(cos(theta) * mscale, sin(theta) * mscale);
 }
 
-fn pair_base(i0: u32) -> u32 {
-    switch (params.mode) {
-        case 0 { return i0; } // norm
-        case 2 { return i0 / 2; } // neox
-        default { return 1; }
+fn pair_base(i0: u32, div_2: bool) -> u32 {
+    if (div_2) {
+        return i0 / 2;
+    } else {
+        return i0;
     }
 }
 
-fn pair_offset() -> u32 {
-    switch (params.mode) {
-        case 0 { return 1; } // norm
-        case 2 { return params.n_dims / 2; } // neox
-        default { return 1; }
+fn pair_offset(is_neox: bool, is_mrope: bool, is_vision: bool) -> u32 {
+    if (is_vision) {
+        return params.n_dims;
+    } else if (is_neox || is_mrope) {
+        return params.n_dims / 2;
+    } else {
+        return 1;
     }
 }
 
@@ -212,6 +217,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.n_threads) {
         return;
     }
+
+    let is_neox = bool(params.mode & 2);
+    let is_mrope = bool(params.mode & 8);
+    let is_vision = params.mode == 24;
 
     var i = gid.x * 2; // start index for this thread
     let i3 = i / (params.ne2 * params.ne1 * params.ne0);
@@ -224,20 +233,49 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_src_row = params.offset_src0 + i3 * params.stride_src03 + i2 * params.stride_src02 + i1 * params.stride_src01;
     let i_dst_row = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
 
-    if (i0 >= params.n_dims) {
-        rotate(i_dst_row + i0, i_dst_row + i0 + 1, f32(src0[i_src_row + i0]), f32(src0[i_src_row + i0 + 1]));
+    if (i0 >= params.n_dims && !is_vision) {
+        let i_src = i_src_row + i0;
+        let i_dst = i_dst_row + i0;
+        rotate(i_dst, i_dst + 1, f32(src0[i_src]), f32(src0[i_src + 1]));
         return;
     }
 
-    let theta_base = f32(src1[params.offset_src1 + i2]) * pow(params.theta_scale, f32(i0)/2.0f);
+    var theta_base_mult: u32 = 0;
+    var theta_scale_pwr: u32 = i0 / 2;
+    if (is_mrope) {
+        let sect_dims = params.sections0 + params.sections1 + params.sections2 + params.sections3;
+        let sec_w = params.sections1 + params.sections0;
+        let sec_e = params.sections2 + sec_w;
+        let sector = (i0 / 2) % sect_dims;
+        if (sector >= params.sections0 && sector < sec_w) {
+            theta_base_mult = 1;
+            if (is_vision) {
+                theta_scale_pwr = sector - params.sections0;
+            }
+        } else if (sector >= sec_w && sector < sec_e) {
+            theta_base_mult = 2;
+            if (is_vision) {
+                theta_scale_pwr = sector - sec_w;
+            }
+        } else if (sector >= sec_e) {
+            if (is_vision) {
+                theta_scale_pwr = sector - sec_e;
+                theta_scale_pwr = (i0 / 2) % sec_e;
+            }
+            theta_base_mult = 3;
+        } else if (is_vision) {
+            theta_scale_pwr = sector;
+        }
+    }
+    let theta_base = f32(src1[params.offset_src1 + i2 + params.ne2 * theta_base_mult]) * pow(params.theta_scale, f32(theta_scale_pwr));
     let thetas = rope_yarn(theta_base/freq_factor(i0), i0);
 
-    let i_src = i_src_row + pair_base(i0);
-    let i_dst = i_dst_row + pair_base(i0);
+    let i_src = i_src_row + pair_base(i0, is_neox || is_mrope || is_vision);
+    let i_dst = i_dst_row + pair_base(i0, is_neox || is_mrope || is_vision);
 
     let x0 = f32(src0[i_src]);
-    let x1 = f32(src0[i_src + pair_offset()]);
-    rotate(i_dst, i_dst + pair_offset(), x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
+    let x1 = f32(src0[i_src + pair_offset(is_neox, is_mrope, is_vision)]);
+    rotate(i_dst, i_dst + pair_offset(is_neox, is_mrope, is_vision), x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
 }
 
 #end(SHADER)
