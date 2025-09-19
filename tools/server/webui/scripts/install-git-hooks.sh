@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to install pre-commit and post-commit hooks for webui
-# Pre-commit: formats code and builds, stashes unstaged changes
+# Pre-commit: formats, lints, checks, and builds code, stashes unstaged changes
 # Post-commit: automatically unstashes changes
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -38,6 +38,18 @@ if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
     # Check if format command succeeded
     if [ $? -ne 0 ]; then
         echo "Error: npm run format failed"
+        if [ $STASH_CREATED -eq 0 ]; then
+            echo "You can restore your unstaged changes with: git stash pop"
+        fi
+        exit 1
+    fi
+
+    # Run the lint command
+    npm run lint
+    
+    # Check if lint command succeeded
+    if [ $? -ne 0 ]; then
+        echo "Error: npm run lint failed"
         if [ $STASH_CREATED -eq 0 ]; then
             echo "You can restore your unstaged changes with: git stash pop"
         fi
@@ -112,7 +124,7 @@ if [ $? -eq 0 ]; then
     echo "   Post-commit: $POST_COMMIT_HOOK"
     echo ""
     echo "The hooks will automatically:"
-    echo "  • Format and build webui code before commits"
+    echo "  • Format, lint, check, and build webui code before commits"
     echo "  • Stash unstaged changes during the process"
     echo "  • Restore your unstaged changes after the commit"
     echo ""
