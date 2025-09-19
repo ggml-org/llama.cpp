@@ -1,8 +1,8 @@
 package com.example.llama.engine
 
-import android.llama.cpp.InferenceEngine
-import android.llama.cpp.InferenceEngine.State
 import android.util.Log
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.InferenceEngine.State
 import com.example.llama.APP_NAME
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope

@@ -6,11 +6,11 @@ import android.content.Context
 import android.content.Context.RECEIVER_EXPORTED
 import android.content.Intent
 import android.content.IntentFilter
-import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.arm.aichat.gguf.InvalidFileFormatException
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.repo.InsufficientStorageException
 import com.example.llama.data.repo.ModelRepository

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "android.llama.cpp"
+    namespace = "com.arm.aichat"
     compileSdk = 36
 
     ndkVersion = "29.0.13113456"
@@ -84,8 +84,8 @@ publishing {
     publications {
         register<MavenPublication>("release") {
             groupId = "com.arm"
-            artifactId = "kleidi-llama"
-            version = "1.0.0"
+            artifactId = "ai-chat"
+            version = "0.1.0"
 
             afterEvaluate {
                 from(components["release"])

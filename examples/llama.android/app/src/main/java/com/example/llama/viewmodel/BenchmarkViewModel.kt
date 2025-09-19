@@ -1,7 +1,7 @@
 package com.example.llama.viewmodel
 
-import android.llama.cpp.isUninterruptible
 import androidx.lifecycle.viewModelScope
+import com.arm.aichat.isUninterruptible
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.engine.BenchmarkService
 import com.example.llama.ui.scaffold.ScaffoldEvent

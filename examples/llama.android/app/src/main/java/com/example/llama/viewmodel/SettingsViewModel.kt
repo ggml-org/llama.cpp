@@ -1,9 +1,9 @@
 package com.example.llama.viewmodel
 
-import android.llama.cpp.LLamaTier
-import android.llama.cpp.TierDetection
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.arm.aichat.LLamaTier
+import com.arm.aichat.TierDetection
 import com.example.llama.data.repo.ModelRepository
 import com.example.llama.data.source.prefs.ColorThemeMode
 import com.example.llama.data.source.prefs.DarkThemeMode

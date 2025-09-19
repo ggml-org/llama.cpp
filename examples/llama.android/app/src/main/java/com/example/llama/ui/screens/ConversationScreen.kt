@@ -1,7 +1,6 @@
 package com.example.llama.ui.screens
 
 import android.content.Intent
-import android.llama.cpp.InferenceEngine.State
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
@@ -63,6 +62,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.arm.aichat.InferenceEngine.State
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.engine.TokenMetrics

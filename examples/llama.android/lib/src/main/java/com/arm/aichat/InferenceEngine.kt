@@ -1,6 +1,6 @@
-package android.llama.cpp
+package com.arm.aichat
 
-import android.llama.cpp.InferenceEngine.State
+import com.arm.aichat.InferenceEngine.State
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 

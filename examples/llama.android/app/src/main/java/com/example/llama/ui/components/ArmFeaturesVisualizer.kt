@@ -1,7 +1,5 @@
 package com.example.llama.ui.components
 
-import android.llama.cpp.ArmFeature
-import android.llama.cpp.ArmFeaturesMapper.DisplayItem
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.MaterialTheme
@@ -12,6 +10,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import com.arm.aichat.ArmFeature
+import com.arm.aichat.ArmFeaturesMapper.DisplayItem
 import kotlin.math.sqrt
 
 /**

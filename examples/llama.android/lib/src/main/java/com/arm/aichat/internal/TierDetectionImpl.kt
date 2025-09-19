@@ -1,14 +1,14 @@
-package android.llama.cpp.internal
+package com.arm.aichat.internal
 
 import android.content.Context
-import android.llama.cpp.LLamaTier
-import android.llama.cpp.TierDetection
 import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.arm.aichat.LLamaTier
+import com.arm.aichat.TierDetection
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 

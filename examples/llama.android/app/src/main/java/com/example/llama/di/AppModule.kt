@@ -1,10 +1,10 @@
 package com.example.llama.di
 
 import android.content.Context
-import android.llama.cpp.InferenceEngine
-import android.llama.cpp.AiChat
-import android.llama.cpp.TierDetection
-import android.llama.cpp.gguf.GgufMetadataReader
+import com.arm.aichat.AiChat
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.TierDetection
+import com.arm.aichat.gguf.GgufMetadataReader
 import com.example.llama.data.db.AppDatabase
 import com.example.llama.data.repo.ModelRepository
 import com.example.llama.data.repo.ModelRepositoryImpl

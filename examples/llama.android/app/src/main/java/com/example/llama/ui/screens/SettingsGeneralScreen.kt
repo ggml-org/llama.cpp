@@ -1,8 +1,6 @@
 package com.example.llama.ui.screens
 
 import android.content.Intent
-import android.llama.cpp.ArmFeaturesMapper
-import android.llama.cpp.ArmFeaturesMapper.DisplayItem
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import com.arm.aichat.ArmFeaturesMapper
+import com.arm.aichat.ArmFeaturesMapper.DisplayItem
 import com.example.llama.APP_NAME
 import com.example.llama.BuildConfig
 import com.example.llama.data.source.prefs.ColorThemeMode

@@ -3,8 +3,6 @@ package com.example.llama
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.llama.cpp.InferenceEngine.State
-import android.llama.cpp.isUninterruptible
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -32,6 +30,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.arm.aichat.InferenceEngine.State
+import com.arm.aichat.isUninterruptible
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.navigation.AppDestinations
 import com.example.llama.navigation.NavigationActions

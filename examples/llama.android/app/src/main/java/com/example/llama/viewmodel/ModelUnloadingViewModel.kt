@@ -1,11 +1,11 @@
 package com.example.llama.viewmodel
 
-import android.llama.cpp.InferenceEngine
-import android.llama.cpp.InferenceEngine.State
-import android.llama.cpp.isModelLoaded
-import android.llama.cpp.isUninterruptible
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.InferenceEngine.State
+import com.arm.aichat.isModelLoaded
+import com.arm.aichat.isUninterruptible
 import com.example.llama.engine.InferenceService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

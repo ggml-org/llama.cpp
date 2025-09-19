@@ -1,8 +1,8 @@
 package com.example.llama.engine
 
-import android.llama.cpp.InferenceEngine
-import android.llama.cpp.InferenceEngine.State
 import android.util.Log
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.InferenceEngine.State
 import com.example.llama.data.model.ModelInfo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow

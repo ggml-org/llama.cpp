@@ -1,7 +1,7 @@
 package com.example.llama.engine
 
-import android.llama.cpp.LLamaTier
-import android.llama.cpp.TierDetection
+import com.arm.aichat.LLamaTier
+import com.arm.aichat.TierDetection
 import android.util.Log
 
 /**

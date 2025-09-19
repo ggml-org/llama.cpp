@@ -1,19 +1,19 @@
 [versions]
 
 # Plugins
-agp = "8.12.2"
+agp = "8.13.0"
 ksp = "2.2.10-2.0.2"
-kotlin = "2.2.10"
+kotlin = "2.2.20"
 dagger-hilt = "2.57.1"
 
 # AndroidX
-activity = "1.10.1"
+activity = "1.11.0"
 core-ktx = "1.17.0"
 datastore-preferences = "1.1.7"
-lifecycle = "2.9.3"
-navigation = "2.9.3"
-room = "2.7.2"
-hilt = "1.2.0"
+lifecycle = "2.9.4"
+navigation = "2.9.4"
+room = "2.8.0"
+hilt = "1.3.0"
 retrofit2 = "3.0.0"
 okhttp3 = "5.1.0"
 
@@ -22,11 +22,11 @@ coroutines = "1.10.2"
 serialization = "1.9.0"
 
 # Compose
-compose-bom = "2025.08.01"
-compose-foundation = "1.9.0"
+compose-bom = "2025.09.00"
+compose-foundation = "1.9.1"
 compose-material-icons = "1.7.8"
-compose-material3 = "1.4.0-beta03"
-compose-ui = "1.9.0"
+compose-material3 = "1.4.0-rc01"
+compose-ui = "1.9.1"
 
 # Accompanist
 accompanist = "0.36.0"

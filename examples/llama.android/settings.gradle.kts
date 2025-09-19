@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LlamaAndroid"
+rootProject.name = "AiChat"
 include(":app")
-include(":llama")
+include(":lib")

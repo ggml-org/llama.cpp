@@ -1,4 +1,4 @@
-package android.llama.cpp
+package com.arm.aichat
 
 /**
  * Represents an Arm® CPU feature with its metadata.

@@ -70,7 +70,7 @@ dependencies {
     implementation(libs.accompanist.systemuicontroller)
 
     // Subproject
-    implementation(project(":llama"))
+    implementation(project(":lib"))
 
     debugImplementation(libs.bundles.debug)
     testImplementation(libs.junit)

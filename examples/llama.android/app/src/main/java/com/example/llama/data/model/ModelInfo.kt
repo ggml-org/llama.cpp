@@ -1,6 +1,6 @@
 package com.example.llama.data.model
 
-import android.llama.cpp.gguf.FileType
+import com.arm.aichat.gguf.FileType
 import com.example.llama.util.formatContextLength
 import com.example.llama.util.formatFileByteSize
 

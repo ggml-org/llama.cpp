@@ -1,9 +1,10 @@
-package android.llama.cpp.internal
+package com.arm.aichat.internal
 
 import android.content.Context
-import android.llama.cpp.InferenceEngine
-import android.llama.cpp.UnsupportedArchitectureException
 import android.util.Log
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.UnsupportedArchitectureException
+import com.arm.aichat.internal.InferenceEngineImpl.Companion.getInstance
 import dalvik.annotation.optimization.FastNative
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -205,7 +206,7 @@ internal class InferenceEngineImpl private constructor(
         }
 
     /**
-     * Send plain text user prompt to LLM, which starts generating tokens in a [kotlinx.coroutines.flow.Flow]
+     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
      */
     override fun sendUserPrompt(
         message: String,

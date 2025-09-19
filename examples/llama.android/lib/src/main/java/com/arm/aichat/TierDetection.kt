@@ -1,4 +1,4 @@
-package android.llama.cpp
+package com.arm.aichat
 
 /**
  * Public interface for [LLamaTier] detection information.

@@ -1,11 +1,11 @@
 package com.example.llama.data.repo
 
 import android.content.Context
-import android.llama.cpp.gguf.GgufMetadataReader
-import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
+import com.arm.aichat.gguf.GgufMetadataReader
+import com.arm.aichat.gguf.InvalidFileFormatException
 import com.example.llama.data.db.dao.ModelDao
 import com.example.llama.data.db.entity.ModelEntity
 import com.example.llama.data.model.GgufMetadata

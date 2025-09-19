@@ -13,7 +13,7 @@ static const Aarch64Features features = info.features;
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 extern "C" JNIEXPORT jint JNICALL
-Java_android_llama_cpp_internal_TierDetectionImpl_getOptimalTier(
+Java_com_arm_aichat_internal_TierDetectionImpl_getOptimalTier(
         JNIEnv*  /*env*/,
         jobject  /*clazz*/) {
     int tier = 0;  // Default to T0 (baseline)
@@ -54,7 +54,7 @@ Java_android_llama_cpp_internal_TierDetectionImpl_getOptimalTier(
 
 // Optional: Keep a feature string function for debugging
 extern "C" JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_internal_TierDetectionImpl_getCpuFeaturesString(
+Java_com_arm_aichat_internal_TierDetectionImpl_getCpuFeaturesString(
         JNIEnv* env,
         jobject  /*clazz*/) {
     std::string text;

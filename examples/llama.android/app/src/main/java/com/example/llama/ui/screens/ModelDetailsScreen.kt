@@ -1,6 +1,5 @@
 package com.example.llama.ui.screens
 
-import android.llama.cpp.gguf.FileType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -22,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.arm.aichat.gguf.FileType
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.ModelCardContentArchitectureRow
 import com.example.llama.ui.components.ModelCardContentContextRow

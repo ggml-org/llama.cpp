@@ -1,11 +1,11 @@
 package com.example.llama.data.model
 
 import kotlinx.serialization.Serializable
-import android.llama.cpp.gguf.GgufMetadata as Domain
+import com.arm.aichat.gguf.GgufMetadata as Domain
 
 
 /**
- * A local serializable domain replicate of [android.llama.cpp.gguf.GgufMetadata]
+ * A local serializable domain replicate of [com.arm.aichat.gguf.GgufMetadata]
  */
 @Serializable
 data class GgufMetadata(

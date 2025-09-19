@@ -1,10 +1,10 @@
-package android.llama.cpp.internal.gguf
+package com.arm.aichat.internal.gguf
 
 import android.content.Context
-import android.llama.cpp.gguf.GgufMetadata
-import android.llama.cpp.gguf.GgufMetadataReader
-import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
+import com.arm.aichat.gguf.GgufMetadata
+import com.arm.aichat.gguf.GgufMetadataReader
+import com.arm.aichat.gguf.InvalidFileFormatException
 import java.io.IOException
 import java.io.InputStream
 

@@ -1,8 +1,6 @@
 package com.example.llama.ui.screens
 
 import android.content.Intent
-import android.llama.cpp.InferenceEngine.State
-import android.llama.cpp.UnsupportedArchitectureException
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -60,6 +58,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import com.arm.aichat.InferenceEngine.State
+import com.arm.aichat.UnsupportedArchitectureException
 import com.example.llama.data.model.SystemPrompt
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.ui.components.ModelCardCoreExpandable

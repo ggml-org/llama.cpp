@@ -1,12 +1,11 @@
-package android.llama.cpp
+package com.arm.aichat
 
 import android.content.Context
-import android.llama.cpp.internal.InferenceEngineImpl
-import android.llama.cpp.internal.TierDetectionImpl
+import com.arm.aichat.internal.InferenceEngineImpl
+import com.arm.aichat.internal.TierDetectionImpl
 
 /**
- * Main entry point for the Ai Chat library.
- * This is the only class that should be used by library consumers.
+ * Main entry point for Arm's AI Chat library.
  */
 object AiChat {
     /**
