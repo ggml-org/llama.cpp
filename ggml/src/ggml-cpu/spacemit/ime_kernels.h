@@ -1,9 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <stdexcept>
-#include "traits.h"
-#include "ggml.h"
+#include <cstddef>
 
 namespace sqnbitgemm_spacemit_ime
 {

@@ -19,7 +19,7 @@
 #endif
 
 #ifdef GGML_USE_CPU_RISCV64_SPACEMIT
-#    include "spacemit/ggml_spacemit_ime.h"
+#    include "spacemit/ime.h"
 #endif
 
 #if defined(_WIN32)

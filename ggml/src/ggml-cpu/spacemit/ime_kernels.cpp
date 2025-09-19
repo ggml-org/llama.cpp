@@ -1,4 +1,7 @@
-#include "ggml_spacemit_ime_kernels.h"
+#include <cmath>
+#include <algorithm>
+#include "ime_kernels.h"
+#include "ggml.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"

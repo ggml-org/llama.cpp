@@ -17,11 +17,14 @@
 #include <cstdlib>  // for qsort
 #include <cstdio>   // for GGML_ASSERT
 #include <thread>
+#include <algorithm>
+#include <stdexcept>
 
-#include "ggml_spacemit_ime.h"
-#include "ggml_spacemit_ime_kernels.h"
+#include <riscv_vector.h>
+
+#include "ime.h"
+#include "ime_kernels.h"
 #include "vec.h"
-
 
 #if defined(__riscv)
 

@@ -442,10 +442,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         if (GGML_CPU_RISCV64_SPACEMIT)
             target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_RISCV64_SPACEMIT ${RISCV64_SPACEMIT_IME_SPEC})
             list(APPEND GGML_CPU_SOURCES
-                ggml-cpu/spacemit/ggml_spacemit_ime.cpp
-                ggml-cpu/spacemit/ggml_spacemit_ime.h
-                ggml-cpu/spacemit/ggml_spacemit_ime_kernels.cpp
-                ggml-cpu/spacemit/ggml_spacemit_ime_kernels.h
+                ggml-cpu/spacemit/ime.cpp
+                ggml-cpu/spacemit/ime.h
+                ggml-cpu/spacemit/ime_kernels.cpp
+                ggml-cpu/spacemit/ime_kernels.h
             )
         endif()
         set(MARCH_STR "rv64gc")
