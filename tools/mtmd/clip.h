@@ -94,6 +94,7 @@ struct ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx);
 
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
+bool clip_image_batch_encode_coreml(struct clip_ctx * ctx, const struct clip_image_f32_batch * imgs, float * vec);
 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);

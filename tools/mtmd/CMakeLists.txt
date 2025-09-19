@@ -21,15 +21,15 @@ if(ENABLE_COREML)
     target_sources(mtmd PRIVATE
         coreml/mtmd_coreml.h
         coreml/mtmd_coreml.mm
-        coreml/ane_minicpmv4_vit_f16.h
-        coreml/ane_minicpmv4_vit_f16.m
+        coreml/coreml_minicpmv40_vit_f16.h
+        coreml/coreml_minicpmv40_vit_f16.m
     )
     # Define compile-time macro for code guards
     target_compile_definitions(mtmd PRIVATE ENABLE_COREML)
-    
+
     # Enable ARC for Objective-C files
     set_source_files_properties(coreml/mtmd_coreml.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    set_source_files_properties(coreml/ane_minicpmv4_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(coreml/coreml_minicpmv40_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
 target_link_libraries     (mtmd PUBLIC ggml llama common)
@@ -45,9 +45,9 @@ target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 # Link CoreML and Accelerate frameworks when CoreML is enabled
 if(ENABLE_COREML)
-    target_link_libraries(mtmd PRIVATE 
-        "-framework Foundation" 
-        "-framework CoreML" 
+    target_link_libraries(mtmd PRIVATE
+        "-framework Foundation"
+        "-framework CoreML"
         "-framework Accelerate"
         "-ObjC"
     )

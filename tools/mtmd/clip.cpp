@@ -391,7 +391,7 @@ struct clip_ctx {
     // for debugging
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
-    
+
     // CoreML model path for iOS
     std::string coreml_model_path;
 
@@ -947,7 +947,7 @@ struct clip_graph {
 
         GGML_ASSERT(model.class_embedding == nullptr);
         const int n_pos = n_patches;
-        
+
         const int image_size_width  = img.nx;
         const int image_size_height = img.ny;
         const int patch_size    = hparams.patch_size;
@@ -3839,16 +3839,12 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
 }
 
 #if defined(ENABLE_COREML)
-// forward declarations
-static bool coreml_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec);
-static bool coreml_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec);
-
-static bool clip_image_encode_coreml(float * data, float * vec, const char* coreml_model_path) {
+static bool clip_image_encode_coreml(float * pixel_values, int32_t * position_ids, float * pos_embed, float * vec, const char* coreml_model_path) {
 
     static int flag = 0;
     static const void* coremlEncoder = NULL;
     static std::string cached_model_path = "";
-    
+
     // Check if we need to load a new model
     if (flag == 0 || (coreml_model_path && cached_model_path != coreml_model_path)) {
         if (coremlEncoder) {
@@ -3862,7 +3858,7 @@ static bool clip_image_encode_coreml(float * data, float * vec, const char* core
         cached_model_path = coreml_model_path ? coreml_model_path : "";
         flag = 1;
     }
-    predictWith(coremlEncoder, data, vec);
+    predictWith(coremlEncoder, pixel_values, position_ids, pos_embed, vec);
     return true;
 }
 #endif
@@ -3877,315 +3873,107 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     bool ios_ctx = true;
     if (ios_ctx){
         printf("clip use coreml\n");
-        std::vector<float> vit_embedding1(1100*1152);
-        std::vector<float> vit_embedding2(1100*1152);
-
-        // call CoreML pipeline: embedding -> encoder -> resampler
-        if (!coreml_embedding(ctx, n_threads, &imgs, vit_embedding1.data())) {
-            return false;
-        }
-        clip_image_encode_coreml(vit_embedding1.data(), vit_embedding2.data(), ctx->coreml_model_path.c_str());
-        if (!coreml_resampler(ctx, n_threads, &imgs, vit_embedding2.data(), vec)) {
-            return false;
-        }
-        return true;
+        return clip_image_batch_encode_coreml(ctx, &imgs, vec);
     }
 #endif
-
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
 }
 
+bool clip_image_batch_encode_coreml(clip_ctx * ctx, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+
+    const clip_image_f32_batch & imgs = *imgs_c_ptr;
+    int batch_size = imgs.entries.size();
+
+    if (batch_size != 1) {
+        return false; // only support batch size of 1
+    }
+     // set inputs
+     const auto & model   = ctx->model;
+     const auto & hparams = model.hparams;
+
+     const int image_size_width  = imgs.entries[0]->nx;
+     const int image_size_height = imgs.entries[0]->ny;
+     const int patch_size    = hparams.patch_size;
+     const int pos_w = image_size_width  / patch_size;
+     const int pos_h = image_size_height / patch_size;
+
+    switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_MINICPMV:
+            {
+                std::vector<float> inp_raw;
+                std::vector<int32_t> positions;
+                std::vector<float> pos_embed;
+
+                // prepare inp_raw
+                {
+                    const int max_patches = 1024;
+                    const int nx = max_patches * patch_size;
+                    const int ny = patch_size;
+                    const int n = nx * ny;
+                    inp_raw.assign(3 * n, 0.0f);
+
+                    int patch_index = 0;
+                    for (int i = 0; i < image_size_height && patch_index < max_patches; i += patch_size) {
+                        for (int j = 0; j < image_size_width && patch_index < max_patches; j += patch_size) {
+                            for (int pi = 0; pi < patch_size; ++pi) {
+                                for (int pj = 0; pj < patch_size; ++pj) {
+                                    int src_index = ((i + pi) * image_size_width + (j + pj)) * 3;
+                                    int dst_index = nx * pi + patch_index * patch_size + pj;
+                                    inp_raw[dst_index]         = imgs.entries[0]->buf[src_index];
+                                    inp_raw[n + dst_index]     = imgs.entries[0]->buf[src_index + 1];
+                                    inp_raw[2 * n + dst_index] = imgs.entries[0]->buf[src_index + 2];
+                                }
+                            }
+                            patch_index++;
+                        }
+                    }
+                }
+                // prepare position_ids
+                {
+                    // inspired from siglip:
+                    //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
+                    //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
+                    positions.assign(std::max(pos_h * pos_w, 1024),0);
+                    int bucket_coords_h[1024];
+                    int bucket_coords_w[1024];
+                    for (int i = 0; i < pos_h; i++){
+                        bucket_coords_h[i] = std::floor(70.0*i/pos_h);
+                    }
+                    for (int i = 0; i < pos_w; i++){
+                        bucket_coords_w[i] = std::floor(70.0*i/pos_w);
+                    }
+                    for (int i = 0, id = 0; i < pos_h; i++){
+                        for (int j = 0; j < pos_w; j++){
+                            positions[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
+                        }
+                    }
+                }
+                // prepare pos_embed
+                {
+                    // inspired from resampler of Qwen-VL:
+                    //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
+                    //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
+                    int embed_dim = clip_n_mmproj_embd(ctx);
+
+                    // TODO @ngxson : this is very inefficient, can we do this using ggml_sin and ggml_cos?
+                    auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
+
+                    pos_embed.assign(embed_dim * std::max(pos_w * pos_h, 1024), 0.0f);
+                    for(int i = 0; i < pos_w * pos_h; ++i){
+                        for(int j = 0; j < embed_dim; ++j){
+                            pos_embed[i * embed_dim + j] = pos_embed_t[i][j];
+                        }
+                    }
+                }
+
 #if defined(ENABLE_COREML)
-static bool coreml_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
-    const clip_image_f32_batch & imgs = *imgs_c_ptr;
-    int batch_size = imgs.entries.size();
-
-    // TODO @ngxson : implement batch size > 1 as a loop
-    //                we don't need true batching support because the cgraph will gonna be big anyway
-    if (batch_size != 1) {
-        return false; // only support batch size of 1
-    }
-
-    // build the inference graph
-    ctx->debug_print_tensors.clear();
-    ggml_backend_sched_reset(ctx->sched.get());
-    GGML_ASSERT(imgs.entries.size() == 1 && "n_batch > 1 is not supported");
-    clip_graph graph(ctx, *imgs.entries[0]);
-    ggml_cgraph * gf;
-    gf = graph.build_minicpmv_embedding();
-        ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
-
-    // set inputs
-    const auto & model   = ctx->model;
-    const auto & hparams = model.hparams;
-
-    const int image_size_width  = imgs.entries[0]->nx;
-    const int image_size_height = imgs.entries[0]->ny;
-
-    const int patch_size    = hparams.patch_size;
-    const int pos_w = image_size_width  / patch_size;
-    const int pos_h = image_size_height / patch_size;
-
-    auto get_inp_tensor = [&gf](const char * name) {
-        ggml_tensor * inp = ggml_graph_get_tensor(gf, name);
-        if (inp == nullptr) {
-            GGML_ABORT("Failed to get tensor %s", name);
-        }
-        if (!(inp->flags & GGML_TENSOR_FLAG_INPUT)) {
-            GGML_ABORT("Tensor %s is not an input tensor", name);
-        }
-        return inp;
-    };
-
-    auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
-        ggml_tensor * cur = get_inp_tensor(name);
-        GGML_ASSERT(cur->type == GGML_TYPE_F32);
-        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
-        ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
-    };
-
-    auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
-        ggml_tensor * cur = get_inp_tensor(name);
-        GGML_ASSERT(cur->type == GGML_TYPE_I32);
-        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
-        ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
-    };
-    // set input pixel values
-    if (!imgs.is_audio) {
-        size_t nelem = 0;
-        for (const auto & img : imgs.entries) {
-            nelem += img->nx * img->ny * 3;
-        }
-        std::vector<float> inp_raw(nelem);
-
-        // layout of data (note: the channel dim is unrolled to better visualize the layout):
-        //
-        // ┌──W──┐
-        // │     H │  channel = R
-        // ├─────┤ │
-        // │     H │  channel = G
-        // ├─────┤ │
-        // │     H │  channel = B
-        // └─────┘ │
-        //   ──────┘ x B
-
-        for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx;
-            const int ny = imgs.entries[i]->ny;
-            const int n = nx * ny;
-
-            for (int b = 0; b < batch_size; b++) {
-                float * batch_entry = inp_raw.data() + b * (3*n);
-                for (int y = 0; y < ny; y++) {
-                    for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
-                        size_t base_dst =    y * nx + x;  // idx of the first channel
-                        batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
-                        batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
-                        batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
-                    }
-                }
-            }
-        }
-        set_input_f32("inp_raw", inp_raw);
-
-    } else {
-        // audio input
-        GGML_ASSERT(imgs.entries.size() == 1);
-        const auto & mel_inp = imgs.entries[0];
-        const int n_step = mel_inp->nx;
-        const int n_mel  = mel_inp->ny;
-        std::vector<float> inp_raw(n_step * n_mel);
-        std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
-        set_input_f32("inp_raw", inp_raw);
-    }
-
-    switch (ctx->model.proj_type) {
-        case PROJECTOR_TYPE_MINICPMV:
-            {
-                // inspired from siglip:
-                //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
-                //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
-                std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
-                for (int i = 0; i < pos_h; i++){
-                    bucket_coords_h[i] = std::floor(70.0*i/pos_h);
-                }
-                for (int i = 0; i < pos_w; i++){
-                    bucket_coords_w[i] = std::floor(70.0*i/pos_w);
-                }
-                for (int i = 0, id = 0; i < pos_h; i++){
-                    for (int j = 0; j < pos_w; j++){
-                        positions[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
-                    }
-                }
-                set_input_i32("positions", positions);
-            } break;
-            default:
-            GGML_ABORT("Unknown projector type");
-    }
-
-    // ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
-    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (ggml_backend_set_n_threads_fn) {
-            ggml_backend_set_n_threads_fn(ctx->backend_cpu, n_threads);
-        }
-    }
-
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
-    if (status != GGML_STATUS_SUCCESS) {
-        LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
-        return false;
-    }
-
-    // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
-    }
-
-    // the last node is the embedding tensor
-    ggml_tensor * embeddings = ggml_graph_node(gf, -1);
-
-    // copy the embeddings to the location passed by the user
-    ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
-
-    return true;
-}
-
-static bool coreml_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec) {
-    const clip_image_f32_batch & imgs = *imgs_c_ptr;
-    int batch_size = imgs.entries.size();
-
-    // TODO @ngxson : implement batch size > 1 as a loop
-    //                we don't need true batching support because the cgraph will gonna be big anyway
-    if (batch_size != 1) {
-        return false; // only support batch size of 1
-    }
-
-    // build the inference graph
-    ctx->debug_print_tensors.clear();
-    ggml_backend_sched_reset(ctx->sched.get());
-    GGML_ASSERT(imgs.entries.size() == 1 && "n_batch > 1 is not supported");
-    clip_graph graph(ctx, *imgs.entries[0]);
-    ggml_cgraph * gf;
-    gf = graph.build_minicpmv_resampler();
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
-
-    // set inputs
-    const auto & model   = ctx->model;
-    const auto & hparams = model.hparams;
-
-    const int image_size_width  = imgs.entries[0]->nx;
-    const int image_size_height = imgs.entries[0]->ny;
-
-    const int patch_size    = hparams.patch_size;
-    const int pos_w = image_size_width  / patch_size;
-    const int pos_h = image_size_height / patch_size;
-
-    auto get_inp_tensor = [&gf](const char * name) {
-        ggml_tensor * inp = ggml_graph_get_tensor(gf, name);
-        if (inp == nullptr) {
-            GGML_ABORT("Failed to get tensor %s", name);
-        }
-        if (!(inp->flags & GGML_TENSOR_FLAG_INPUT)) {
-            GGML_ABORT("Tensor %s is not an input tensor", name);
-        }
-        return inp;
-    };
-
-    auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
-        ggml_tensor * cur = get_inp_tensor(name);
-        GGML_ASSERT(cur->type == GGML_TYPE_F32);
-        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
-        ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
-    };
-
-    {
-        struct ggml_tensor * embeddings = ggml_graph_get_tensor(gf, "embeddings");
-        ggml_backend_tensor_set(embeddings, vit_embedding, 0, ggml_nbytes(embeddings));
-
-    }
-    
-    switch (ctx->model.proj_type) {
-        case PROJECTOR_TYPE_MINICPMV:
-            {
-                // inspired from resampler of Qwen-VL:
-                //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
-                //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
-                int embed_dim = clip_n_mmproj_embd(ctx);
-
-                // TODO @ngxson : this is very inefficient, can we do this using ggml_sin and ggml_cos?
-                auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
-
-                std::vector<float> pos_embed(embed_dim * pos_w * pos_h);
-                for(int i = 0; i < pos_w * pos_h; ++i){
-                    for(int j = 0; j < embed_dim; ++j){
-                        pos_embed[i * embed_dim + j] = pos_embed_t[i][j];
-                    }
-                }
-
-                set_input_f32("pos_embed", pos_embed);
-            } break;
-            default:
-            GGML_ABORT("Unknown projector type");
-    }
-
-    // ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
-    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (ggml_backend_set_n_threads_fn) {
-            ggml_backend_set_n_threads_fn(ctx->backend_cpu, n_threads);
-        }
-    }
-
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
-    if (status != GGML_STATUS_SUCCESS) {
-        LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
-        return false;
-    }
-
-    // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
-    }
-
-    // the last node is the embedding tensor
-    ggml_tensor * embeddings = ggml_graph_node(gf, -1);
-
-    // sanity check (only support batch size of 1 for now)
-    const int n_tokens_out = embeddings->ne[1];
-    const int expected_n_tokens_out = clip_n_output_tokens(ctx, imgs.entries[0].get());
-    if (n_tokens_out != expected_n_tokens_out) {
-        LOG_ERR("%s: expected output %d tokens, got %d\n", __func__, expected_n_tokens_out, n_tokens_out);
-        GGML_ABORT("Invalid number of output tokens");
-    }
-
-    // copy the embeddings to the location passed by the user
-    ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
-
-    return true;
-}
+                return clip_image_encode_coreml(inp_raw.data(), positions.data(), pos_embed.data(), vec, ctx->coreml_model_path.c_str());
 #endif
+            }
+        default:
+            GGML_ABORT("Unknown projector type");
+    }
+}
 
 bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
