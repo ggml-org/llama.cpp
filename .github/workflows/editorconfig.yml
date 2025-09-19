@@ -1,29 +1,34 @@
-name: EditorConfig Checker
+# DISABLED: EditorConfig Checker
+# This workflow has been disabled to reduce CI coverage-like runs
+# Original workflow provided code formatting checks but added overhead
+# To re-enable: uncomment the entire workflow below
 
-on:
-  workflow_dispatch: # allows manual triggering
-    inputs:
-      create_release:
-        description: 'Create new release'
-        required: true
-        type: boolean
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
-
-jobs:
-  editorconfig:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: editorconfig-checker/action-editorconfig-checker@v2
-        with:
-          version: v3.0.3
-      - run: editorconfig-checker
+# name: EditorConfig Checker
+# 
+# on:
+#   workflow_dispatch: # allows manual triggering
+#     inputs:
+#       create_release:
+#         description: 'Create new release'
+#         required: true
+#         type: boolean
+#   push:
+#     branches:
+#       - master
+#   pull_request:
+#     branches:
+#       - master
+# 
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+#   cancel-in-progress: true
+# 
+# jobs:
+#   editorconfig:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: editorconfig-checker/action-editorconfig-checker@v2
+#         with:
+#           version: v3.0.3
+#       - run: editorconfig-checker

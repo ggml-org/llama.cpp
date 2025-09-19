@@ -1,30 +1,35 @@
-name: flake8 Lint
+# DISABLED: flake8 Lint
+# This workflow has been disabled to reduce CI coverage-like runs
+# Original workflow provided Python code linting but added overhead
+# To re-enable: uncomment the entire workflow below
 
-on:
-  push:
-    branches:
-      - master
-    paths: ['.github/workflows/python-lint.yml', '**/*.py']
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/python-lint.yml', '**/*.py']
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
-
-jobs:
-  flake8-lint:
-    runs-on: ubuntu-latest
-    name: Lint
-    steps:
-      - name: Check out source repository
-        uses: actions/checkout@v4
-      - name: Set up Python environment
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: flake8 Lint
-        uses: py-actions/flake8@v2
-        with:
-            plugins: "flake8-no-print"
+# name: flake8 Lint
+# 
+# on:
+#   push:
+#     branches:
+#       - master
+#     paths: ['.github/workflows/python-lint.yml', '**/*.py']
+#   pull_request:
+#     types: [opened, synchronize, reopened]
+#     paths: ['.github/workflows/python-lint.yml', '**/*.py']
+# 
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+#   cancel-in-progress: true
+# 
+# jobs:
+#   flake8-lint:
+#     runs-on: ubuntu-latest
+#     name: Lint
+#     steps:
+#       - name: Check out source repository
+#         uses: actions/checkout@v4
+#       - name: Set up Python environment
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
+#       - name: flake8 Lint
+#         uses: py-actions/flake8@v2
+#         with:
+#             plugins: "flake8-no-print"
