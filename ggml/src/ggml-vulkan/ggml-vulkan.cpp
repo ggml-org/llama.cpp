@@ -12721,7 +12721,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 const vk_device& device = ggml_vk_get_device(ctx->device);
-                if (op->op == GGML_OP_CONV_TRANSPOSE_2D && !device->pipeline_conv_transpose_2d_f32[0]) {
+                if (op->op == GGML_OP_CONV_TRANSPOSE_2D &&
+                    device->properties.limits.maxPushConstantsSize < sizeof(vk_op_conv_transpose_2d_push_constants)) {
                     return false;
                 }
                 // Channel-contiguous format is not supported yet.
