@@ -2,7 +2,7 @@ package com.example.llama.di
 
 import android.content.Context
 import android.llama.cpp.InferenceEngine
-import android.llama.cpp.KleidiLlama
+import android.llama.cpp.AiChat
 import android.llama.cpp.TierDetection
 import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.db.AppDatabase
@@ -76,7 +76,7 @@ internal abstract class AppModule {
             return if (USE_STUB_ENGINE) {
                 StubInferenceEngine()
             } else {
-                KleidiLlama.getInferenceEngine(context)
+                AiChat.getInferenceEngine(context)
             }
         }
 
@@ -85,7 +85,7 @@ internal abstract class AppModule {
             return if (USE_STUB_ENGINE) {
                 StubTierDetection
             } else {
-                KleidiLlama.getTierDetection(context)
+                AiChat.getTierDetection(context)
             }
         }
 

@@ -23,7 +23,7 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 /**
  * Logging utils
  */
-#define TAG "kleidi-llama"
+#define TAG "ai-chat"
 #define LOGv(...) __android_log_print(ANDROID_LOG_VERBOSE,  TAG, __VA_ARGS__)
 #define LOGd(...) __android_log_print(ANDROID_LOG_DEBUG,    TAG, __VA_ARGS__)
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO,     TAG, __VA_ARGS__)

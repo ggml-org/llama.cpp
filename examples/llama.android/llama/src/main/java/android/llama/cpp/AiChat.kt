@@ -5,10 +5,10 @@ import android.llama.cpp.internal.InferenceEngineImpl
 import android.llama.cpp.internal.TierDetectionImpl
 
 /**
- * Main entry point for the Llama Android library.
+ * Main entry point for the Ai Chat library.
  * This is the only class that should be used by library consumers.
  */
-object KleidiLlama {
+object AiChat {
     /**
      * Get the inference engine single instance.
      */

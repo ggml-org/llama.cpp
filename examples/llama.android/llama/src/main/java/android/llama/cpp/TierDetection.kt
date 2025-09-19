@@ -9,7 +9,7 @@ interface TierDetection {
 }
 
 /**
- * ARM optimization tiers supported by the Kleidi-Llama library.
+ * ARM optimization tiers supported by this library.
  * Higher tiers provide better performance on supported hardware.
  */
 enum class LLamaTier(val rawValue: Int, val description: String) {

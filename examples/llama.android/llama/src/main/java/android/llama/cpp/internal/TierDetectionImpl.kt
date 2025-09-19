@@ -23,7 +23,7 @@ internal class TierDetectionImpl private constructor(
         private val TAG = TierDetectionImpl::class.simpleName
 
         // CPU feature detection preferences
-        private const val DATASTORE_CPU_DETECTION = "llama_cpu_detection"
+        private const val DATASTORE_CPU_DETECTION = "cpu-detection"
         private const val DATASTORE_VERSION = 1
         private val Context.llamaTierDataStore: DataStore<Preferences>
             by preferencesDataStore(name = DATASTORE_CPU_DETECTION)
@@ -95,7 +95,7 @@ internal class TierDetectionImpl private constructor(
     private fun performOptimalTierDetection(): LLamaTier? {
         try {
             // Load CPU detection library
-            System.loadLibrary("kleidi-llama-cpu-detector")
+            System.loadLibrary("cpu-detector")
             Log.i(TAG, "CPU feature detector loaded successfully")
 
             // Detect optimal tier

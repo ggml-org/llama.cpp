@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.31.6)
 
-project("kleidi-llama" VERSION 1.0.0 LANGUAGES C CXX)
+project("ai-chat" VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED true)
@@ -17,8 +17,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
 add_subdirectory(
         ${CMAKE_CURRENT_LIST_DIR}/../../../../../../include/cpu_features
         ${CMAKE_BINARY_DIR}/cpu_features_build)
-add_library(kleidi-llama-cpu-detector SHARED cpu_detector.cpp)
-target_link_libraries(kleidi-llama-cpu-detector
+add_library(cpu-detector SHARED cpu_detector.cpp)
+target_link_libraries(cpu-detector
         PRIVATE CpuFeatures::cpu_features
         android
         log)
@@ -46,7 +46,7 @@ set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../../../)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
-        kleidi-llama.cpp)
+        kleidi_llama.cpp)
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}

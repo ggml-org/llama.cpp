@@ -127,7 +127,7 @@ internal class InferenceEngineImpl private constructor(
                 }
                 _state.value = InferenceEngine.State.Initializing
                 Log.i(TAG, "Loading native library...")
-                System.load(File(nativeLibDir, "libkleidi-llama.so").absolutePath)
+                System.load(File(nativeLibDir, "libai-chat.so").absolutePath)
                 init(nativeLibDir)
                 _state.value = InferenceEngine.State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
