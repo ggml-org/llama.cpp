@@ -1741,10 +1741,12 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
-    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ json(), json {
+    const std::optional<json> tools_override = json();
+    const std::optional<json> additional_context = json {
         {"datetime", format_time(inputs.now, "%b %d %Y %H:%M:%S GMT")},
         {"functions", json(inputs.tools.empty() ? "" : inputs.tools.dump(2))},
-    });
+    };
+    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, tools_override, additional_context);
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
