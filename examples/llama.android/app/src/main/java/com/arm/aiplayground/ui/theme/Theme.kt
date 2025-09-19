@@ -1,6 +1,5 @@
 package com.arm.aiplayground.ui.theme
 
-import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -9,16 +8,11 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 import com.arm.aiplayground.data.source.prefs.ColorThemeMode
 import com.arm.aiplayground.data.source.prefs.DarkThemeMode
-import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
-// -------------------- ColorScheme --------------------
+// -------------------- Color Schemes --------------------
 internal val armLightColorScheme: ColorScheme = lightColorScheme(
     primary = md_theme_light_primary,
     onPrimary = md_theme_light_onPrimary,
@@ -78,7 +72,6 @@ internal val armLightColorScheme: ColorScheme = lightColorScheme(
     onTertiaryFixed = md_theme_light_onTertiaryFixed,
     onTertiaryFixedVariant = md_theme_light_onTertiaryFixedVariant,
 )
-
 
 internal val armDarkColorScheme: ColorScheme = darkColorScheme(
     primary = md_theme_dark_primary,
@@ -141,38 +134,25 @@ internal val armDarkColorScheme: ColorScheme = darkColorScheme(
 )
 
 @Composable
-fun LlamaTheme(
-    colorThemeMode: ColorThemeMode,
-    darkThemeMode: DarkThemeMode,
-    content: @Composable () -> Unit
-) {
-    val context = LocalContext.current
-
-    val darkTheme = when (darkThemeMode) {
+fun isDarkTheme(darkThemeMode: DarkThemeMode) =
+    when (darkThemeMode) {
         DarkThemeMode.AUTO -> isSystemInDarkTheme()
         DarkThemeMode.LIGHT -> false
         DarkThemeMode.DARK -> true
     }
+
+@Composable
+fun LlamaTheme(
+    colorThemeMode: ColorThemeMode,
+    isDarkTheme: Boolean,
+    content: @Composable () -> Unit
+) {
+    val context = LocalContext.current
     val colorScheme = when(colorThemeMode) {
-        ColorThemeMode.ARM -> if (darkTheme) armDarkColorScheme else armLightColorScheme
+        ColorThemeMode.ARM ->
+            if (isDarkTheme) armDarkColorScheme else armLightColorScheme
         ColorThemeMode.MATERIAL ->
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    }
-
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        val systemUiController = rememberSystemUiController()
-        SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-
-            // Set status bar and navigation bar colors
-            systemUiController.setSystemBarsColor(
-                color = colorScheme.background,
-                darkIcons = !darkTheme
-            )
-        }
+            if (isDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     }
 
     MaterialTheme(

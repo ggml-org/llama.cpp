@@ -66,9 +66,6 @@ dependencies {
     implementation(libs.bundles.hilt)
     implementation(libs.bundles.retrofit)
 
-    // Individual dependencies
-    implementation(libs.accompanist.systemuicontroller)
-
     // Subproject
     implementation(project(":lib"))
 

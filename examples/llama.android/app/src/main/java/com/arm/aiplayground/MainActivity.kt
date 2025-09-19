@@ -5,8 +5,10 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -18,6 +20,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -49,6 +52,9 @@ import com.arm.aiplayground.ui.screens.ModelLoadingScreen
 import com.arm.aiplayground.ui.screens.ModelsScreen
 import com.arm.aiplayground.ui.screens.SettingsGeneralScreen
 import com.arm.aiplayground.ui.theme.LlamaTheme
+import com.arm.aiplayground.ui.theme.isDarkTheme
+import com.arm.aiplayground.ui.theme.md_theme_dark_scrim
+import com.arm.aiplayground.ui.theme.md_theme_light_scrim
 import com.arm.aiplayground.viewmodel.BenchmarkViewModel
 import com.arm.aiplayground.viewmodel.ConversationViewModel
 import com.arm.aiplayground.viewmodel.MainViewModel
@@ -70,7 +76,22 @@ class MainActivity : ComponentActivity() {
             val colorThemeMode by settingsViewModel.colorThemeMode.collectAsState()
             val darkThemeMode by settingsViewModel.darkThemeMode.collectAsState()
 
-            LlamaTheme(colorThemeMode = colorThemeMode, darkThemeMode = darkThemeMode) {
+            val isDarkTheme = isDarkTheme(darkThemeMode)
+            LlamaTheme(colorThemeMode = colorThemeMode, isDarkTheme = isDarkTheme) {
+                DisposableEffect(darkThemeMode) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.auto(
+                            android.graphics.Color.TRANSPARENT,
+                            android.graphics.Color.TRANSPARENT,
+                        ) { isDarkTheme },
+                        navigationBarStyle = SystemBarStyle.auto(
+                            md_theme_light_scrim.value.toInt(),
+                            md_theme_dark_scrim.value.toInt(),
+                        ) { isDarkTheme },
+                    )
+                    onDispose {}
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
