@@ -2,89 +2,58 @@
 
 [
   {
-    "SHADER_SUFFIX": "f32_norm",
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NORM", "ROTATE"]
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "ROTATE"]
   },
   {
-    "SHADER_SUFFIX": "f32_norm_inplace",
+    "SHADER_SUFFIX": "f32_inplace",
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "NORM", "ROTATE_INPLACE"]
+    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "ROTATE_INPLACE"]
   },
   {
-    "SHADER_SUFFIX": "f16_norm",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NORM", "ROTATE"]
+    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "ROTATE"]
   },
   {
-    "SHADER_SUFFIX": "f16_norm_inplace",
+    "SHADER_SUFFIX": "f16_inplace",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "NORM", "ROTATE_INPLACE"]
+    "DECLS": ["NO_FF_BINDINGS_INPLACE", "NO_FF_FUNC", "ROTATE_INPLACE"]
   },
   {
-   "SHADER_SUFFIX": "f32_norm_ff",
+   "SHADER_SUFFIX": "f32_ff",
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NORM", "ROTATE"]
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "ROTATE"]
   },
   {
-   "SHADER_SUFFIX": "f32_norm_ff_inplace",
+   "SHADER_SUFFIX": "f32_ff_inplace",
     "REPLS": {
       "TYPE" : "f32",
     },
-    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "NORM", "ROTATE_INPLACE"]
+    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "ROTATE_INPLACE"]
   },
   {
-    "SHADER_SUFFIX": "f16_norm_ff",
+    "SHADER_SUFFIX": "f16_ff",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NORM", "ROTATE"]
+    "DECLS": ["FF_BINDINGS", "FF_FUNC", "ROTATE"]
   },
   {
-    "SHADER_SUFFIX": "f16_norm_ff_inplace",
+    "SHADER_SUFFIX": "f16_ff_inplace",
     "REPLS": {
       "TYPE" : "f16",
     },
-    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "NORM", "ROTATE_INPLACE"]
-  },
-
-  {
-    "SHADER_SUFFIX": "f32_neox",
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NEOX", "ROTATE"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_neox",
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["NO_FF_BINDINGS", "NO_FF_FUNC", "NEOX", "ROTATE"]
-  },
-  {
-   "SHADER_SUFFIX": "f32_neox_ff",
-    "REPLS": {
-      "TYPE" : "f32",
-    },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NEOX", "ROTATE"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_neox_ff",
-    "REPLS": {
-      "TYPE" : "f16",
-    },
-    "DECLS": ["FF_BINDINGS", "FF_FUNC", "NEOX", "ROTATE"]
+    "DECLS": ["FF_BINDINGS_INPLACE", "FF_FUNC", "ROTATE_INPLACE"]
   }
 ]
 
@@ -93,16 +62,16 @@
 #define(DECLS)
 
 #decl(ROTATE)
-fn rotate(i_dst: u32, out0: f32, out1: f32) {
-    dst[i_dst] = {{TYPE}}(out0);
-    dst[i_dst + pair_offset()] = {{TYPE}}(out1);
+fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
+    dst[i_dst0] = {{TYPE}}(out0);
+    dst[i_dst1] = {{TYPE}}(out1);
 }
 #enddecl(ROTATE)
 
 #decl(ROTATE_INPLACE)
-fn rotate(i_dst: u32, out0: f32, out1: f32) {
-    src0[i_dst] = {{TYPE}}(out0);
-    src0[i_dst + pair_offset()] = {{TYPE}}(out1);
+fn rotate(i_dst0: u32, i_dst1: u32, out0: f32, out1: f32) {
+    src0[i_dst0] = {{TYPE}}(out0);
+    src0[i_dst1] = {{TYPE}}(out1);
 }
 #enddecl(ROTATE_INPLACE)
 
@@ -158,18 +127,6 @@ var<uniform> params: Params;
 
 #enddecl(FF_BINDINGS_INPLACE)
 
-#decl(NORM)
-fn pair_offset() -> u32 {
-    return 1;
-}
-#enddecl(NORM)
-
-#decl(NEOX)
-fn pair_offset() -> u32 {
-    return params.n_dims / 2;
-}
-#enddecl(NEOX)
-
 #end(DECLS)
 
 #define(SHADER)
@@ -196,11 +153,13 @@ struct Params {
     ne2: u32,
 
     n_dims: u32,
+    mode: u32,
     theta_scale: f32,
     attn_factor: f32,
     freq_scale: f32,
     ext_factor: f32,
-    corr_dims: vec2f
+    corr_dim0: f32,
+    corr_dim1: f32
 };
 
 
@@ -223,11 +182,27 @@ fn rope_yarn(theta_extrap: f32, i: u32) -> vec2<f32> {
     var mscale = params.attn_factor;
     var theta = params.freq_scale * theta_extrap;
     if (params.ext_factor != 0.0f) {
-        let ramp_mix = rope_yarn_ramp(params.corr_dims.x, params.corr_dims.y, i) * params.ext_factor;
+        let ramp_mix = rope_yarn_ramp(params.corr_dim0, params.corr_dim1, i) * params.ext_factor;
         theta = theta * (1 - ramp_mix) + theta_extrap * ramp_mix;
         mscale *= 1.0f + 0.1f * log(1.0f / params.freq_scale);
     }
     return vec2<f32>(cos(theta) * mscale, sin(theta) * mscale);
+}
+
+fn pair_base(i0: u32) -> u32 {
+    switch (params.mode) {
+        case 0 { return i0; } // norm
+        case 2 { return i0 / 2; } // neox
+        default { return 1; }
+    }
+}
+
+fn pair_offset() -> u32 {
+    switch (params.mode) {
+        case 0 { return 1; } // norm
+        case 2 { return params.n_dims / 2; } // neox
+        default { return 1; }
+    }
 }
 
 override wg_size: u32;
@@ -246,20 +221,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i1 = i / params.ne0;
     let i0 = i % params.ne0;
 
-    let i_src = params.offset_src0 + i3 * params.stride_src03 + i2 * params.stride_src02 + i1 * params.stride_src01 + i0;
-    let i_dst = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1 + i0;
+    let i_src_row = params.offset_src0 + i3 * params.stride_src03 + i2 * params.stride_src02 + i1 * params.stride_src01;
+    let i_dst_row = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
 
     if (i0 >= params.n_dims) {
-        rotate(i_dst, f32(src0[i_src]), f32(src0[i_src + 1]));
+        rotate(i_dst_row + i0, i_dst_row + i0 + 1, f32(src0[i_src_row + i0]), f32(src0[i_src_row + i0 + 1]));
         return;
     }
 
     let theta_base = f32(src1[params.offset_src1 + i2]) * pow(params.theta_scale, f32(i0)/2.0f);
     let thetas = rope_yarn(theta_base/freq_factor(i0), i0);
 
+    let i_src = i_src_row + pair_base(i0);
+    let i_dst = i_dst_row + pair_base(i0);
+
     let x0 = f32(src0[i_src]);
     let x1 = f32(src0[i_src + pair_offset()]);
-    rotate(i_dst, x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
+    rotate(i_dst, i_dst + pair_offset(), x0 * thetas.x - x1 * thetas.y, x0 * thetas.y + x1 * thetas.x);
 }
 
 #end(SHADER)
