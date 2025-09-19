@@ -236,13 +236,13 @@ struct gguf_bytes_reader {
 gguf_bytes_reader::~gguf_bytes_reader() {}
 
 struct gguf_bytes_buffer_reader : public gguf_bytes_reader {
-    gguf_bytes_buffer_reader(std::basic_streambuf<uint8_t> & streambuf) : streambuf(streambuf), offset(0) {}
+    gguf_bytes_buffer_reader(std::basic_streambuf<char> & streambuf) : streambuf(streambuf), offset(0) {}
 
     ~gguf_bytes_buffer_reader() {}
 
     size_t read(void * buffer, size_t size, size_t count) override {
         size_t total_size = size * count;
-        auto   bytes_read = streambuf.sgetn(static_cast<uint8_t *>(buffer), total_size);
+        auto   bytes_read = streambuf.sgetn(static_cast<char*>(buffer), total_size);
         offset += bytes_read;
         return bytes_read;
     }
@@ -260,8 +260,8 @@ struct gguf_bytes_buffer_reader : public gguf_bytes_reader {
     }
 
   private:
-    std::basic_streambuf<uint8_t> & streambuf;
-    size_t                          offset;
+    std::basic_streambuf<char> & streambuf;
+    size_t                       offset;
 };
 
 struct gguf_bytes_file_reader : public gguf_bytes_reader {
@@ -815,7 +815,7 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     return result;
 }
 
-struct gguf_context * gguf_init_from_buffer(std::basic_streambuf<uint8_t> & streambuf, struct gguf_init_params params) {
+struct gguf_context * gguf_init_from_buffer(std::basic_streambuf<char> & streambuf, struct gguf_init_params params) {
     gguf_bytes_buffer_reader bytes_reader(streambuf);
     gguf_reader              reader(bytes_reader);
     return gguf_init_from_reader_impl(reader, params);

@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
-#include "uint8-buff-stream.h"
 #include <future>
 #include <string>
 #include <map>
@@ -54,7 +53,9 @@ private:
 };
 
 template <bool Writable> struct llama_file_buffer : public llama_file {
-    llama_file_buffer(std::unique_ptr<std::basic_streambuf<uint8_t>> && streambuf);
+    /// @note Use char for the streambuf because not all platforms support uint8_t specialization (e.g. MacOS or newer NDKs)
+    ///       from C++17 there are guarantees that make safe to access binary data from char
+    llama_file_buffer(std::unique_ptr<std::basic_streambuf<char>> && streambuf);
 
     ~llama_file_buffer() override;
 
@@ -75,7 +76,7 @@ template <bool Writable> struct llama_file_buffer : public llama_file {
     /// @throw std::runtime_error if the buffer is read-only
     void write_u32(uint32_t val) const override;
 
-    std::unique_ptr<std::basic_streambuf<uint8_t>> streambuf;
+    std::unique_ptr<std::basic_streambuf<char>> streambuf;
 };
 
 template <bool Writable> struct llama_future_file_buffer {

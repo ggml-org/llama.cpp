@@ -47,13 +47,13 @@ std::vector<uint8_t> load_file_into_buffer(const char * const model_path) {
     return buffer;
 }
 
-std::unique_ptr<std::basic_streambuf<uint8_t>> load_file_into_streambuf(const char * const model_path) {
+std::unique_ptr<std::basic_streambuf<char>> load_file_into_streambuf(const char * const model_path) {
     return std::make_unique<Uint8BufferStreamBuf>(load_file_into_buffer(model_path));
 }
 
 struct file_entry {
     std::string                                    path;
-    std::unique_ptr<std::basic_streambuf<uint8_t>> streambuf;
+    std::unique_ptr<std::basic_streambuf<char>>    streambuf;
 };
 
 std::vector<file_entry> load_files_into_streambuf(const char * const model_path) {
