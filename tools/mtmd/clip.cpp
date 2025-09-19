@@ -919,112 +919,6 @@ struct clip_graph {
         return gf;
     }
 
-    ggml_cgraph * build_minicpmv_embedding() {
-        GGML_ASSERT(model.class_embedding == nullptr);
-        const int n_pos = n_patches;
-
-        // for selecting learned pos embd, used by ViT
-        struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
-        ggml_set_name(positions, "positions");
-        ggml_set_input(positions);
-
-        ggml_tensor * learned_pos_embd = ggml_get_rows(ctx0, model.position_embeddings, positions);
-
-        ggml_tensor * inp = build_inp();
-        if (learned_pos_embd) {
-            inp = ggml_add(ctx0, inp, learned_pos_embd);
-            cb(inp, "pos_embed", -1);
-        }
-        ggml_tensor * embeddings = inp;
-
-        // pre-layernorm
-        if (model.pre_ln_w) {
-            embeddings = ggml_norm(ctx0, embeddings, eps);
-            ggml_set_name(embeddings, "pre_ln");
-            embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.pre_ln_w), model.pre_ln_b);
-        }
-
-        ggml_build_forward_expand(gf, embeddings);
-        return gf;
-    }
-
-    ggml_cgraph * build_minicpmv_resampler() {
-        const int batch_size = 1;
-
-        GGML_ASSERT(model.class_embedding == nullptr);
-        const int n_pos = n_patches;
-
-        const int image_size_width  = img.nx;
-        const int image_size_height = img.ny;
-        const int patch_size    = hparams.patch_size;
-        const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
-
-        // position embeddings for the projector (not for ViT)
-        int n_output_dim = clip_n_mmproj_embd(ctx);
-        ggml_tensor * pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_output_dim, n_pos, batch_size);
-        ggml_set_name(pos_embed, "pos_embed");
-        ggml_set_input(pos_embed);
-
-        struct ggml_tensor * embeddings = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1152, num_patches);
-        ggml_set_name(embeddings, "embeddings");
-        ggml_set_input(embeddings);
-
-        // resampler projector (it is just another transformer)
-
-        ggml_tensor * q = model.mm_model_query;
-        ggml_tensor * v = ggml_mul_mat(ctx0, model.mm_model_kv_proj, embeddings);
-
-        // norm
-        q = build_norm(q, model.mm_model_ln_q_w, model.mm_model_ln_q_b, NORM_TYPE_NORMAL, eps, -1);
-        v = build_norm(v, model.mm_model_ln_kv_w, model.mm_model_ln_kv_b, NORM_TYPE_NORMAL, eps, -1);
-
-        // k = v + pos_embed
-        ggml_tensor * k = ggml_add(ctx0, v, pos_embed);
-
-        // attention
-        {
-            int n_embd = clip_n_mmproj_embd(ctx);
-            const int d_head = 128;
-            int n_head = n_embd/d_head;
-            // Use actual config value if available, otherwise fall back to hardcoded values
-            int num_query = ctx->model.hparams.minicpmv_query_num;
-
-            ggml_tensor * Q = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, model.mm_model_attn_q_w, q),
-                model.mm_model_attn_q_b);
-            ggml_tensor * K = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, model.mm_model_attn_k_w, k),
-                model.mm_model_attn_k_b);
-            ggml_tensor * V = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, model.mm_model_attn_v_w, v),
-                model.mm_model_attn_v_b);
-
-            Q = ggml_reshape_3d(ctx0, Q, d_head, n_head, num_query);
-            K = ggml_reshape_3d(ctx0, K, d_head, n_head, n_pos);
-            V = ggml_reshape_3d(ctx0, V, d_head, n_head, n_pos);
-
-            cb(Q, "resampler_Q", -1);
-            cb(K, "resampler_K", -1);
-            cb(V, "resampler_V", -1);
-
-            embeddings = build_attn(
-                model.mm_model_attn_o_w,
-                model.mm_model_attn_o_b,
-                Q, K, V, nullptr, kq_scale, -1);
-            cb(embeddings, "resampler_attn_out", -1);
-        }
-        // layernorm
-        embeddings = build_norm(embeddings, model.mm_model_ln_post_w, model.mm_model_ln_post_b, NORM_TYPE_NORMAL, eps, -1);
-
-        // projection
-        embeddings = ggml_mul_mat(ctx0, model.mm_model_proj, embeddings);
-
-        // build the graph
-        ggml_build_forward_expand(gf, embeddings);
-
-        return gf;
-    }
-
     ggml_cgraph * build_internvl() {
         GGML_ASSERT(model.class_embedding != nullptr);
         GGML_ASSERT(model.position_embeddings != nullptr);
@@ -3371,10 +3265,9 @@ struct llava_uhd {
         const int original_width  = original_size.width;
         const int original_height = original_size.height;
 
-        bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
+        const bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
         const bool has_pinpoints = !ctx->model.hparams.image_res_candidates.empty();
 
-        // has_slices = false;
         if (!has_slices) {
             // skip slicing logic
             res.overview_size = clip_image_size{slice_size, slice_size};
