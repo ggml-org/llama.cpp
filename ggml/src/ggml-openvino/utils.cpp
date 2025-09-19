@@ -86,6 +86,11 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         };
     }
 
+    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+        std::string filename = "cgraph.txt";
+        GgmlOvDecoder::dump_cgraph(cgraph, filename);
+    }
+
     if (is_naive(cgraph)) {
         return naive_compute(cgraph, core, device, config);
     }

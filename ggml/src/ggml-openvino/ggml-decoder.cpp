@@ -65,11 +65,6 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
         print_tensor_address_map(cgraph);
     }
 
-    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-        std::string filename = "cgraph.txt";
-        dump_cgraph(cgraph, filename);
-    }
-
     set_llm_params();
 
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
@@ -83,11 +78,6 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
                              std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
-    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-        std::string filename = "cgraph.txt";
-        dump_cgraph(cgraph, filename);
-    }
-
     m_cgraph = cgraph;
     m_model_weights = model_weights;
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
