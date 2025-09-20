@@ -34,13 +34,16 @@
 
 std::mutex lock;
 std::vector<std::pair<std::string, std::string>> shader_fnames;
+std::locale c_locale("C");
 
 std::string GLSLC = "glslc";
 std::string input_dir = "vulkan-shaders";
 std::string output_dir = "/tmp";
 std::string target_hpp = "ggml-vulkan-shaders.hpp";
 std::string target_cpp = "ggml-vulkan-shaders.cpp";
+std::string target_cmake = "";
 bool no_clean = false;
+bool no_embed = false;
 
 const std::vector<std::string> type_names = {
     "f32",
@@ -232,14 +235,75 @@ std::string basename(const std::string &path) {
     return path.substr(path.find_last_of("/\\") + 1);
 }
 
+std::stringstream make_generic_stringstream() {
+    std::stringstream ss;
+    ss.imbue(c_locale);
+    return ss;
+}
+
+struct compile_command {
+    std::string name;
+    std::string input_filepath;
+    std::string output_filepath;
+    std::vector<std::string> flags;
+};
+
+// Code for writing a CMake build file
+
+std::stringstream cmake_lists;
+
+struct cmake_escape { const std::string& str; };
+std::ostream& operator<<(std::ostream& os, const cmake_escape& to_escape) {
+    for (char c : to_escape.str) {
+        if (c == '"' || c == '\\') {
+            os << '\\';
+        }
+        os << c;
+    }
+    return os;
+}
+
+void cmake_add_header() {
+    cmake_lists = make_generic_stringstream();
+    cmake_lists << "cmake_minimum_required(VERSION 3.14)\n";
+    cmake_lists << "project(ggml-vulkan-shaders)\n\n";
+    cmake_lists << "set(GLSLC \"" << GLSLC << "\")\n\n";
+    cmake_lists << "function(compile_shader name in_file out_file flags)\n";
+    cmake_lists << "  add_custom_command(\n";
+    cmake_lists << "    OUTPUT ${out_file}\n";
+    cmake_lists << "    COMMAND ${GLSLC} ${flags} ${ARGN} -MD -MF ${out_file}.d ${in_file} -o ${out_file}\n";
+    cmake_lists << "    DEPENDS ${in_file}\n";
+    cmake_lists << "    DEPFILE ${out_file}.d\n";
+    cmake_lists << "    COMMENT \"Building Vulkan shader ${name}.spv\"\n";
+    cmake_lists << "  )\n";
+    cmake_lists << "endfunction()\n\n";
+}
+
+void cmake_add_build_command(const compile_command& cmd) {
+    cmake_lists << "compile_shader(" << cmd.name << " \"" << cmd.input_filepath  << "\" \"" << cmd.output_filepath << "\" ";
+    for (const std::string& flag : cmd.flags) {
+        cmake_lists << "\"" << cmake_escape{flag} << "\" ";
+    }
+    cmake_lists << ")\n";
+    shader_fnames.push_back(std::make_pair(cmd.name, cmd.output_filepath));
+}
+
+void cmake_add_target() {
+    cmake_lists << "\nadd_custom_target(ggml-vulkan-shaders ALL DEPENDS\n";
+    for (const auto& pair : shader_fnames) {
+        cmake_lists << "  \"" << pair.second << "\"\n";
+    }
+    cmake_lists << ")\n";
+}
+
 // variables to track number of compiles in progress
 static uint32_t compile_count = 0;
 static std::mutex compile_count_mutex;
 static std::condition_variable compile_count_cond;
 
-void string_to_spv_func(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+compile_command create_compile_command(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16, bool coopmat, bool coopmat2, bool f16acc) {
     std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
-    std::string out_fname = join_paths(output_dir, name + ".spv");
+    std::string out_path = join_paths(output_dir, name + ".spv");
     std::string in_path = join_paths(input_dir, in_fname);
 
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
@@ -248,25 +312,20 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     std::string opt_level = (coopmat || name.find("bf16") != std::string::npos) ? "" : "-O";
 
-    #ifdef _WIN32
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, "\"" + in_path + "\"", "-o", "\"" + out_fname + "\""};
-    #else
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_fname};
-    #endif
+    std::vector<std::string> flags = {"-fshader-stage=compute", target_env, opt_level};
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
-        cmd.push_back("-g");
+        flags.push_back("-g");
     #endif
 
     for (const auto& define : defines) {
-        cmd.push_back("-D" + define.first + "=" + define.second);
+        flags.push_back("-D" + define.first + "=" + define.second);
     }
 
-    std::string command;
-    for (const auto& part : cmd) {
-        command += part + " ";
-    }
+    return {std::move(name), std::move(in_path), std::move(out_path), std::move(flags)};
+}
 
+void execute_compile_command(compile_command cmd) {
     std::string stdout_str, stderr_str;
     try {
         // std::cout << "Executing command: ";
@@ -275,16 +334,27 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
         // }
         // std::cout << std::endl;
 
+        std::string flags_str;
+        for (const auto& part : cmd.flags) {
+            flags_str += part + " ";
+        }
+
+        #ifdef _WIN32
+            std::string command = GLSLC + " " + flags_str + " \"" + cmd.input_filepath + "\" -o \"" + cmd.output_filepath + "\"";
+        #else
+            std::string command = GLSLC + " " + flags_str + " " + cmd.input_filepath + " -o " + cmd.output_filepath;
+        #endif
         execute_command(command, stdout_str, stderr_str);
+
         if (!stderr_str.empty()) {
-            std::cerr << "cannot compile " << name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
+            std::cerr << "cannot compile " << cmd.name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
             return;
         }
 
         std::lock_guard<std::mutex> guard(lock);
-        shader_fnames.push_back(std::make_pair(name, out_fname));
+        shader_fnames.push_back(std::make_pair(cmd.name, cmd.output_filepath));
     } catch (const std::exception& e) {
-        std::cerr << "Error executing command for " << name << ": " << e.what() << std::endl;
+        std::cerr << "Error executing command for " << cmd.name << ": " << e.what() << std::endl;
     }
     {
         std::lock_guard<std::mutex> guard(compile_count_mutex);
@@ -302,6 +372,12 @@ std::map<std::string, std::string> merge_maps(const std::map<std::string, std::s
 
 static std::vector<std::future<void>> compiles;
 void string_to_spv(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+    compile_command cmd = create_compile_command(_name, in_fname, defines, fp16, coopmat, coopmat2, f16acc);
+
+    if (!target_cmake.empty()) {
+        cmake_add_build_command(cmd);
+        return;
+    }
     {
         // wait until fewer than N compiles are in progress.
         // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
@@ -312,7 +388,7 @@ void string_to_spv(const std::string& _name, const std::string& in_fname, const 
         }
         compile_count++;
     }
-    compiles.push_back(std::async(string_to_spv_func, _name, in_fname, defines, fp16, coopmat, coopmat2, f16acc));
+    compiles.push_back(std::async(execute_compile_command, std::move(cmd)));
 }
 
 void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool coopmat2, bool f16acc) {
@@ -821,12 +897,68 @@ void process_shaders() {
     }
 }
 
-void write_output_files() {
-    FILE* hdr = fopen(target_hpp.c_str(), "w");
-    FILE* src = fopen(target_cpp.c_str(), "w");
+std::vector<unsigned char> read_binary_file(const std::string& path, bool may_not_exist = false) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) {
+        if (!may_not_exist) {
+            std::cerr << "Error opening file: " << path << " (" << strerror(errno) << ")\n";
+        }
+        return {};
+    }
 
-    fprintf(hdr, "#include <cstdint>\n\n");
-    fprintf(src, "#include \"%s\"\n\n", basename(target_hpp).c_str());
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    std::vector<unsigned char> data(size);
+    size_t read_size = fread(data.data(), 1, size, f);
+    fclose(f);
+    if (read_size != size) {
+        std::cerr << "Error reading file: " << path << " (" << strerror(errno) << ")\n";
+        return {};
+    }
+
+    return data;
+}
+
+void write_binary_file(const std::string& path, const unsigned char * data, size_t size) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) {
+        std::cerr << "Error opening file for writing: " << path << " (" << strerror(errno) << ")\n";
+        return;
+    }
+
+    size_t write_size = fwrite(data, 1, size, f);
+    fclose(f);
+    if (write_size != size) {
+        std::cerr << "Error writing file: " << path << " (" << strerror(errno) << ")\n";
+        return;
+    }
+}
+
+void write_binary_file(const std::string& path, const std::string& content) {
+    write_binary_file(path, (const unsigned char *)content.data(), content.size());
+}
+
+void write_file_if_changed(const std::string& path, const std::string& content) {
+    std::vector<unsigned char> existing = read_binary_file(path, true);
+    if (existing.size() != content.size() || memcmp(existing.data(), content.data(), content.size()) != 0) {
+        write_binary_file(path, content);
+    }
+}
+
+void write_output_files() {
+    std::stringstream hdr = make_generic_stringstream();
+    std::stringstream src = make_generic_stringstream();
+
+    hdr << "#include <cstdint>\n\n";
+    src << "#include \"" << basename(target_hpp).c_str() << "\"\n\n";
+
+    if (no_embed) {
+        std::string shader_dir = output_dir;
+        std::replace(shader_dir.begin(), shader_dir.end(), '\\', '/' );
+        hdr << "#define GGML_VK_SHADER_DIR \"" << shader_dir << "\"\n\n";
+    }
 
     std::sort(shader_fnames.begin(), shader_fnames.end());
     for (const auto& pair : shader_fnames) {
@@ -838,91 +970,86 @@ void write_output_files() {
             const std::string& path = pair.second;
         #endif
 
-        FILE* spv = fopen(path.c_str(), "rb");
-        if (!spv) {
-            std::cerr << "Error opening SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
-            continue;
-        }
+        if (no_embed) {
+            hdr << "inline constexpr char const * " << name << "_data = \"" << basename(path) << "\";\n";
+            hdr << "const uint64_t " << name << "_len = 0;\n\n";
+        } else {
+            std::vector<unsigned char> data = read_binary_file(path);
+            if (data.empty()) {
+                continue;
+            }
 
-        fseek(spv, 0, SEEK_END);
-        size_t size = ftell(spv);
-        fseek(spv, 0, SEEK_SET);
+            hdr << "extern const unsigned char " << name << "_data[" << data.size() << "];\n";
+            hdr << "const uint64_t " << name << "_len = " << data.size() << ";\n\n";
 
-        std::vector<unsigned char> data(size);
-        size_t read_size = fread(data.data(), 1, size, spv);
-        fclose(spv);
-        if (read_size != size) {
-            std::cerr << "Error reading SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
-            continue;
-        }
+            src << "const unsigned char " << name << "_data[" << data.size() << "] = {\n" << std::hex;
+            for (size_t i = 0; i < data.size(); ++i) {
+                src << "0x" << static_cast<int>(data[i]) << ",";
+                if ((i + 1) % 12 == 0) src << "\n";
+            }
+            src << std::dec << "\n};\n\n";
 
-        fprintf(hdr, "extern unsigned char %s_data[%zu];\n", name.c_str(), size);
-        fprintf(hdr, "const uint64_t %s_len = %zu;\n\n", name.c_str(), size);
-
-        fprintf(src, "unsigned char %s_data[%zu] = {\n", name.c_str(), size);
-        for (size_t i = 0; i < size; ++i) {
-            fprintf(src, "0x%02x,", data[i]);
-            if ((i + 1) % 12 == 0) fprintf(src, "\n");
-        }
-        fprintf(src, "\n};\n\n");
-
-        if (!no_clean) {
-            std::remove(path.c_str());
+            if (!no_clean) {
+                std::remove(path.c_str());
+            }
         }
     }
 
     std::string suffixes[2] = {"_f32", "_f16"};
     for (const char *op : {"add", "sub", "mul", "div", "add_rms"}) {
-        fprintf(hdr, "extern unsigned char *%s_data[2][2][2][2];\n", op);
-        fprintf(hdr, "extern uint64_t %s_len[2][2][2][2];\n", op);
-        std::string data = "unsigned char *" + std::string(op) + "_data[2][2][2][2] = ";
-        std::string len = "uint64_t " + std::string(op) + "_len[2][2][2][2] = ";
+        hdr << "extern const void * " << op << "_data[2][2][2][2];\n";
+        hdr << "extern const uint64_t " << op << "_len[2][2][2][2];\n";
+
+        std::stringstream data = make_generic_stringstream();
+        std::stringstream len  = make_generic_stringstream();
+        data << "const void * " << op << "_data[2][2][2][2] = ";
+        len  << "const uint64_t " << op << "_len[2][2][2][2] = ";
         for (uint32_t t0 = 0; t0 < 2; ++t0) {
             if (t0 == 0) {
-                data += "{";
-                len += "{";
+                data << "{";
+                len  << "{";
             }
             for (uint32_t t1 = 0; t1 < 2; ++t1) {
                 if (t1 == 0) {
-                    data += "{";
-                    len += "{";
+                    data << "{";
+                    len  << "{";
                 }
                 for (uint32_t t2 = 0; t2 < 2; ++t2) {
                     if (t2 == 0) {
-                        data += "{";
-                        len += "{";
+                        data << "{";
+                        len  << "{";
                     }
                     for (uint32_t rte = 0; rte < 2; ++rte) {
                         if (rte == 0) {
-                            data += "{";
-                            len += "{";
+                            data << "{";
+                            len  << "{";
                         }
-                        data += op + suffixes[t0] + suffixes[t1] + suffixes[t2] + ((rte != 0) ? "_rte" : "");
-                        len  += op + suffixes[t0] + suffixes[t1] + suffixes[t2] + ((rte != 0) ? "_rte" : "");
-                        data += "_data,";
-                        len  += "_len,";
+                        data << op << suffixes[t0] << suffixes[t1] << suffixes[t2] << ((rte != 0) ? "_rte" : "");
+                        len  << op << suffixes[t0] << suffixes[t1] << suffixes[t2] << ((rte != 0) ? "_rte" : "");
+                        data << "_data,";
+                        len  << "_len,";
                         if (rte == 1) {
-                            data += "}, ";
-                            len += "}, ";
+                            data << "}, ";
+                            len  << "}, ";
                         }
                     }
                     if (t2 == 1) {
-                        data += "}, ";
-                        len += "}, ";
+                        data << "}, ";
+                        len  << "}, ";
                     }
                 }
                 if (t1 == 1) {
-                    data += "}, ";
-                    len += "}, ";
+                    data << "}, ";
+                    len  << "}, ";
                 }
             }
             if (t0 == 1) {
-                data += "};\n";
-                len += "};\n";
+                data << "};\n";
+                len  << "};\n";
             }
         }
-        fputs(data.c_str(), src);
-        fputs(len.c_str(), src);
+        src << data.str();
+        src << len.str();
     }
 
     std::vector<std::string> btypes = {"f16", "f32"};
@@ -936,19 +1063,26 @@ void write_output_files() {
         if (btype == "q8_1" && !is_legacy_quant(tname)) {
             continue;
         }
-        fprintf(hdr, "extern unsigned char *arr_dmmv_%s_%s_f32_data[3];\n", tname.c_str(), btype.c_str());
-        fprintf(hdr, "extern uint64_t arr_dmmv_%s_%s_f32_len[3];\n", tname.c_str(), btype.c_str());
-        std::string data = "unsigned char *arr_dmmv_" + tname + "_" + btype + "_f32_data[3] = {mul_mat_vec_" + tname + "_" + btype + "_f32_data, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_data, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_no_shmem_data};\n";
-        std::string len =  "uint64_t arr_dmmv_"       + tname + "_" + btype + "_f32_len[3] =  {mul_mat_vec_" + tname + "_" + btype + "_f32_len,  mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_len, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_no_shmem_len};\n";
-        fputs(data.c_str(), src);
-        fputs(len.c_str(), src);
+        hdr << "extern const void * arr_dmmv_"   << tname << "_" << btype << "_f32_data[3];\n";
+        hdr << "extern const uint64_t arr_dmmv_" << tname << "_" << btype << "_f32_len[3];\n";
+        src << "const void * arr_dmmv_"   << tname << "_" << btype << "_f32_data[3] = {mul_mat_vec_" << tname << "_" << btype << "_f32_data, mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_data, mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_no_shmem_data};\n";
+        src << "const uint64_t arr_dmmv_" << tname << "_" << btype << "_f32_len[3] =  {mul_mat_vec_" << tname << "_" << btype << "_f32_len,  mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_len, mul_mat_vec_"  << tname << "_" << btype << "_f32_subgroup_no_shmem_len};\n";
     }
     }
 
-    fclose(hdr);
-    fclose(src);
+    write_file_if_changed(target_hpp, hdr.str());
+    if (no_embed) {
+        write_file_if_changed(target_cpp, src.str());
+    } else {
+        write_binary_file(target_cpp, src.str());
+    }
+    if (!target_cmake.empty()) {
+        cmake_add_target();
+        write_file_if_changed(target_cmake, cmake_lists.str());
+    }
 }
-}
+
+} // namespace
 
 int main(int argc, char** argv) {
     std::map<std::string, std::string> args;
@@ -981,6 +1115,13 @@ int main(int argc, char** argv) {
     }
     if (args.find("--no-clean") != args.end()) {
         no_clean = true; // Keep temporary SPIR-V files in output-dir after build
+    }
+    if (args.find("--no-embed") != args.end()) {
+        no_embed = true; // Do not embed SPIR-V binaries into C++ source files, only write stubs to header
+    }
+    if (args.find("--cmake") != args.end()) {
+        target_cmake = args["--cmake"]; // Write a CMakeLists.txt file instead of invoking glslc directly
+        cmake_add_header();
     }
 
     if (!directory_exists(input_dir)) {
