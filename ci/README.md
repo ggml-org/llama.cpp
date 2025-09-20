@@ -1,8 +1,10 @@
 # CI
 
-This CI implements heavy workflows that are running on self-hosted runners with various hardware configurations.
+This CI implements heavy-duty workflows that run on self-hosted runners. Typically the purpose of these workflows is to
+cover hardware configurations that are not available from Github-hosted runners and/or require more computational
+resource than normally available.
 
-It is a good practice, before publishing changes to execute the full CI locally on your machine:
+It is a good practice, before publishing changes to execute the full CI locally on your machine. For example:
 
 ```bash
 mkdir tmp
@@ -19,40 +21,13 @@ GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
 # with MUSA support
 GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+# etc.
 ```
 
-## Running MUSA CI in a Docker Container
+# Adding self-hosted runners
 
-Assuming `$PWD` is the root of the `llama.cpp` repository, follow these steps to set up and run MUSA CI in a Docker container:
-
-### 1. Create a local directory to store cached models, configuration files and venv:
-
-```bash
-mkdir -p $HOME/llama.cpp/ci-cache
-```
-
-### 2. Create a local directory to store CI run results:
-
-```bash
-mkdir -p $HOME/llama.cpp/ci-results
-```
-
-### 3. Start a Docker container and run the CI:
-
-```bash
-docker run --privileged -it \
-    -v $HOME/llama.cpp/ci-cache:/ci-cache \
-    -v $HOME/llama.cpp/ci-results:/ci-results \
-    -v $PWD:/ws -w /ws \
-    mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
-```
-
-Inside the container, execute the following commands:
-
-```bash
-apt update -y && apt install -y bc cmake ccache git python3.10-venv time unzip wget
-git config --global --add safe.directory /ws
-GG_BUILD_MUSA=1 bash ./ci/run.sh /ci-results /ci-cache
-```
-
-This setup ensures that the CI runs within an isolated Docker environment while maintaining cached files and results across runs.
+- Add a self-hosted `ggml-ci` workflow to [[.github/workflows/build.yml]] with an appropriate label
+- Request a runner token from `ggml-org` (for example, via a comment in the PR or email)
+- Set-up a machine using the received token ([docs](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners))
+- Optionally update [ci/run.sh](https://github.com/ggml-org/llama.cpp/blob/master/ci/run.sh) to build and run on the target platform by gating the implementation with a `GG_BUILD_...` env
