@@ -31,10 +31,10 @@
 #include "types.comp"
 
 #ifndef LOAD_VEC_A
-#define LOAD_VEC_A 1
+#define LOAD_VEC_A 2
 #endif
 #ifndef LOAD_VEC_B
-#define LOAD_VEC_B 1
+#define LOAD_VEC_B 2
 #endif
 
 #if !defined(TO_FLOAT_TYPE)
@@ -98,13 +98,13 @@ layout (constant_id = 9) const uint TK = 1;  // Only needed for coopmat
 layout (constant_id = 10) const uint WARP = 32;
 
 #ifdef COOPMAT
-#define SHMEM_STRIDE (BK + 8)
+#define SHMEM_STRIDE (BK / 2 + 4)
 #else
-#define SHMEM_STRIDE (BK + 1)
+#define SHMEM_STRIDE (BK / 2 + 1)
 #endif
 
-shared FLOAT_TYPE buf_a[BM * SHMEM_STRIDE];
-shared FLOAT_TYPE buf_b[BN * SHMEM_STRIDE];
+shared FLOAT_TYPE_VEC2 buf_a[BM * SHMEM_STRIDE];
+shared FLOAT_TYPE_VEC2 buf_b[BN * SHMEM_STRIDE];
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
 
@@ -302,8 +302,8 @@ void main() {
     }
 #else
     ACC_TYPE sums[WMITER * TM * WNITER * TN];
-    FLOAT_TYPE cache_a[WMITER * TM];
-    FLOAT_TYPE cache_b[TN];
+    FLOAT_TYPE_VEC2 cache_a[WMITER * TM];
+    FLOAT_TYPE_VEC2 cache_b[TN];
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
         sums[i] = ACC_TYPE(0.0f);
@@ -312,13 +312,13 @@ void main() {
 
     for (uint block = start_k; block < end_k; block += BK) {
         [[unroll]] for (uint l = 0; l < BM; l += loadstride_a) {
-            load_a_to_shmem(pos_a, loadr_a, loadc_a + l, ir * BM + loadc_a + l, block + loadr_a, end_k);
+            load_a_to_shmem(pos_a, loadr_a, loadc_a + l, ir * BM + loadc_a + l, block, end_k);
         }
         [[unroll]] for (uint l = 0; l < BN; l += loadstride_b) {
 #if !defined(MUL_MAT_ID)
-            load_b_to_shmem(pos_b, loadr_b, loadc_b + l, ic * BN + loadc_b + l, block + loadr_b, end_k);
+            load_b_to_shmem(pos_b, loadr_b, loadc_b + l, ic * BN + loadc_b + l, block, end_k);
 #else
-            load_b_to_shmem(pos_b, loadr_b, loadc_b + l, ic, _ne1, block + loadr_b, end_k);
+            load_b_to_shmem(pos_b, loadr_b, loadc_b + l, ic, _ne1, block, end_k);
 #endif
         }
 
@@ -331,17 +331,17 @@ void main() {
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
-                coopMatLoad(cache_a, buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(cache_a, buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
 
                 [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
-                    coopMatLoad(cache_b, buf_b, (warp_c * WN + cm_col * TN) * SHMEM_STRIDE + i, SHMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+                    coopMatLoad(cache_b, buf_b, (warp_c * WN + cm_col * TN) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
 
                     sums[cm_col * cms_per_row + cm_row] = coopMatMulAdd(cache_a, cache_b, sums[cm_col * cms_per_row + cm_row]);
                 }
             }
         }
 #else
-        [[unroll]] for (uint i = 0; i < BK; i++) {
+        [[unroll]] for (uint i = 0; i < BK / 2; i++) {
             // Load from shared into cache
             [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                 [[unroll]] for (uint j = 0; j < TM; j++) {
@@ -357,7 +357,7 @@ void main() {
                     [[unroll]] for (uint cc = 0; cc < TN; cc++) {
                         [[unroll]] for (uint cr = 0; cr < TM; cr++) {
                             const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
-                            sums[sums_idx] = fma(ACC_TYPE(cache_a[wsir * TM + cr]), ACC_TYPE(cache_b[cc]), sums[sums_idx]);
+                            sums[sums_idx] = fma(ACC_TYPE(cache_a[wsir * TM + cr].x), ACC_TYPE(cache_b[cc].x), fma(ACC_TYPE(cache_a[wsir * TM + cr].y), ACC_TYPE(cache_b[cc].y), sums[sums_idx]));
                         }
                     }
                 }
