@@ -4679,17 +4679,17 @@ int main(int argc, char ** argv) {
                     json res_json = result->to_json();
                     if (res_json.is_array()) {
                         for (const auto & res : res_json) {
-                            if (!server_sent_event(sink, "data", res)) {
+                            if (!server_sent_event(sink, res)) {
                                 // sending failed (HTTP connection closed), cancel the generation
                                 return false;
                             }
                         }
                         return true;
                     } else {
-                        return server_sent_event(sink, "data", res_json);
+                        return server_sent_event(sink, res_json);
                     }
                 }, [&](const json & error_data) {
-                    server_sent_event(sink, "error", error_data);
+                    server_sent_event(sink, json{{"error", error_data}});
                 }, [&sink]() {
                     // note: do not use req.is_connection_closed here because req is already destroyed
                     return !sink.is_writable();
