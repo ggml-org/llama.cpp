@@ -571,7 +571,7 @@ struct clip_graph {
         ggml_set_input(pos_w);
 
         auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-            return build_rope_2d(ctx0, cur, pos_h, pos_w, hparams.rope_theta, true);
+            return build_rope_2d(gf, ctx0, cur, pos_h, pos_w, hparams.rope_theta, true);
         };
 
         ggml_tensor * inp = build_inp();
@@ -1013,7 +1013,7 @@ struct clip_graph {
             // first half is X axis and second half is Y axis
             // ref: https://github.com/huggingface/transformers/blob/40a493c7ed4f19f08eadb0639cf26d49bfa5e180/src/transformers/models/llama4/modeling_llama4.py#L1312
             // ref: https://github.com/Blaizzy/mlx-vlm/blob/a57156aa87b33cca6e5ee6cfc14dd4ef8f611be6/mlx_vlm/models/llama4/vision.py#L441
-            return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+            return build_rope_2d(gf, ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
         };
         ggml_tensor * cur = build_vit(
                                 inp, n_pos,
@@ -1088,7 +1088,7 @@ struct clip_graph {
         // build ViT with 2D position embeddings
         auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
             // first half is X axis and second half is Y axis
-            return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+            return build_rope_2d(gf, ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
         };
 
         ggml_tensor * inp = build_inp();
@@ -1975,9 +1975,8 @@ private:
     }
 
     // implementation of the 2D RoPE without adding a new op in ggml
-    // this is not efficient (use double the memory), but works on all backends
-    // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
     static ggml_tensor * build_rope_2d(
+        ggml_cgraph * gf,
         ggml_context * ctx0,
         ggml_tensor * cur,
         ggml_tensor * pos_a, // first half
@@ -2002,16 +2001,10 @@ private:
                                     : 1.0;
 
         // first half
-        ggml_tensor * first;
         {
-            first = ggml_view_3d(ctx0, cur,
-                n_dim/2, n_head, n_pos,
-                ggml_row_size(cur->type, n_dim),
-                ggml_row_size(cur->type, n_dim*n_head),
-                0);
-            first = ggml_rope_ext(
+            cur = ggml_rope_ext(
                 ctx0,
-                first,
+                cur,
                 pos_a,      // positions
                 nullptr,    // freq factors
                 n_dim/2,    // n_dims
@@ -2028,7 +2021,8 @@ private:
                 ggml_row_size(cur->type, n_dim),
                 ggml_row_size(cur->type, n_dim*n_head),
                 n_dim/2 * ggml_element_size(cur));
-            second = ggml_rope_ext(
+            // "second" tensor should be on the same backend as ggml_rope_ext(), therefore we can use inplace version
+            second = ggml_rope_ext_inplace(
                 ctx0,
                 second,
                 pos_b,      // positions
@@ -2038,9 +2032,9 @@ private:
                 freq_scale_odd,
                 0.0f, 1.0f, 0.0f, 0.0f
             );
+            ggml_build_forward_expand(gf, second);
         }
 
-        cur = ggml_concat(ctx0, first, second, 0);
         return cur;
     }
 
