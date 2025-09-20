@@ -131,6 +131,7 @@ static std::string fs_get_cache_directory() {
 }
 
 struct rpc_server_params {
+    bool        verbose     = false;
     std::string host        = "127.0.0.1";
     int         port        = 50052;
     size_t      backend_mem = 0;
@@ -143,12 +144,13 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h, --help                show this help message and exit\n");
-    fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
-    fprintf(stderr, "  -d DEV,  --device         device to use\n");
-    fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
-    fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
-    fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
-    fprintf(stderr, "  -c,      --cache          enable local file cache\n");
+    fprintf(stderr, "  -v, --verbose             increase verbosity level\n");
+    fprintf(stderr, "  -t, --threads N           number of threads for the CPU backend (default: %d)\n", params.n_threads);
+    fprintf(stderr, "  -d, --device DEV          device to use\n");
+    fprintf(stderr, "  -H, --host HOST           host to bind to (default: %s)\n", params.host.c_str());
+    fprintf(stderr, "  -p, --port PORT           port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -m, --mem MEM             backend memory size (in MB)\n");
+    fprintf(stderr, "  -c, --cache               enable local file cache\n");
     fprintf(stderr, "\n");
 }
 
@@ -156,7 +158,9 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
     std::string arg;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
-        if (arg == "-H" || arg == "--host") {
+        if (arg == "-v" || arg == "--verbose") {
+            params.verbose = true;
+        } else if (arg == "-H" || arg == "--host") {
             if (++i >= argc) {
                 return false;
             }
@@ -262,6 +266,14 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "Invalid parameters\n");
         return 1;
     }
+
+    ggml_log_set([](enum ggml_log_level level, const char * text, void * user_data) {
+        auto verbose = *static_cast<bool *>(user_data);
+        if (verbose || level >= GGML_LOG_LEVEL_INFO) {
+            fputs(text, stderr);
+            fflush(stderr);
+        }
+    }, &params.verbose);
 
     if (params.host != "127.0.0.1") {
         fprintf(stderr, "\n");
