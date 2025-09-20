@@ -2060,6 +2060,7 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
+    llama_memory_breakdown_print(ctx);
 
     llama_backend_free();
 
