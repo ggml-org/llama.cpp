@@ -6,6 +6,7 @@
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
+		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
 		ConfirmationDialog
@@ -319,6 +320,8 @@
 {:else if isServerLoading}
 	<!-- Server Loading State -->
 	<ServerLoadingSplash />
+{:else if serverStore.error}
+	<ServerErrorSplash error={serverStore.error} />
 {:else if serverStore.modelName}
 	<div
 		aria-label="Welcome screen with file drop zone"

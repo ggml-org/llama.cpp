@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
@@ -34,11 +35,50 @@ import { config } from '$lib/stores/settings.svelte';
  * - Slots endpoint availability (for processing state monitoring)
  * - Context window size and token limits
  */
+const SERVER_PROPS_STORAGE_KEY = 'llama.cpp.serverProps';
+
 class ServerStore {
+	constructor() {
+		if (!browser) return;
+
+		const cachedProps = this.readCachedServerProps();
+		if (cachedProps) {
+			this._serverProps = cachedProps;
+		}
+	}
+
 	private _serverProps = $state<ApiLlamaCppServerProps | null>(null);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _slotsEndpointAvailable = $state<boolean | null>(null);
+
+	private readCachedServerProps(): ApiLlamaCppServerProps | null {
+		if (!browser) return null;
+
+		try {
+			const raw = localStorage.getItem(SERVER_PROPS_STORAGE_KEY);
+			if (!raw) return null;
+
+			return JSON.parse(raw) as ApiLlamaCppServerProps;
+		} catch (error) {
+			console.warn('Failed to read cached server props from localStorage:', error);
+			return null;
+		}
+	}
+
+	private persistServerProps(props: ApiLlamaCppServerProps | null): void {
+		if (!browser) return;
+
+		try {
+			if (props) {
+				localStorage.setItem(SERVER_PROPS_STORAGE_KEY, JSON.stringify(props));
+			} else {
+				localStorage.removeItem(SERVER_PROPS_STORAGE_KEY);
+			}
+		} catch (error) {
+			console.warn('Failed to persist server props to localStorage:', error);
+		}
+	}
 
 	get serverProps(): ApiLlamaCppServerProps | null {
 		return this._serverProps;
@@ -128,11 +168,13 @@ class ServerStore {
 			console.log('Fetching server properties...');
 			const props = await ChatService.getServerProps();
 			this._serverProps = props;
+			this.persistServerProps(props);
 			console.log('Server properties loaded:', props);
 
 			// Check slots endpoint availability after server props are loaded
 			await this.checkSlotsEndpointAvailability();
 		} catch (error) {
+			const hadCachedProps = this._serverProps !== null;
 			let errorMessage = 'Failed to connect to server';
 
 			if (error instanceof Error) {
@@ -145,6 +187,8 @@ class ServerStore {
 					errorMessage = 'Server not found - check server address';
 				} else if (error.message.includes('ETIMEDOUT')) {
 					errorMessage = 'Connection timeout - server may be overloaded';
+				} else if (error.message.includes('503')) {
+					errorMessage = 'Server temporarily unavailable - try again shortly';
 				} else if (error.message.includes('500')) {
 					errorMessage = 'Server error - check server logs';
 				} else if (error.message.includes('404')) {
@@ -154,7 +198,25 @@ class ServerStore {
 				}
 			}
 
-			this._error = errorMessage;
+			if (!hadCachedProps) {
+				const cachedProps = this.readCachedServerProps();
+				if (cachedProps) {
+					this._serverProps = cachedProps;
+					this._error = null;
+					console.warn(
+						'Failed to refresh server properties, using cached values from localStorage:',
+						errorMessage
+					);
+				} else {
+					this._error = errorMessage;
+				}
+			} else {
+				this._error = null;
+				console.warn(
+					'Failed to refresh server properties, continuing with cached values:',
+					errorMessage
+				);
+			}
 			console.error('Error fetching server properties:', error);
 		} finally {
 			this._loading = false;
@@ -169,6 +231,7 @@ class ServerStore {
 		this._error = null;
 		this._loading = false;
 		this._slotsEndpointAvailable = null;
+		this.persistServerProps(null);
 	}
 }
 
