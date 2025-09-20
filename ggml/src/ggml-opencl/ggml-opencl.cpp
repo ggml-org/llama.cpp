@@ -407,6 +407,10 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_scales_trans;
     ggml_cl_buffer prealloc_act_trans;
 
+    // prealloc buffers for src0 and src1
+    ggml_cl_buffer prealloc_src0;
+    ggml_cl_buffer prealloc_src1;
+
     cl_program program_add;
     cl_program program_add_id;
     cl_program program_clamp;
@@ -4690,6 +4694,81 @@ static bool ggml_cl_can_mul_mat(const struct ggml_tensor * src0, const struct gg
             (ne0 >= 32 && ne1 >= 32 && ne10 >= 32);
 }
 
+// Copy a noncontiguous tensor to contiguous tensor. ne[] remains the same but
+// nb[] is recalculated such that tensor is contiguous.
+static void ggml_cl_copy_to_contiguous(ggml_backend_t backend, const ggml_tensor * src, cl_mem dst,
+                                       cl_ulong &nb0, cl_ulong &nb1, cl_ulong &nb2, cl_ulong &nb3) {
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    const int tensor_type_size = ggml_type_size(src->type);
+
+    const int ne00 = src->ne[0];
+    const int ne01 = src->ne[1];
+    const int ne02 = src->ne[2];
+    const int ne03 = src->ne[3];
+
+    const cl_ulong nb00 = src->nb[0];
+    const cl_ulong nb01 = src->nb[1];
+    const cl_ulong nb02 = src->nb[2];
+    const cl_ulong nb03 = src->nb[3];
+
+    const int ne0 = src->ne[0];
+    const int ne1 = src->ne[1];
+    const int ne2 = src->ne[2];
+    const int ne3 = src->ne[3];
+
+    nb0 = tensor_type_size;
+    nb1 = tensor_type_size*ne00;
+    nb2 = tensor_type_size*ne00*ne01;
+    nb3 = tensor_type_size*ne00*ne01*ne02;
+
+    ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *)src->extra;
+
+    cl_ulong offset0 = extra->offset + src->view_offs;
+    cl_ulong offsetd = 0;
+
+    cl_kernel kernel;
+
+    switch (src->type) {
+        case GGML_TYPE_F32:
+            kernel = backend_ctx->kernel_cpy_f32_f32;
+            break;
+        case GGML_TYPE_F16:
+            kernel = backend_ctx->kernel_cpy_f16_f16;
+            break;
+        default:
+            GGML_ASSERT(false && "not implemented");
+    }
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &dst));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne03));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne1));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne2));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne3));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb0));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb3));
+
+    const int nth = MIN(64, ne00);
+
+    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
+    size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, src);
+}
+
 static void ggml_cl_nop(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     UNUSED(backend);
     UNUSED(src0);
@@ -7630,20 +7709,20 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     const int  ne02 = src0 ? src0->ne[2] : 0;
     const int  ne03 = src0 ? src0->ne[3] : 0;
 
-    const cl_ulong nb00 = src0 ? src0->nb[0] : 0;
-    const cl_ulong nb01 = src0 ? src0->nb[1] : 0;
-    const cl_ulong nb02 = src0 ? src0->nb[2] : 0;
-    const cl_ulong nb03 = src0 ? src0->nb[3] : 0;
+    cl_ulong nb00 = src0 ? src0->nb[0] : 0;
+    cl_ulong nb01 = src0 ? src0->nb[1] : 0;
+    cl_ulong nb02 = src0 ? src0->nb[2] : 0;
+    cl_ulong nb03 = src0 ? src0->nb[3] : 0;
 
     const int  ne10 = src1 ? src1->ne[0] : 0;
     const int  ne11 = src1 ? src1->ne[1] : 0;
     const int  ne12 = src1 ? src1->ne[2] : 0;
     const int  ne13 = src1 ? src1->ne[3] : 0;
 
-    const cl_ulong nb10 = src1 ? src1->nb[0] : 0;
-    const cl_ulong nb11 = src1 ? src1->nb[1] : 0;
-    const cl_ulong nb12 = src1 ? src1->nb[2] : 0;
-    const cl_ulong nb13 = src1 ? src1->nb[3] : 0;
+    cl_ulong nb10 = src1 ? src1->nb[0] : 0;
+    cl_ulong nb11 = src1 ? src1->nb[1] : 0;
+    cl_ulong nb12 = src1 ? src1->nb[2] : 0;
+    cl_ulong nb13 = src1 ? src1->nb[3] : 0;
 
     const int  ne0 = dst ? dst->ne[0] : 0;
     const int  ne1 = dst ? dst->ne[1] : 0;
@@ -7984,11 +8063,28 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
     // GEMM using local memory
     // Current BK = 16, so ne00 % 16 == 0
-    if (ggml_is_contiguous(src0) &&
-        ggml_is_contiguous(src1) &&
-        src1t == GGML_TYPE_F32 &&
+    if (src1t == GGML_TYPE_F32 &&
         ne00 % 16 == 0 &&
         ne11 > 1) {
+        cl_mem mem_src0 = extra0->data_device;
+        cl_mem mem_src1 = extra1->data_device;
+
+        if (!ggml_is_contiguous(src0)) {
+            backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
+            ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
+                nb00, nb01, nb02, nb03);
+            mem_src0 = backend_ctx->prealloc_src0.buffer;
+            offset0 = 0;
+        }
+
+        if (!ggml_is_contiguous(src1)) {
+            backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
+            ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
+                    nb10, nb11, nb12, nb13);
+            mem_src1 = backend_ctx->prealloc_src1.buffer;
+            offset1 = 0;
+        }
+
         switch(src0t) {
             case GGML_TYPE_F32: {
                 kernel = backend_ctx->kernel_mul_mm_f32_f32_l4_lm;
@@ -7998,9 +8094,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 int batch_stride_b = ne10*ne11;
                 int batch_stride_d = ne0*ne1;
 
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
                 CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
                 CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
                 CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
                 CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
@@ -8033,9 +8129,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 int batch_stride_b = ne10*ne11;
                 int batch_stride_d = ne0*ne1;
 
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
                 CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
                 CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
                 CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
                 CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
