@@ -459,9 +459,9 @@ static std::string tokens_to_output_formatted_string(const llama_context * ctx, 
     return out;
 }
 
-static bool server_sent_event(httplib::DataSink & sink, const char * event, const json & data) {
+static bool server_sent_event(httplib::DataSink & sink, const json & data) {
     const std::string str =
-        std::string(event) + ": " +
+        "data: " +
         data.dump(-1, ' ', false, json::error_handler_t::replace) +
         "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
