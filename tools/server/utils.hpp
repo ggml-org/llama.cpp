@@ -1368,34 +1368,6 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
-
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
-static server_tokens format_rerank(const struct llama_vocab * vocab, server_tokens & query, server_tokens & doc) {
-    server_tokens result = {};
-
-    // Get EOS token - use SEP token as fallback if EOS is not available
-    llama_token eos_token = llama_vocab_eos(vocab);
-    if (eos_token == LLAMA_TOKEN_NULL) {
-        eos_token = llama_vocab_sep(vocab);
-    }
-    if (llama_vocab_get_add_bos(vocab)) {
-        result.push_back(llama_vocab_bos(vocab));
-    }
-    result.push_back(query);
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-    if (llama_vocab_get_add_sep(vocab)) {
-        result.push_back(llama_vocab_sep(vocab));
-    }
-    result.push_back(doc);
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-    return result;
-}
-
-
 static server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
     mtmd::bitmaps bitmaps;
     for (auto & file : files) {
@@ -1499,5 +1471,45 @@ static std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * voc
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
     }
+    return result;
+}
+
+// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+static server_tokens format_rerank(const struct llama_model * model, const struct llama_vocab * vocab, mtmd_context * mctx, const std::string & query, const std::string & doc) {
+    server_tokens result = {};
+
+    const char * rerank_prompt = llama_model_chat_template(model, "rerank");
+
+    if (rerank_prompt != nullptr) {
+        std::string prompt = rerank_prompt;
+        string_replace_all(prompt, "{query}"   , query);
+        string_replace_all(prompt, "{document}", doc  );
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        result.push_back(tokens);
+    } else {
+        // Get EOS token - use SEP token as fallback if EOS is not available
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        llama_token eos_token = llama_vocab_eos(vocab);
+        if (eos_token == LLAMA_TOKEN_NULL) {
+            eos_token = llama_vocab_sep(vocab);
+        }
+
+        if (llama_vocab_get_add_bos(vocab)) {
+            result.push_back(llama_vocab_bos(vocab));
+        }
+        result.push_back(query_tokens);
+        if (llama_vocab_get_add_eos(vocab)) {
+            result.push_back(eos_token);
+        }
+        if (llama_vocab_get_add_sep(vocab)) {
+            result.push_back(llama_vocab_sep(vocab));
+        }
+        result.push_back(doc_tokens);
+        if (llama_vocab_get_add_eos(vocab)) {
+            result.push_back(eos_token);
+        }
+    }
+
     return result;
 }
