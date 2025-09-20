@@ -127,12 +127,12 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  postPatch = ''
-    substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
-      --replace '[bundle pathForResource:@"ggml-metal" ofType:@"metal"];' "@\"$out/bin/ggml-metal.metal\";"
-    substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
-      --replace '[bundle pathForResource:@"default" ofType:@"metallib"];' "@\"$out/bin/default.metallib\";"
-  '';
+  # postPatch = ''
+  #   substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
+  #     --replace '[bundle pathForResource:@"ggml-metal" ofType:@"metal"];' "@\"$out/bin/ggml-metal.metal\";"
+  #   substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
+  #     --replace '[bundle pathForResource:@"default" ofType:@"metallib"];' "@\"$out/bin/default.metallib\";"
+  # '';
 
   # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
   # `default.metallib` may be compiled with Metal compiler from XCode
