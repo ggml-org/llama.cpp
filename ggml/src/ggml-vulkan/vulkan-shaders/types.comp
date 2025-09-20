@@ -11,12 +11,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE float
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE mat2x4
+#else
+#define A_TYPE float
 #endif
 #endif
 
@@ -24,12 +24,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE float16_t
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE f16vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE f16mat2x4
+#else
+#define A_TYPE float16_t
 #endif
 #endif
 
@@ -37,12 +37,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE uint16_t
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE u16vec4
 #elif LOAD_VEC_A == 8
 #error unsupported
+#else
+#define A_TYPE uint16_t
 #endif
 #endif
 
@@ -205,6 +205,18 @@ struct block_q8_1_packed32
 {
     f16vec2 ds;
     int32_t qs[8];
+};
+
+// 4 blocks in one to allow 16-byte/128-bit alignment and loads
+struct block_q8_1_x4
+{
+    f16vec2 ds[4];
+    int32_t qs[32];
+};
+struct block_q8_1_x4_packed128
+{
+    f16vec2 ds[4];
+    ivec4 qs[8];
 };
 
 // K-quants
@@ -1410,6 +1422,11 @@ uint32_t fp32_to_bf16(float f)
 float bf16_to_fp32(uint32_t u)
 {
     return uintBitsToFloat(u << 16);
+}
+
+vec4 bf16_to_fp32(uvec4 u)
+{
+    return vec4(bf16_to_fp32(u.x), bf16_to_fp32(u.y), bf16_to_fp32(u.z), bf16_to_fp32(u.w));
 }
 
 float e8m0_to_fp32(uint8_t x) {

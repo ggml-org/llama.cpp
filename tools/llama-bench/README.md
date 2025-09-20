@@ -30,8 +30,10 @@ options:
   --delay <0...N> (seconds)                 delay between each test (default: 0)
   -o, --output <csv|json|jsonl|md|sql>      output format printed to stdout (default: md)
   -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: none)
+  --list-devices                            list available devices and exit
   -v, --verbose                             verbose output
   --progress                                print test progress indicators
+  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)
 
 test parameters:
   -m, --model <filename>                    (default: models/7B/ggml-model-q4_0.gguf)
@@ -43,17 +45,17 @@ test parameters:
   -ub, --ubatch-size <n>                    (default: 512)
   -ctk, --cache-type-k <t>                  (default: f16)
   -ctv, --cache-type-v <t>                  (default: f16)
-  -dt, --defrag-thold <f>                   (default: -1)
   -t, --threads <n>                         (default: system dependent)
   -C, --cpu-mask <hex,hex>                  (default: 0x0)
   --cpu-strict <0|1>                        (default: 0)
   --poll <0...100>                          (default: 50)
   -ngl, --n-gpu-layers <n>                  (default: 99)
-  -rpc, --rpc <rpc_servers>                 (default: none)
+  -ncmoe, --n-cpu-moe <n>                   (default: 0)
   -sm, --split-mode <none|layer|row>        (default: layer)
   -mg, --main-gpu <i>                       (default: 0)
   -nkvo, --no-kv-offload <0|1>              (default: 0)
   -fa, --flash-attn <0|1>                   (default: 0)
+  -dev, --device <dev0/dev1/...>            (default: auto)
   -mmp, --mmap <0|1>                        (default: 1)
   -embd, --embeddings <0|1>                 (default: 0)
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)

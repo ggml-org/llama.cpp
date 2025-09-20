@@ -108,7 +108,8 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Determine tag name
@@ -528,11 +529,14 @@ jobs:
   windows-hip:
     runs-on: windows-2022
 
+    env:
+      HIPSDK_INSTALLER_VERSION: "25.Q3"
+
     strategy:
       matrix:
         include:
           - name: "radeon"
-            gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+            gpu_targets: "gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
@@ -542,29 +546,52 @@ jobs:
       - name: Clone rocWMMA repository
         id: clone_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+          git clone https://github.com/rocm/rocwmma --branch develop --depth 1
+
+      - name: Cache ROCm Installation
+        id: cache-rocm
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-hip-${{ matrix.name }}-x64
+          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
 
-      - name: Install
+      - name: Install ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
         id: depends
         run: |
           $ErrorActionPreference = "Stop"
           write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
           $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $proc.WaitForExit(600000)
+          $completed = $proc.WaitForExit(600000)
+          if (-not $completed) {
+              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
+              $proc.Kill()
+              exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
+              exit 1
+          }
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm
         id: verify
         run: |
-          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+          # Find and test ROCm installation
+          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
+          if (-not $clangPath) {
+            Write-Error "ROCm installation not found"
+            exit 1
+          }
+          & $clangPath.FullName --version
 
       - name: Build
         id: cmake_build
@@ -585,9 +612,12 @@ jobs:
             -DLLAMA_CURL=OFF
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
+          md "build\bin\hipblaslt\library"
           cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\hipblaslt.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
+          cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
 
       - name: Pack artifacts
         id: pack_artifacts

@@ -20,8 +20,8 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
     COMMAND ${CMAKE_COMMAND} -E env PYTHONIOENCODING=utf-8
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/wgsl-shaders/embed_wgsl.py
-            --input "${SHADER_DIR}"
-            --output "${SHADER_HEADER}"
+            --input_dir "${SHADER_DIR}"
+            --output_file "${SHADER_HEADER}"
     DEPENDS ${WGSL_SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/wgsl-shaders/embed_wgsl.py
     VERBATIM
 )

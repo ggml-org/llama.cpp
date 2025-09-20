@@ -795,6 +795,7 @@ static ggml_backend_i ggml_backend_rpc_interface = {
     /* .graph_compute           = */ ggml_backend_rpc_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint) {
