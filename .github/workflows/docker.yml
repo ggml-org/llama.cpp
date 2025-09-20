@@ -67,22 +67,19 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine tag name
+      - name: Determine source tag name
+        id: srctag
+        uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+      - name: Determine image tag name
         id: tag
         shell: bash
         run: |
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
           REPO_OWNER="${GITHUB_REPOSITORY_OWNER@L}"  # to lower case
           REPO_NAME="${{ github.event.repository.name }}"
 
-          # determine tag name postfix (build number, commit hash)
-          if [[ "${{ env.GITHUB_BRANCH_NAME }}" == "master" ]]; then
-            TAG_POSTFIX="-b${BUILD_NUMBER}"
-          else
-            SAFE_NAME=$(echo "${{ env.GITHUB_BRANCH_NAME }}" | tr '/' '-')
-            TAG_POSTFIX="-${SAFE_NAME}-${SHORT_HASH}"
-          fi
           # list all tags possible
           if [[ "${{ matrix.config.tag }}" == "cpu" ]]; then
               TYPE=""
@@ -90,9 +87,9 @@ jobs:
               TYPE="-${{ matrix.config.tag }}"
           fi
           PREFIX="ghcr.io/${REPO_OWNER}/${REPO_NAME}:"
-          FULLTAGS="${PREFIX}full${TYPE},${PREFIX}full${TYPE}${TAG_POSTFIX}"
-          LIGHTTAGS="${PREFIX}light${TYPE},${PREFIX}light${TYPE}${TAG_POSTFIX}"
-          SERVERTAGS="${PREFIX}server${TYPE},${PREFIX}server${TYPE}${TAG_POSTFIX}"
+          FULLTAGS="${PREFIX}full${TYPE},${PREFIX}full${TYPE}${{ steps.srctag.outputs.name }}"
+          LIGHTTAGS="${PREFIX}light${TYPE},${PREFIX}light${TYPE}${{ steps.srctag.outputs.name }}"
+          SERVERTAGS="${PREFIX}server${TYPE},${PREFIX}server${TYPE}${{ steps.srctag.outputs.name }}"
           echo "full_output_tags=$FULLTAGS" >> $GITHUB_OUTPUT
           echo "light_output_tags=$LIGHTTAGS" >> $GITHUB_OUTPUT
           echo "server_output_tags=$SERVERTAGS" >> $GITHUB_OUTPUT
@@ -100,7 +97,6 @@ jobs:
           echo "light_output_tags=$LIGHTTAGS"  # print out for debugging
           echo "server_output_tags=$SERVERTAGS"  # print out for debugging
         env:
-          GITHUB_BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
       - name: Free Disk Space (Ubuntu)
@@ -176,3 +172,27 @@ jobs:
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+
+  create_tag:
+    name: Create and push git tag
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine source tag name
+        id: srctag
+        uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }
+
+      - name: Create and push git tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag ${{ steps.srctag.outputs.name }} || exit 0
+          git push origin ${{ steps.srctag.outputs.name }} || exit 0
