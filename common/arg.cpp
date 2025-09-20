@@ -3042,6 +3042,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.port = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    add_opt(common_arg({ "--systemd" },
+                       string_format("use systemd socket and readiness notification (default: %s)",
+                                     params.use_systemd ? "enabled" : "disabled"),
+                       [](common_params & params) { params.use_systemd = true; })
+                .set_examples({ LLAMA_EXAMPLE_SERVER })
+                .set_env("LLAMA_ARG_SYSTEMD"));
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
     add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),

@@ -31,6 +31,12 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+#    include <sys/socket.h>
+#    include <sys/stat.h>
+#    include <systemd/sd-daemon.h>
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
@@ -4075,6 +4081,38 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+// Subclass of httplib::Server that adds systemd socket activation support on systems
+// where that's available.
+class SystemdServer : public httplib::Server {
+  public:
+    bool setup_sd_socket() {
+        int n = sd_listen_fds(0);
+        if (n != 1) {
+            LOG_ERR("%s: sd_listen_fds() returned %d\n", __func__, n);
+            return false;
+        }
+
+        int         fd = SD_LISTEN_FDS_START;
+        struct stat statbuf;
+        if (fstat(fd, &statbuf) == -1 || !S_ISSOCK(statbuf.st_mode)) {
+            LOG_ERR("%s: fstat() failed or fd is not a socket\n", __func__);
+            return false;
+        }
+
+        LOG_INF("%s: using systemd socket fd %d\n", __func__, fd);
+        svr_sock_ = fd;
+        return true;
+    }
+};
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+#    define NEW_SERVER (new SystemdServer())
+#else
+#    define NEW_SERVER (new httplib::Server())
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
 int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
@@ -4105,14 +4143,14 @@ int main(int argc, char ** argv) {
         );
     } else {
         LOG_INF("Running without SSL\n");
-        svr.reset(new httplib::Server());
+        svr.reset(NEW_SERVER);
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
         LOG_ERR("Server is built without SSL support\n");
         return 1;
     }
-    svr.reset(new httplib::Server());
+    svr.reset(NEW_SERVER);
 #endif
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
@@ -5323,24 +5361,38 @@ int main(int argc, char ** argv) {
     };
 
     bool was_bound = false;
-    bool is_sock = false;
-    if (string_ends_with(std::string(params.hostname), ".sock")) {
-        is_sock = true;
-        LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
-        svr->set_address_family(AF_UNIX);
-        // bind_to_port requires a second arg, any value other than 0 should
-        // simply get ignored
-        was_bound = svr->bind_to_port(params.hostname, 8080);
-    } else {
-        LOG_INF("%s: binding port with default address family\n", __func__);
-        // bind HTTP listen port
-        if (params.port == 0) {
-            int bound_port = svr->bind_to_any_port(params.hostname);
-            if ((was_bound = (bound_port >= 0))) {
-                params.port = bound_port;
-            }
+    bool is_sock   = false;
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    bool using_sd_socket = false;
+    if (params.use_systemd) {
+        was_bound       = static_cast<SystemdServer *>(svr.get())->setup_sd_socket();
+        using_sd_socket = was_bound;
+        if (!was_bound) {
+            LOG_INF("%s: couldn't set up systemd socket; falling back to opening host:port socket\n", __func__);
+        }
+    }
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
+    if (!was_bound) {
+        if (string_ends_with(std::string(params.hostname), ".sock")) {
+            is_sock = true;
+            LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
+            svr->set_address_family(AF_UNIX);
+            // bind_to_port requires a second arg, any value other than 0 should
+            // simply get ignored
+            was_bound = svr->bind_to_port(params.hostname, 8080);
         } else {
-            was_bound = svr->bind_to_port(params.hostname, params.port);
+            LOG_INF("%s: binding port with default address family\n", __func__);
+            // bind HTTP listen port
+            if (params.port == 0) {
+                int bound_port = svr->bind_to_any_port(params.hostname);
+                if ((was_bound = (bound_port >= 0))) {
+                    params.port = bound_port;
+                }
+            } else {
+                was_bound = svr->bind_to_port(params.hostname, params.port);
+            }
         }
     }
 
@@ -5368,6 +5420,12 @@ int main(int argc, char ** argv) {
 
     ctx_server.init();
     state.store(SERVER_STATE_READY);
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (params.use_systemd) {
+        sd_notify(0, "READY=1");
+    }
+#endif
 
     LOG_INF("%s: model loaded\n", __func__);
 
@@ -5403,9 +5461,17 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
-            is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
-                      string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (using_sd_socket) {
+        LOG_INF("%s: server is listening on systemd socket - starting the main loop\n", __func__);
+    } else {
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+        LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
+                is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
+                          string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    }
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
 
     // this call blocks the main thread until queue_tasks.terminate() is called
     ctx_server.queue_tasks.start_loop();
