@@ -185,11 +185,13 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
         // the last block represents memory still available in an existing chunk
         struct free_block * block = &alloc->free_blocks[alloc->n_free_blocks - 1];
         max_avail = MAX(max_avail, block->size);
-        best_fit_block = alloc->n_free_blocks - 1;
         if (block->size < size) {
             // not enough space in existing chunk, start the next one
-            ggml_dyn_tallocr_new_chunk(alloc, &alloc->free_blocks[best_fit_block], size);
+            GGML_ASSERT(alloc->n_free_blocks < MAX_FREE_BLOCKS && "out of free blocks");
+            ggml_dyn_tallocr_new_chunk(alloc, &alloc->free_blocks[alloc->n_free_blocks], size);
+            alloc->n_free_blocks++;
         }
+        best_fit_block = alloc->n_free_blocks - 1;
     }
 
     struct free_block * block = &alloc->free_blocks[best_fit_block];

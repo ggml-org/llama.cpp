@@ -319,6 +319,25 @@ static void test_tensor_larger_than_max_size() {
     GGML_ASSERT(backend.context->allocated_total() == 24);
 }
 
+// Fill up leftover unallocated space of a chunk after allocating a large tensor that
+// requires a new chunk.
+static void test_fill_leftover_space() {
+    dummy_backend backend      = dummy_backend_init(16);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[4];
+    x[0] = make_input_with_size(ctx, 8);
+    x[1] = ggml_pad(ctx, x[0], 2, 0, 0, 0);
+    x[3] = ggml_mean(ctx, x[1]);
+    assign_names(ctx);
+
+    ggml_gallocr_ptr galloc = allocate_graph(graph, x[3], &backend.buffer_type);
+    check_all_allocated(graph);
+    check_no_overlap(graph);
+    check_max_size(ctx);
+    GGML_ASSERT(backend.context->allocated_total() <= 12 + 16);
+}
+
 // Check that views don't require any extra memory
 static void test_view_inplace() {
     dummy_backend backend      = dummy_backend_init(32);
@@ -473,8 +492,8 @@ static void test_buffer_size_zero() {
 
     ggml_backend_buffer_type_t bufts[2] = { &backend_a.buffer_type, &backend_b.buffer_type };
     ggml_gallocr_ptr           galloc   = ggml_gallocr_ptr(ggml_gallocr_new_n(bufts, 2));
-    bool res1 = ggml_gallocr_reserve_n(galloc.get(), graph, node_buffer_ids, leaf_buffer_ids);
-    bool res2 = ggml_gallocr_alloc_graph(galloc.get(), graph);
+    bool                       res1     = ggml_gallocr_reserve_n(galloc.get(), graph, node_buffer_ids, leaf_buffer_ids);
+    bool                       res2     = ggml_gallocr_alloc_graph(galloc.get(), graph);
     GGML_ASSERT(res1 && res2);
 
     check_all_allocated(graph);
@@ -493,6 +512,7 @@ int main() {
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
+    run("test_fill_leftover_space", test_fill_leftover_space);
     run("test_view_inplace", test_view_inplace);
     run("test_reuse_and_free", test_reuse_and_free);
     run("test_merge_free_block(32)", []() { test_merge_free_block(32); });
