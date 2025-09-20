@@ -374,28 +374,16 @@ static size_t ggml_dyn_tallocr_max_size(struct ggml_dyn_tallocr * alloc) {
 // virtual buffer with contiguous memory range, split into multiple backend buffers (chunks)
 
 struct vbuffer {
-    ggml_backend_buffer_type_t buft;
     ggml_backend_buffer_t chunks[GGML_VBUFFER_MAX_CHUNKS];
 };
-
-static struct vbuffer * ggml_vbuffer_new(ggml_backend_buffer_type_t buft) {
-    struct vbuffer * buf = calloc(1, sizeof(struct vbuffer));
-    buf->buft = buft;
-    return buf;
-}
-
-static void ggml_vbuffer_free_chunks(struct vbuffer * buf) {
-    for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS; ++i) {
-        ggml_backend_buffer_free(buf->chunks[i]);
-        buf->chunks[i] = NULL;
-    }
-}
 
 static void ggml_vbuffer_free(struct vbuffer * buf) {
     if (buf == NULL) {
         return;
     }
-    ggml_vbuffer_free_chunks(buf);
+    for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS; ++i) {
+        ggml_backend_buffer_free(buf->chunks[i]);
+    }
     free(buf);
 }
 
@@ -413,17 +401,22 @@ static size_t ggml_vbuffer_size(struct vbuffer * buf) {
     return size;
 }
 
-static bool ggml_vbuffer_alloc(struct vbuffer * buf, const struct ggml_dyn_tallocr * talloc, enum ggml_backend_buffer_usage usage) {
+static struct vbuffer * ggml_vbuffer_alloc(ggml_backend_buffer_type_t buft, const struct ggml_dyn_tallocr * talloc, enum ggml_backend_buffer_usage usage) {
+    struct vbuffer * buf = (struct vbuffer *)calloc(1, sizeof(struct vbuffer));
+    if (buf == NULL) {
+        return NULL;
+    }
+
     for (int n = 0; n < talloc->n_chunks; n++) {
         size_t chunk_size = talloc->max_size[n];
-        buf->chunks[n] = ggml_backend_buft_alloc_buffer(buf->buft, chunk_size);
+        buf->chunks[n] = ggml_backend_buft_alloc_buffer(buft, chunk_size);
         if (buf->chunks[n] == NULL) {
-            ggml_vbuffer_free_chunks(buf);
-            return false;
+            ggml_vbuffer_free(buf);
+            return NULL;
         }
         ggml_backend_buffer_set_usage(buf->chunks[n], usage);
     }
-    return true;
+    return buf;
 }
 
 static void ggml_vbuffer_tensor_alloc(struct vbuffer * buf, struct ggml_tensor * tensor, struct buffer_address buf_addr) {
@@ -497,7 +490,7 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
 
     for (int i = 0; i < n_bufs; i++) {
         galloc->bufts[i] = bufts[i];
-        galloc->buffers[i] = ggml_vbuffer_new(bufts[i]);
+        galloc->buffers[i] = NULL;
 
         // check if the same buffer type is used multiple times and reuse the same allocator
         for (int j = 0; j < i; j++) {
@@ -862,17 +855,18 @@ bool ggml_gallocr_reserve_n(ggml_gallocr_t galloc, struct ggml_cgraph * graph, c
             }
         }
 
-        size_t cur_size = ggml_vbuffer_size(galloc->buffers[i]);
+        size_t cur_size = galloc->buffers[i] ? ggml_vbuffer_size(galloc->buffers[i]) : 0;
         size_t new_size = ggml_dyn_tallocr_max_size(galloc->buf_tallocs[i]);
 
         // even if there are no tensors allocated in this buffer, we still need to allocate it to initialize views
-        if (new_size > cur_size || ggml_vbuffer_n_chunks(galloc->buffers[i]) == 0) {
+        if (new_size > cur_size || galloc->buffers[i] == NULL) {
 #ifndef NDEBUG
             GGML_LOG_DEBUG("%s: reallocating %s buffer from size %.02f MiB to %.02f MiB\n", __func__, ggml_backend_buft_name(galloc->bufts[i]), cur_size / 1024.0 / 1024.0, new_size / 1024.0 / 1024.0);
 #endif
 
-            ggml_vbuffer_free_chunks(galloc->buffers[i]);
-            if (!ggml_vbuffer_alloc(galloc->buffers[i], galloc->buf_tallocs[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE)) {
+            ggml_vbuffer_free(galloc->buffers[i]);
+            galloc->buffers[i] = ggml_vbuffer_alloc(galloc->bufts[i], galloc->buf_tallocs[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+            if (galloc->buffers[i] == NULL) {
                 GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(galloc->bufts[i]), new_size);
                 return false;
             }
