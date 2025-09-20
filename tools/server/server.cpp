@@ -5251,6 +5251,35 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
+    const auto & do_load_model = [&ctx_server, &params, &state]() -> bool {
+        // load the model
+        LOG_INF("%s: loading model\n", __func__);
+
+        if (!ctx_server.load_model(params)) {
+            return false;
+        }
+
+        ctx_server.init();
+        state.store(SERVER_STATE_READY);
+
+        LOG_INF("%s: model loaded\n", __func__);
+        return true;
+    };
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (params.use_systemd) {
+        // When using systemd, load the model before starting to accept on the socket.
+        // This prevents a race condition where the client whose connection triggered
+        // this service's start will get 503 errors while the model loads.
+        if (!do_load_model()) {
+            LOG_ERR("%s: exiting due to model loading error\n", __func__);
+            ctx_server.queue_results.terminate();
+            llama_backend_free();
+            return 1;
+        }
+    }
+#endif
+
     //
     // Router
     //
@@ -5402,28 +5431,18 @@ int main(int argc, char ** argv) {
     } else {
         LOG_INF("%s: HTTP server is listening on systemd socket, http threads: %d\n", __func__, params.n_threads_http);
     }
-#endif
-
-    // load the model
-    LOG_INF("%s: loading model\n", __func__);
-
-    if (!ctx_server.load_model(params)) {
-        clean_up();
-        t.join();
-        LOG_ERR("%s: exiting due to model loading error\n", __func__);
-        return 1;
-    }
-
-    ctx_server.init();
-    state.store(SERVER_STATE_READY);
-
-#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
     if (params.use_systemd) {
         sd_notify(0, "READY=1");
     }
 #endif
 
-    LOG_INF("%s: model loaded\n", __func__);
+    if (state.load() != SERVER_STATE_READY) {
+        if (!do_load_model()) {
+            clean_up();
+            t.join();
+            return 1;
+        }
+    }
 
     // print sample chat example to make it clear which template is used
     LOG_INF("%s: chat template, chat_template: %s, example_format: '%s'\n", __func__,
