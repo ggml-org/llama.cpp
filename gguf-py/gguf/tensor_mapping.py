@@ -17,6 +17,7 @@ class TensorNameMap:
             "embed_tokens",                              # embeddinggemma
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
+            "embeddings.tok_embeddings",                 # modern bert
             "language_model.embedding.word_embeddings",  # persimmon
             "wte",                                       # gpt2
             "transformer.embd.wte",                      # phi2
@@ -46,6 +47,7 @@ class TensorNameMap:
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
+            "embeddings.norm",            # modern bert
             "emb_ln",                     # nomic-bert
             "transformer.norm",           # openelm
             "rwkv.blocks.0.pre_ln",       # rwkv
@@ -99,6 +101,7 @@ class TensorNameMap:
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
             "model.transformer.ln_f",                  # llada
+            "final_norm",                              # modern bert
         ),
 
         # Rope frequencies
@@ -145,9 +148,10 @@ class TensorNameMap:
             "model.layers.{bid}.input_layernorm",                   # llama4
             "layers.{bid}.input_layernorm",                         # embeddinggemma
             "transformer_encoder.{bid}.attention_norm",             # neobert
+            "layers.{bid}.attn_norm",                              # bert
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
-            "layers.{bid}.input_layernorm",                         # qwen3-embedding
+            "layers.{bid}.input_layernorm",                         # qwen3-embedding,
         ),
 
         # Attention norm 2
@@ -177,6 +181,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
+            "layers.{bid}.attn.Wqkv",                                              # modern bert
         ),
 
         # Attention query
@@ -250,6 +255,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
+            "layers.{bid}.attn.Wo",                                         # modern bert
             "transformer.layer.{bid}.attention.out_lin",                    # distillbert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
             "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
@@ -325,6 +331,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
+            "layers.{bid}.mlp_norm"                                          # modern bert
         ),
 
         # Post feed-forward norm
@@ -378,6 +385,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.up_proj",                               # embeddinggemma
             "layers.{bid}.feed_forward.w3",                           # llama-pth
             "encoder.layer.{bid}.intermediate.dense",                 # bert
+            "layers.{bid}.mlp.Wi",                                    # modern bert
             "transformer.layer.{bid}.ffn.lin1",                       # distillbert
             "transformer.h.{bid}.mlp.fc_in",                          # gpt-j
             "transformer.h.{bid}.mlp.linear_3",                       # refact
@@ -479,6 +487,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.down_proj",                             # embeddinggemma
             "layers.{bid}.feed_forward.w2",                           # llama-pth
             "encoder.layer.{bid}.output.dense",                       # bert
+            "layers.{bid}.mlp.Wo",                                    # modern bert
             "transformer.layer.{bid}.ffn.lin2",                       # distillbert
             "transformer.h.{bid}.mlp.fc_out",                         # gpt-j
             "language_model.encoder.layers.{bid}.mlp.dense_4h_to_h",  # persimmon
