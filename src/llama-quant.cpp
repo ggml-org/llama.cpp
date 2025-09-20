@@ -868,8 +868,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t row_idx = 0;
         double total_mse = 0.0;
         double total_proj = 0.0;
+        double total_bias = 0.0;
         for (int64_t slice = 0; slice < ne2; ++slice) {
-            const int64_t rs = sample_rows_per_slice[slice];
+            const int64_t rs = rows_sample[slice];
             if (rs == 0) { continue; }
 
             const float * values = has_values ? values_sample + slice * n_per_row : nullptr;
@@ -918,21 +919,24 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                     row_proj_norm.push_back(p_norm);
                 }
+
                 offset += (size_t)n_per_row;
             }
 
             // Trimmed sum to avoid outlier rows dominating the results
             auto trimmed_sum = [&](std::vector<double> & v) -> double {
                 if (v.empty()) { return 0.0; }
+
                 const int64_t n = (int64_t)v.size();
                 if (n < 50) {
                     double s = 0.0;
                     for (const double z : v) { s += z; }
+
                     return s;
                 }
 
-                int64_t k = (int64_t) std::floor(0.02 * (double)n); // trim 2% on each side
-                k = std::max<int64_t>(0, std::min<int64_t>(k, n / 32)); // but not more than 3.125%
+                int64_t k = (int64_t)std::floor(0.02 * (double)n); // trim 2% each side
+                k = std::max<int64_t>(0, std::min<int64_t>(k, n / 32)); // cap at ~3.125%
                 std::nth_element(v.begin(), v.begin() + k, v.end());
                 std::nth_element(v.begin() + k, v.begin() + (n - k), v.end());
                 double s = 0.0;
@@ -944,11 +948,17 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             };
 
             const double scale_rows = (double)nrows / std::max(1.0, (double)rs);
+            const double slice_mse = trimmed_sum(row_mse_norm) * scale_rows;
+            const double slice_proj = activations ? trimmed_sum(row_proj_norm) * scale_rows : 0.0;
 
-            total_mse += trimmed_sum(row_mse_norm) * scale_rows;
-            if (activations) { total_proj += trimmed_sum(row_proj_norm) * scale_rows; }
+            total_mse += slice_mse;
+            total_proj += slice_proj;
 
-            if (!std::isfinite(total_mse) || !std::isfinite(total_proj)) {
+            // per-slice lambda if provided, otherwise use scalar
+            const double bl = slice_bias_lambda ? (double)std::max(0.0f, slice_bias_lambda[slice]) : (double)tensor_bias_lambda;
+            total_bias += bl * slice_proj;
+
+            if (!std::isfinite(total_mse) || !std::isfinite(total_proj) || !std::isfinite(total_bias)) {
                 if (out_mse) { *out_mse = infinity; }
                 if (out_proj) { *out_proj = 0.0; }
 
@@ -959,100 +969,42 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (out_mse) { *out_mse = total_mse; }
         if (out_proj) { *out_proj = total_proj; }
 
-        const double total_err = total_mse + bias_lambda * total_proj;
+        const double total_err = slice_bias_lambda ? total_mse + total_bias : total_mse + tensor_bias_lambda * total_proj;
+
         return std::isfinite(total_err) ? total_err : infinity;
     };
 
-    // Higher precision but longer to compute
-    auto precise_lambda = [&](const ggml_tensor * t,
-        const std::vector<float> & f32_sample,
-        const std::vector<int64_t> & sample_rows_per_slice,
-        const float * values,
-        const float * activations,
-        const std::vector<ggml_type> & compatible_candidates) -> float
+    // Returns lambda per slice or 0.0 if no activations
+    auto estimate_lambda = [&](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float>
     {
-        if (!activations) { return 0.0f; }
-
-        std::vector<ggml_type> probes;
-        probes.reserve(3);
-        auto push_if = [&](const ggml_type tiny) {
-            if (std::find(compatible_candidates.begin(), compatible_candidates.end(), tiny) != compatible_candidates.end()) {
-                probes.push_back(tiny);
-            }
-        };
-
-        push_if(GGML_TYPE_Q3_K);
-        push_if(GGML_TYPE_Q4_K);
-        push_if(GGML_TYPE_Q5_K);
-        if (probes.empty() && !compatible_candidates.empty()) {
-            probes.push_back(compatible_candidates[compatible_candidates.size() / 2]);
-        }
-        if (probes.size() == 1 && compatible_candidates.size() >= 2) {
-            probes.push_back(compatible_candidates.front());
-        }
-        if (probes.empty()) { return 0.0f; }
-
-        // Scratch buffers
-        const int64_t n_per_row = t->ne[0];
-        const size_t total_sampled_rows = f32_sample.size() / n_per_row;
-        size_t max_row_sz = 0;
-        for (auto pt : probes) max_row_sz = std::max(max_row_sz, ggml_row_size(pt, n_per_row));
-
-        std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
-        std::vector<float>   dequantized_buffer(f32_sample.size());
-
-        std::vector<double> ratios;
-        ratios.reserve(probes.size());
-        for (const auto pt : probes) {
-            double m = 0.0;
-            double p = 0.0;
-            (void)estimate_error(t, pt, f32_sample, sample_rows_per_slice, values, activations, quantized_buffer, dequantized_buffer, 0.0f, &m, &p);
-            if (p > epsilon && std::isfinite(m) && std::isfinite(p)) {
-                ratios.push_back(m / p);
-            }
-        }
-
-        if (ratios.empty()) { return 0.0f; }
-
-        std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
-        const double lambda = std::clamp(ratios[ratios.size() / 2], 0.0, 8.0);
-
-        return (float)lambda;
-    };
-
-    // Faster to compute but may yield lower precision. Best option for the vast majority of cases
-    auto fast_lambda = [&](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) {
-        if (!activations) { return 0.0f; }
-
-        double accum = 0.0;
-        int ns = 0;
+        std::vector<float> lambdas(std::max<int64_t>(1, ne2), 0.0f);
+        if (!activations) { return lambdas; }
 
         for (int64_t s = 0; s < std::max<int64_t>(1, ne2); ++s) {
             const float * v = values ? values + s * n_per_row : nullptr;
             const float * a = activations + s * n_per_row;
-
             double s1 = 0.0;
             double s2 = 0.0;
             for (int64_t j = 0; j < n_per_row; ++j) {
-                const double w  = v ? std::max(0.0f, v[j]) : 1.0;
+                const double w = v ? std::max(0.0f, v[j]) : 1.0;
                 const double aw = std::sqrt(w) * a[j];
                 const double aw2 = aw * aw;
                 s1 += aw2;
                 s2 += aw2 * aw2;
             }
 
+            float l = 0.0f;
             if (s1 > 0.0) {
-                const double n = (double)n_per_row;
-                double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
+                const auto n = (double)n_per_row;
+                const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
                 double lambda = 8.0 * (c / (c + 1.0));
-                accum += std::clamp(lambda, 0.0, 8.0);
-                ++ns;
+                l = (float)std::clamp(lambda, 0.0, 12.0);
             }
+
+            lambdas[(size_t)s] = l;
         }
 
-        if (ns == 0) { return 0.0f; }
-
-        return (float)(accum / ns);
+        return lambdas;
     };
 
     std::vector<tensor_info> all;
@@ -1060,32 +1012,33 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     for (const auto * tw : tensors) {
         std::vector<std::thread> workers;
         workers.reserve(std::max(1, nthread));
-        ggml_tensor * t = tw->tensor;
-        const std::string name = ggml_get_name(t);
-        if (!can_quantize(t)) { continue; }
+        ggml_tensor * tensor = tw->tensor;
+        const std::string name = ggml_get_name(tensor);
+        if (!can_quantize(tensor)) { continue; }
 
-        LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12d elements)\n", __func__, name.c_str(), (int)ggml_nelements(t));
+        LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12d elements)\n", __func__, name.c_str(), (int)ggml_nelements(tensor));
         if (!ml.use_mmap) {
-            if (buffer.size() < ggml_nbytes(t)) { buffer.resize(ggml_nbytes(t)); }
-            t->data = buffer.data();
+            if (buffer.size() < ggml_nbytes(tensor)) { buffer.resize(ggml_nbytes(tensor)); }
+            tensor->data = buffer.data();
         }
-        ml.load_data_for(t);
+
+        ml.load_data_for(tensor);
 
         // Dequantize sampled rows into f32_sample
-        const int64_t n_per_row = t->ne[0];
-        const int64_t nrows_total = t->ne[1];
-        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
+        const int64_t n_per_row = tensor->ne[0];
+        const int64_t nrows_total = tensor->ne[1];
+        const int64_t ne2 = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
 
-        // Larger sample_rows_per_expert values may result in more accurate error estimates, but it will take much longer to compute
-        const int sample_rows_per_expert = activations_data ? 512 : 256;
+        // Larger rows_sample_per_expert values may result in more accurate error estimates, but it will take much longer to compute
+        const int rows_sample_per_expert = activations_data ? 512 : 256;
         std::vector<float> f32_sample;
-        f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, sample_rows_per_expert) * (size_t)n_per_row);
+        f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, rows_sample_per_expert) * (size_t)n_per_row);
 
-        std::vector<int64_t> sample_rows_per_slice(ne2, 0);
-        const int64_t sample_rows_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, sample_rows_per_expert));
-        const int64_t stride = std::max<int64_t>(1, nrows_total / sample_rows_max);
+        std::vector<int64_t> rows_sample(ne2, 0);
+        const int64_t rows_sample_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, rows_sample_per_expert));
+        const int64_t stride = std::max<int64_t>(1, nrows_total / rows_sample_max);
         std::vector<float> row_buffer(n_per_row);
-        const ggml_type src_type = t->type;
+        const ggml_type src_type = tensor->type;
         const ggml_type_traits *src_traits = ggml_get_type_traits(src_type);
         const bool src_is_quant = ggml_is_quantized(src_type);
         const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
@@ -1199,23 +1152,20 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Adjusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE.
         // Larger values favours quantisation types that produce smaller bias even if the MSE is slightly bigger
-        float bias_lambda = 0.0f;
-        {
-            const float * values = values_sample.empty() ? nullptr : values_sample.data();
-            const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
-            if (params->bpw_bias == 1) {
-                bias_lambda = fast_lambda(values, activations, n_per_row, ne2);
-            } else if (params->bpw_bias == 2) {
-                bias_lambda = precise_lambda(t, f32_sample, sample_rows_per_slice, values, activations, compatible_candidates);
-            }
-        }
-
-        // Now evaluate candidates
-        std::vector<candidate_types> eval_candidates(compatible_candidates.size());
+        float tensor_lambda = 0.0f;
         const float * values = values_sample.empty() ? nullptr : values_sample.data();
         const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
+        auto lambdas = estimate_lambda(values, activations, n_per_row, ne2);
+        double acc = 0.0;
+        int ns = 0;
+        for (float l : lambdas) { acc += l; ++ns; }
+        tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
+
+        // Evaluate candidates
+        std::vector<candidate_types> eval_candidates(compatible_candidates.size());
         std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
         std::vector<float> dequantised_buffer(f32_sample.size());
+        const float * slice_lambda = lambdas.empty() ? nullptr : lambdas.data();
         int n_eval_threads = std::max(1, std::min<int>(nthread, (int)compatible_candidates.size()));
         std::atomic<size_t> cidx{0};
         std::vector<std::thread> eval_workers;
@@ -1476,7 +1426,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             int best_j = -1;
             double best_ratio = -1.0;
             size_t best_delta = 0;
-
             for (int i = 0; i < (int)all.size(); ++i) {
                 const auto & ti = all[i];
                 if (ti.choice >= (int)ti.candidate.size() - 1) {
