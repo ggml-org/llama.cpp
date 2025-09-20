@@ -111,8 +111,8 @@ sealed class BottomBarConfig {
         val onSendClick: () -> Unit,
         val showModelCard: Boolean,
         val onToggleModelCard: (Boolean) -> Unit,
-        val onAttachPhotoClick: (() -> Unit)?,
-        val onAttachFileClick: (() -> Unit)?,
-        val onAudioInputClick: (() -> Unit)?,
+        val onAttachPhotoClick: (() -> Unit)? = null,
+        val onAttachFileClick: (() -> Unit)? = null,
+        val onAudioInputClick: (() -> Unit)? = null,
     ) : BottomBarConfig()
 }

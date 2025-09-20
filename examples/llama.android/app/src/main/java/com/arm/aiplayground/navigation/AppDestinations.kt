@@ -12,10 +12,13 @@ object AppDestinations {
     const val MODEL_LOADING_ROUTE = "model_loading"
 
     const val CONVERSATION_ROUTE = "conversation"
-    const val CONVERSATION_ROUTE_WITH_PARAMS = "conversation/{modelLoadTimeMs}/{promptTimeMs}"
+    const val CONVERSATION_ROUTE_WITH_PARAMS = "conversation/{modelLoadTimeMs}/{promptProcessTimeMs}"
+    const val CONVERSATION_ROUTE_PARAM_MODEL_LOAD_TIME = "modelLoadTimeMs"
+    const val CONVERSATION_ROUTE_PARAM_PROMPT_PROCESS_TIME = "promptProcessTimeMs"
 
     const val BENCHMARK_ROUTE = "benchmark"
     const val BENCHMARK_ROUTE_WITH_PARAMS = "benchmark/{modelLoadTimeMs}"
+    const val BENCHMARK_ROUTE_PARAM_MODEL_LOAD_TIME = "modelLoadTimeMs"
 
     // Settings destinations
     const val SETTINGS_GENERAL_ROUTE = "settings_general"
