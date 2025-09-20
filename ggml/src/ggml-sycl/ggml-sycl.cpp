@@ -3577,6 +3577,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_SUB:
             ggml_sycl_sub(ctx, dst);
             break;
+        case GGML_OP_COUNT_EQUAL:
+            ggml_sycl_count_equal(ctx, dst);
+            break;
         case GGML_OP_ACC:
             ggml_sycl_acc(ctx, dst);
             break;
@@ -4070,7 +4073,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .graph_compute           = */ ggml_backend_sycl_graph_compute,
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
-    /* .optimize_graph          = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {
@@ -4356,6 +4359,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ADD:
         case GGML_OP_ADD1:
         case GGML_OP_SUB:
+        case GGML_OP_COUNT_EQUAL:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_REPEAT:

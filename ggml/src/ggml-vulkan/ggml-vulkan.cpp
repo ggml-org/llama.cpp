@@ -593,7 +593,7 @@ struct vk_device_struct {
     bool disable_fusion;
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
-    bool disable_optimize_graph;
+    bool disable_graph_optimize;
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
@@ -3624,8 +3624,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
 
-        const char* GGML_VK_DISABLE_OPTIMIZE_GRAPH = getenv("GGML_VK_DISABLE_OPTIMIZE_GRAPH");
-        device->disable_optimize_graph = GGML_VK_DISABLE_OPTIMIZE_GRAPH != nullptr;
+        const char* GGML_VK_DISABLE_GRAPH_OPTIMIZE = getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+        device->disable_graph_optimize = GGML_VK_DISABLE_GRAPH_OPTIMIZE != nullptr;
 
         bool fp16_storage = false;
         bool fp16_compute = false;
@@ -4423,8 +4423,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
 static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
-
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
@@ -4540,7 +4540,7 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
+            if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_vk_device_is_supported(devices[i])) {
                 // Check if there are two physical devices corresponding to the same GPU
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
@@ -11914,12 +11914,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 }
 
 // Sort the graph for improved parallelism.
-static void ggml_vk_optimize_graph(ggml_backend_t backend, struct ggml_cgraph * graph)
+static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph)
 {
-    VK_LOG_DEBUG("ggml_vk_optimize_graph(" << graph->n_nodes << " nodes)");
+    VK_LOG_DEBUG("ggml_vk_graph_optimize(" << graph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
-    if (ctx->device->disable_optimize_graph) {
+    if (ctx->device->disable_graph_optimize) {
         return;
     }
 
@@ -12053,7 +12053,7 @@ static ggml_backend_i ggml_backend_vk_interface = {
     /* .graph_compute           = */ ggml_backend_vk_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
-    /* .optimize_graph          = */ ggml_vk_optimize_graph,
+    /* .graph_optimize          = */ ggml_vk_graph_optimize,
 };
 
 static ggml_guid_t ggml_backend_vk_guid() {
@@ -12736,6 +12736,20 @@ static bool ggml_vk_instance_debug_utils_ext_available(
     return false;
 
     UNUSED(instance_extensions);
+}
+
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
+    VkPhysicalDeviceFeatures2 device_features2;
+    device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    VkPhysicalDeviceVulkan11Features vk11_features;
+    vk11_features.pNext = nullptr;
+    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    device_features2.pNext = &vk11_features;
+
+    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+
+    return vk11_features.storageBuffer16BitAccess;
 }
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {

@@ -526,7 +526,10 @@ struct ggml_backend_cann_context {
      */
     aclrtStream stream(int stream) {
         if (streams[stream] == nullptr) {
-            ggml_cann_set_device(device);
+            // If the device is not set here, destroying the stream later may cause a mismatch
+            // between the thread contexts where the stream was created and destroyed.
+            // However, I printed the device_id, thread_id, and stream, and they are all consistent.
+            ACL_CHECK(aclrtSetDevice(device));
             ACL_CHECK(aclrtCreateStream(&streams[stream]));
         }
         return streams[stream];
