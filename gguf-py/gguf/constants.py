@@ -43,6 +43,7 @@ class Keys:
         LICENSE                    = "general.license"
         LICENSE_NAME               = "general.license.name"
         LICENSE_LINK               = "general.license.link"
+        LICENSE_CONTENT            = "general.license.content"
 
         # Typically represents the converted GGUF repo (Unless native)
         URL                        = "general.url" # Model Website/Paper
