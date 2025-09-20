@@ -736,21 +736,17 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     std::string mmprojFile;
 
     if (res_code == 200 || res_code == 304) {
-        // extract ggufFile.rfilename in json, using regex
-        {
-            std::regex pattern("\"ggufFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
-            std::smatch match;
-            if (std::regex_search(res_str, match, pattern)) {
-                ggufFile = match[1].str();
+        try {
+            auto j = json::parse(res_str);
+
+            if (j.contains("ggufFile") && j["ggufFile"].contains("rfilename")) {
+                ggufFile = j["ggufFile"]["rfilename"].get<std::string>();
             }
-        }
-        // extract mmprojFile.rfilename in json, using regex
-        {
-            std::regex pattern("\"mmprojFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
-            std::smatch match;
-            if (std::regex_search(res_str, match, pattern)) {
-                mmprojFile = match[1].str();
+            if (j.contains("mmprojFile") && j["mmprojFile"].contains("rfilename")) {
+                mmprojFile = j["mmprojFile"]["rfilename"].get<std::string>();
             }
+        } catch (const std::exception & e) {
+            throw std::runtime_error(std::string("error parsing manifest JSON: ") + e.what());
         }
         if (!use_cache) {
             // if not using cached response, update the cache file
