@@ -197,7 +197,9 @@ add_library(ggml-base
             ../include/ggml-cpp.h
             ../include/ggml-opt.h
             ../include/gguf.h
+            ../include/ggml-delta.h
             ggml.c
+            ggml-delta.c
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp

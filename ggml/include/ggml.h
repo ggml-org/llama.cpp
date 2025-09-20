@@ -539,7 +539,8 @@ extern "C" {
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
-
+        GGML_OP_DELTA_NET,
+    
         GGML_OP_UNARY,
 
         GGML_OP_MAP_CUSTOM1,
@@ -2277,6 +2278,7 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * state,
             float scale);
+
 
     GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
             struct ggml_context * ctx,

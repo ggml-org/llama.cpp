@@ -3748,6 +3748,32 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
         super().set_vocab()
 
+@ModelBase.register("Qwen3NextForCausalLM")
+class Qwen3NextModel(Qwen3MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["linear_conv_kernel_dim"]))
+        self.gguf_writer.add_ssm_state_size(self.find_hparam(["linear_key_head_dim"]))
+        self.gguf_writer.add_ssm_group_count(self.find_hparam(["linear_num_key_heads"]))
+        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["linear_num_value_heads"]))
+        self.gguf_writer.add_ssm_inner_size(self.find_hparam(["hidden_size"]) * (self.find_hparam(["linear_num_value_heads"]) // self.find_hparam(["linear_num_key_heads"])))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:        
+        if name.endswith(".A_log"):
+            data_torch = -torch.exp(data_torch)
+        elif name.endswith(".dt_bias"):
+            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+        elif "conv1d" in name:
+            data_torch = data_torch.squeeze()
+        elif "q_proj.weight" in name:
+            q_proj, gate = data_torch.chunk(2, dim=0)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), gate)
+            data_torch = q_proj
+
+        yield from Qwen2MoeModel.modify_tensors(self, data_torch, name, bid)
+
 
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
