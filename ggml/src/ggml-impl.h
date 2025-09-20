@@ -602,6 +602,32 @@ static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx
     return true;
 }
 
+static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const int * node_idx, const enum ggml_op * ops, int num_ops) {
+    for (int i = 0; i < num_ops; ++i) {
+        if (node_idx[i] + num_ops > cgraph->n_nodes) {
+            return false;
+        }
+
+        struct ggml_tensor * node = cgraph->nodes[node_idx[i]];
+        if (node->op != ops[i]) {
+            return false;
+        }
+        if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idx[i], 1)) {
+            return false;
+        }
+        if (i > 0) {
+            struct ggml_tensor * prev = cgraph->nodes[node_idx[i - 1]];
+            if (node->src[0] != prev && node->src[1] != prev) {
+                return false;
+            }
+            if (!ggml_are_same_shape(node, prev)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 #ifdef __cplusplus
 }
 #endif
@@ -613,6 +639,11 @@ static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx
 // nicer C++ syntax for ggml_can_fuse
 inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
     return ggml_can_fuse(cgraph, node_idx, ops.begin(), (int)ops.size());
+}
+
+inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, std::initializer_list<int> node_idx, std::initializer_list<enum ggml_op> ops) {
+    assert(node_idx.size() == ops.size());
+    return ggml_can_fuse_ext(cgraph, node_idx.begin(), ops.begin(), (int)ops.size());
 }
 
 // expose GGUF internals for test code

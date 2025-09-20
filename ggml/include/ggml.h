@@ -702,9 +702,10 @@ extern "C" {
     GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
     "use ggml_row_size() instead");
 
-    GGML_API const char * ggml_type_name(enum ggml_type type);
-    GGML_API const char * ggml_op_name  (enum ggml_op   op);
-    GGML_API const char * ggml_op_symbol(enum ggml_op   op);
+    GGML_API const char * ggml_type_name  (enum ggml_type type);
+    GGML_API const char * ggml_op_name    (enum ggml_op   op);
+    GGML_API const char * ggml_op_symbol  (enum ggml_op   op);
+    GGML_API bool         ggml_op_is_empty(enum ggml_op   op);
 
     GGML_API const char * ggml_unary_op_name(enum ggml_unary_op op);
     GGML_API const char * ggml_glu_op_name(enum ggml_glu_op op);
