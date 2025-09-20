@@ -27,6 +27,26 @@ def replace_placeholders(shader_text, replacements):
     return shader_text
 
 
+def expand_includes(shader, input_dir):
+    """
+    Replace #include "file" lines in the text with the contents of that file.
+    Searches for files relative to input_dir.
+    """
+    include_pattern = re.compile(r'^\s*#include\s+"([^"]+)"\s*$', re.MULTILINE)
+
+    def replacer(match):
+        fname = match.group(1)
+        file_path = os.path.join(input_dir, fname)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Included file not found: {file_path}")
+        with open(file_path, "r", encoding="utf-8") as f:
+            included_code = f.read()
+        # Recursively expand includes inside the included file
+        return expand_includes(included_code, input_dir)
+
+    return include_pattern.sub(replacer, shader)
+
+
 def write_shader(shader_name, shader_code, output_dir, outfile):
     if output_dir:
         wgsl_filename = os.path.join(output_dir, f"{shader_name}.wgsl")
@@ -35,8 +55,9 @@ def write_shader(shader_name, shader_code, output_dir, outfile):
     outfile.write(f'const char* wgsl_{shader_name} = R"({shader_code})";\n\n')
 
 
-def generate_variants(shader_path, output_dir, outfile):
-    shader_base_name = shader_path.split("/")[-1].split(".")[0]
+def generate_variants(fname, input_dir, output_dir, outfile):
+    shader_path = os.path.join(input_dir, fname)
+    shader_base_name = fname.split(".")[0]
 
     with open(shader_path, "r", encoding="utf-8") as f:
         text = f.read()
@@ -46,11 +67,21 @@ def generate_variants(shader_path, output_dir, outfile):
     except ValueError:
         write_shader(shader_base_name, text, output_dir, outfile)
     else:
-        decls_map = parse_decls(extract_block(text, "DECLS"))
-        shader_template = extract_block(text, "SHADER")
+        try:
+            decls_map = parse_decls(extract_block(text, "DECLS"))
+        except ValueError:
+            decls_map = {}
 
+        with open(os.path.join(input_dir, "common_decls.tmpl"), "r", encoding="utf-8") as f:
+            common_decls = f.read()
+        decls_map.update(parse_decls(common_decls))
+
+        shader_template = extract_block(text, "SHADER")
         for variant in variants:
-            decls = variant["DECLS"]
+            if "DECLS" in variant:
+                decls = variant["DECLS"]
+            else:
+                decls = []
             decls_code = ""
             for key in decls:
                 if key not in decls_map:
@@ -59,8 +90,16 @@ def generate_variants(shader_path, output_dir, outfile):
 
             shader_variant = replace_placeholders(shader_template, variant["REPLS"])
             final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
+            final_shader = expand_includes(final_shader, input_dir)
 
-            output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
+            if "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
+            elif "TYPE_SUFFIX" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE_SUFFIX"]
+            elif "TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
+            else:
+                output_name = shader_base_name
             write_shader(output_name, final_shader, output_dir, outfile)
 
 
@@ -78,7 +117,7 @@ def main():
         out.write("// Auto-generated shader embedding\n\n")
         for fname in sorted(os.listdir(args.input_dir)):
             if fname.endswith(".wgsl"):
-                generate_variants(os.path.join(args.input_dir, fname), args.output_dir, out)
+                generate_variants(fname, args.input_dir, args.output_dir, out)
 
 
 if __name__ == "__main__":
