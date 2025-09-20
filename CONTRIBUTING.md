@@ -1,3 +1,11 @@
+# Contributors
+
+The project differentiates between 3 levels of contributors:
+
+- Contributors: people who have contributed before (no special privileges)
+- Collaborators (Triage): people with significant contributions, who may be responsible for some parts of the code, and are expected to maintain and review contributions for the code they own
+- Maintainers: responsible for reviewing and merging PRs, after approval from the code owners
+
 # Pull requests (for contributors)
 
 - llama.cpp uses the ggml tensor library for model evaluation. If you are unfamiliar with ggml, consider taking a look at the [examples in the ggml repository](https://github.com/ggml-org/ggml/tree/master/examples/). [simple](https://github.com/ggml-org/ggml/tree/master/examples/simple) shows the bare minimum for using ggml. [gpt-2](https://github.com/ggml-org/ggml/tree/master/examples/gpt-2) has minimal implementations for language model inference using GPT-2. [mnist](https://github.com/ggml-org/ggml/tree/master/examples/mnist) demonstrates how to train and evaluate a simple image classifier
@@ -12,11 +20,15 @@
 
 # Pull requests (for collaborators)
 
+- Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
+- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
+
+# Pull requests (for maintainers)
+
 - Squash-merge PRs
 - Use the following format for the squashed commit title: `<module> : <commit title> (#<issue_number>)`. For example: `utils : fix typo in utils.py (#1234)`
 - Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
-- Consider adding yourself to [CODEOWNERS](CODEOWNERS)
-- Let authors, who are also collaborators, merge their own PRs
+- Let other maintainers, merge their own PRs
 - When merging a PR by a contributor, make sure you have a good understanding of the changes
 - Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 
@@ -116,6 +128,21 @@
     #ifdef FOO
     #endif // FOO
     ```
+
+# Code maintenance
+
+- Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file reponsible for:
+  - Reviewing and merging related PRs
+  - Fixing related bugs
+  - Providing developer guidance/support
+
+- When adding or modifying a large piece of code:
+  - If you are a collaborator, make sure to add yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
+  - If you are a contributor, find an existing collaborator who is willing to review and maintain your code long-term
+  - Provide the necessary CI workflow (and hardware) to test your changes
+
+- New code should follow the guidelines (coding, naming, etc.) outlined in this document. Exceptions are allowed in isolated, backend-specific parts of the code that do not interface directly with the `ggml` interfaces.
+  _(NOTE: for legacy reasons, existing code is not required to follow this guideline)_
 
 # Documentation
 
