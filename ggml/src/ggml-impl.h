@@ -578,7 +578,7 @@ static inline bool ggml_node_has_n_uses(const struct ggml_cgraph * cgraph, int n
 // TODO: Consider allowing GGML_OP_NONE nodes in between
 static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const int * node_idxs, const enum ggml_op * ops, int num_ops) {
     for (int i = 0; i < num_ops; ++i) {
-        if (node_idxs[i] + num_ops > cgraph->n_nodes) {
+        if (node_idxs[i] >= cgraph->n_nodes) {
             return false;
         }
 
