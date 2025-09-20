@@ -117,9 +117,8 @@ kernel void kernel_convert_block_q4_0_noshuffle(
     }
 }
 
-
 //------------------------------------------------------------------------------
-// block_q4_0
+// block_mxfp4
 //------------------------------------------------------------------------------
 #define QK_MXFP4 32
 struct block_mxfp4 {
@@ -159,6 +158,45 @@ kernel void kernel_restore_block_mxfp4(
 
     b->e = *e;
     for (int i = 0; i < QK_MXFP4 / 2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// block_q8_0
+//------------------------------------------------------------------------------
+typedef struct {
+    half d;       // delta
+    char qs[QK8_0]; // quants
+} block_q8_0;
+
+kernel void kernel_convert_block_q8_0(
+    global block_q8_0 * src0,
+    global uchar * dst_q,
+    global half  * dst_d
+) {
+    global block_q8_0 * b = (global block_q8_0 *) src0 + get_global_id(0);
+    global uchar      * q = (global uchar *) dst_q + QK8_0*get_global_id(0);
+    global half       * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q8_0(
+    global uchar * src_q,
+    global half  * src_d,
+    global block_q8_0 * dst
+) {
+    global block_q8_0 * b = (global block_q8_0 *) dst + get_global_id(0);
+    global uchar      * q = (global uchar *) src_q + QK8_0*get_global_id(0);
+    global half       * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK8_0; ++i) {
         b->qs[i] = q[i];
     }
 }
