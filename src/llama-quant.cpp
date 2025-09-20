@@ -1153,13 +1153,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         // Adjusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE.
         // Larger values favours quantisation types that produce smaller bias even if the MSE is slightly bigger
         float tensor_lambda = 0.0f;
+        std::vector<float> lambdas;
         const float * values = values_sample.empty() ? nullptr : values_sample.data();
         const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
-        auto lambdas = estimate_lambda(values, activations, n_per_row, ne2);
-        double acc = 0.0;
-        int ns = 0;
-        for (float l : lambdas) { acc += l; ++ns; }
-        tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
+        if (!params->no_bias) {
+            double acc = 0.0;
+            int ns = 0;
+            lambdas = estimate_lambda(values, activations, n_per_row, ne2);
+            for (float l : lambdas) { acc += l; ++ns; }
+            tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
+        }
 
         // Evaluate candidates
         std::vector<candidate_types> eval_candidates(compatible_candidates.size());
@@ -1726,8 +1729,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             } else {
                 LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate - ", __func__);
             }
-            const char* msg[] = {"no bias (MSE only)", "fast (default)", "precise (slow)"};
-            LLAMA_LOG_INFO("using %s error estimation\n", msg[params->bpw_bias]);
+            LLAMA_LOG_INFO("using %s error estimation\n", params->no_bias ? "MSE only (no aligment bias)" : "aligment bias (default)");
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
             bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
         } else {
@@ -2038,7 +2040,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
-        /*.bpw_bias                    =*/ 1
+        /*.no_bias                     =*/ false
     };
 
     return result;

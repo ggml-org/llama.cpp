@@ -117,12 +117,12 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
-    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights]\n", executable);
+    printf("       [--target-bpw n] [--no-bias] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
-    printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
-    printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
-    printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
+    printf("  --allow-requantize: allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
+    printf("  --leave-output-tensor: will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
+    printf("  --pure: disable k-quant mixtures and quantize all tensors to the same type\n");
     printf("  --imatrix file_name: use data in file_name as importance matrix for quant optimizations\n");
     printf("  --include-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
@@ -134,7 +134,8 @@ static void usage(const char * executable) {
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 16.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
-    printf("  --bpw_bias: type of error bias to use: 0 = no bias (MSE only), 1 = fast (default), 2 = precise (slow)\n");
+    printf("  --no-bias: use mean square error estimation only (no aligment bias)\n");
+    printf("      Advanced option use MSE only and disable aligment bias error estimation\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -496,27 +497,6 @@ static bool parse_target_bpw(const char * data, float & target_bpw) {
     return true;
 }
 
-static bool parse_bpw_bias(const char * data, int & bpw_bias) {
-    if (!data) {
-        printf("\n%s: error bias type not provided\n\n", __func__);
-        return false;
-    }
-
-    try {
-        bpw_bias = std::stoi(data);
-        if (bpw_bias < 0 || bpw_bias > 2) {
-            printf("\n%s: error bias type must be one of 0 (no bias, MSE only), 1 (fast), or 2 (precise, but slow)\n\n", __func__);
-            return false;
-        }
-    }
-    catch (const std::exception & e) {
-        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__, data);
-        return false;
-    }
-
-    return true;
-}
-
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -531,7 +511,6 @@ int main(int argc, char ** argv) {
     std::vector<tensor_quantization> tensor_types;
     std::vector<int> prune_layers;
     float target_bpw = -1.0f;
-    int bpw_bias = 1;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -562,11 +541,8 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--bpw-bias") == 0) {
-            if (arg_idx == argc-1 || !parse_bpw_bias(argv[++arg_idx], bpw_bias)) {
-                usage(argv[0]);
-            }
-            params.bpw_bias = bpw_bias;
+        } else if (strcmp(argv[arg_idx], "--no-bias") == 0) {
+            params.no_bias = true;
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
             if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
                 usage(argv[0]);
