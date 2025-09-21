@@ -26,7 +26,7 @@
 			await gracefulStop();
 
 			if (to?.url) {
-				await goto(to.url.pathname + to.url.search);
+				await goto(to.url.pathname + to.url.search + to.url.hash);
 			}
 		}
 	});
