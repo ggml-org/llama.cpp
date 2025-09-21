@@ -1433,19 +1433,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double best_ratio = -1.0;
             size_t best_delta = 0;
             for (int i = 0; i < (int)all.size(); ++i) {
-                const auto & ti = all[i];
-                if (ti.choice >= (int)ti.candidate.size() - 1) {
-                    continue;
-                }
-
+                const auto &ti = all[i];
                 int j = ti.choice + 1;
+                // skip same-bytes entries
                 while (j < (int)ti.candidate.size() && ti.candidate[j].bytes == ti.candidate[ti.choice].bytes) { ++j; }
                 if (j >= (int)ti.candidate.size()) { continue; }
 
                 size_t delta = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
                 if (cur_bytes + delta > budget_bytes) { continue; }
 
-                double err_gain = std::max(0.0, (double)ti.candidate[ti.choice].error - (double)ti.candidate[j].error);
+                double err_gain = std::max(0.0, ti.candidate[ti.choice].error - ti.candidate[j].error);
                 double ratio = err_gain / (double)(delta * 8);
                 if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && delta < best_delta)) {
                     best_ratio = ratio;
@@ -1454,7 +1451,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     best_j = j;
                 }
             }
-
             if (best_i < 0) { break; }
             all[best_i].choice = best_j;
             cur_bytes += best_delta;
