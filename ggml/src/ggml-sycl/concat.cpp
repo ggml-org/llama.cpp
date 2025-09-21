@@ -194,12 +194,6 @@ void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
 void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    static std::atomic<bool> printed{false};
-    if (!printed.exchange(true)) std::fprintf(stderr, "[LP] hit ggml_sycl_op_concat\n");
-
-    LP_PROFILE_INIT_ONCE();
-    LP_PROFILE_PAIR(dst->src[0], dst->src[1]);
-
     switch (dst->type) {
     case GGML_TYPE_F32:
         concat_impl_sycl<float>(ctx, dst);
