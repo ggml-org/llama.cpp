@@ -1002,7 +1002,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const std::string name = ggml_get_name(tensor);
         if (!can_quantize(tensor)) { continue; }
 
-        LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12d elements)\n", __func__, name.c_str(), (int)ggml_nelements(tensor));
+        LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", __func__, name.c_str(), ggml_nelements(tensor));
         if (!ml.use_mmap) {
             if (buffer.size() < ggml_nbytes(tensor)) { buffer.resize(ggml_nbytes(tensor)); }
             tensor->data = buffer.data();
