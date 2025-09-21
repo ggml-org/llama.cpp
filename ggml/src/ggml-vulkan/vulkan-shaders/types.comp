@@ -11,15 +11,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE float
-#define A_TYPE32 float
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE vec4
-#define A_TYPE32 vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE mat2x4
-#define A_TYPE32 mat2x4
+#else
+#define A_TYPE float
 #endif
 #endif
 
@@ -27,15 +24,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE float16_t
-#define A_TYPE32 float
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE f16vec4
-#define A_TYPE32 vec4
 #elif LOAD_VEC_A == 8
 #define A_TYPE f16mat2x4
-#define A_TYPE32 mat2x4
+#else
+#define A_TYPE float16_t
 #endif
 #endif
 
@@ -43,12 +37,12 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
-#define A_TYPE uint16_t
-#elif LOAD_VEC_A == 4
+#if LOAD_VEC_A == 4
 #define A_TYPE u16vec4
 #elif LOAD_VEC_A == 8
 #error unsupported
+#else
+#define A_TYPE uint16_t
 #endif
 #endif
 

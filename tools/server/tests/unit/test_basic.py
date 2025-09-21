@@ -92,7 +92,7 @@ def test_no_webui():
     url = f"http://{server.server_host}:{server.server_port}"
     res = requests.get(url)
     assert res.status_code == 200
-    assert "<html>" in res.text
+    assert "<!doctype html>" in res.text
     server.stop()
 
     # with --no-webui

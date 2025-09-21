@@ -593,7 +593,7 @@ struct vk_device_struct {
     bool disable_fusion;
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
-    bool disable_optimize_graph;
+    bool disable_graph_optimize;
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
@@ -1185,6 +1185,14 @@ struct vk_staging_memcpy {
     size_t n;
 };
 
+struct vk_staging_memset {
+    vk_staging_memset(void * _dst, uint32_t _val, size_t _n) : dst(_dst), val(_val), n(_n) {}
+
+    void * dst;
+    uint32_t val;
+    size_t n;
+};
+
 struct vk_context_struct {
     vk_submission * s;
     std::vector<vk_sequence> seqs;
@@ -1193,6 +1201,7 @@ struct vk_context_struct {
 
     std::vector<vk_staging_memcpy> in_memcpys;
     std::vector<vk_staging_memcpy> out_memcpys;
+    std::vector<vk_staging_memset> memsets;
 
     vk_command_pool * p {};
 };
@@ -1230,8 +1239,6 @@ static std::string format_size(size_t size) {
 
     return oss.str();
 }
-
-static std::mutex log_mutex;
 
 class vk_memory_logger {
 public:
@@ -1422,6 +1429,8 @@ struct ggml_backend_vk_buffer_context {
 };
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
+static std::mutex log_mutex;
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     std::lock_guard<std::mutex> guard(log_mutex);
     vk_buffer buf = buf_ref.lock();
@@ -1584,7 +1593,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 
     vk::ComputePipelineCreateInfo compute_pipeline_create_info(
-        vk::PipelineCreateFlags{},
+        device->pipeline_executable_properties_support ?
+            vk::PipelineCreateFlagBits::eCaptureStatisticsKHR :
+            vk::PipelineCreateFlags{},
         pipeline_shader_create_info,
         pipeline->layout);
 
@@ -3624,8 +3635,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
 
-        const char* GGML_VK_DISABLE_OPTIMIZE_GRAPH = getenv("GGML_VK_DISABLE_OPTIMIZE_GRAPH");
-        device->disable_optimize_graph = GGML_VK_DISABLE_OPTIMIZE_GRAPH != nullptr;
+        const char* GGML_VK_DISABLE_GRAPH_OPTIMIZE = getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+        device->disable_graph_optimize = GGML_VK_DISABLE_GRAPH_OPTIMIZE != nullptr;
 
         bool fp16_storage = false;
         bool fp16_compute = false;
@@ -4423,8 +4434,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
 static bool ggml_vk_instance_validation_ext_available();
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
-
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
@@ -4540,7 +4551,7 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
+            if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_vk_device_is_supported(devices[i])) {
                 // Check if there are two physical devices corresponding to the same GPU
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
@@ -5194,6 +5205,14 @@ static void deferred_memcpy(void * dst, const void * src, size_t size, std::vect
     }
 }
 
+static void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<vk_staging_memset>* memsets = nullptr) {
+    if (memsets == nullptr) {
+        memset(dst, val, size);
+    } else {
+        memsets->emplace_back(dst, val, size);
+    }
+}
+
 static void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
     if (device->sync_staging == nullptr || device->sync_staging->size < size) {
         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
@@ -5389,6 +5408,10 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
 
+        for (auto& mset : subctx->memsets) {
+            memset(mset.dst, mset.val, mset.n);
+        }
+
         ggml_vk_submit(subctx, dst->device->fence);
         VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
         dst->device->device.resetFences({ dst->device->fence });
@@ -5528,11 +5551,24 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
 static void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_memset_async(" << offset << ", " << c << ", " << size << ")");
 
+    if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
+        dst->device->uma) {
+        deferred_memset((uint8_t*)dst->ptr + offset, c, size, &ctx->memsets);
+        return;
+    }
+
+    // Fall back to GPU fillBuffer for non-UMA or non-host-visible buffers
     ctx->s->buffer.fillBuffer(dst->buffer, offset, size, c);
 }
 
 static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_memset(" << offset << ", " << c << ", " << size << ")");
+
+    if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
+        dst->device->uma) {
+        memset((uint8_t*)dst->ptr + offset, c, size);
+        return;
+    }
 
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
     vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
@@ -11168,6 +11204,10 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
 
+        for (auto& mset : subctx->memsets) {
+            memset(mset.dst, mset.val, mset.n);
+        }
+
         if (almost_ready && !ctx->almost_ready_fence_pending && !use_fence) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
             ctx->almost_ready_fence_pending = true;
@@ -11190,6 +11230,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         }
         subctx->in_memcpys.clear();
         subctx->out_memcpys.clear();
+        subctx->memsets.clear();
     }
 
     return true;
@@ -11914,12 +11955,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 }
 
 // Sort the graph for improved parallelism.
-static void ggml_vk_optimize_graph(ggml_backend_t backend, struct ggml_cgraph * graph)
+static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph)
 {
-    VK_LOG_DEBUG("ggml_vk_optimize_graph(" << graph->n_nodes << " nodes)");
+    VK_LOG_DEBUG("ggml_vk_graph_optimize(" << graph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
-    if (ctx->device->disable_optimize_graph) {
+    if (ctx->device->disable_graph_optimize) {
         return;
     }
 
@@ -12053,7 +12094,7 @@ static ggml_backend_i ggml_backend_vk_interface = {
     /* .graph_compute           = */ ggml_backend_vk_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
-    /* .optimize_graph          = */ ggml_vk_optimize_graph,
+    /* .graph_optimize          = */ ggml_vk_graph_optimize,
 };
 
 static ggml_guid_t ggml_backend_vk_guid() {
@@ -12738,6 +12779,20 @@ static bool ggml_vk_instance_debug_utils_ext_available(
     UNUSED(instance_extensions);
 }
 
+static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
+    VkPhysicalDeviceFeatures2 device_features2;
+    device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    VkPhysicalDeviceVulkan11Features vk11_features;
+    vk11_features.pNext = nullptr;
+    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    device_features2.pNext = &vk11_features;
+
+    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+
+    return vk11_features.storageBuffer16BitAccess;
+}
+
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
@@ -13138,16 +13193,16 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
     } else if (tensor->op == GGML_OP_IM2COL_3D) {
         const int32_t s0 = tensor->op_params[0];
         const int32_t s1 = tensor->op_params[1];
-        const int32_t s1 = tensor->op_params[2];
+        const int32_t s2 = tensor->op_params[2];
         const int32_t p0 = tensor->op_params[3];
         const int32_t p1 = tensor->op_params[4];
-        const int32_t p1 = tensor->op_params[5];
+        const int32_t p2 = tensor->op_params[5];
         const int32_t d0 = tensor->op_params[6];
         const int32_t d1 = tensor->op_params[7];
-        const int32_t d1 = tensor->op_params[8];
+        const int32_t d2 = tensor->op_params[8];
         const int32_t IC = tensor->op_params[9];
 
-        tensor_clone = ggml_im2col(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
+        tensor_clone = ggml_im2col_3d(ggml_ctx, src_clone[0], src_clone[1], IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, tensor->type);
     } else if (tensor->op == GGML_OP_TIMESTEP_EMBEDDING) {
         const int32_t dim = tensor->op_params[0];
         const int32_t max_period = tensor->op_params[1];

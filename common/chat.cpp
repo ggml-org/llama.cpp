@@ -1741,10 +1741,12 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
-    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ json(), json {
+    const std::optional<json> tools_override = json();
+    const std::optional<json> additional_context = json {
         {"datetime", format_time(inputs.now, "%b %d %Y %H:%M:%S GMT")},
         {"functions", json(inputs.tools.empty() ? "" : inputs.tools.dump(2))},
-    });
+    };
+    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, tools_override, additional_context);
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -2230,15 +2232,28 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
 
 static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     // Parse thinking tags
+    static const common_regex start_think_regex(regex_escape("<think>"));
+    static const common_regex end_think_regex(regex_escape("</think>"));
+    // Granite models output partial tokens such as "<" and "<think".
+    // By leveraging try_consume_regex()/try_find_regex() throwing
+    // common_chat_msg_partial_exception for these partial tokens,
+    // processing is interrupted and the tokens are not passed to add_content().
+    if (auto res = builder.try_consume_regex(start_think_regex)) {
+        // Restore position for try_parse_reasoning()
+        builder.move_to(res->groups[0].begin);
+        builder.try_find_regex(end_think_regex, std::string::npos, false);
+        // Restore position for try_parse_reasoning()
+        builder.move_to(res->groups[0].begin);
+    }
     builder.try_parse_reasoning("<think>", "</think>");
 
-    // Parse response tags using regex
-    static const common_regex response_regex("<response>([\\s\\S]*?)</response>");
-    if (auto res = builder.try_find_regex(response_regex)) {
-        // Extract the content between the tags (capture group 1)
-        auto content = builder.str(res->groups[1]);
-        builder.add_content(content);
-        builder.move_to(res->groups[0].end);
+    // Parse response tags
+    static const common_regex start_response_regex(regex_escape("<response>"));
+    static const common_regex end_response_regex(regex_escape("</response>"));
+    // Granite models output partial tokens such as "<" and "<response".
+    // Same hack as reasoning parsing.
+    if (builder.try_consume_regex(start_response_regex)) {
+        builder.try_find_regex(end_response_regex);
     }
 
     if (!builder.syntax().parse_tool_calls) {
@@ -2252,13 +2267,10 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
         builder.move_to(res->groups[0].end);
 
         // Expect JSON array of tool calls
-        auto tool_calls_data = builder.consume_json();
-        if (tool_calls_data.json.is_array()) {
-            if (!builder.add_tool_calls(tool_calls_data.json)) {
-                builder.add_content("<|tool_call|>" + tool_calls_data.json.dump());
+        if (auto tool_call = builder.try_consume_json_with_dumped_args({{{"arguments"}}})) {
+            if (!builder.add_tool_calls(tool_call->value) || tool_call->is_partial) {
+                throw common_chat_msg_partial_exception("incomplete tool call");
             }
-        } else {
-            builder.add_content("<|tool_call|>" + tool_calls_data.json.dump());
         }
     } else {
         builder.add_content(builder.consume_rest());
