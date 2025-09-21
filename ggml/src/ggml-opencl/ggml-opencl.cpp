@@ -6108,12 +6108,12 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
     } else {
         cl_kernel kernel = backend_ctx->kernel_concat_f32_non_contiguous;
 
-        long ne00 = src0->ne[0], ne01 = src0->ne[1], ne02 = src0->ne[2], ne03 = src0->ne[3];
+        cl_long ne00 = src0->ne[0], ne01 = src0->ne[1], ne02 = src0->ne[2], ne03 = src0->ne[3];
         cl_ulong nb00 = src0->nb[0], nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
 
         cl_ulong nb10 = src1->nb[0], nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
 
-        long d_ne0 = dst->ne[0], d_ne1 = dst->ne[1], d_ne2 = dst->ne[2], d_ne3 = dst->ne[3];
+        cl_long d_ne0 = dst->ne[0], d_ne1 = dst->ne[1], d_ne2 = dst->ne[2], d_ne3 = dst->ne[3];
         cl_ulong d_nb0 = dst->nb[0], d_nb1 = dst->nb[1], d_nb2 = dst->nb[2], d_nb3 = dst->nb[3];
 
 
@@ -6124,10 +6124,10 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),    &extrad_cl->data_device));
         CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong),  &off_dst));
 
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(long),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(long),      &ne01));
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(long),      &ne02));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(long),      &ne03));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_long),      &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_long),      &ne01));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_long),      &ne02));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_long),      &ne03));
         CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),    &nb00));
         CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong),    &nb01));
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong),    &nb02));
@@ -6138,10 +6138,10 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
         CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong),    &nb12));
         CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong),    &nb13));
 
-        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(long),     &d_ne0));
-        CL_CHECK(clSetKernelArg(kernel, 19, sizeof(long),     &d_ne1));
-        CL_CHECK(clSetKernelArg(kernel, 20, sizeof(long),     &d_ne2));
-        CL_CHECK(clSetKernelArg(kernel, 21, sizeof(long),     &d_ne3));
+        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_long),     &d_ne0));
+        CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_long),     &d_ne1));
+        CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_long),     &d_ne2));
+        CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_long),     &d_ne3));
         CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong),    &d_nb0));
         CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_ulong),    &d_nb1));
         CL_CHECK(clSetKernelArg(kernel, 24, sizeof(cl_ulong),    &d_nb2));
