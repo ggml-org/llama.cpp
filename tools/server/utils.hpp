@@ -54,8 +54,8 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
             return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const &) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value\n", key.c_str(), json(default_value).type_name());
+        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
             return default_value;
         }
     } else {
@@ -459,9 +459,9 @@ static std::string tokens_to_output_formatted_string(const llama_context * ctx, 
     return out;
 }
 
-static bool server_sent_event(httplib::DataSink & sink, const char * event, const json & data) {
+static bool server_sent_event(httplib::DataSink & sink, const json & data) {
     const std::string str =
-        std::string(event) + ": " +
+        "data: " +
         data.dump(-1, ' ', false, json::error_handler_t::replace) +
         "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
@@ -708,6 +708,16 @@ static json oaicompat_chat_params_parse(
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
 
+    // parse the "enable_thinking" kwarg to override the default value
+    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    if (enable_thinking_kwarg == "true") {
+        inputs.enable_thinking = true;
+    } else if (enable_thinking_kwarg == "false") {
+        inputs.enable_thinking = false;
+    } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
+        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
@@ -724,7 +734,7 @@ static json oaicompat_chat_params_parse(
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
-        if ( (!inputs.enable_thinking) || inputs.chat_template_kwargs.find("enable_thinking") != inputs.chat_template_kwargs.end()) {
+        if ( inputs.enable_thinking ) {
             throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
         }
 
@@ -990,6 +1000,47 @@ static bool are_lora_equal(
         }
     }
     return true;
+}
+
+// get the ids of all enabled loras
+static std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras) {
+    std::vector<size_t> enabled_ids;
+    for (size_t i = 0; i < loras.size(); ++i) {
+        if (loras[i].scale > 0) {
+            enabled_ids.push_back(i);
+        }
+    }
+    return enabled_ids;
+}
+
+// check whether the given lora set has only aloras activated (empty => false)
+static bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras) {
+    bool found_alora = false;
+    for (const auto & lora : loras) {
+        if (lora.scale != 0) {
+            if (llama_adapter_get_alora_n_invocation_tokens(lora.ptr) == 0) {
+                return false;
+            }
+            found_alora = true;
+        }
+    }
+    return found_alora;
+}
+
+// if the two sets of loras are different, they require a cache clear unless the
+// change is only from aloras to aloras.
+static bool lora_should_clear_cache(
+        const std::vector<common_adapter_lora_info> & current,
+        const std::vector<common_adapter_lora_info> & next) {
+
+    // This should always be called after determining that the two sets are
+    // _not_ equal. This assert is therefore some slightly wasted work and
+    // should be safe to remove as long as this method is called correctly.
+    GGML_ASSERT(!are_lora_equal(current, next));
+
+    return (
+        !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
+        !lora_all_alora(next));
 }
 
 // parse lora config from JSON request, returned a copy of lora_base with updated scale
