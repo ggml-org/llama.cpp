@@ -1709,7 +1709,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             } else {
                 LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate - ", __func__);
             }
-            LLAMA_LOG_INFO("using %s error estimation\n", params->no_bias ? "MSE only (no aligment bias)" : "aligment bias (default)");
+            LLAMA_LOG_INFO("using %s error estimation\n", params->no_bias ? "MSE only (no alignment bias)" : "alignment bias (default)");
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
             bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
         } else {
