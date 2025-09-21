@@ -65,6 +65,16 @@ if [ ! -z ${GG_BUILD_CUDA} ]; then
     fi
 fi
 
+if [ ! -z ${GG_BUILD_ROCM} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
+    if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
+        echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
+        exit 1
+    fi
+
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DAMDGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
+fi
+
 if [ ! -z ${GG_BUILD_SYCL} ]; then
     if [ -z ${ONEAPI_ROOT} ]; then
         echo "Not detected ONEAPI_ROOT, please install oneAPI base toolkit and enable it by:"
@@ -883,7 +893,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     fi
 
     if [ -z ${GG_BUILD_VRAM_GB} ] || [ ${GG_BUILD_VRAM_GB} -ge 8 ]; then
-        if [ -z ${GG_BUILD_CUDA} ] && [ -z ${GG_BUILD_VULKAN} ]; then
+        if [ -z ${GG_BUILD_CUDA} ] && [ -z ${GG_BUILD_VULKAN} ] && [ -z ${GG_BUILD_ROCM} ] && [ -z ${GG_BUILD_METAL} ]; then
             test $ret -eq 0 && gg_run pythia_1_4b
         else
             test $ret -eq 0 && gg_run pythia_2_8b
