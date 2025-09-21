@@ -2563,12 +2563,14 @@ kernel void kernel_norm_f32(
 // F == 1 : rms_norm (no fuse)
 // F == 2 : rms_norm + mul
 // F == 3 : rms_norm + mul + add
+// F == 4 : rms_norm + mul + swiglu
 template <short F>
 kernel void kernel_rms_norm_fuse_impl(
         constant ggml_metal_kargs_rms_norm & args,
         device const char * src0,
         device const char * src1_0,
         device const char * src1_1,
+        device const char * src1_2, 
         device       char * dst,
         threadgroup float * shmem_f32 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
@@ -2622,6 +2624,15 @@ kernel void kernel_rms_norm_fuse_impl(
         if (F == 3) {
             y[i00] = (x[i00]*scale)*f0[i00] + f1[i00];
         }
+        if (F == 4) {
+            device const float4 * gate_ptr = (device const float4 *) (
+                src1_2 + (i03 % args.nef3[2]) * args.nbf3[2] +
+                         (i02 % args.nef2[2]) * args.nbf2[2] +
+                         (i01 % args.nef1[2]) * args.nbf1[2]
+            );
+            float4 g = gate_ptr[i00]; 
+            y[i00] = (x[i00] * scale * f0[i00]) * (g / (1.0f + exp(-g)));
+        }
     }
 }
 
@@ -2630,6 +2641,7 @@ typedef decltype(kernel_rms_norm_fuse_impl<1>) kernel_rms_norm_fuse_t;
 template [[host_name("kernel_rms_norm_f32")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<1>;
 template [[host_name("kernel_rms_norm_mul_f32")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<2>;
 template [[host_name("kernel_rms_norm_mul_add_f32")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<3>;
+template [[host_name("kernel_rms_norm_mul_swiglu_f32")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<4>;
 
 kernel void kernel_l2_norm_f32(
         constant ggml_metal_kargs_l2_norm & args,

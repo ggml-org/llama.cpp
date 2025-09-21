@@ -2391,7 +2391,8 @@ int ggml_metal_op_rms_norm(ggml_metal_op_t ctx, int idx) {
 
     int n_fuse = 1;
 
-    ggml_metal_buffer_id bid_fuse[2] = { bid_src0, bid_src0 };
+    ggml_metal_buffer_id bid_fuse[3] = { bid_src0, bid_src0, bid_src0 };
+    int32_t fuse_type = 0; // 0 = auto / default (ADD)
 
     // d[0] = rms_norm(a)
     // d[1] = mul(d[0], b)
@@ -2436,13 +2437,38 @@ int ggml_metal_op_rms_norm(ggml_metal_op_t ctx, int idx) {
         }
 
         ++n_fuse;
+        // ========== 新增：尝试从 n_fuse==2 继续融合 SWIGLU_SPLIT ==========
+        if (n_fuse == 2 && idx + 2 < idx_end) {
+            fops[2] = GGML_OP_GLU;
+
+            if (ggml_can_fuse(gf, idx + 1, fops + 1, 2) &&
+                ops[1] == ops[2]->src[1] &&
+                ops[2]->src[0]->ne[0] == op->ne[0] &&
+                ggml_is_contiguous_rows(ops[2]->src[0]) &&
+                ggml_get_glu_op(ops[2]) == GGML_GLU_OP_SWIGLU &&
+                ops[2]->src[0]->type == GGML_TYPE_F32) {
+                fuse_type = 2; // SWIGLU
+
+                bid_fuse[2] = ggml_metal_get_buffer_id(ops[2]->src[0]); // ✅ 第三个 buffer
+
+                args.nef1[2] = ops[2]->src[0]->ne[1];
+                args.nef2[2] = ops[2]->src[0]->ne[2];
+                args.nef3[2] = ops[2]->src[0]->ne[3];
+
+                args.nbf1[2] = ops[2]->src[0]->nb[1];
+                args.nbf2[2] = ops[2]->src[0]->nb[2];
+                args.nbf3[2] = ops[2]->src[0]->nb[3];
+
+                n_fuse = 3;
+            }
+        }
 
         if (debug_fusion > 1 && n_fuse > 1) {
             if (n_fuse == 2) {
                 GGML_LOG_DEBUG("%s: fuse: RMS_NORM + MUL\n", __func__);
             }
             if (n_fuse == 3) {
-                GGML_LOG_DEBUG("%s: fuse: RMS_NORM + MUL + ADD\n", __func__);
+                GGML_LOG_DEBUG("%s: fuse: RMS_NORM + MUL + %s\n", __func__,ggml_op_name(fops[2]));
             }
         }
     }
@@ -2459,7 +2485,7 @@ int ggml_metal_op_rms_norm(ggml_metal_op_t ctx, int idx) {
         }
     }
 
-    ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_rms_norm(lib, op, n_fuse);
+    ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_rms_norm(lib, op, n_fuse, fuse_type);
 
     int nth = 32; // SIMD width
 
@@ -2477,7 +2503,8 @@ int ggml_metal_op_rms_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
     ggml_metal_encoder_set_buffer  (enc, bid_fuse[0], 2);
     ggml_metal_encoder_set_buffer  (enc, bid_fuse[1], 3);
-    ggml_metal_encoder_set_buffer  (enc, bid_dst, 4);
+    ggml_metal_encoder_set_buffer  (enc, bid_fuse[2], 4);
+    ggml_metal_encoder_set_buffer  (enc, bid_dst, 5);
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
