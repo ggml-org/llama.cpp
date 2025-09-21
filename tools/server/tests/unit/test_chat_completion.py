@@ -271,8 +271,10 @@ def test_chat_completion_with_timings_per_token():
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "test"}],
         "stream": True,
+        "stream_options": {"include_usage": True},
         "timings_per_token": True,
     })
+    stats_received = False
     for i, data in enumerate(res):
         if i == 0:
             # Check first role message for stream=True
@@ -288,6 +290,8 @@ def test_chat_completion_with_timings_per_token():
                 assert "predicted_per_second" in data["timings"]
                 assert "predicted_n" in data["timings"]
                 assert data["timings"]["predicted_n"] <= 10
+                stats_received = True
+    assert stats_received
 
 
 def test_logprobs():
@@ -385,3 +389,68 @@ def test_logit_bias():
     output_text = res.choices[0].message.content
     assert output_text
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
+
+def test_context_size_exceeded():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ] * 100, # make the prompt too long
+    })
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert res.body["error"]["type"] == "exceed_context_size_error"
+    assert res.body["error"]["n_prompt_tokens"] > 0
+    assert server.n_ctx is not None
+    assert server.n_slots is not None
+    assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
+
+
+@pytest.mark.parametrize(
+    "n_batch,batch_count,reuse_cache",
+    [
+        (64, 15, False),
+        (64, 1, True),
+    ]
+)
+def test_return_progresssss(n_batch, batch_count, reuse_cache):
+    global server
+    server.n_batch = n_batch
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.start()
+    def make_cmpl_request():
+        return server.make_stream_request("POST", "/chat/completions", data={
+            "max_tokens": 10,
+            "messages": [
+                {"role": "user", "content": "This is a test" * 100},
+            ],
+            "stream": True,
+            "return_progress": True,
+        })
+    if reuse_cache:
+        # make a first request to populate the cache
+        res0 = make_cmpl_request()
+        for _ in res0:
+            pass # discard the output
+
+    res = make_cmpl_request()
+    last_progress = None
+    total_batch_count = 0
+    for data in res:
+        cur_progress = data.get("prompt_progress", None)
+        if cur_progress is None:
+            continue
+        if last_progress is not None:
+            assert cur_progress["total"] == last_progress["total"]
+            assert cur_progress["cache"] == last_progress["cache"]
+            assert cur_progress["processed"] > last_progress["processed"]
+        total_batch_count += 1
+        last_progress = cur_progress
+
+    assert last_progress is not None
+    assert last_progress["total"] > 0
+    assert last_progress["processed"] == last_progress["total"]
+    assert total_batch_count == batch_count

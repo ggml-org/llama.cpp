@@ -63,7 +63,7 @@ causal-verify-logits: causal-run-original-model causal-run-converted-model
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 
 causal-run-original-embeddings:
-	@./scripts/causal/run-casual-gen-embeddings-org.sh
+	@./scripts/causal/run-casual-gen-embeddings-org.py
 
 causal-run-converted-embeddings:
 	@./scripts/causal/run-converted-model-embeddings-logits.sh
