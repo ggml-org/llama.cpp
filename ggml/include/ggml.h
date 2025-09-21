@@ -581,7 +581,7 @@ extern "C" {
         GGML_UNARY_OP_CEIL,
         GGML_UNARY_OP_ROUND,
         GGML_UNARY_OP_TRUNC,
-
+        
         GGML_UNARY_OP_COUNT,
     };
 
@@ -1103,7 +1103,40 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_gelu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+            
+    GGML_API struct ggml_tensor * ggml_floor(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_floor_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_trunc(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);  
+
+    GGML_API struct ggml_tensor * ggml_trunc_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+            
     // GELU using erf (error function) when possible
     // some backends may fallback to approximation based on Abramowitz and Stegun formula
     GGML_API struct ggml_tensor * ggml_gelu_erf(
@@ -2154,7 +2187,7 @@ extern "C" {
             int                  p1,
             int                  p2,
             int                  p3);
-
+    
     GGML_API struct ggml_tensor * ggml_pad_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
