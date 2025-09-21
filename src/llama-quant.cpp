@@ -982,8 +982,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double s2 = 0.0;
             for (int64_t j = 0; j < n_per_row; ++j) {
                 const double w = v ? std::max(0.0f, v[j]) : 1.0;
-                const double aw2 = std::sqrt(w) * a[j];
-                const double z = aw2 * aw2;
+                const double aw = std::sqrt(w) * a[j];
+                const double z  = aw * aw;
                 s1 += z;
                 s2 += z * z;
             }
@@ -992,7 +992,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (s1 > 0.0) {
                 const auto n = (double)n_per_row;
                 const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
-                l = (float) std::clamp(8.0 * (c / (c + 1.0)), 0.0, 12.0);
+                l = (float)std::clamp(8.0 * (c / (c + 1.0)), 0.0, 12.0);
             }
 
             lambdas[(size_t)s] = l;
