@@ -75,13 +75,12 @@
  * @param device The device ID to set.
  */
 void ggml_cann_set_device(const int32_t device) {
-    // TODO: uncomment these lines after empty context has fixed.
-    // int current_device;
-    // ACL_CHECK(aclrtGetDevice(&current_device));
+    int current_device = -1;
+    aclrtGetDevice(&current_device);
 
-    // if (device == current_device) {
-    //   return;
-    // }
+    if (device == current_device) {
+      return;
+    }
     ACL_CHECK(aclrtSetDevice(device));
 }
 
@@ -2757,7 +2756,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
     /* .graph_compute           = */ ggml_backend_cann_graph_compute,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
-    /* .optimize_graph          = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 /**
