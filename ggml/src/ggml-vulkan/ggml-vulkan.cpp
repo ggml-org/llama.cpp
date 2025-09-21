@@ -1584,7 +1584,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 
     vk::ComputePipelineCreateInfo compute_pipeline_create_info(
-        vk::PipelineCreateFlags{},
+        device->pipeline_executable_properties_support ?
+            vk::PipelineCreateFlagBits::eCaptureStatisticsKHR :
+            vk::PipelineCreateFlags{},
         pipeline_shader_create_info,
         pipeline->layout);
 
