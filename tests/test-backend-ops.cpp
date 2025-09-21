@@ -2927,36 +2927,41 @@ struct test_rms_norm_back : public test_case {
     }
 };
 
-// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD
+// GGML_OP_RMS_NORM + GGML_OP_MUL + (GGML_OP_ADD or GGML_GLU_OP_SWIGLU)
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const float eps;
     const bool broadcast;
     const bool multi_add; // test a sequence of adds feeding into rms_norm
+    const bool use_swiglu; // if true, use GGML_GLU_OP_SWIGLU instead of GGML_OP_ADD for the final OP
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "RMS_NORM_MUL_ADD";
+        return use_swiglu ? "RMS_NORM_MUL_SWIGLU" : "RMS_NORM_MUL_ADD";
     }
 
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne, eps, broadcast, multi_add);
+        return VARS_TO_STR6(type, ne, eps, broadcast, multi_add, use_swiglu);
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
-            float eps = 1e-6f, bool broadcast = false, bool multi_add = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add) {}
+            float eps = 1e-6f, bool broadcast = false, bool multi_add = false, bool use_swiglu = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add), use_swiglu(use_swiglu) {}
+
+    test_rms_norm_mul_add(bool use_swiglu_flag)
+        : test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, 1e-6f, false, false, use_swiglu_flag) {}
+    
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0]*2, ne[1]*3, ne[2]*3, ne[3]*4};
 
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_tensor * c = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * c = ggml_new_tensor(ctx, type, 4, ne.data()); //c is gate or add
 
         ggml_set_param(a);
         ggml_set_name(a, "a");
@@ -2970,7 +2975,13 @@ struct test_rms_norm_mul_add : public test_case {
         if (multi_add) {
             a = ggml_add(ctx, ggml_add(ctx, a, b), c);
         }
-        ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
+
+        ggml_tensor * out;
+        if (use_swiglu) {
+            out = ggml_swiglu_split(ctx, ggml_repeat(ctx, c, a), ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b));
+        } else {
+            out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -6102,12 +6113,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, false, false, true)); // ← use_swiglu=true
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true,  false, true)); // ← use_swiglu=true
         test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, false));
         test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
     }
     for (uint32_t n : {1, 511, 1025, 8192, 33*512}) {
         for (bool multi_add : {false, true}) {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add, true)); // ← use_swiglu=true
         }
     }
 
