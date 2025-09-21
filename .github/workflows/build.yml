@@ -1247,3 +1247,195 @@ jobs:
               -DGGML_CANN=on \
               -DSOC_TYPE=${{ matrix.device }}
           cmake --build build -j $(nproc)
+
+# TODO: simplify the following workflows using a matrix
+# TODO: run lighter CI on PRs and the full CI only on master (if needed)
+  ggml-ci-x64-cpu-low-perf:
+    runs-on: [self-hosted, Linux, X64, CPU, low-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-low-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU, low-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-cpu-high-perf:
+    runs-on: [self-hosted, Linux, X64, CPU, high-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-high-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU, high-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-v100-cuda:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, V100]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          nvidia-smi
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-v100-vulkan:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, V100]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-t4-cuda:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          nvidia-smi
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-t4-vulkan:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-t4-vulkan-coopmat1:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-cpu-amx:
+    runs-on: [self-hosted, Linux, X64, CPU, AMX]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-amd-v710-vulkan:
+    runs-on: [self-hosted, Linux, X64, AMD, V710]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-amd-v710-rocm:
+    runs-on: [self-hosted, Linux, X64, AMD, V710]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-mac-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+# TODO: install vulkan drivers
+#  ggml-ci-mac-vulkan:
+#    runs-on: [self-hosted, macOS, ARM64]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
