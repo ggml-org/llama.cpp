@@ -21,6 +21,60 @@ struct tensor_quantization {
     ggml_type quant = GGML_TYPE_COUNT;
 };
 
+static bool is_quantizable(const std::string & name, const llm_arch arch, const llama_model_quantize_params * params) {
+    if (params->only_copy) { return false; }
+
+    const auto tn = LLM_TN(arch);
+
+    // This used to be a regex, but <regex> has an extreme cost to compile times.
+    bool q = name.size() >= 6 && name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+
+    // Do not quantize norm tensors
+    q &= name.find("_norm.weight") == std::string::npos;
+
+    // Do not quantize expert gating tensors
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    q &= name.find("ffn_gate_inp.weight") == std::string::npos;
+
+    // These are very small (e.g. 4x4)
+    q &= name.find("altup") == std::string::npos;
+    q &= name.find("laurel") == std::string::npos;
+
+    // These are not too big so keep them as it is
+    q &= name.find("per_layer_model_proj") == std::string::npos;
+
+    // Do not quantize positional embeddings and token types (BERT)
+    q &= name != tn(LLM_TENSOR_POS_EMBD, "weight");
+    q &= name != tn(LLM_TENSOR_TOKEN_TYPES, "weight");
+
+    // Do not quantize Jamba, Mamba, LFM2's small yet 2D weights
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    q &= name.find("ssm_conv1d.weight") == std::string::npos;
+    q &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // Do not quantize ARWKV, RWKV's small yet 2D weights
+    q &= name.find("time_mix_first.weight") == std::string::npos;
+    q &= name.find("time_mix_w0.weight") == std::string::npos;
+    q &= name.find("time_mix_w1.weight") == std::string::npos;
+    q &= name.find("time_mix_w2.weight") == std::string::npos;
+    q &= name.find("time_mix_v0.weight") == std::string::npos;
+    q &= name.find("time_mix_v1.weight") == std::string::npos;
+    q &= name.find("time_mix_v2.weight") == std::string::npos;
+    q &= name.find("time_mix_a0.weight") == std::string::npos;
+    q &= name.find("time_mix_a1.weight") == std::string::npos;
+    q &= name.find("time_mix_a2.weight") == std::string::npos;
+    q &= name.find("time_mix_g1.weight") == std::string::npos;
+    q &= name.find("time_mix_g2.weight") == std::string::npos;
+    q &= name.find("time_mix_decay_w1.weight") == std::string::npos;
+    q &= name.find("time_mix_decay_w2.weight") == std::string::npos;
+    q &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
+
+    // Do not quantize relative position bias (T5)
+    q &= name.find("attn_rel_b.weight") == std::string::npos;
+
+    return q;
+}
+
 static bool is_iq(const enum ggml_type t) {
     switch (t) {
         case GGML_TYPE_IQ1_S:
@@ -684,40 +738,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
     };
 
-    auto name_tn = LLM_TN(model.arch);
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
-        // This list should be kept in sync with llama_tensor_quantize_impl() to avoid drift
-        const std::string name = ggml_get_name(t);
-        bool q = name.rfind("weight") == name.size() - 6;
-        q &= ggml_n_dims(t) >= 2;
-        q &= name.find("_norm.weight") == std::string::npos;
-        q &= name.find("ffn_gate_inp.weight") == std::string::npos;
-        q &= name.find("altup") == std::string::npos;
-        q &= name.find("laurel") == std::string::npos;
-        q &= name.find("per_layer_model_proj") == std::string::npos;
-        q &= name != name_tn(LLM_TENSOR_POS_EMBD, "weight");
-        q &= name != name_tn(LLM_TENSOR_TOKEN_TYPES, "weight");
-        q &= name.find("ssm_conv1d.weight") == std::string::npos;
-        q &= name.find("shortconv.conv.weight") == std::string::npos;
-        q &= name.find("time_mix_first.weight") == std::string::npos;
-        q &= name.find("time_mix_w0.weight") == std::string::npos;
-        q &= name.find("time_mix_w1.weight") == std::string::npos;
-        q &= name.find("time_mix_w2.weight") == std::string::npos;
-        q &= name.find("time_mix_v0.weight") == std::string::npos;
-        q &= name.find("time_mix_v1.weight") == std::string::npos;
-        q &= name.find("time_mix_v2.weight") == std::string::npos;
-        q &= name.find("time_mix_a0.weight") == std::string::npos;
-        q &= name.find("time_mix_a1.weight") == std::string::npos;
-        q &= name.find("time_mix_a2.weight") == std::string::npos;
-        q &= name.find("time_mix_g1.weight") == std::string::npos;
-        q &= name.find("time_mix_g2.weight") == std::string::npos;
-        q &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-        q &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-        q &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
-        q &= name.find("attn_rel_b.weight") == std::string::npos;
-        q &= !params->only_copy;
-
-        return q;
+        if (ggml_n_dims(t) < 2) { return false; }
+        return is_quantizable(ggml_get_name(t), model.arch, params);
     };
 
     // Estimate error for a given type using a sampled subset of rows
@@ -1747,57 +1770,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
             ++idx, ml.n_tensors, ggml_get_name(tensor), llama_format_tensor_shape(tensor).c_str(), ggml_type_name(tensor->type));
 
-        // This used to be a regex, but <regex> has an extreme cost to compile times.
-        bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
-
-        // quantize only 2D and 3D tensors (experts)
-        quantize &= (ggml_n_dims(tensor) >= 2);
-
-        // do not quantize norm tensors
-        quantize &= name.find("_norm.weight") == std::string::npos;
-
+        bool quantize = ggml_n_dims(tensor) >= 2 && is_quantizable(name, model.arch, params);
         quantize &= params->quantize_output_tensor || name != "output.weight";
-        quantize &= !params->only_copy;
-
-        // do not quantize expert gating tensors
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
-
-        // these are very small (e.g. 4x4)
-        quantize &= name.find("altup")  == std::string::npos;
-        quantize &= name.find("laurel") == std::string::npos;
-
-        // these are not too big so keep them as it is
-        quantize &= name.find("per_layer_model_proj") == std::string::npos;
-
-        // do not quantize positional embeddings and token types (BERT)
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-        // do not quantize Mamba's small yet 2D weights
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
-        quantize &= name.find("shortconv.conv.weight") == std::string::npos;
-
-        // do not quantize RWKV's small yet 2D weights
-        quantize &= name.find("time_mix_first.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
-
-        // do not quantize relative position bias (T5)
-        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
         ggml_type new_type;
         void * new_data;
