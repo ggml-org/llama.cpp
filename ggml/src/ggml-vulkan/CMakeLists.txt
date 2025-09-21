@@ -214,7 +214,7 @@ if (Vulkan_FOUND)
             DEPENDS ${_ggml_vk_output_dir}/CMakeCache.txt
                     ${_ggml_vk_shader_cmake_file}
                     ${_ggml_vk_shader_files}
-            COMMAND cmake --build ${_ggml_vk_output_dir} --target all
+            COMMAND cmake --build ${_ggml_vk_output_dir} -j ${CMAKE_BUILD_PARALLEL_LEVEL}
             COMMENT "Build vulkan shaders"
         )
     endif()
