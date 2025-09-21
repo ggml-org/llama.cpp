@@ -1248,6 +1248,8 @@ jobs:
               -DSOC_TYPE=${{ matrix.device }}
           cmake --build build -j $(nproc)
 
+# TODO: simplify the following workflows using a matrix
+# TODO: run lighter CI on PRs and the full CI only on master (if needed)
   ggml-ci-x64-cpu-low-perf:
     runs-on: [self-hosted, Linux, X64, CPU, low-perf]
 
