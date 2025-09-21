@@ -372,17 +372,17 @@ function gg_run_qwen3_0_6b {
     ./bin/llama-quantize ${model_bf16} ${model_q5_k} q5_k
     ./bin/llama-quantize ${model_bf16} ${model_q6_k} q6_k
 
-    (time ./bin/llama-cli -no-cnv --model ${model_bf16} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q8_0} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q4_0} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_0.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q4_1} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_1.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q5_0} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_0.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q5_1} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_1.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q2_k} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q2_k.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q3_k} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q3_k.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q4_k} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_k.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q5_k} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_k.log
-    (time ./bin/llama-cli -no-cnv --model ${model_q6_k} -t 1 -ngl 99 -c 0 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
+    (time ./bin/llama-cli -no-cnv --model ${model_bf16} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q8_0} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q4_0} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_0.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q4_1} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_1.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q5_0} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_0.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q5_1} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_1.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q2_k} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q2_k.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q3_k} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q3_k.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q4_k} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q4_k.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q5_k} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_k.log
+    (time ./bin/llama-cli -no-cnv --model ${model_q6_k} -t 1 -ngl 99 -c 2048 -s 1234 -n 256 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     (time ./bin/llama-perplexity --model ${model_bf16} -f ${wiki_test} -t 1 -ngl 99 -c 2048 -b 512 --chunks 4 ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
     (time ./bin/llama-perplexity --model ${model_q8_0} -f ${wiki_test} -t 1 -ngl 99 -c 2048 -b 512 --chunks 4 ) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
@@ -398,10 +398,10 @@ function gg_run_qwen3_0_6b {
 
     (time ./bin/llama-imatrix --model ${model_bf16} -f ${wiki_test} -t 1 -ngl 99 -c 2048 -b 512 --chunks 4 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 0 -fa off ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 0 -fa on  ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 0 -fa off ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 0 -fa on  ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 2048 -fa off ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 2048 -fa on  ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 2048 -fa off ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 2048 -fa on  ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
         qnt="$1"
