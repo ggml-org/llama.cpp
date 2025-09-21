@@ -1179,55 +1179,53 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
-        {
-            auto & candidates = info.candidate;
-            if (!candidates.empty()) {
-                std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
-                    if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
+        auto pareto_convex = [](std::vector<candidate_types> & candidates) {
+            if (candidates.empty()) return;
 
-                    return a.error < b.error;
-                });
+            std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
+                if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
+                return a.error < b.error;
+            });
 
-                std::vector<candidate_types> pareto;
-                pareto.reserve(candidates.size());
-                double best_err = infinity;
-                size_t last_bytes = std::numeric_limits<size_t>::max();
-                for (const auto & c : candidates) {
-                    if (c.bytes != last_bytes) {
-                        last_bytes = c.bytes;
-                        if (c.error < best_err) {
-                            best_err = c.error;
-                            pareto.push_back(c);
-                        }
+            // Pareto by bytes -> error
+            std::vector<candidate_types> pareto;
+            pareto.reserve(candidates.size());
+            double best_err = std::numeric_limits<double>::infinity();
+            size_t last_b = std::numeric_limits<size_t>::max();
+            for (const auto & c : candidates) {
+                if (c.bytes != last_b) {
+                    last_b = c.bytes;
+                    if (c.error < best_err) {
+                        best_err = c.error;
+                        pareto.push_back(c);
                     }
-                }
-
-                candidates.swap(pareto);
-
-                if (candidates.size() >= 3) {
-                    std::vector<candidate_types> hull;
-                    hull.reserve(candidates.size());
-                    auto slope = [](const candidate_types & a, const candidate_types & b) {
-                        const double dx = b.bytes - a.bytes;
-
-                        return dx <= 0.0 ? infinity : (b.error - a.error) / dx;
-                    };
-
-                    for (const auto & p : candidates) {
-                        while (hull.size() >= 2) {
-                            double s1 = slope(hull[hull.size() - 2], hull[hull.size() - 1]);
-                            double s2 = slope(hull[hull.size() - 1], p);
-                            if (s2 + epsilon < s1) { hull.pop_back(); }
-                            else { break; }
-                        }
-
-                        hull.push_back(p);
-                    }
-
-                    candidates.swap(hull);
                 }
             }
-        }
+
+            candidates.swap(pareto);
+            if (candidates.size() < 3) { return; } // need at least 3 points to do convex hull
+
+            // Convex hull (lower envelope)
+            auto slope = [](const candidate_types & a, const candidate_types & b) {
+                const double dx = b.bytes - a.bytes;
+                return dx <= 0.0 ? infinity : (b.error - a.error) / dx;
+            };
+
+            std::vector<candidate_types> hull; hull.reserve(candidates.size());
+            for (const auto & p : candidates) {
+                while (hull.size() >= 2) {
+                    const double s1 = slope(hull[hull.size() - 2], hull[hull.size() - 1]);
+                    const double s2 = slope(hull[hull.size() - 1], p);
+                    if (s2 + epsilon < s1) hull.pop_back();
+                    else { break; }
+                }
+
+                hull.push_back(p);
+            }
+            candidates.swap(hull);
+        };
+
+        pareto_convex(info.candidate);
 
         // Initialize choice at the smallest bpw candidate
         info.choice = 0;
