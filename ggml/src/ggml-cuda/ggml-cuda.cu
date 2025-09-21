@@ -2835,29 +2835,9 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         }
 
         ggml_tensor * softmax = cgraph->nodes[node_idx];
-
-        float scale    = 1.0f;
-        float max_bias = 0.0f;
-
-        memcpy(&scale,    (const float *) softmax->op_params + 0, sizeof(float));
-        memcpy(&max_bias, (const float *) softmax->op_params + 1, sizeof(float));
-
-        if (scale != 1.0f || max_bias != 0.0f) {
-            return false;
+        if (ggml_cuda_should_use_topk_moe(softmax)) {
+            return true;
         }
-
-        // don't fuse when masks or sinks are present
-        if (softmax->src[1] || softmax->src[2]) {
-            return false;
-        }
-
-        const int n_expert = softmax->ne[0];
-        // n_expert must be a power of 2
-        if (n_expert & (n_expert - 1) != 0 || n_expert > 512) {
-            return false;
-        }
-
-        return true;
     }
 
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
@@ -2926,8 +2906,6 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
 
         return true;
     }
-
-
 
     return false;
 }
@@ -3010,7 +2988,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
                         continue;
                     }
-
                 }
 #ifndef NDEBUG
                 assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));

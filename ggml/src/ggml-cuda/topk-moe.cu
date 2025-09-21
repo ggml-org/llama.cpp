@@ -1,3 +1,4 @@
+#include "ggml.h"
 #include "topk-moe.cuh"
 
 /*
@@ -10,10 +11,10 @@
 */
 template <size_t n_experts>
 __global__ void topk_moe_cuda(const float * logits,
-                                float *       weights,
-                                int32_t *     ids,
-                                const int     n_rows,
-                                const int     n_expert_used) {
+                              float *       weights,
+                              int32_t *     ids,
+                              const int     n_rows,
+                              const int     n_expert_used) {
     const int row = blockIdx.x * blockDim.y + threadIdx.y;
     if (row >= n_rows) {
         return;
@@ -94,12 +95,12 @@ __global__ void topk_moe_cuda(const float * logits,
 }
 
 static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
-                                    const float *               logits,
-                                    float *                     weights,
-                                    int32_t *                   ids,
-                                    const int                   n_rows,
-                                    const int                   n_expert,
-                                    const int                   n_expert_used) {
+                                 const float *               logits,
+                                 float *                     weights,
+                                 int32_t *                   ids,
+                                 const int                   n_rows,
+                                 const int                   n_expert,
+                                 const int                   n_expert_used) {
     const int    rows_per_block = 4;
     dim3         grid_dims((n_rows + rows_per_block - 1) / rows_per_block, 1, 1);
     dim3         block_dims(32, rows_per_block, 1);
@@ -143,9 +144,9 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
 }
 
 void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
-                             ggml_tensor *               logits,
-                             ggml_tensor *               weights,
-                             ggml_tensor *               ids) {
+                           const ggml_tensor *         logits,
+                           ggml_tensor *               weights,
+                           ggml_tensor *               ids) {
     GGML_ASSERT(logits->type == GGML_TYPE_F32);
     GGML_ASSERT(weights->type == GGML_TYPE_F32);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
@@ -162,4 +163,29 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
     const int n_expert_used = weights->ne[1];
 
     launch_topk_moe_cuda(ctx, logits_d, weights_d, ids_d, n_rows, n_experts, n_expert_used);
+}
+
+bool ggml_cuda_should_use_topk_moe(const ggml_tensor * softmax) {
+    float scale    = 1.0f;
+    float max_bias = 0.0f;
+
+    memcpy(&scale, (const float *) softmax->op_params + 0, sizeof(float));
+    memcpy(&max_bias, (const float *) softmax->op_params + 1, sizeof(float));
+
+    if (scale != 1.0f || max_bias != 0.0f) {
+        return false;
+    }
+
+    // don't fuse when masks or sinks are present
+    if (softmax->src[1] || softmax->src[2]) {
+        return false;
+    }
+
+    const int n_expert = softmax->ne[0];
+    // n_expert must be a power of 2
+    if ((n_expert & (n_expert - 1)) != 0 || n_expert > 512) {
+        return false;
+    }
+
+    return true;
 }

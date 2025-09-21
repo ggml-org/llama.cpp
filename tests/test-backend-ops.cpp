@@ -4434,7 +4434,7 @@ struct test_topk_moe: public test_case {
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "TOPK_GATED_MOE";
+        return "TOPK_MOE";
     }
 
     bool run_whole_graph() override { return true; }
