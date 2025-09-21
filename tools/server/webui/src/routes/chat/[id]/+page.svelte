@@ -44,7 +44,7 @@
 				const success = await chatStore.loadConversation(chatId);
 
 				if (!success) {
-					await goto('/');
+					await goto('#/');
 				}
 			})();
 		}
