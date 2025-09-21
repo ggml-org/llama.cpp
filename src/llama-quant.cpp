@@ -1146,8 +1146,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         for (size_t i = 0; i < base_sz; ++i) {
             ggml_type ts_type = base_arr[i];
             if (is_iq(ts_type) && !has_valid_imatrix) {
-                LLAMA_LOG_WARN("%s: skipping %s quantization for %s, no or mismatched imatrix provided\n",
-                    __func__, ggml_type_name(ts_type), name.c_str());
+                LLAMA_LOG_WARN("%s: skipping %s quantization for %s, no or mismatched imatrix provided\n", __func__, ggml_type_name(ts_type), name.c_str());
                 continue;
             }
 
@@ -1214,60 +1213,54 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             info.candidate.push_back(candidate_types{ tensor->type, bpw, ggml_nbytes(tensor), 0.0 });
         }
 
-        // Keep only the pareto‑optimal candidates: if A has >= bytes and >= error than B, drop A.
+        // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
         {
-            std::vector<candidate_types> pruned;
-            pruned.reserve(info.candidate.size());
+            auto & candidates = info.candidate;
+            if (!candidates.empty()) {
+                std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
+                    if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
 
-            // Sort by bytes ascending, error ascending
-            std::sort(info.candidate.begin(), info.candidate.end(), [](const candidate_types & a, const candidate_types & b) {
-                if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
-                return a.error < b.error;
-            });
+                    return a.error < b.error;
+                });
 
-            double best_err = infinity;
-            size_t last_bytes = std::numeric_limits<size_t>::max();
-            for (const auto & c : info.candidate) {
-                // Only keep the best error seen so far at strictly larger byte sizes
-                if (c.bytes != last_bytes) {
-                    // first time we see this byte size
-                    last_bytes = c.bytes;
-                    if (c.error < best_err) {
-                        pruned.push_back(c);
-                        best_err = c.error;
+                std::vector<candidate_types> pareto;
+                pareto.reserve(candidates.size());
+                double best_err = infinity;
+                size_t last_bytes = std::numeric_limits<size_t>::max();
+                for (const auto & c : candidates) {
+                    if (c.bytes != last_bytes) {
+                        last_bytes = c.bytes;
+                        if (c.error < best_err) {
+                            best_err = c.error;
+                            pareto.push_back(c);
+                        }
                     }
-                } else {
-                    // same bytes: we already sorted by error; skip
-                }
-            }
-
-            info.candidate.swap(pruned);
-        }
-
-        // Enforce convexity in (bytes, error) curve
-        {
-            const auto & c = info.candidate;
-            if (c.size() >= 3) {
-                std::vector<candidate_types> convex;
-                convex.reserve(c.size());
-                auto slope = [](const candidate_types & a, const candidate_types & b) -> double {
-                    const double dx = (double)b.bytes - (double)a.bytes;
-                    if (dx <= 0.0) { return infinity; }
-
-                    return ((double)b.error - (double)a.error) / dx;
-                };
-
-                for (const auto & p : c) {
-                    while (convex.size() >= 2) {
-                        double s1 = slope(convex[convex.size() - 2], convex[convex.size() - 1]);
-                        double s2 = slope(convex[convex.size() - 1], p);
-                        if (s2 + epsilon < s1) { convex.pop_back(); }
-                        else { break; }
-                    }
-                    convex.push_back(p);
                 }
 
-                info.candidate.swap(convex);
+                candidates.swap(pareto);
+
+                if (candidates.size() >= 3) {
+                    std::vector<candidate_types> hull;
+                    hull.reserve(candidates.size());
+                    auto slope = [](const candidate_types & a, const candidate_types & b) {
+                        const double dx = b.bytes - a.bytes;
+
+                        return dx <= 0.0 ? infinity : (b.error - a.error) / dx;
+                    };
+
+                    for (const auto & p : candidates) {
+                        while (hull.size() >= 2) {
+                            double s1 = slope(hull[hull.size() - 2], hull[hull.size() - 1]);
+                            double s2 = slope(hull[hull.size() - 1], p);
+                            if (s2 + epsilon < s1) { hull.pop_back(); }
+                            else { break; }
+                        }
+
+                        hull.push_back(p);
+                    }
+
+                    candidates.swap(hull);
+                }
             }
         }
 
