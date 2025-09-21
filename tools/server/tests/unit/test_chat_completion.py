@@ -271,8 +271,10 @@ def test_chat_completion_with_timings_per_token():
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "test"}],
         "stream": True,
+        "stream_options": {"include_usage": True},
         "timings_per_token": True,
     })
+    stats_received = False
     for i, data in enumerate(res):
         if i == 0:
             # Check first role message for stream=True
@@ -288,6 +290,8 @@ def test_chat_completion_with_timings_per_token():
                 assert "predicted_per_second" in data["timings"]
                 assert "predicted_n" in data["timings"]
                 assert data["timings"]["predicted_n"] <= 10
+                stats_received = True
+    assert stats_received
 
 
 def test_logprobs():

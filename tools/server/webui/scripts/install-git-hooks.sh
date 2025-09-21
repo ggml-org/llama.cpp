@@ -36,6 +36,18 @@ if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
         exit 1
     fi
 
+    # Run the lint command
+    npm run lint
+    
+    # Check if lint command succeeded
+    if [ $? -ne 0 ]; then
+        echo "Error: npm run lint failed"
+        if [ $STASH_CREATED -eq 0 ]; then
+            echo "You can restore your unstaged changes with: git stash pop"
+        fi
+        exit 1
+    fi
+
     # Run the check command
     npm run check
     
