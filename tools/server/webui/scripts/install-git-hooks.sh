@@ -42,9 +42,6 @@ if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
     # Check if lint command succeeded
     if [ $? -ne 0 ]; then
         echo "Error: npm run lint failed"
-        if [ $STASH_CREATED -eq 0 ]; then
-            echo "You can restore your unstaged changes with: git stash pop"
-        fi
         exit 1
     fi
 
@@ -70,9 +67,11 @@ EOF
 cat > "$PRE_PUSH_HOOK" << 'EOF'
 #!/bin/bash
 
-# Check if there are any changes in the webui directory that need building
-if git diff --name-only HEAD~1..HEAD | grep -q "^tools/server/webui/" || git diff --name-only --cached | grep -q "^tools/server/webui/"; then
-    echo "Building webui for push..."
+# Check if there are any webui changes that need building
+WEBUI_CHANGES=$(git diff --name-only @{push}..HEAD | grep "^tools/server/webui/" || true)
+
+if [ -n "$WEBUI_CHANGES" ]; then
+    echo "Webui changes detected, checking if build is up-to-date..."
     
     # Change to webui directory
     cd tools/server/webui
@@ -83,48 +82,80 @@ if git diff --name-only HEAD~1..HEAD | grep -q "^tools/server/webui/" || git dif
         exit 1
     fi
     
-    # Stash any unstaged changes to avoid conflicts during build
-    echo "Checking for unstaged changes..."
-    if ! git diff --quiet || ! git diff --cached --quiet --diff-filter=A; then
-        echo "Stashing unstaged changes..."
-        git stash push --include-untracked -m "Pre-push hook: stashed unstaged changes"
-        STASH_CREATED=$?
+    # Check if build output exists and is newer than source files
+    BUILD_FILE="../public/index.html.gz"
+    NEEDS_BUILD=false
+    
+    if [ ! -f "$BUILD_FILE" ]; then
+        echo "Build output not found, building..."
+        NEEDS_BUILD=true
     else
-        echo "No unstaged changes to stash"
-        STASH_CREATED=1
-    fi
-    
-    # Run the build command
-    npm run build
-    
-    # Check if build command succeeded
-    if [ $? -ne 0 ]; then
-        echo "Error: npm run build failed"
-        if [ $STASH_CREATED -eq 0 ]; then
-            echo "You can restore your unstaged changes with: git stash pop"
+        # Check if any source files are newer than the build output
+        if find src -newer "$BUILD_FILE" -type f | head -1 | grep -q .; then
+            echo "Source files are newer than build output, rebuilding..."
+            NEEDS_BUILD=true
         fi
-        exit 1
     fi
+    
+    if [ "$NEEDS_BUILD" = true ]; then
+        echo "Building webui..."
+        
+        # Stash any unstaged changes to avoid conflicts during build
+        echo "Checking for unstaged changes..."
+        if ! git diff --quiet || ! git diff --cached --quiet --diff-filter=A; then
+            echo "Stashing unstaged changes..."
+            git stash push --include-untracked -m "Pre-push hook: stashed unstaged changes"
+            STASH_CREATED=$?
+        else
+            echo "No unstaged changes to stash"
+            STASH_CREATED=1
+        fi
+        
+        # Run the build command
+        npm run build
+        
+        # Check if build command succeeded
+        if [ $? -ne 0 ]; then
+            echo "Error: npm run build failed"
+            if [ $STASH_CREATED -eq 0 ]; then
+                echo "You can restore your unstaged changes with: git stash pop"
+            fi
+            exit 1
+        fi
 
-    # Go back to repo root to add build output
-    cd ../../..
-    
-    # Add the build output to staging area and commit if there are changes
-    if [ -f "tools/server/public/index.html.gz" ]; then
-        git add tools/server/public/index.html.gz
-        if ! git diff --cached --quiet; then
-            git commit -m "chore: update webui build output"
+        # Go back to repo root
+        cd ../../..
+        
+        # Check if build output was created/updated
+        if [ -f "tools/server/public/index.html.gz" ]; then
+            # Add the build output and commit it
+            git add tools/server/public/index.html.gz
+            if ! git diff --cached --quiet; then
+                echo "Committing updated build output..."
+                git commit -m "chore: update webui build output"
+                echo "✅ Build output committed successfully"
+            else
+                echo "Build output unchanged"
+            fi
+        else
+            echo "Error: Build output not found after build"
+            if [ $STASH_CREATED -eq 0 ]; then
+                echo "You can restore your unstaged changes with: git stash pop"
+            fi
+            exit 1
         fi
+        
+        if [ $STASH_CREATED -eq 0 ]; then
+            echo "✅ Build completed. Your unstaged changes have been stashed."
+            echo "They will be automatically restored after the push."
+            # Create a marker file to indicate stash was created by pre-push hook
+            touch .git/WEBUI_PUSH_STASH_MARKER
+        fi
+    else
+        echo "✅ Build output is up-to-date"
     fi
     
-    if [ $STASH_CREATED -eq 0 ]; then
-        echo "✅ Build completed. Your unstaged changes have been stashed."
-        echo "They will be automatically restored after the push."
-        # Create a marker file to indicate stash was created by pre-push hook
-        touch .git/WEBUI_PUSH_STASH_MARKER
-    fi
-    
-    echo "✅ Webui build completed successfully"
+    echo "✅ Webui ready for push"
 fi
 
 exit 0
