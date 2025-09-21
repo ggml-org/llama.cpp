@@ -1288,21 +1288,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         bytes = 0;
         err = 0.0;
         for (size_t i = 0; i < all.size(); ++i) {
-            const auto & cand = all[i].candidate;
+            const auto & candidate = all[i].candidate;
             int best_j = 0;
             double best_val = infinity;
-            for (int j = 0; j < (int)cand.size(); ++j) {
-                const double bits = (double)cand[j].bytes * 8.0;
-                const double val = cand[j].error + mu * bits;
-                if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && cand[j].bytes < cand[best_j].bytes)) {
+            for (int j = 0; j < (int)candidate.size(); ++j) {
+                const double bits = (double)candidate[j].bytes * 8.0;
+                const double val = candidate[j].error + mu * bits;
+                if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && candidate[j].bytes < candidate[best_j].bytes)) {
                     best_val = val;
                     best_j = j;
                 }
             }
 
             choice[i] = best_j;
-            bytes += cand[best_j].bytes;
-            err += cand[best_j].error;
+            bytes += candidate[best_j].bytes;
+            err += candidate[best_j].error;
         }
     };
 
