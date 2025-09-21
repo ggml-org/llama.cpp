@@ -6,7 +6,7 @@ on:
 
 jobs:
   debian-13-riscv64-native: # Bianbu 2.2
-    runs-on: self-hosted
+    runs-on: [self-hosted, RISCV64]
 
     steps:
       - name: Install prerequisites
