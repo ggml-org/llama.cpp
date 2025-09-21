@@ -1165,7 +1165,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         // Evaluate candidates
         std::vector<candidate_types> eval_candidates(compatible_candidates.size());
         std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
-        std::vector<float> dequantised_buffer(f32_sample.size());
+        std::vector<float> dequantized_buffer(f32_sample.size());
         const float * slice_lambda = lambdas.empty() ? nullptr : lambdas.data();
         int n_eval_threads = std::max(1, std::min<int>(nthread, (int)compatible_candidates.size()));
         std::atomic<size_t> cidx{0};
@@ -1175,7 +1175,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             eval_workers.emplace_back([&] {
                 // thread-local scratch
                 std::vector<uint8_t> tl_quantized_buffer(quantized_buffer.size());
-                std::vector<float>   tl_dequantised_buffer(dequantised_buffer.size());
+                std::vector<float> tl_dequantized_buffer(dequantized_buffer.size());
                 for (;;) {
                     const size_t i = cidx.fetch_add(1, std::memory_order_relaxed);
                     if (i >= compatible_candidates.size()) { break; }
@@ -1184,7 +1184,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     const auto bpw = (float)tensor_bpw(tensor, tensor_types);
                     const size_t bytes = tensor_bytes(tensor, tensor_types);
                     const auto err = estimate_error(tensor, tensor_types, f32_sample, rows_sample, values, activations,
-                        tl_quantized_buffer, tl_dequantised_buffer, tensor_lambda, slice_lambda);
+                        tl_quantized_buffer, tl_dequantized_buffer, tensor_lambda, slice_lambda);
                     eval_candidates[i] = candidate_types{ tensor_types, bpw, bytes, err };
                 }
             });
