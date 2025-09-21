@@ -606,6 +606,10 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
 static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, const enum ggml_op * ops, int num_ops) {
     assert(num_ops < 32);
 
+    if (node_idx + num_ops > cgraph->n_nodes) {
+        return false;
+    }
+
     int idxs[32];
     for (int i = 0; i < num_ops; ++i) {
         idxs[i] = node_idx + i;
@@ -625,11 +629,6 @@ static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx
 // nicer C++ syntax for ggml_can_fuse
 inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
     return ggml_can_fuse(cgraph, node_idx, ops.begin(), (int)ops.size());
-}
-
-inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, std::initializer_list<int> node_idx, std::initializer_list<enum ggml_op> ops) {
-    assert(node_idx.size() == ops.size());
-    return ggml_can_fuse_ext(cgraph, node_idx.begin(), ops.begin(), (int)ops.size());
 }
 
 // expose GGUF internals for test code
