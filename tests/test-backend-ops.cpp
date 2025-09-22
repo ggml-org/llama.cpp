@@ -2064,22 +2064,22 @@ struct test_get_rows_back : public test_case {
 // GGML_OP_SET_ROWS
 struct test_set_rows : public test_case {
     const ggml_type type;
-    const ggml_type idx_type;
+    const ggml_type type_idx;
     const std::array<int64_t, 4> ne;
     const std::array<int, 2> nr23; // broadcast only dims 2 and 3
     const int r; // rows to set
     const bool v; // view (non-contiguous src1)
 
     std::string vars() override {
-        return VARS_TO_STR6(type, idx_type, ne, nr23, r, v);
+        return VARS_TO_STR6(type, type_idx, ne, nr23, r, v);
     }
 
     test_set_rows(ggml_type type,
-            ggml_type idx_type,
+            ggml_type type_idx,
             std::array<int64_t, 4> ne,
             std::array<int, 2> nr23,
             int r, bool v = false)
-        : type(type), idx_type(idx_type), ne(ne), nr23(nr23), r(r), v(v) {}
+        : type(type), type_idx(type_idx), ne(ne), nr23(nr23), r(r), v(v) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * dst = ggml_new_tensor_4d(ctx, type,          ne[0], ne[1], ne[2]*nr23[0], ne[3]*nr23[1]);
@@ -2088,7 +2088,7 @@ struct test_set_rows : public test_case {
         ggml_tensor * src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], r,     ne[2]*nr23[0], ne[3]*nr23[1]);
         ggml_set_name(src, "src");
 
-        ggml_tensor * row_idxs = ggml_new_tensor_3d(ctx, idx_type, r, ne[2], ne[3]);
+        ggml_tensor * row_idxs = ggml_new_tensor_3d(ctx, type_idx, r, ne[2], ne[3]);
         ggml_set_name(row_idxs, "row_idxs");
 
         if (v) {
@@ -2125,7 +2125,7 @@ struct test_set_rows : public test_case {
                         const size_t offs = i1*t->nb[1] + i2*t->nb[2];
                         if (t->type == GGML_TYPE_I32) {
                             // TODO: Make a template or something
-                            std::vector<int32_t> data_i32(ne[1]);
+                            std::vector<int32_t> data_i32(t->ne[0]);
                             for (int i = 0; i < t->ne[0]; i++) {
                                 data_i32[i] = static_cast<int32_t>(data[i]);
                             }
