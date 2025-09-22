@@ -1300,7 +1300,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-x64-nvidia-v100-cuda:
     runs-on: [self-hosted, Linux, X64, NVIDIA, V100]

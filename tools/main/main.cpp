@@ -178,7 +178,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        // Start the non-batch threadpool in the paused state
+        // start the non-batch threadpool in the paused state
         tpp.paused = true;
     }
 
