@@ -99,6 +99,8 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                 output_name = f"{shader_base_name}_" + variant["SHADER_SUFFIX"]
             elif "REPLS" in variant and "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
+            elif "REPLS" in variant and "SRC_TYPE" in variant["REPLS"] and "DST_TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC_TYPE"], variant["REPLS"]["DST_TYPE"]])
             elif "REPLS" in variant and "TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
             else:

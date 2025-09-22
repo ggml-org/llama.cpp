@@ -130,7 +130,7 @@ struct webgpu_context_struct {
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline get_rows_pipeline[30];
     wgpu::ComputePipeline get_rows_f32_no_vec_pipeline;
-    wgpu::ComputePipeline cpy_pipeline;
+    wgpu::ComputePipeline cpy_pipeline[2][2];      // src type, dst type
     wgpu::ComputePipeline add_pipeline[2][2];      // type, inplace
     wgpu::ComputePipeline sub_pipeline[2][2];      // type, inplace
     wgpu::ComputePipeline mul_pipeline[2][2];      // type, inplace
@@ -491,8 +491,9 @@ static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor
         (uint32_t) (src->nb[2] / ggml_type_size(src->type)), (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
         (uint32_t) (dst->nb[0] / ggml_type_size(dst->type)), (uint32_t) (dst->nb[1] / ggml_type_size(dst->type)),
         (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)), (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)),
-        // Logical shape — same for both tensors even if permuted
-        (uint32_t) src->ne[0], (uint32_t) src->ne[1], (uint32_t) src->ne[2], (uint32_t) src->ne[3]
+        // Logical shapes
+        (uint32_t) src->ne[0], (uint32_t) src->ne[1], (uint32_t) src->ne[2], (uint32_t) dst->ne[0],
+        (uint32_t) dst->ne[1], (uint32_t) dst->ne[2]
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -508,7 +509,8 @@ static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor
 
     size_t   max_wg_size = ctx->max_wg_size_x;
     uint32_t wg_x        = (ne + max_wg_size - 1) / max_wg_size;
-    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->cpy_pipeline, params, entries, wg_x, ggml_op_name(dst->op));
+    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->cpy_pipeline[src->type][dst->type], params, entries, wg_x,
+                                          ggml_op_name(dst->op));
 }
 
 static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * idx, ggml_tensor * dst) {
@@ -930,6 +932,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_RESHAPE:
             return false;
         case GGML_OP_CPY:
+        case GGML_OP_CONT:
             ggml_webgpu_cpy(ctx, src0, node);
             break;
         case GGML_OP_SET_ROWS:
@@ -1360,8 +1363,15 @@ static void ggml_webgpu_init_get_rows_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_cpy_pipeline(webgpu_context & webgpu_ctx) {
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline, wgsl_cpy, "cpy",
-                                ggml_webgpu_max_wg_size_entry(webgpu_ctx));
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_max_wg_size_entry(webgpu_ctx);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F32][GGML_TYPE_F32],
+                                wgsl_cpy_f32_f32, "cpy_f32_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F32][GGML_TYPE_F16],
+                                wgsl_cpy_f32_f16, "cpy_f32_f16", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F16][GGML_TYPE_F32],
+                                wgsl_cpy_f16_f32, "cpy_f16_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F16][GGML_TYPE_F16],
+                                wgsl_cpy_f16_f16, "cpy_f16_f16", constants);
 }
 
 static void ggml_webgpu_init_add_pipeline(webgpu_context & webgpu_ctx) {
@@ -1608,6 +1618,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                           (src1->type == op->type);
             break;
         case GGML_OP_CPY:
+        case GGML_OP_CONT:
+            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                          (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+            break;
         case GGML_OP_SET_ROWS:
             supports_op = (op->type == GGML_TYPE_F16 && src0->type == GGML_TYPE_F32);
             break;
