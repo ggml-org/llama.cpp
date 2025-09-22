@@ -2,7 +2,10 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
+/.github/actions/                       @slaren
 /.github/workflows/                     @CISC
+/.github/workflows/release.yml          @slaren
+/.github/workflows/winget.yml           @slaren
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/CMakeLists.txt                  @ggerganov
@@ -35,23 +38,27 @@
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
 /examples/save-load-state/              @ggerganov
+/examples/simple/                       @slaren
+/examples/simple-chat/                  @slaren
 /examples/speculative-simple/           @ggerganov
 /examples/speculative/                  @ggerganov
-/ggml/src/ggml-common.h                 @ggerganov
-/ggml/src/ggml-cpu/                     @ggerganov
+/ggml/include/                          @ggerganov @slaren
+/ggml/src/ggml-common.h                 @ggerganov @slaren
+/ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
+/ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
-/ggml/src/ggml-impl.h                   @ggerganov
-/ggml/src/ggml-include/                 @ggerganov
+/ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
-/ggml/src/ggml-threading.*              @ggerganov
+/ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
 /ggml/src/ggml-zdnn/                    @taronaeo
-/ggml/src/ggml.c                        @ggerganov
-/ggml/src/ggml.cpp                      @ggerganov
+/ggml/src/ggml.c                        @ggerganov @slaren
+/ggml/src/ggml.cpp                      @ggerganov @slaren
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
 /gguf-py/                               @CISC
 /media/                                 @ggerganov
@@ -64,9 +71,13 @@
 /src/llama-chat.*                       @ngxson
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
+/src/llama-model-loader.*               @slaren
 /src/llama-vocab.*                      @CISC
 /tests/                                 @ggerganov
+/tests/test-backend-ops.cpp             @slaren
+/tests/test-thread-safety.cpp           @slaren
 /tools/batched-bench/                   @ggerganov
+/tools/llama-bench/                     @slaren
 /tools/main/                            @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
@@ -77,6 +88,8 @@
 /tools/tts/                             @ggerganov
 /tools/run/                             @ericcurtin
 /vendor/                                @ggerganov
+.clang-format                           @slaren
+.clang-tidy                             @slaren
 AUTHORS                                 @ggerganov
 CMakeLists.txt                          @ggerganov
 CONTRIBUTING.md                         @ggerganov
