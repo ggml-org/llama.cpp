@@ -38,9 +38,11 @@ std::vector<std::pair<std::string, std::string>> shader_fnames;
 std::string GLSLC = "glslc";
 std::string input_dir = "vulkan-shaders";
 std::string output_dir = "/tmp";
-std::string target_hpp = "ggml-vulkan-shaders.hpp";
-std::string target_cpp = "ggml-vulkan-shaders.cpp";
+std::string file_filter = "";
+std::string target_hpp = "";
+std::string target_cpp = "";
 bool no_clean = false;
+bool do_header = false;
 
 const std::vector<std::string> type_names = {
     "f32",
@@ -241,6 +243,23 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
     std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
     std::string out_fname = join_paths(output_dir, name + ".spv");
     std::string in_path = join_paths(input_dir, in_fname);
+
+    if ((file_filter != "" && in_fname != file_filter) || do_header) {
+
+        if (do_header) {
+            std::lock_guard<std::mutex> guard(lock);
+            shader_fnames.push_back(std::make_pair(name, out_fname));
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(compile_count_mutex);
+            assert(compile_count > 0);
+            compile_count--;
+        }
+        compile_count_cond.notify_all();
+
+        return;
+    }
 
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
@@ -485,7 +504,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
 }
 
 void process_shaders() {
-    std::cout << "ggml_vulkan: Generating and compiling shaders to SPIR-V" << std::endl;
+    //std::cout << "ggml_vulkan: Generating and compiling shaders to SPIR-V" << std::endl;
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}};
 
     // matmul
@@ -837,11 +856,23 @@ void process_shaders() {
 }
 
 void write_output_files() {
-    FILE* hdr = fopen(target_hpp.c_str(), "w");
-    FILE* src = fopen(target_cpp.c_str(), "w");
+    FILE* hdr = nullptr;
+    FILE* src = nullptr;
+    if (do_header) {
+        hdr = fopen(target_hpp.c_str(), "w");
+    } else {
+        src = fopen(target_cpp.c_str(), "w");
+    }
 
-    fprintf(hdr, "#include <cstdint>\n\n");
-    fprintf(src, "#include \"%s\"\n\n", basename(target_hpp).c_str());
+    if (hdr) {
+        fprintf(hdr, "#include <cstdint>\n\n");
+    }
+    if (src) {
+        fprintf(src, "#include <cstdint>\n\n");
+        if (file_filter == "mul_mat_vec.comp") {
+            fprintf(src, "#include \"ggml-vulkan-shaders.hpp\"\n\n");
+        }
+    }
 
     std::sort(shader_fnames.begin(), shader_fnames.end());
     for (const auto& pair : shader_fnames) {
@@ -853,33 +884,45 @@ void write_output_files() {
             const std::string& path = pair.second;
         #endif
 
-        FILE* spv = fopen(path.c_str(), "rb");
-        if (!spv) {
-            std::cerr << "Error opening SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
-            continue;
+        size_t size {};
+        std::vector<unsigned char> data;
+
+        if (src) {
+            FILE* spv = fopen(path.c_str(), "rb");
+            if (!spv) {
+                std::cerr << "Error opening SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
+                continue;
+            }
+
+            fseek(spv, 0, SEEK_END);
+            size = ftell(spv);
+            fseek(spv, 0, SEEK_SET);
+
+            data.resize(size);
+            size_t read_size = fread(data.data(), 1, size, spv);
+            fclose(spv);
+            if (read_size != size) {
+                std::cerr << "Error reading SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
+                continue;
+            }
         }
 
-        fseek(spv, 0, SEEK_END);
-        size_t size = ftell(spv);
-        fseek(spv, 0, SEEK_SET);
-
-        std::vector<unsigned char> data(size);
-        size_t read_size = fread(data.data(), 1, size, spv);
-        fclose(spv);
-        if (read_size != size) {
-            std::cerr << "Error reading SPIR-V file: " << path << " (" << strerror(errno) << ")\n";
-            continue;
+        if (hdr) {
+            fprintf(hdr, "extern unsigned char %s_data[];\n", name.c_str());
+            fprintf(hdr, "extern const uint64_t %s_len;\n\n", name.c_str());
+        }
+        if (src) {
+            fprintf(src, "extern const uint64_t %s_len = %zu;\n\n", name.c_str(), size);
         }
 
-        fprintf(hdr, "extern unsigned char %s_data[%zu];\n", name.c_str(), size);
-        fprintf(hdr, "const uint64_t %s_len = %zu;\n\n", name.c_str(), size);
-
-        fprintf(src, "unsigned char %s_data[%zu] = {\n", name.c_str(), size);
-        for (size_t i = 0; i < size; ++i) {
-            fprintf(src, "0x%02x,", data[i]);
-            if ((i + 1) % 12 == 0) fprintf(src, "\n");
+        if (src) {
+            fprintf(src, "unsigned char %s_data[%zu] = {\n", name.c_str(), size);
+            for (size_t i = 0; i < size; ++i) {
+                fprintf(src, "0x%02x,", data[i]);
+                if ((i + 1) % 12 == 0) fprintf(src, "\n");
+            }
+            fprintf(src, "\n};\n\n");
         }
-        fprintf(src, "\n};\n\n");
 
         if (!no_clean) {
             std::remove(path.c_str());
@@ -888,8 +931,17 @@ void write_output_files() {
 
     std::string suffixes[2] = {"_f32", "_f16"};
     for (const char *op : {"add", "sub", "mul", "div", "add_rms"}) {
-        fprintf(hdr, "extern unsigned char *%s_data[2][2][2][2];\n", op);
-        fprintf(hdr, "extern uint64_t %s_len[2][2][2][2];\n", op);
+
+        auto source = op == "add_rms" ? std::string("add") : op;
+
+        if (src && source + ".comp" != file_filter) {
+            continue;
+        }
+
+        if (hdr) {
+            fprintf(hdr, "extern unsigned char *%s_data[2][2][2][2];\n", op);
+            fprintf(hdr, "extern uint64_t %s_len[2][2][2][2];\n", op);
+        }
         std::string data = "unsigned char *" + std::string(op) + "_data[2][2][2][2] = ";
         std::string len = "uint64_t " + std::string(op) + "_len[2][2][2][2] = ";
         for (uint32_t t0 = 0; t0 < 2; ++t0) {
@@ -936,8 +988,10 @@ void write_output_files() {
                 len += "};\n";
             }
         }
-        fputs(data.c_str(), src);
-        fputs(len.c_str(), src);
+        if (src) {
+            fputs(data.c_str(), src);
+            fputs(len.c_str(), src);
+        }
     }
 
     std::vector<std::string> btypes = {"f16", "f32"};
@@ -951,21 +1005,41 @@ void write_output_files() {
         if (btype == "q8_1" && !is_legacy_quant(tname)) {
             continue;
         }
-        fprintf(hdr, "extern unsigned char *arr_dmmv_%s_%s_f32_data[3];\n", tname.c_str(), btype.c_str());
-        fprintf(hdr, "extern uint64_t arr_dmmv_%s_%s_f32_len[3];\n", tname.c_str(), btype.c_str());
+        if (hdr) {
+            fprintf(hdr, "extern unsigned char *arr_dmmv_%s_%s_f32_data[3];\n", tname.c_str(), btype.c_str());
+            fprintf(hdr, "extern uint64_t arr_dmmv_%s_%s_f32_len[3];\n", tname.c_str(), btype.c_str());
+        }
         std::string data = "unsigned char *arr_dmmv_" + tname + "_" + btype + "_f32_data[3] = {mul_mat_vec_" + tname + "_" + btype + "_f32_data, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_data, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_no_shmem_data};\n";
         std::string len =  "uint64_t arr_dmmv_"       + tname + "_" + btype + "_f32_len[3] =  {mul_mat_vec_" + tname + "_" + btype + "_f32_len,  mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_len, mul_mat_vec_" + tname + "_" + btype + "_f32_subgroup_no_shmem_len};\n";
-        fputs(data.c_str(), src);
-        fputs(len.c_str(), src);
+        if (src) {
+            if ("mul_mat_vec.comp" != file_filter) {
+                continue;
+            }
+
+            fputs(data.c_str(), src);
+            fputs(len.c_str(), src);
+        }
     }
     }
 
-    fclose(hdr);
-    fclose(src);
+    if (hdr) {
+        fclose(hdr);
+    }
+    if (src) {
+        fclose(src);
+    }
 }
 }
 
 int main(int argc, char** argv) {
+#if 0
+    std::string cmdline {};
+    for (int i = 0; i < argc; ++i) {
+        cmdline += argv[i];
+        cmdline += " ";
+    }
+    printf("%s\n", cmdline.c_str());
+#endif
     std::map<std::string, std::string> args;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -990,12 +1064,16 @@ int main(int argc, char** argv) {
     }
     if (args.find("--target-hpp") != args.end()) {
         target_hpp = args["--target-hpp"]; // Path to generated header file
+        do_header = true;
     }
     if (args.find("--target-cpp") != args.end()) {
         target_cpp = args["--target-cpp"]; // Path to generated cpp file
     }
     if (args.find("--no-clean") != args.end()) {
         no_clean = true; // Keep temporary SPIR-V files in output-dir after build
+    }
+    if (args.find("--filter") != args.end()) {
+        file_filter = args["--filter"];
     }
 
     if (!directory_exists(input_dir)) {
