@@ -259,7 +259,7 @@ function gg_sum_test_scripts_release {
 }
 
 function gg_get_model {
-    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-bf16.gguf"
+    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-f16.gguf"
     if [[ -s $gguf_0 ]]; then
         echo -n "$gguf_0"
     else
@@ -388,7 +388,9 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-cli -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log
-    (time ./bin/llama-perplexity --model ${model_bf16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
+    if [ -z ${GG_BUILD_NO_BF16} ]; then
+        (time ./bin/llama-perplexity --model ${model_bf16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
+    fi
     (time ./bin/llama-perplexity --model ${model_q8_0} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
     (time ./bin/llama-perplexity --model ${model_q4_0} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-q4_0.log
     (time ./bin/llama-perplexity --model ${model_q4_1} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-q4_1.log
@@ -400,7 +402,7 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-perplexity --model ${model_q5_k} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-q5_k.log
     (time ./bin/llama-perplexity --model ${model_q6_k} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
-    (time ./bin/llama-imatrix --model ${model_bf16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
+    (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
     (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
     (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
@@ -421,7 +423,9 @@ function gg_run_qwen3_0_6b {
     }
 
     check_ppl "f16"  "$(cat $OUT/${ci}-tg-f16.log  | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "bf16" "$(cat $OUT/${ci}-tg-bf16.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
+    if [ -z ${GG_BUILD_NO_BF16} ]; then
+        check_ppl "bf16" "$(cat $OUT/${ci}-tg-bf16.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
+    fi
     check_ppl "q8_0" "$(cat $OUT/${ci}-tg-q8_0.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
     check_ppl "q4_0" "$(cat $OUT/${ci}-tg-q4_0.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
     check_ppl "q4_1" "$(cat $OUT/${ci}-tg-q4_1.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
@@ -446,7 +450,9 @@ function gg_sum_qwen3_0_6b {
     gg_printf '- perplexity:\n%s\n' "$(cat $OUT/${ci}-ppl.log)"
     gg_printf '- imatrix:\n```\n%s\n```\n' "$(cat $OUT/${ci}-imatrix-sum.log)"
     gg_printf '- f16:\n```\n%s\n```\n'  "$(cat $OUT/${ci}-tg-f16.log)"
-    gg_printf '- bf16:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-bf16.log)"
+    if [ -z ${GG_BUILD_NO_BF16} ]; then
+        gg_printf '- bf16:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-bf16.log)"
+    fi
     gg_printf '- q8_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q8_0.log)"
     gg_printf '- q4_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q4_0.log)"
     gg_printf '- q4_1:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q4_1.log)"
