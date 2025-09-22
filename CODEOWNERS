@@ -10,3 +10,12 @@
 /ggml/src/gguf.cpp @JohannesGaessler
 /ggml/src/ggml-vulkan/ @0cc4m
 /ggml/src/ggml-zdnn/ @taronaeo
+/.github/workflows/ @CISC
+/src/llama-adapter.* @CISC
+/src/llama-arch.* @CISC
+/src/llama-graph.* @CISC
+/src/llama-model.* @CISC
+/src/llama-vocab.* @CISC
+/gguf-py/ @CISC
+/convert_*.py @CISC
+requirements*.txt @CISC
