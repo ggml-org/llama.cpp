@@ -1347,9 +1347,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // increase mu until we get under budget or hit a safety cap
     {
         int expand = 0;
+        size_t prev_bytes_hi = std::numeric_limits<size_t>::max();
         while (true) {
             lagrange_penalty(mu_hi, choice_hi, bytes_hi, err_hi);
             if (bytes_hi <= budget_bytes) { break; }
+            if (bytes_hi >= prev_bytes_hi) { break; }
+            prev_bytes_hi = bytes_hi;
 
             mu_hi *= 2.0;
             if (++expand > 60) { break; } // safety cap
