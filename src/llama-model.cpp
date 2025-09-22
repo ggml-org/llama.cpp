@@ -3367,6 +3367,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_PLAMO2:
                 {
+                    // mamba parameters
+                    const uint32_t d_conv             = hparams.ssm_d_conv;
+                    const uint32_t d_state            = hparams.ssm_d_state;
+                    const uint32_t num_heads          = hparams.ssm_dt_rank;
+                    const uint32_t intermediate_size  = hparams.ssm_d_inner;
+                    const int64_t dt_dim              = std::max(64, int(hparams.n_embd / 16));
+
+                    // attention parameters
+                    const uint32_t qk_dim = hparams.n_embd_head_k;
+                    const uint32_t v_dim  = hparams.n_embd_head_v;
+
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
@@ -3381,16 +3392,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         auto & layer = layers[i];
                         bool is_mamba_layer = hparams.is_recurrent(i);
 
-
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
                         if (is_mamba_layer) {
-                            const uint32_t d_conv             = hparams.ssm_d_conv;
-                            const uint32_t d_state            = hparams.ssm_d_state;
-                            const uint32_t num_heads          = hparams.ssm_dt_rank;
-                            const uint32_t intermediate_size  = hparams.ssm_d_inner;
-                            const int64_t dt_dim              = std::max(64, int(hparams.n_embd / 16));
-
                             layer.ssm_in       = create_tensor(tn(LLM_TENSOR_SSM_IN,     "weight", i), {n_embd, 2 * intermediate_size}, 0);
                             layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, intermediate_size}, 0);
 
@@ -3407,9 +3411,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ssm_b_norm = create_tensor(tn(LLM_TENSOR_SSM_B_NORM, i), {d_state}, 0);
                             layer.ssm_c_norm = create_tensor(tn(LLM_TENSOR_SSM_C_NORM, i), {d_state}, 0);
                         } else {
-                            const uint32_t head_dim           = hparams.n_embd_head_k;
-                            const uint32_t qk_dim             = head_dim;
-                            const uint32_t v_dim              = head_dim;
                             const int64_t num_attention_heads = hparams.n_head(i);
                             const int64_t q_num_heads         = num_attention_heads;
                             const int64_t num_key_value_heads = hparams.n_head_kv(i);
@@ -3420,8 +3421,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             const int64_t v_proj_dim          = v_num_heads * v_dim;
 
                             layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, q_proj_dim + k_proj_dim + v_proj_dim}, 0);
-                            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {head_dim, num_attention_heads}, 0);
-                            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {head_dim, k_num_heads}, 0);
+                            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {qk_dim, num_attention_heads}, 0);
+                            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {qk_dim, k_num_heads}, 0);
                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {q_num_heads * v_dim, n_embd}, 0);
                         }
 
