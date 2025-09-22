@@ -157,7 +157,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
     dpct::queue_ptr stream = ctx.stream();
     switch (dst->type) {
         case GGML_TYPE_F32:
-           set_rows_sycl<TIn, TIdx, float>(
+            set_rows_sycl<TIn, TIdx, float>(
                 src0_d, src1_d, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
