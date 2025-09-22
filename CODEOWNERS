@@ -2,7 +2,10 @@
 
 /ci/ @ggerganov
 /.devops/*.Dockerfile @ngxson
-/tools/server/ @ngxson
+/tools/server/* @ngxson # no subdir
+/tools/server/webui/ @allozaur
+/tools/mtmd/ @ngxson
+/src/llama-chat.* @ngxson
 /ggml/src/ggml-cuda/fattn* @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.* @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.* @JohannesGaessler
