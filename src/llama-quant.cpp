@@ -1230,22 +1230,27 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (candidates.size() < 3) { return; } // need at least 3 points to do convex hull
 
             // Convex hull (lower envelope)
-            auto slope = [](const candidate_types & a, const candidate_types & b) {
-                const double dx = b.bytes - a.bytes;
-                return dx <= 0.0 ? infinity : (b.error - a.error) / dx;
-            };
-
             std::vector<candidate_types> hull; hull.reserve(candidates.size());
-            for (const auto & p : candidates) {
+            for (const auto & c : candidates) {
+                auto cross_product = [](const candidate_types & h0, const candidate_types & h1, const candidate_types & p) -> double {
+                    const double dx1 = (double)h1.bytes - (double)h0.bytes;
+                    const double dy1 = h1.error - h0.error;
+                    const double dx2 = (double)p.bytes - (double)h0.bytes;
+                    const double dy2 = p.error - h0.error;
+                    return dx1 * dy2 - dx2 * dy1;
+                };
+
                 while (hull.size() >= 2) {
-                    const double s1 = slope(hull[hull.size() - 2], hull[hull.size() - 1]);
-                    const double s2 = slope(hull[hull.size() - 1], p);
-                    if (s2 + epsilon < s1) hull.pop_back();
-                    else { break; }
+                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= epsilon) {
+                        hull.pop_back();
+                    } else {
+                        break;
+                    }
                 }
 
-                hull.push_back(p);
+                hull.push_back(c);
             }
+
             candidates.swap(hull);
         };
 
