@@ -2835,7 +2835,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         }
 
         ggml_tensor * softmax = cgraph->nodes[node_idx];
-        if (ggml_cuda_should_use_topk_moe(softmax)) {
+        ggml_tensor * weights = cgraph->nodes[node_idx+4];
+        if (ggml_cuda_should_use_topk_moe(softmax, weights)) {
             return true;
         }
     }
