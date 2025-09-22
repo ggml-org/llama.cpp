@@ -1209,6 +1209,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
                 return a.error < b.error;
             });
+            const auto last = std::unique(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
+                return a.bytes == b.bytes;
+            });
+            candidates.erase(last, candidates.end());
 
             // Pareto by bytes -> error
             std::vector<candidate_types> pareto;
