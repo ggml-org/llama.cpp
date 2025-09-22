@@ -957,7 +957,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (out_mse) { *out_mse = total_mse; }
         if (out_proj) { *out_proj = total_proj; }
 
-        const double total_err = slice_bias_lambda ? total_mse + total_bias : total_mse + tensor_bias_lambda * total_proj;
+        const double total_err = total_mse + total_bias;
         return std::isfinite(total_err) ? total_err : infinity;
     };
 
