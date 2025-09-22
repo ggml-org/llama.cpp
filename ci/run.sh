@@ -210,33 +210,9 @@ function gg_sum_ctest_release {
     gg_printf '```\n'
 }
 
-# test_scripts_debug
+# test_scripts
 
-function gg_run_test_scripts_debug {
-    cd ${SRC}
-
-    set -e
-
-    (cd ./tools/gguf-split && time bash tests.sh "$SRC/build-ci-debug/bin" "$MNT/models") 2>&1 | tee -a $OUT/${ci}-scripts.log
-    (cd ./tools/quantize   && time bash tests.sh "$SRC/build-ci-debug/bin" "$MNT/models") 2>&1 | tee -a $OUT/${ci}-scripts.log
-
-    set +e
-}
-
-function gg_sum_test_scripts_debug {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs test scripts in debug mode\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-scripts.log)"
-    gg_printf '```\n'
-    gg_printf '\n'
-}
-
-# test_scripts_release
-
-function gg_run_test_scripts_release {
+function gg_run_test_scripts {
     cd ${SRC}
 
     set -e
@@ -247,10 +223,10 @@ function gg_run_test_scripts_release {
     set +e
 }
 
-function gg_sum_test_scripts_release {
+function gg_sum_test_scripts {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs test scripts in release mode\n'
+    gg_printf 'Runs test scripts\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}-scripts.log)"
@@ -627,8 +603,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run rerank_tiny
 
     if [ -z ${GG_BUILD_CLOUD} ] || [ ${GG_BUILD_EXTRA_TESTS_0} ]; then
-        test $ret -eq 0 && gg_run test_scripts_debug
-        test $ret -eq 0 && gg_run test_scripts_release
+        test $ret -eq 0 && gg_run test_scripts
     fi
 
     test $ret -eq 0 && gg_run qwen3_0_6b
