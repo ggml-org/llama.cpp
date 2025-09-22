@@ -44,6 +44,9 @@
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov @slaren
+/ggml/src/ggml-alloc.c                  @slaren
+/ggml/src/ggml-backend*                 @slaren
+/ggml/src/ggml-blas/                    @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
 /ggml/src/ggml-cuda/common.cuh          @slaren
