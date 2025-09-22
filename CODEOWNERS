@@ -20,6 +20,7 @@
 /examples/batched/                      @ggerganov
 /examples/convert-llama2c-to-ggml/      @ggerganov
 /examples/deprecation-warning/          @ggerganov
+/examples/diffusion/                    @am17an
 /examples/embedding/                    @ggerganov
 /examples/eval-callback/                @ggerganov
 /examples/export-docs/                  @ggerganov
@@ -51,7 +52,7 @@
 /ggml/src/ggml-zdnn/                    @taronaeo
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
-/ggml/src/gguf.cpp                      @JohannesGaessler
+/ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
 /gguf-py/                               @CISC
 /media/                                 @ggerganov
 /scripts/gen*                           @ggerganov
