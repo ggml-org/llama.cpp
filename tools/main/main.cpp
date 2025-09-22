@@ -706,6 +706,10 @@ int main(int argc, char ** argv) {
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
+            
+            if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                assistant_ss << common_token_to_piece(ctx, id, false);
+            }
 
             // echo this to console
             input_echo = true;
@@ -826,9 +830,6 @@ int main(int argc, char ** argv) {
 
             // if current token is not EOG, we add it to current assistant message
             if (params.conversation_mode && !waiting_for_first_input) {
-                const auto id = common_sampler_last(smpl);
-                assistant_ss << common_token_to_piece(ctx, id, false);
-
                 if (!prompt.empty()) {
                     prompt.clear();
                     is_interacting = false;
