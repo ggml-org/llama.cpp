@@ -4111,14 +4111,14 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
         case GGML_TYPE_F32:
             if (src1->type == GGML_TYPE_I64) {
                 kernel = backend_ctx->kernel_set_rows_f32_i64;
-            } else if (src1->type == GGML_TYPE_I32) {
+            } else {
                 kernel = backend_ctx->kernel_set_rows_f32_i32;
             }
             break;
         case GGML_TYPE_F16:
             if (src1->type == GGML_TYPE_I64) {
                 kernel = backend_ctx->kernel_set_rows_f16_i64;
-            } else if (src1->type == GGML_TYPE_I32) {
+            } else {
                 kernel = backend_ctx->kernel_set_rows_f16_i32;
             }
             break;
