@@ -73,7 +73,7 @@ static inline int ggml_up(int n, int m) {
     return (n + m - 1) & ~(m - 1);
 }
 
-// TODO: move to ggml.h?
+// TODO: move to ggml.h? (won't be able to inline)
 static bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml_tensor * b) {
     if (a->type != b->type) {
         return false;
@@ -87,6 +87,19 @@ static bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml
         }
     }
     return true;
+}
+
+static bool ggml_op_is_empty(enum ggml_op op) {
+    switch (op) {
+        case GGML_OP_NONE:
+        case GGML_OP_RESHAPE:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_VIEW:
+        case GGML_OP_PERMUTE:
+            return true;
+        default:
+            return false;
+    }
 }
 
 //
