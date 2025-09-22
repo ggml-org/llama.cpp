@@ -33,22 +33,25 @@
 /examples/llama.swiftui/                @ggerganov
 /examples/llama.vim                     @ggerganov
 /examples/lookahead/                    @ggerganov
-/examples/lookup/                       @ggerganov
+/examples/lookup/                       @JohannesGaessler
 /examples/parallel/                     @ggerganov
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
 /examples/save-load-state/              @ggerganov
-/examples/simple/                       @slaren
 /examples/simple-chat/                  @slaren
+/examples/simple/                       @slaren
 /examples/speculative-simple/           @ggerganov
 /examples/speculative/                  @ggerganov
+/ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
-/ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
+/ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
+/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
+/ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
@@ -70,8 +73,8 @@
 /src/llama-arch.*                       @CISC
 /src/llama-chat.*                       @ngxson
 /src/llama-graph.*                      @CISC
-/src/llama-model.*                      @CISC
 /src/llama-model-loader.*               @slaren
+/src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
 /tests/                                 @ggerganov
 /tests/test-backend-ops.cpp             @slaren
@@ -82,11 +85,11 @@
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
+/tools/run/                             @ericcurtin
 /tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
 /tools/server/webui/                    @allozaur
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
-/tools/run/                             @ericcurtin
 /vendor/                                @ggerganov
 .clang-format                           @slaren
 .clang-tidy                             @slaren
