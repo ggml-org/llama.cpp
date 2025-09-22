@@ -609,3 +609,72 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("cpu-ref", silent, dir_path);
 #endif
 }
+
+void ggml_backend_load_all_variants(const char * name) {
+    // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
+    const fs::path name_path = fs::u8path(name);
+    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
+    const fs::path file_extension = backend_filename_extension();
+
+    std::vector<fs::path> search_paths;
+#ifdef GGML_BACKEND_DIR
+    search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
+#endif
+    // default search paths: executable directory, current directory
+    search_paths.push_back(get_executable_path());
+    search_paths.push_back(fs::current_path());
+
+    for (const auto & search_path : search_paths) {
+        if (!fs::exists(search_path)) {
+            GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+            continue;
+        }
+        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
+        for (const auto & entry : dir_it) {
+            if (entry.is_regular_file()) {
+                auto filename = entry.path().filename();
+                auto ext = entry.path().extension();
+                if (filename.native().find(file_prefix.native()) == 0 && ext == file_extension) {
+                    fs::path path = search_path / filename;
+                    ggml_backend_reg_t backend = get_reg().load_backend(path, false);
+                    if (backend == nullptr) {
+                        GGML_LOG_ERROR("%s: failed to load backend variant %s\n", __func__, path_str(entry.path()).c_str());
+                    }
+
+                }
+            }
+        }
+    }
+}
+
+void ggml_backend_load_variant(const char * name, const char * variant) {
+    const fs::path name_path = fs::u8path(name);
+    const fs::path variant_path = fs::u8path(variant);
+    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
+    const fs::path target_filename = file_prefix.native() + variant_path.native() + backend_filename_extension().native();
+
+    std::vector<fs::path> search_paths;
+#ifdef GGML_BACKEND_DIR
+    search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
+#endif
+    // default search paths: executable directory, current directory
+    search_paths.push_back(get_executable_path());
+    search_paths.push_back(fs::current_path());
+
+    for (const auto & search_path : search_paths) {
+        if (!fs::exists(search_path)) {
+            GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+            continue;
+        }
+
+        fs::path full_path = search_path / target_filename;
+        if (fs::exists(full_path) && fs::is_regular_file(full_path)) {
+            ggml_backend_reg_t backend = get_reg().load_backend(full_path, false);
+            if (backend == nullptr) {
+                GGML_LOG_ERROR("%s: failed to load backend variant %s\n", __func__, path_str(full_path).c_str());
+            } else {
+                return;
+            }
+        }
+    }
+}

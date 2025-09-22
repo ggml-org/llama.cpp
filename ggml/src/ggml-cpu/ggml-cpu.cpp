@@ -108,7 +108,7 @@ struct ggml_backend_cpu_context {
 };
 
 static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
-    return "CPU";
+    return GGML_CPU_VARIANT_NAME;
 
     GGML_UNUSED(backend);
 }

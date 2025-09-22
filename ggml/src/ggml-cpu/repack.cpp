@@ -1869,8 +1869,43 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     return nullptr;
 }
 
+static bool supports_tensor(const struct ggml_tensor * op) {
+    if (op->op == GGML_OP_MUL_MAT &&
+        op->src[0]->buffer &&
+        (ggml_n_dims(op->src[0]) == 2) && ggml_repack_get_optimal_repack_type(op->src[0])) {
+
+        if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
+            return false;
+        }
+
+        if (op->src[1]->type == GGML_TYPE_F32) {
+            return true;
+        }
+
+    } else if (op->op == GGML_OP_MUL_MAT_ID && op->src[0]->buffer &&
+            (ggml_n_dims(op->src[0]) == 3) && ggml_repack_get_optimal_repack_type(op->src[0])) {
+
+        if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
+            return false;
+        }
+
+        if (op->src[1]->type == GGML_TYPE_F32) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static enum ggml_status ggml_backend_cpu_repack_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
-    tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
+    if (tensor->op == GGML_OP_NONE) {
+        tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
+        tensor->buffer = buffer;
+    }
+
+    if (supports_tensor(tensor)) {
+        tensor->src[0]->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor->src[0]));
+        tensor->src[0]->buffer = buffer;
+    }
 
     GGML_UNUSED(buffer);
     return GGML_STATUS_SUCCESS;
