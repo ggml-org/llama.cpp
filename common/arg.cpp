@@ -1068,8 +1068,6 @@ static std::string get_all_kv_cache_types() {
 //
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
-    std::string arg;
-    const std::string arg_prefix = "--";
     common_params & params = ctx_arg.params;
 
     std::unordered_map<std::string, common_arg *> arg_to_options;
