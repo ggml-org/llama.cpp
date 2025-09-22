@@ -54,7 +54,9 @@
 /ggml/src/gguf.cpp                      @JohannesGaessler
 /gguf-py/                               @CISC
 /media/                                 @ggerganov
-/scripts/                               @ggerganov
+/scripts/gen*                           @ggerganov
+/scripts/get*                           @ggerganov
+/scripts/sync*                          @ggerganov
 /src/                                   @ggerganov
 /src/llama-adapter.*                    @CISC
 /src/llama-arch.*                       @CISC
