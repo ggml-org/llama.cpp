@@ -3391,7 +3391,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);  \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
-    CREATE_UNARY(exp)
     CREATE_UNARY(gelu)
     CREATE_UNARY(gelu_erf)
     CREATE_UNARY(gelu_quick)
@@ -3402,6 +3401,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(hardsigmoid)
     CREATE_UNARY(hardswish)
 #undef CREATE_UNARY
+
+#define CREATE_UNARY_RTE(name)  \
+    if (device->float_controls_rte_fp16) {  \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32_rte", name ## _f32_rte_len, name ## _f32_rte_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);   \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16_rte", name ## _f16_rte_len, name ## _f16_rte_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);   \
+    } else {    \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);   \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);   \
+    }
+    CREATE_UNARY_RTE(exp)
+#undef CREATE_UNARY_RTE
 
 #define CREATE_GLU(name)  \
     if (device->float_controls_rte_fp16) {  \
