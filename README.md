@@ -520,8 +520,8 @@ To learn more about model quantization, [read this documentation](tools/quantize
 ## Contributing
 
 - Contributors can open PRs
-- Collaborators can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
 - Collaborators will be invited based on contributions
+- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
 - Any help with managing issues, PRs and projects is very appreciated!
 - See [good first issues](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
 - Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
