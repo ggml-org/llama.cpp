@@ -739,7 +739,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
-        if (ggml_n_dims(t) < 2) { return false; }
+        if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
         return is_quantizable(ggml_get_name(t), model.arch, params);
     };
 
@@ -882,10 +882,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         auto trimmed_sum = [&](std::vector<double> & v) -> double {
             const int64_t n = (int64_t)v.size();
             if (n == 0) { return 0.0; }
-            if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0); }
+            if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0); } // use all samples for small datasets
 
-            int64_t k = (int64_t) std::floor(0.02 * (double)n); // trim 2% on each side
-            k = std::clamp<int64_t>(k, 0, std::min(n / 32, n / 2 - 1)); // but no more than ~3% or n/2 if small
+            int64_t k = (int64_t) std::floor(0.02 * (double)n); // trim 2% from each tail of the distribution
+            k = std::clamp<int64_t>(k, 0, std::min(n / 32, n / 2 - 1)); // cap trimming at ~3% (1/32) or half the samples - 1
             std::sort(v.begin(), v.end());
             return std::accumulate(v.begin() + k, v.begin() + (n - k), 0.0);
         };
@@ -1289,7 +1289,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     if (total_elems == 0) { return {}; }
 
     const double target_bpw = params->target_bpw;
-    size_t budget_bytes = std::llround(target_bpw * (double)total_elems / 8.0);
+    size_t budget_bytes = std::llround(target_bpw * (double)total_elems / 8.0); // convert bpw to bytes
 
     auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
         std::unordered_map<std::string, ggml_type> overrides;
@@ -1362,8 +1362,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (bytes_hi >= prev_bytes_hi) { break; }
             prev_bytes_hi = bytes_hi;
 
-            mu_hi *= 2.0;
-            if (++expand > 60) { break; } // safety cap
+            mu_hi *= 2.0; // double the penalty multiplier to reduce tensor sizes
+            if (++expand > 60) { break; } // safety cap to prevent an infinite loop
         }
     }
 
@@ -1371,8 +1371,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     double best_over_gap = infinity;
     double best_under_err = infinity;
     double best_over_err = infinity;
-    for (int it = 0; it < 40; ++it) {
-        double mu = 0.5 * (mu_lo + mu_hi);
+    for (int it = 0; it < 40; ++it) { // binary search iterations for optimal Lagrange multiplier (40 ≈ 1e-12 precision)
+        double mu = 0.5 * (mu_lo + mu_hi); // midpoint of current bounds
         lagrange_penalty(mu, choice_mid, bytes_mid, err_mid);
 
         const double gap = std::abs((double)bytes_mid - (double)budget_bytes);
@@ -1435,7 +1435,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 if (cur_bytes + delta > budget_bytes) { continue; }
 
                 double err_gain = std::max(0.0, ti.candidate[ti.choice].error - ti.candidate[j].error);
-                double ratio = err_gain / (double)(delta * 8);
+                double ratio = err_gain / (double)(delta * 8); // error reduction per bit
                 if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && delta < best_delta)) {
                     best_ratio = ratio;
                     best_delta = delta;
