@@ -983,7 +983,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (s1 > 0.0) {
                 const auto n = (double)n_per_row;
                 const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
-                l = (float)std::clamp(8.0 * (c / (c + 1.0)), 0.0, 12.0);
+                l = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 12.0);
             }
 
             lambdas[(size_t)s] = l;
