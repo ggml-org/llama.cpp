@@ -7656,6 +7656,21 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             if i not in self._attn_layers
         ]
 
+        # There are some models in this family that are non-hybrid, but keep the
+        # same parent class by setting all layers to "attention." If this is the
+        # case, the model architecture needs to be updated to a standard
+        # "granite" or "granitemoe" model
+        if not self._ssm_layers:
+            has_experts = self.find_hparam(["num_experts_per_tok"], optional=True)
+            new_arch = (
+                gguf.MODEL_ARCH.GRANITE_MOE
+                if has_experts else
+                gguf.MODEL_ARCH.GRANITE
+            )
+            self.model_arch = new_arch
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[new_arch]
+            self.gguf_writer.add_architecture()
+
         # n_group and d_inner are used during reshape_tensors for mamba2
         # NOTE: Explicitly include hparam prefix prefix for d_model to
         #   disambiguate with top-level head_dim
@@ -7740,8 +7755,11 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_head_count_kv(head_count_kv_vec)
 
-        ## If Bamba, use rope, otherwise don't
-        use_rope = "BambaForCausalLM" in self.hparams["architectures"]
+        ## If Bamba or non-hybrid, use rope, otherwise don't
+        use_rope = (
+            "BambaForCausalLM" in self.hparams["architectures"]
+            or not self._ssm_layers
+        )
         self.gguf_writer.add_rope_scaling_finetuned(use_rope)
         if not use_rope:
             self.gguf_writer.add_context_length(2**20)
