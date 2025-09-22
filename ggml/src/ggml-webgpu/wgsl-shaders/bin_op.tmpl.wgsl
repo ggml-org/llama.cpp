@@ -64,6 +64,70 @@
       "OP": "*"
     },
     "DECLS": ["INPLACE"]
+  },
+  {
+    "SHADER_NAME": "sub_f32",
+    "REPLS": {
+      "TYPE" : "f32",
+      "OP": "-"
+    },
+    "DECLS": ["NOT_INPLACE"]
+  },
+  {
+    "SHADER_NAME": "sub_f16",
+    "REPLS": {
+      "TYPE" : "f16",
+      "OP": "-"
+    },
+    "DECLS": ["NOT_INPLACE"]
+  },
+  {
+    "SHADER_NAME": "sub_f32_inplace",
+    "REPLS": {
+      "TYPE" : "f32",
+      "OP": "-"
+    },
+    "DECLS": ["INPLACE"]
+  },
+  {
+    "SHADER_NAME": "sub_f16_inplace",
+    "REPLS": {
+      "TYPE" : "f16",
+      "OP": "-"
+    },
+    "DECLS": ["INPLACE"]
+  },
+  {
+    "SHADER_NAME": "div_f32",
+    "REPLS": {
+      "TYPE" : "f32",
+      "OP": "/"
+    },
+    "DECLS": ["NOT_INPLACE"]
+  },
+  {
+    "SHADER_NAME": "div_f16",
+    "REPLS": {
+      "TYPE" : "f16",
+      "OP": "/"
+    },
+    "DECLS": ["NOT_INPLACE"]
+  },
+  {
+    "SHADER_NAME": "div_f32_inplace",
+    "REPLS": {
+      "TYPE" : "f32",
+      "OP": "/"
+    },
+    "DECLS": ["INPLACE"]
+  },
+  {
+    "SHADER_NAME": "div_f16_inplace",
+    "REPLS": {
+      "TYPE" : "f16",
+      "OP": "/"
+    },
+    "DECLS": ["INPLACE"]
   }
 ]
 

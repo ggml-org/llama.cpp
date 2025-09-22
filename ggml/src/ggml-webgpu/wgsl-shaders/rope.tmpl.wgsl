@@ -83,7 +83,7 @@ fn freq_factor(i: u32) -> f32 {
 
 #decl(FF_FUNC)
 fn freq_factor(i: u32) -> f32 {
-    return src2[i/2];
+    return src2[params.offset_src2 + i/2];
 }
 #enddecl(FF_FUNC)
 
@@ -136,6 +136,7 @@ enable f16;
 struct Params {
     offset_src0: u32,
     offset_src1: u32,
+    offset_src2: u32,
     offset_dst: u32,
 
     // Strides (in elements)
