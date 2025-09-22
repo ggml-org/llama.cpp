@@ -31,10 +31,22 @@
 #include "types.comp"
 
 #ifndef LOAD_VEC_A
-#define LOAD_VEC_A 2
+#define LOAD_VEC_A 1
 #endif
 #ifndef LOAD_VEC_B
-#define LOAD_VEC_B 2
+#define LOAD_VEC_B 1
+#endif
+
+// Load 2 values at once without affecting index calculations through LOAD_VEC
+#if (defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)) && !defined(ALIGNED)
+#define LOAD_VEC_BATCH_A 2
+#else
+#define LOAD_VEC_BATCH_A 1
+#endif
+#if !defined(ALIGNED)
+#define LOAD_VEC_BATCH_B 2
+#else
+#define LOAD_VEC_BATCH_B 1
 #endif
 
 #if !defined(TO_FLOAT_TYPE)
@@ -236,13 +248,13 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
-    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
-    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B);
-    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B);
+    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A / LOAD_VEC_BATCH_A);
+    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A / LOAD_VEC_BATCH_A);
+    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B / LOAD_VEC_BATCH_B);
+    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B / LOAD_VEC_BATCH_B);
 
-    const uint loadstride_a = gl_WorkGroupSize.x * LOAD_VEC_A / BK;
-    const uint loadstride_b = gl_WorkGroupSize.x * LOAD_VEC_B / BK;
+    const uint loadstride_a = gl_WorkGroupSize.x * LOAD_VEC_A * LOAD_VEC_BATCH_A / BK;
+    const uint loadstride_b = gl_WorkGroupSize.x * LOAD_VEC_B * LOAD_VEC_BATCH_B / BK;
 
 #ifdef MUL_MAT_ID
 #ifdef MUL_MAT_ID_USE_SUBGROUPS
