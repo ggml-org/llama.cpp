@@ -2,7 +2,10 @@
 
 /ci/ @ggerganov
 /.devops/*.Dockerfile @ngxson
-/tools/server/ @ngxson
+/tools/server/* @ngxson # no subdir
+/tools/server/webui/ @allozaur
+/tools/mtmd/ @ngxson
+/src/llama-chat.* @ngxson
 /ggml/src/ggml-cuda/fattn* @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.* @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.* @JohannesGaessler
@@ -10,3 +13,12 @@
 /ggml/src/gguf.cpp @JohannesGaessler
 /ggml/src/ggml-vulkan/ @0cc4m
 /ggml/src/ggml-zdnn/ @taronaeo
+/.github/workflows/ @CISC
+/src/llama-adapter.* @CISC
+/src/llama-arch.* @CISC
+/src/llama-graph.* @CISC
+/src/llama-model.* @CISC
+/src/llama-vocab.* @CISC
+/gguf-py/ @CISC
+/convert_*.py @CISC
+requirements*.txt @CISC
