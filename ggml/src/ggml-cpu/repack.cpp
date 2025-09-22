@@ -1980,3 +1980,149 @@ ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
 
     return &ggml_backend_cpu_buffer_type_repack;
 }
+
+#ifdef GGML_BUILD_TESTS
+// Test repack wrapper buffer type that stores original data before repacking.
+// The motivation for this type is that when testing repack when set_tensor is
+// called the data of the tensor is repacked and the original data is lost.
+//
+// In test-backend-ops.cpp we want to compare the results of a backend using
+// repacked input data, and compare against a backend that non-repacked data.
+// The problem arises in `ggml_backend_compare_graph_backend` where the graphs
+// are copied and ggml_backend_buffer_repack_buffer_type does not implement
+// the get_tensor function, but even if it did it would return the repacked data
+// which is not what we want to compare against. This type allows proper
+// comparison between repack and non-repack data.
+
+#include <unordered_map>
+#include <vector>
+
+struct test_repack_wrapper_context {
+    ggml_backend_buffer_t cpu_buffer;
+
+    // This map stores the original (non repacked) data so that when the graph
+    // is copied by ggml_backend_compare_graph_backend we can return the original
+    // data in get_tensor.
+    std::unordered_map<struct ggml_tensor *, std::vector<uint8_t>> original_data;
+};
+
+static void ggml_backend_cpu_repack_test_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    test_repack_wrapper_context * ctx = (test_repack_wrapper_context *) buffer->context;
+    if (ctx->cpu_buffer) {
+        ggml_backend_buffer_free(ctx->cpu_buffer);
+    }
+    delete ctx;
+}
+
+static enum ggml_status ggml_backend_cpu_repack_test_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+    if (tensor->op == GGML_OP_MUL_MAT && ggml_n_dims(tensor->src[0]) == 2) {
+        tensor->src[0]->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor->src[0]));
+    }
+    if (tensor->op == GGML_OP_MUL_MAT_ID && ggml_n_dims(tensor->src[0]) == 3) {
+        tensor->src[0]->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor->src[0]));
+    }
+
+    // Not really sure if this is strictly needed as the cpu buffer does not
+    // initialize anything at the moment, but keeping this just in case that changes.
+    test_repack_wrapper_context * w_ctx = (test_repack_wrapper_context *) buffer->context;
+    if (w_ctx->cpu_buffer->iface.init_tensor) {
+        return w_ctx->cpu_buffer->iface.init_tensor(w_ctx->cpu_buffer, tensor);
+    }
+    return GGML_STATUS_SUCCESS;
+}
+
+static void ggml_backend_cpu_repack_test_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    test_repack_wrapper_context * w_ctx = (test_repack_wrapper_context *) buffer->context;
+    GGML_ASSERT(w_ctx != nullptr);
+
+    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+    if (tensor_traits) {
+        w_ctx->original_data[tensor] = std::vector<uint8_t>((const uint8_t *)data, (const uint8_t *)data + size);
+        auto OK = tensor_traits->repack(tensor, data, size);
+        GGML_ASSERT(OK == 0);
+    } else {
+        // Forward to underlying CPU buffer (no repacking)
+        w_ctx->cpu_buffer->iface.set_tensor(w_ctx->cpu_buffer, tensor, data, offset, size);
+    }
+}
+
+static void * ggml_backend_cpu_repack_test_buffer_get_base(ggml_backend_buffer_t buffer) {
+    test_repack_wrapper_context * w_ctx = (test_repack_wrapper_context *) buffer->context;
+    return ggml_backend_buffer_get_base(w_ctx->cpu_buffer);
+}
+
+static void ggml_backend_cpu_repack_test_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    test_repack_wrapper_context * w_ctx = (test_repack_wrapper_context *) buffer->context;
+
+    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+    if (tensor_traits) {
+        // Return the original data for repacked tensor data. This is here so
+        // that when the graph is copied we can still get the original data which
+        // would otherwise be lost.
+        auto it = w_ctx->original_data.find(const_cast<struct ggml_tensor *>(tensor));
+        if (it != w_ctx->original_data.end()) {
+            const auto& original = it->second;
+            size_t copy_size = std::min(size, original.size() - offset);
+            std::memcpy(data, original.data() + offset, copy_size);
+        }
+    } else {
+        // For non-repacked data just forward to the underlying CPU buffer.
+        w_ctx->cpu_buffer->iface.get_tensor(w_ctx->cpu_buffer, tensor, data, offset, size);
+    }
+}
+
+static const char * ggml_backend_cpu_repack_test_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    return "CPU_REPACK_TEST";
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_cpu_repack_test_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+    if (!cpu_buffer) {
+        return nullptr;
+    }
+
+    test_repack_wrapper_context * w_ctx = new test_repack_wrapper_context;
+    w_ctx->cpu_buffer = cpu_buffer;
+
+    static const struct ggml_backend_buffer_i ggml_backend_cpu_repack_test_buffer_i = {
+        /* .free_buffer   = */ ggml_backend_cpu_repack_test_buffer_free_buffer,
+        /* .get_base      = */ ggml_backend_cpu_repack_test_buffer_get_base,
+        /* .init_tensor   = */ ggml_backend_cpu_repack_test_buffer_init_tensor,
+        /* .memset_tensor = */ nullptr,
+        /* .set_tensor    = */ ggml_backend_cpu_repack_test_buffer_set_tensor,
+        /* .get_tensor    = */ ggml_backend_cpu_repack_test_buffer_get_tensor,
+        /* .cpy_tensor    = */ nullptr,
+        /* .clear         = */ nullptr,
+        /* .reset         = */ nullptr,
+    };
+
+    // This is intentionally using the repack buffer type because this type is
+    // used in ggml::cpu::repack::get_tensor_traits, and without this the
+    // computation will not be forwarded to repacks compute_forward function.
+    auto repack_buft = ggml_backend_cpu_repack_buffer_type();
+    return ggml_backend_buffer_init(repack_buft, ggml_backend_cpu_repack_test_buffer_i, w_ctx, size);
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_cpu_repack_test_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    return ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
+    GGML_UNUSED(buft);
+}
+
+ggml_backend_buffer_type_t ggml_backend_cpu_repack_test_buffer_type(void) {
+    static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_repack_test = {
+        /* .iface    = */ {
+                           /* .get_name         = */ ggml_backend_cpu_repack_test_buffer_type_get_name,
+                           /* .alloc_buffer     = */ ggml_backend_cpu_repack_test_buffer_type_alloc_buffer,
+                           /* .get_alignment    = */ ggml_backend_cpu_repack_test_buffer_type_get_alignment,
+                           /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
+                           /* .get_alloc_size   = */ nullptr,  // defaults to ggml_nbytes
+                           /* .is_host          = */ nullptr,  // defaults to true
+                           },
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
+        /* .context = */ nullptr,
+    };
+    return &ggml_backend_cpu_buffer_type_repack_test;
+}
+#endif // GGML_BUILD_TESTS

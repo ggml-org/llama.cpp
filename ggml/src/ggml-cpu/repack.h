@@ -10,6 +10,10 @@
 
 ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void);
 
+#ifdef GGML_BUILD_TESTS
+ggml_backend_buffer_type_t ggml_backend_cpu_repack_test_buffer_type(void);
+#endif
+
 template <int K> constexpr int QK_0() {
     if constexpr (K == 4) {
         return QK4_0;
