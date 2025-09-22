@@ -3,7 +3,6 @@
 /ci/ @ggerganov
 /.devops/*.Dockerfile @ngxson
 /tools/server/ @ngxson
-/tools/server/webui/ @allozaur
 /ggml/src/ggml-cuda/fattn* @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.* @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.* @JohannesGaessler
