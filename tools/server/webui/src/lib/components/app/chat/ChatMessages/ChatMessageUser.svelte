@@ -53,27 +53,33 @@
 		textareaElement = $bindable()
 	}: Props = $props();
 
-	let innerWidth = $state(0);
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
 
 	$effect(() => {
-		if (messageElement && message.content.trim() && innerWidth > 0) {
-			if (message.content.includes('\n')) {
-				isMultiline = true;
-				return;
-			}
+		if (!messageElement || !message.content.trim()) return;
 
-			const computedStyle = window.getComputedStyle(messageElement);
-			const lineHeight = parseFloat(computedStyle.lineHeight);
-			const actualHeight = messageElement.scrollHeight;
-
-			isMultiline = actualHeight > lineHeight * 1.2;
+		if (message.content.includes('\n')) {
+			isMultiline = true;
+			return;
 		}
+
+		const resizeObserver = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const element = entry.target as HTMLElement;
+				const estimatedSingleLineHeight = 24; // Typical line height for text-md
+
+				isMultiline = element.offsetHeight > estimatedSingleLineHeight * 1.5;
+			}
+		});
+
+		resizeObserver.observe(messageElement);
+
+		return () => {
+			resizeObserver.disconnect();
+		};
 	});
 </script>
-
-<svelte:window bind:innerWidth />
 
 <div
 	aria-label="User message with actions"
