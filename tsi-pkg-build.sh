@@ -38,6 +38,27 @@ echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
 cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
 cmake --build build-posix --config Release
 
+# Fix GLIBC compatibility for TSI binaries
+echo 'fixing GLIBC compatibility for TSI binaries'
+
+# Fix simple-backend-tsi
+mv build-posix/bin/simple-backend-tsi build-posix/bin/simple-backend-tsi-original
+cat > build-posix/bin/simple-backend-tsi << 'EOL'
+#!/bin/bash
+export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:$LD_LIBRARY_PATH"
+exec "$(dirname "$0")/simple-backend-tsi-original" "$@"
+EOL
+chmod +x build-posix/bin/simple-backend-tsi
+
+# Fix llama-cli
+mv build-posix/bin/llama-cli build-posix/bin/llama-cli-original
+cat > build-posix/bin/llama-cli << 'EOL'
+#!/bin/bash
+export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:$LD_LIBRARY_PATH"
+exec "$(dirname "$0")/llama-cli-original" "$@"
+EOL
+chmod +x build-posix/bin/llama-cli
+
 #Compile for fpga with build-fpga as a target folder
 
 echo 'building llama.cp, ggml for tsavorite  and other binary for fpga'
@@ -66,7 +87,8 @@ fi
 
 cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 #!/bin/bash
-export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
+# Set up library paths for GCC 13.3.0 compatibility
+export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:\${LD_LIBRARY_PATH}:\$(pwd)"
 tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu")
 
 for kernel in "\${tsi_kernels[@]}"; do
