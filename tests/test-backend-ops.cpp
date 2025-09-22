@@ -2677,23 +2677,30 @@ struct test_scale : public test_case {
     const std::array<int64_t, 4> ne;
     float scale;
     float bias;
+    bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, scale, bias);
+        return VARS_TO_STR5(type, ne, scale, bias, inplace);
     }
 
     test_scale(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 10, 10},
             float scale = 2.0f,
-            float bias = 0.0f)
-        : type(type), ne(ne), scale(scale), bias(bias) {}
+            float bias = 0.0f,
+            bool inplace = false)
+        : type(type), ne(ne), scale(scale), bias(bias), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_scale_bias(ctx, a, scale, bias);
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_scale_bias_inplace(ctx, a, scale, bias);
+        } else {
+            out = ggml_scale_bias(ctx, a, scale, bias);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -6110,6 +6117,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_add1());
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
+    test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
+
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
