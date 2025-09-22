@@ -63,6 +63,8 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+message("CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+
 # Add path to modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
@@ -107,6 +109,12 @@ if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(LLAMA_TOOLS_INSTALL_DEFAULT OFF)
+else()
+    set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
+endif()
+
 #
 # option list
 #
@@ -131,6 +139,7 @@ option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
+option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
 
 # 3rd party libs
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
@@ -148,6 +157,14 @@ endif()
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
+
+if (NOT DEFINED LLAMA_BUILD_NUMBER)
+    set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
+endif()
+if (NOT DEFINED LLAMA_BUILD_COMMIT)
+    set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
+endif()
+set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -172,7 +189,6 @@ endfunction()
 
 llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
 llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_KOMPUTE             GGML_KOMPUTE)
 llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
 llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
 llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
@@ -215,8 +231,15 @@ if (LLAMA_USE_SYSTEM_GGML)
 endif()
 
 if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
+    set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
+    set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+if (MINGW)
+    # Target Windows 8 for PrefetchVirtualMemory
+    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
 #
@@ -258,10 +281,6 @@ endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-
-set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
-set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
-set(LLAMA_INSTALL_VERSION 0.0.${BUILD_NUMBER})
 
 set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")

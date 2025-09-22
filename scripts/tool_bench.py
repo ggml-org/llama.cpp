@@ -12,6 +12,7 @@
         export LLAMA_SERVER_BIN_PATH=$PWD/build/bin/llama-server
         export LLAMA_CACHE=${LLAMA_CACHE:-$HOME/Library/Caches/llama.cpp}
 
+        ./scripts/tool_bench.py run --n 10 --temp -1 --temp 0 --temp 1 --temp 2 --temp 5 --llama-baseline $PWD/buildMaster/bin/llama-server --output qwen14b.jsonl --hf bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_L
         ./scripts/tool_bench.py run --n 30 --temp -1 --temp 0 --temp 1 --model "Qwen 2.5 1.5B Q4_K_M"      --output qwen1.5b.jsonl  --hf bartowski/Qwen2.5-1.5B-Instruct-GGUF      --ollama qwen2.5:1.5b-instruct-q4_K_M
         ./scripts/tool_bench.py run --n 30 --temp -1 --temp 0 --temp 1 --model "Qwen 2.5 Coder 7B Q4_K_M"  --output qwenc7b.jsonl   --hf bartowski/Qwen2.5-Coder-7B-Instruct-GGUF  --ollama qwen2.5-coder:7b
 
@@ -52,7 +53,7 @@ import typer
 sys.path.insert(0, Path(__file__).parent.parent.as_posix())
 if True:
     from tools.server.tests.utils import ServerProcess
-    from tools.server.tests.unit.test_tool_call import TIMEOUT_SERVER_START, do_test_calc_result, do_test_hello_world, do_test_weather
+    from tools.server.tests.unit.test_tool_call import do_test_calc_result, do_test_hello_world, do_test_weather
 
 
 @contextmanager
@@ -205,6 +206,7 @@ def run(
     model: Annotated[Optional[str], typer.Option(help="Name of the model to test (server agnostic)")] = None,
     hf: Annotated[Optional[str], typer.Option(help="GGUF huggingface model repo id (+ optional quant) to test w/ llama-server")] = None,
     chat_template: Annotated[Optional[str], typer.Option(help="Chat template override for llama-server")] = None,
+    chat_template_file: Annotated[Optional[str], typer.Option(help="Chat template file override for llama-server")] = None,
     ollama: Annotated[Optional[str], typer.Option(help="Ollama model tag to test")] = None,
     llama_baseline: Annotated[Optional[str], typer.Option(help="llama-server baseline binary path to use as baseline")] = None,
     n: Annotated[int, typer.Option(help="Number of times to run each test")] = 10,
@@ -228,6 +230,12 @@ def run(
     n_predict = 512 # High because of DeepSeek R1
     # n_ctx = 8192
     n_ctx = 2048
+
+    if model is None:
+        if hf is not None:
+            model = hf.split("/")[-1]
+        elif ollama is not None:
+            model = ollama
 
     assert force or append or not output.exists(), f"Output file already exists: {output}; use --force to overwrite"
 
@@ -315,18 +323,19 @@ def run(
                     server.jinja = True
                     server.ctk = ctk
                     server.ctv = ctv
-                    server.fa = fa
+                    server.fa = "on" if fa else "off"
                     server.n_predict = n_predict
                     server.model_hf_repo = hf
                     server.model_hf_file = None
                     server.chat_template = chat_template
+                    server.chat_template_file = chat_template_file
                     server.server_path = server_path
                     if port is not None:
                         server.server_port = port
                     # server.debug = True
 
                     with scoped_server(server):
-                        server.start(timeout_seconds=TIMEOUT_SERVER_START)
+                        server.start(timeout_seconds=15 * 60)
                         for ignore_chat_grammar in [False]:
                             run(
                                 server,
@@ -335,6 +344,7 @@ def run(
                                 temp=t,
                                 output_kwargs=dict(
                                     chat_template=chat_template,
+                                    chat_template_file=chat_template_file,
                                 ),
                                 request_kwargs=dict(
                                     ignore_chat_grammar=ignore_chat_grammar,
@@ -355,6 +365,7 @@ def run(
                         temp=t,
                         output_kwargs=dict(
                             chat_template=None,
+                            chat_template_file=None,
                         ),
                         request_kwargs=dict(
                             model=ollama,

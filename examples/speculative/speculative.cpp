@@ -85,6 +85,8 @@ int main(int argc, char ** argv) {
     }
 
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+    params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
+
     common_init_result llama_init_dft = common_init_from_params(params);
 
     model_dft = llama_init_dft.model.get();
@@ -142,6 +144,8 @@ int main(int argc, char ** argv) {
         }
     }
 
+    auto * mem_tgt = llama_get_memory(ctx_tgt);
+    auto * mem_dft = llama_get_memory(ctx_dft);
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -240,7 +244,7 @@ int main(int argc, char ** argv) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
 
-                    auto & dist_tgt = *common_sampler_get_candidates(smpl);
+                    auto & dist_tgt = *common_sampler_get_candidates(smpl, true);
 
                     float p_tgt = 0.0f;
                     float p_dft = 0.0f;
@@ -420,14 +424,14 @@ int main(int argc, char ** argv) {
             {
                 LOG_DBG("keeping sequence %d, n_past_tgt = %d, n_past_dft = %d\n", s_keep, n_past_tgt, n_past_dft);
 
-                llama_kv_self_seq_keep(ctx_dft, s_keep);
-                llama_kv_self_seq_cp  (ctx_dft, s_keep, 0, -1, -1);
-                llama_kv_self_seq_keep(ctx_dft, 0);
+                llama_memory_seq_keep(mem_dft, s_keep);
+                llama_memory_seq_cp  (mem_dft, s_keep, 0, -1, -1);
+                llama_memory_seq_keep(mem_dft, 0);
 
-                llama_kv_self_seq_rm  (ctx_tgt, s_keep, n_past_tgt, -1);
-                llama_kv_self_seq_keep(ctx_tgt, s_keep);
-                llama_kv_self_seq_cp  (ctx_tgt, s_keep, 0, -1, -1);
-                llama_kv_self_seq_keep(ctx_tgt, 0);
+                llama_memory_seq_rm  (mem_tgt, s_keep, n_past_tgt, -1);
+                llama_memory_seq_keep(mem_tgt, s_keep);
+                llama_memory_seq_cp  (mem_tgt, s_keep, 0, -1, -1);
+                llama_memory_seq_keep(mem_tgt, 0);
             }
 
             for (int s = 0; s < n_seq_dft; ++s) {
@@ -444,7 +448,7 @@ int main(int argc, char ** argv) {
             common_batch_clear(batch_dft);
             common_batch_add  (batch_dft, token_id, n_past_dft, { 0 }, true);
 
-            llama_kv_self_seq_rm(ctx_dft, 0, n_past_dft, -1);
+            llama_memory_seq_rm(mem_dft, 0, n_past_dft, -1);
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
             llama_decode(ctx_dft, batch_dft);
 
@@ -489,7 +493,7 @@ int main(int argc, char ** argv) {
 
                 common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
 
-                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl);
+                const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 
                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
@@ -503,8 +507,8 @@ int main(int argc, char ** argv) {
                     if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
                         LOG_DBG("splitting seq %3d into %3d\n", s, n_seq_cur);
 
-                        llama_kv_self_seq_rm(ctx_dft,    n_seq_cur, -1, -1);
-                        llama_kv_self_seq_cp(ctx_dft, s, n_seq_cur, -1, -1);
+                        llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);
+                        llama_memory_seq_cp(mem_dft, s, n_seq_cur, -1, -1);
 
                         // all previous tokens from this branch are now also part of the new branch
                         for (int t = 0; t < batch_tgt.n_tokens; ++t) {
@@ -585,9 +589,9 @@ int main(int argc, char ** argv) {
 
         // evaluate the target model on the drafted tokens
         {
-            llama_kv_self_seq_keep(ctx_tgt, 0);
+            llama_memory_seq_keep(mem_tgt, 0);
             for (int s = 1; s < n_seq_dft; ++s) {
-                llama_kv_self_seq_cp(ctx_tgt, 0, s, -1, -1);
+                llama_memory_seq_cp(mem_tgt, 0, s, -1, -1);
             }
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());

@@ -33,7 +33,18 @@ typedef struct _txe_device_t *txe_device_s;
 typedef struct _txe_compute_pipeline_state_t *txe_compute_pipeline_state_s;
 FILE *tsi_op_log_file;
 uint64_t num_of_op;
-
+// Centralized TSI runtime initialization - called once globally
+static void ensure_tsi_runtime_initialized() {
+  static bool runtime_initialized = false;
+  if (!runtime_initialized) {
+    std::string mainProfilerName = "OPU ";
+    tsirt::utils::TSIProfiler::initialize();
+    // TSI Run time Initalization
+    tsi_initialize(NUM_OF_TXES, NULL);
+    runtime_initialized = true;
+    GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
+  }
+}
 #ifdef USE_COMMAND_BUFFERS
 typedef struct _txe_command_queue_t *txe_command_queue_s;
 typedef struct _txe_dispatch_queue_t *txe_dispatch_queue_s;
@@ -384,6 +395,7 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
   }
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
 
+
   switch (kernel_type) {
       case GGML_TSAVORITE_KERNEL_TYPE_ADD:
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
@@ -475,7 +487,6 @@ static txe_device_s
 ggml_backend_tsavorite_device_acq(struct ggml_backend_tsavorite_device_context *ctx) {
   assert(ctx != NULL);
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   if (ctx->device == tsi_nil) {
     ctx->device = tsi_system_default_device_create();
     snprintf(ctx->name, sizeof("txe"), "txe");
@@ -492,7 +503,6 @@ static void ggml_backend_tsavorite_device_rel(struct ggml_backend_tsavorite_devi
   assert(ctx != NULL);
   assert(ctx->ref_count > 0);
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   ctx->ref_count--;
 
   // Need to define function txe_device_free
@@ -507,7 +517,6 @@ static void ggml_backend_tsavorite_device_rel(struct ggml_backend_tsavorite_devi
 static void *ggml_tsavorite_host_malloc(size_t n) {
   void *data = NULL;
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   GGML_TSAVORITE_LOG_INFO("\n Allocating memory from tsi_alloc with size  %ld \n", n);
   data = tsi_alloc(n);
   GGML_TSAVORITE_LOG_CONT("\n Allocating memory from tsi_alloc with size  %ld starting memory %p\n",
@@ -526,12 +535,9 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
   if (tsi_log_setup() == false)
     return NULL;
 
-  std::string mainProfilerName = "OPU ";
-  tsirt::utils::TSIProfiler::initialize();
-  tsirt::utils::TSIScopedProfiler mainProfiler(mainProfilerName);
   
-  // TSI Run time Initalization
-  tsi_initialize(NUM_OF_TXES, NULL);
+  std::string mainProfilerName = "OPU ";
+  tsirt::utils::TSIScopedProfiler mainProfiler(mainProfilerName);
 
   // init context
   struct ggml_backend_tsavorite_context *ctx = (struct ggml_backend_tsavorite_context *)calloc(
@@ -608,6 +614,7 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
 static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
 
+
   for (int i = 0; i < GGML_TSAVORITE_KERNEL_TYPE_COUNT; ++i) {
     if (ctx->kernels[i].pipeline) {
       tsi_kernel_release(ctx->kernels[i].pipeline);
@@ -649,6 +656,7 @@ static ggml_backend_tsavorite_buffer_s ggml_tsavorite_get_buffer(struct ggml_ten
     // GGML_TSAVORITE_LOG_INFO("%s: data tensor '%16s', offs_data = %8ld, offs_eval = %8ld, offs_cach = %8ld\n", __func__, t->name, offs_data, offs_eval, offs_cach);
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
 
+
     const int64_t tsize = ggml_nbytes(t);
 
     ggml_backend_buffer_t buffer = t->view_src ? t->view_src->buffer : t->buffer;
@@ -682,7 +690,6 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   if (!ctx_dev)
     return false;
-  GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   for (size_t i = 0, n = 3; i < n; ++i) {
     if (op->src[i] != NULL && op->src[i]->type != GGML_TYPE_F32) {
       return false;
@@ -1127,6 +1134,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 #if 0
 static const char * ggml_backend_tsavorite_buffer_get_name(ggml_backend_buffer_t buffer) {
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
     GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
     return "tSavorite";
 
@@ -1217,7 +1225,6 @@ static bool ggml_backend_tsavorite_buffer_cpy_tensor(ggml_backend_buffer_t buffe
                                                      const struct ggml_tensor *src,
                                                      struct ggml_tensor *dst) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   if (ggml_backend_buffer_is_host(src->buffer)) {
     memcpy(dst->data, src->data, (ggml_nbytes(src)));
     return true;
@@ -1468,7 +1475,6 @@ static enum ggml_status ggml_backend_tsavorite_graph_compute(ggml_backend_t back
 static void ggml_backend_tsavorite_set_n_cb(ggml_backend_t backend, int n_cb) {
   // GGML_ASSERT(ggml_backend_is_tsavorite(backend));
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   struct ggml_backend_tsavorite_context *ctx =
       (struct ggml_backend_tsavorite_context *)backend->context;
 
@@ -1508,6 +1514,7 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
 
 static ggml_guid_t ggml_backend_tsavorite_guid(void) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
   static ggml_guid guid = {0x81, 0xa1, 0x8b, 0x1e, 0x71, 0xec, 0x79, 0xed,
                            0x2b, 0x85, 0xdc, 0x8a, 0x61, 0x98, 0x30, 0xe6};
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
@@ -1518,13 +1525,11 @@ static ggml_guid_t ggml_backend_tsavorite_guid(void) {
 ggml_backend_t ggml_backend_tsavorite_init(void) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_tsavorite_reg(), 0);
-
   struct ggml_backend_tsavorite_context *ctx = ggml_tsavorite_init(dev);
   if (ctx == NULL) {
     GGML_TSAVORITE_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
     return NULL;
   }
-
   ggml_backend_t backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
   if (backend) {
     backend->guid = ggml_backend_tsavorite_guid();
@@ -1550,7 +1555,6 @@ void ggml_backend_tsavorite_set_abort_callback(ggml_backend_t backend,
                                                void *user_data) {
   GGML_ASSERT(ggml_backend_is_tsavorite(backend));
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   struct ggml_backend_tsavorite_context *ctx =
       (struct ggml_backend_tsavorite_context *)backend->context;
 
@@ -1562,7 +1566,6 @@ void ggml_backend_tsavorite_set_abort_callback(ggml_backend_t backend,
 void ggml_backend_tsavorite_capture_next_compute(ggml_backend_t backend) {
   GGML_ASSERT(ggml_backend_is_tsavorite(backend));
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   struct ggml_backend_tsavorite_context *ctx =
       (struct ggml_backend_tsavorite_context *)backend->context;
   ctx->capture_next_compute = true;
@@ -1582,6 +1585,7 @@ static const char *ggml_backend_tsavorite_device_get_name(ggml_backend_dev_t dev
 static const char *ggml_backend_tsavorite_device_get_description(ggml_backend_dev_t dev) {
   // acq/rel just to populate ctx->name in case it hasn't been done yet
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
   struct ggml_backend_tsavorite_device_context *ctx_dev =
       (struct ggml_backend_tsavorite_device_context *)dev->context;
   ggml_backend_tsavorite_device_acq(ctx_dev);
@@ -1594,7 +1598,6 @@ static const char *ggml_backend_tsavorite_device_get_description(ggml_backend_de
 static void ggml_backend_tsavorite_device_get_memory(ggml_backend_dev_t dev, size_t *free,
                                                      size_t *total) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
   if (!dev || !free || !total) {
     GGML_TSAVORITE_LOG_INFO("One of more pointers(dev, free, total) are NULL\n");
     GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
@@ -1632,6 +1635,7 @@ static enum ggml_backend_dev_type ggml_backend_tsavorite_device_get_type(ggml_ba
 static void ggml_backend_tsavorite_device_get_props(ggml_backend_dev_t dev,
                                                     struct ggml_backend_dev_props *props) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
   props->name = ggml_backend_tsavorite_device_get_name(dev);
   props->description = ggml_backend_tsavorite_device_get_description(dev);
   props->type = ggml_backend_tsavorite_device_get_type(dev);
@@ -1650,6 +1654,7 @@ static void ggml_backend_tsavorite_device_get_props(ggml_backend_dev_t dev,
 static ggml_backend_t ggml_backend_tsavorite_device_init(ggml_backend_dev_t dev,
                                                          const char *params) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
   struct ggml_backend_tsavorite_context *ctx = ggml_tsavorite_init(dev);
   if (ctx == NULL) {
     GGML_TSAVORITE_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
@@ -1763,6 +1768,7 @@ static ggml_backend_buffer_t ggml_backend_tsavorite_device_buffer_from_ptr(ggml_
 static bool ggml_backend_tsavorite_device_supports_op(ggml_backend_dev_t dev,
                                                       const struct ggml_tensor *op) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+
   struct ggml_backend_tsavorite_device_context *ctx_dev =
       (struct ggml_backend_tsavorite_device_context *)dev->context;
 
@@ -1789,7 +1795,7 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   if (op->type != GGML_TYPE_F32)
     return false;
   switch (op->op) {
-  // case GGML_OP_NONE:
+  case GGML_OP_NONE:
   case GGML_OP_ADD:
   case GGML_OP_SUB:
   case GGML_OP_DIV:
@@ -1885,14 +1891,13 @@ ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
   ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
   ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+  ensure_tsi_runtime_initialized();
   g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
   g_ggml_backend_tsavorite_reg.context = NULL;
-
   g_ggml_backend_tsavorite_device.iface = ggml_backend_tsavorite_device_i;
   g_ggml_backend_tsavorite_device.reg = &g_ggml_backend_tsavorite_reg;
   g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
-
   return &g_ggml_backend_tsavorite_reg;
 }
 

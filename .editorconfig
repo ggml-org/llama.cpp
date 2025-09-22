@@ -48,3 +48,7 @@ end_of_line = unset
 charset = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
+
+[vendor/miniaudio/miniaudio.h]
+trim_trailing_whitespace = unset
+insert_final_newline = unset

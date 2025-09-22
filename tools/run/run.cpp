@@ -1,4 +1,17 @@
+#include "chat.h"
+#include "common.h"
+#include "llama-cpp.h"
+#include "log.h"
+
+#include "linenoise.cpp/linenoise.h"
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
+
 #if defined(_WIN32)
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
 #    include <windows.h>
 #    include <io.h>
 #else
@@ -23,13 +36,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "chat.h"
-#include "common.h"
-#include "json.hpp"
-#include "linenoise.cpp/linenoise.h"
-#include "llama-cpp.h"
-#include "log.h"
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
 [[noreturn]] static void sigint_handler(int) {
@@ -401,39 +407,22 @@ class HttpClient {
         }
 
         std::string output_file_partial;
-        curl = curl_easy_init();
-        if (!curl) {
-            return 1;
-        }
 
-        progress_data data;
-        File          out;
         if (!output_file.empty()) {
             output_file_partial = output_file + ".partial";
-            if (!out.open(output_file_partial, "ab")) {
-                printe("Failed to open file for writing\n");
-
-                return 1;
-            }
-
-            if (out.lock()) {
-                printe("Failed to exclusively lock file\n");
-
-                return 1;
-            }
         }
 
-        set_write_options(response_str, out);
-        data.file_size = set_resume_point(output_file_partial);
-        set_progress_options(progress, data);
-        set_headers(headers);
-        CURLcode res = perform(url);
-        if (res != CURLE_OK){
-            printe("Fetching resource '%s' failed: %s\n", url.c_str(), curl_easy_strerror(res));
+        if (download(url, headers, output_file_partial, progress, response_str)) {
             return 1;
         }
+
         if (!output_file.empty()) {
-            std::filesystem::rename(output_file_partial, output_file);
+            try {
+                std::filesystem::rename(output_file_partial, output_file);
+            } catch (const std::filesystem::filesystem_error & e) {
+                printe("Failed to rename '%s' to '%s': %s\n", output_file_partial.c_str(), output_file.c_str(), e.what());
+                return 1;
+            }
         }
 
         return 0;
@@ -452,6 +441,42 @@ class HttpClient {
   private:
     CURL *              curl  = nullptr;
     struct curl_slist * chunk = nullptr;
+
+    int download(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
+             const bool progress, std::string * response_str = nullptr) {
+        curl = curl_easy_init();
+        if (!curl) {
+            return 1;
+        }
+
+        progress_data data;
+        File          out;
+        if (!output_file.empty()) {
+            if (!out.open(output_file, "ab")) {
+                printe("Failed to open file for writing\n");
+
+                return 1;
+            }
+
+            if (out.lock()) {
+                printe("Failed to exclusively lock file\n");
+
+                return 1;
+            }
+        }
+
+        set_write_options(response_str, out);
+        data.file_size = set_resume_point(output_file);
+        set_progress_options(progress, data);
+        set_headers(headers);
+        CURLcode res = perform(url);
+        if (res != CURLE_OK){
+            printe("Fetching resource '%s' failed: %s\n", url.c_str(), curl_easy_strerror(res));
+            return 1;
+        }
+
+        return 0;
+    }
 
     void set_write_options(std::string * response_str, const File & out) {
         if (response_str) {
@@ -501,6 +526,9 @@ class HttpClient {
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+#ifdef _WIN32
+        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
         return curl_easy_perform(curl);
     }
 
@@ -936,23 +964,36 @@ static int apply_chat_template(const struct common_chat_templates * tmpls, Llama
 // Function to tokenize the prompt
 static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt,
                            std::vector<llama_token> & prompt_tokens, const LlamaData & llama_data) {
-    const bool is_first = llama_kv_self_seq_pos_max(llama_data.context.get(), 0) == 0;
-
-    const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
-    prompt_tokens.resize(n_prompt_tokens);
-    if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), is_first,
-                       true) < 0) {
-        printe("failed to tokenize the prompt\n");
+    const bool is_first = llama_memory_seq_pos_max(llama_get_memory(llama_data.context.get()), 0) == -1;
+    int n_tokens = prompt.size() + 2 * is_first;
+    prompt_tokens.resize(n_tokens);
+    n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+                              prompt_tokens.data(), prompt_tokens.size(),
+                              is_first, /*parse_special =*/true);
+    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+        printe("tokenization failed: input too large\n");
         return -1;
     }
-
-    return n_prompt_tokens;
+    if (n_tokens < 0) {
+        prompt_tokens.resize(-n_tokens);
+        int check = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+                                   prompt_tokens.data(), prompt_tokens.size(),
+                                   is_first, /*parse_special =*/true);
+        if (check != -n_tokens) {
+            printe("failed to tokenize the prompt (size mismatch)\n");
+            return -1;
+        }
+        n_tokens = check;
+    } else {
+        prompt_tokens.resize(n_tokens);
+    }
+    return n_tokens;
 }
 
 // Check if we have enough space in the context to evaluate this batch
 static int check_context_size(const llama_context_ptr & ctx, const llama_batch & batch) {
     const int n_ctx      = llama_n_ctx(ctx.get());
-    const int n_ctx_used = llama_kv_self_seq_pos_max(ctx.get(), 0);
+    const int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx.get()), 0);
     if (n_ctx_used + batch.n_tokens > n_ctx) {
         printf(LOG_COL_DEFAULT "\n");
         printe("context size exceeded\n");
