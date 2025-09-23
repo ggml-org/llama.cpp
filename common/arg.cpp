@@ -24,6 +24,7 @@
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <list>
 #include <regex>
 #include <set>
@@ -36,8 +37,20 @@
 #if defined(LLAMA_USE_CURL)
 #include <curl/curl.h>
 #include <curl/easy.h>
-#include <future>
 #endif
+
+#ifdef __linux__
+#include <linux/limits.h>
+#elif defined(_WIN32)
+#   if !defined(PATH_MAX)
+#   define PATH_MAX MAX_PATH
+#   endif
+#elif defined(_AIX)
+#include <sys/limits.h>
+#else
+#include <sys/syslimits.h>
+#endif
+#define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = nlohmann::ordered_json;
 
@@ -208,19 +221,6 @@ bool common_has_curl() {
     return true;
 }
 
-#ifdef __linux__
-#include <linux/limits.h>
-#elif defined(_WIN32)
-#   if !defined(PATH_MAX)
-#   define PATH_MAX MAX_PATH
-#   endif
-#elif defined(_AIX)
-#include <sys/limits.h>
-#else
-#include <sys/syslimits.h>
-#endif
-#define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
-
 //
 // CURL utils
 //
@@ -368,10 +368,9 @@ static bool common_download_head(CURL *              curl,
 }
 
 // download one single file from remote URL to local path
-static bool common_download_file_single(const std::string & url,
-                                        const std::string & path,
-                                        const std::string & bearer_token,
-                                        bool                offline) {
+static bool common_download_file_single_online(const std::string & url,
+                                               const std::string & path,
+                                               const std::string & bearer_token) {
     // If the file exists, check its JSON metadata companion file.
     std::string metadata_path = path + ".json";
     static const int max_attempts        = 3;
@@ -384,10 +383,6 @@ static bool common_download_file_single(const std::string & url,
         // Check if the file already exists locally
         const auto file_exists = std::filesystem::exists(path);
         if (file_exists) {
-            if (offline) {
-                LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
-                return true;  // skip verification/downloading
-            }
             // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
             std::ifstream metadata_in(metadata_path);
             if (metadata_in.good()) {
@@ -407,10 +402,6 @@ static bool common_download_file_single(const std::string & url,
             }
             // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
         } else {
-            if (offline) {
-                LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
-                return false;
-            }
             LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
         }
 
@@ -530,6 +521,89 @@ static bool common_download_file_single(const std::string & url,
     return true;
 }
 
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params) {
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::vector<char> res_buffer;
+
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        auto data_vec = static_cast<std::vector<char> *>(data);
+        data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_buffer);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    if (params.timeout > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, params.timeout);
+    }
+    if (params.max_size > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_MAXFILESIZE, params.max_size);
+    }
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    for (const auto & header : params.headers) {
+        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        std::string error_msg = curl_easy_strerror(res);
+        throw std::runtime_error("error: cannot make GET request: " + error_msg);
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+
+    return { res_code, std::move(res_buffer) };
+}
+
+#else
+
+bool common_has_curl() {
+    return false;
+}
+
+static bool common_download_file_single_online(const std::string &, const std::string &, const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download model from internet\n");
+    return false;
+}
+
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params &) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download model from the internet");
+    }
+
+    return {};
+}
+
+#endif // LLAMA_USE_CURL
+
+static bool common_download_file_single(const std::string & url,
+                                        const std::string & path,
+                                        const std::string & bearer_token,
+                                        bool                offline) {
+    if (!offline) {
+        return common_download_file_single_online(url, path, bearer_token);
+    }
+
+    if (!std::filesystem::exists(path)) {
+        LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
+        return false;
+    }
+
+    LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
+    return true;
+}
+
 // download multiple files from remote URLs to local paths
 // the input is a vector of pairs <url, path>
 static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token, bool offline) {
@@ -588,7 +662,7 @@ static bool common_download_model(
 
     if (n_split > 1) {
         char split_prefix[PATH_MAX] = {0};
-        char split_url_prefix[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+        char split_url_prefix[LLAMA_MAX_URL_LENGTH] = {0};
 
         // Verify the first split file format
         // and extract split URL and PATH prefixes
@@ -609,7 +683,7 @@ static bool common_download_model(
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
 
-            char split_url[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+            char split_url[LLAMA_MAX_URL_LENGTH] = {0};
             llama_split_path(split_url, sizeof(split_url), split_url_prefix, idx, n_split);
 
             if (std::string(split_path) == model.path) {
@@ -624,50 +698,6 @@ static bool common_download_model(
     }
 
     return true;
-}
-
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params) {
-    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
-    curl_slist_ptr http_headers;
-    std::vector<char> res_buffer;
-
-    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
-    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
-    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
-        auto data_vec = static_cast<std::vector<char> *>(data);
-        data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
-        return size * nmemb;
-    };
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_buffer);
-#if defined(_WIN32)
-    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#endif
-    if (params.timeout > 0) {
-        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, params.timeout);
-    }
-    if (params.max_size > 0) {
-        curl_easy_setopt(curl.get(), CURLOPT_MAXFILESIZE, params.max_size);
-    }
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
-    for (const auto & header : params.headers) {
-        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
-    }
-    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
-
-    CURLcode res = curl_easy_perform(curl.get());
-
-    if (res != CURLE_OK) {
-        std::string error_msg = curl_easy_strerror(res);
-        throw std::runtime_error("error: cannot make GET request: " + error_msg);
-    }
-
-    long res_code;
-    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
-
-    return { res_code, std::move(res_buffer) };
 }
 
 /**
@@ -736,21 +766,17 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     std::string mmprojFile;
 
     if (res_code == 200 || res_code == 304) {
-        // extract ggufFile.rfilename in json, using regex
-        {
-            std::regex pattern("\"ggufFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
-            std::smatch match;
-            if (std::regex_search(res_str, match, pattern)) {
-                ggufFile = match[1].str();
+        try {
+            auto j = json::parse(res_str);
+
+            if (j.contains("ggufFile") && j["ggufFile"].contains("rfilename")) {
+                ggufFile = j["ggufFile"]["rfilename"].get<std::string>();
             }
-        }
-        // extract mmprojFile.rfilename in json, using regex
-        {
-            std::regex pattern("\"mmprojFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
-            std::smatch match;
-            if (std::regex_search(res_str, match, pattern)) {
-                mmprojFile = match[1].str();
+            if (j.contains("mmprojFile") && j["mmprojFile"].contains("rfilename")) {
+                mmprojFile = j["mmprojFile"]["rfilename"].get<std::string>();
             }
+        } catch (const std::exception & e) {
+            throw std::runtime_error(std::string("error parsing manifest JSON: ") + e.what());
         }
         if (!use_cache) {
             // if not using cached response, update the cache file
@@ -769,45 +795,6 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
 
     return { hf_repo, ggufFile, mmprojFile };
 }
-
-#else
-
-bool common_has_curl() {
-    return false;
-}
-
-static bool common_download_file_single(const std::string &, const std::string &, const std::string &, bool) {
-    LOG_ERR("error: built without CURL, cannot download model from internet\n");
-    return false;
-}
-
-static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> &, const std::string &, bool) {
-    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
-    return false;
-}
-
-static bool common_download_model(
-        const common_params_model &,
-        const std::string &,
-        bool) {
-    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
-    return false;
-}
-
-static struct common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool) {
-    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
-    return {};
-}
-
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params &) {
-    if (!url.empty()) {
-        throw std::runtime_error("error: built without CURL, cannot download model from the internet");
-    }
-
-    return {};
-}
-
-#endif // LLAMA_USE_CURL
 
 //
 // Docker registry functions
@@ -1068,8 +1055,6 @@ static std::string get_all_kv_cache_types() {
 //
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
-    std::string arg;
-    const std::string arg_prefix = "--";
     common_params & params = ctx_arg.params;
 
     std::unordered_map<std::string, common_arg *> arg_to_options;
