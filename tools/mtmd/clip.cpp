@@ -3552,16 +3552,23 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
     } else if (ctx->proj_type() == PROJECTOR_TYPE_IDEFICS3) {
-        // Do an aspect-ratio preserving resize to the max size
-        // TODO: Integrate into llava_uhd to avoid copy-paste
+        // The refined size has two steps:
+        // 1. Resize w/ aspect-ratio preserving such that the longer side is
+        //      image_size * scale_factor
+        // 2. Resize w/out preserving aspect ratio such that both sides are
+        //      multiples of image_size (always rounding up)
+        //
+        // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
         const int32_t target_size = params.image_size * params.proj_scale_factor;
         const float scale = std::min(
             static_cast<float>(target_size) / original_size.width,
             static_cast<float>(target_size) / original_size.height);
-        const clip_image_size refined_size{
-            static_cast<int>(original_size.width * scale),
-            static_cast<int>(original_size.height * scale),
-        };
+        int refined_w = static_cast<int>(original_size.width * scale);
+        int refined_h = static_cast<int>(original_size.height * scale);
+        refined_w = static_cast<int>(params.image_size * std::ceil(static_cast<float>(refined_w) / params.image_size));
+        refined_h = static_cast<int>(params.image_size * std::ceil(static_cast<float>(refined_h) / params.image_size));
+        const clip_image_size refined_size{refined_w, refined_h};
+
         llava_uhd::slice_instructions instructions;
         instructions.overview_size = clip_image_size{params.image_size, params.image_size};
         instructions.refined_size = refined_size;
@@ -3569,7 +3576,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             static_cast<int>(std::ceil(static_cast<float>(refined_size.width) / params.image_size)),
             static_cast<int>(std::ceil(static_cast<float>(refined_size.height) / params.image_size)),
         };
-        instructions.padding_refined = true;
         for (int y = 0; y < refined_size.height; y += params.image_size) {
             for (int x = 0; x < refined_size.width; x += params.image_size) {
                 instructions.slices.push_back(llava_uhd::slice_coordinates{
