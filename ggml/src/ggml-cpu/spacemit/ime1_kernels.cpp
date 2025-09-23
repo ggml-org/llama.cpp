@@ -1,31 +1,19 @@
-#include <cmath>
-#include <algorithm>
-#include "ime_kernels.h"
+// Copyright (c) 2025 SpacemiT. All rights reserved.
+// Licensed under the MIT License.
 #include "ggml.h"
+#include "ime_kernels.h"
 
+#include <algorithm>
+#include <cmath>
+
+// clang-format off
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
 #pragma GCC diagnostic ignored "-Wcast-qual"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #endif
-
-// HPMADOT_OFF = 0 is not supported when ref_C used
-#define HPMADOT_OFF 0
-namespace sqnbitgemm_spacemit_ime
-{
-template <typename T>
-struct Q4_0X16 {
-    T scale[16];
-    // uint8_t zp[8];
-    // blklen = 16
-    // uint8_t[16][8]
-    // b0 b8, b1 b9, b2 b10, b3 b11, b4 b12, b5 b13, b6 b14, b7 b15
-
-    // blklen = 32
-    // uint8_t[16][2][8]
-    // b0 b8, b1 b9, b2 b10, b3 b11, b4 b12, b5 b13, b6 b14, b7 b15
-    // b16 b24, b17 b25, b18 b26, b19 b27, b20 b28, b21 b29, b22 b30, b23 b31
-};
+// clang-format on
+namespace sqnbitgemm_spacemit_ime {
 
 #define QUANTIZEM4ROW_KERNEL                           \
     "vmv.s.x            v16, zero                \n\t" \
@@ -89,16 +77,15 @@ struct Q4_0X16 {
     "vsetvli            t0, t1, e8, mf4          \n\t" \
     "vse8.v             v31, (s1)                \n\t"
 
-void
-QuantizeAM4Row_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* QuantA)
-{
+namespace ime1 {
+void quantize_a_4row_i8(size_t BlkLen, const float * A, size_t CountK, std::byte * QuantA) {
     constexpr float range_max_reciprocal = 1.0f / ((1 << 7) - 1);
-    const float fone = 1.0f;
+    const float     fone                 = 1.0f;
 
     if (BlkLen == 16 || BlkLen == 32 || BlkLen == 64) {
         for (size_t row_index = 0; row_index < 4; ++row_index) {
-            const float* SRC = A + row_index * CountK;
-            std::byte* DST = QuantA + row_index * sizeof(float);
+            const float * SRC = A + row_index * CountK;
+            std::byte *   DST = QuantA + row_index * sizeof(float);
 
             const size_t offset = (4 - row_index) * 4 + row_index * 8;
             const size_t stride = 4 * (sizeof(float) + BlkLen);
@@ -145,15 +132,15 @@ QuantizeAM4Row_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte*
                 QUANTIZEM4ROW_STORE
 
                 "QUIT%=:                                     \n\t"
-                : [ SRC ] "+r"(SRC)
-                : [ DST ] "r"(DST), [ BlkLen ] "r"(BlkLen), [ OFFSET ] "r"(offset), [ STRIDE ] "r"(stride),
-                  [ CountK ] "r"(CountK), [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal)
+                : [SRC] "+r"(SRC)
+                : [DST] "r"(DST), [BlkLen] "r"(BlkLen), [OFFSET] "r"(offset), [STRIDE] "r"(stride),
+                  [CountK] "r"(CountK), [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal)
                 : "cc", "t0", "t1", "t2", "t3", "a1", "s1", "s2", "f10", "f11");
         }
     } else if (BlkLen == 128) {
         for (size_t row_index = 0; row_index < 4; ++row_index) {
-            const float* SRC = A + row_index * CountK;
-            std::byte* DST = QuantA + row_index * sizeof(float);
+            const float * SRC = A + row_index * CountK;
+            std::byte *   DST = QuantA + row_index * sizeof(float);
 
             const size_t offset = (4 - row_index) * 4 + row_index * 8;
             const size_t stride = 4 * (sizeof(float) + BlkLen);
@@ -215,17 +202,17 @@ QuantizeAM4Row_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte*
                 "jal                x0, QUANTIZE%=           \n\t"
 
                 "QUIT%=:                                     \n\t"
-                : [ SRC ] "+r"(SRC)
-                : [ DST ] "r"(DST), [ BlkLen ] "r"(BlkLen), [ OFFSET ] "r"(offset), [ STRIDE ] "r"(stride),
-                  [ CountK ] "r"(CountK), [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal)
+                : [SRC] "+r"(SRC)
+                : [DST] "r"(DST), [BlkLen] "r"(BlkLen), [OFFSET] "r"(offset), [STRIDE] "r"(stride),
+                  [CountK] "r"(CountK), [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal)
                 : "cc", "t0", "t1", "t2", "t6", "a1", "s1", "s2", "f10", "f11");
         }
     } else if (BlkLen == 256) {
         for (size_t row_index = 0; row_index < 4; ++row_index) {
-            const float* SRC = A + row_index * CountK;
-            std::byte* DST = QuantA + row_index * sizeof(float);
-            const size_t offset = (4 - row_index) * 4 + row_index * 8;
-            const size_t stride = 4 * (sizeof(float) + BlkLen);
+            const float * SRC    = A + row_index * CountK;
+            std::byte *   DST    = QuantA + row_index * sizeof(float);
+            const size_t  offset = (4 - row_index) * 4 + row_index * 8;
+            const size_t  stride = 4 * (sizeof(float) + BlkLen);
             __asm__ volatile(
                 "vsetvli            t0, zero, e32, m8        \n\t"
                 "li                 t6, 32                   \n\t"
@@ -348,23 +335,21 @@ QuantizeAM4Row_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte*
                 "bnez               t2, TAIL_LOOP%=          \n\t"
 
                 "QUIT%=:                                     \n\t"
-                : [ SRC ] "+r"(SRC)
-                : [ DST ] "r"(DST), [ BlkLen ] "r"(BlkLen), [ OFFSET ] "r"(offset), [ STRIDE ] "r"(stride),
-                  [ CountK ] "r"(CountK), [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal)
+                : [SRC] "+r"(SRC)
+                : [DST] "r"(DST), [BlkLen] "r"(BlkLen), [OFFSET] "r"(offset), [STRIDE] "r"(stride),
+                  [CountK] "r"(CountK), [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal)
                 : "cc", "t0", "t1", "t2", "t6", "a1", "s1", "s2", "f10", "f11");
         }
     }
 }
 
-void
-QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* QuantA)
-{
-    const float* SRC = A;
-    std::byte* DST = QuantA;
+void quantize_a_row_i8(size_t BlkLen, const float * A, size_t CountK, std::byte * QuantA) {
+    const float *   SRC                  = A;
+    std::byte *     DST                  = QuantA;
     constexpr float range_max_reciprocal = 1.0f / ((1 << 7) - 1);
-    const float fone = 1.0f;
-    std::byte* QuantA_offset = QuantA + CountK + 4 * ((CountK + BlkLen - 1) / BlkLen);
-    size_t offset = (CountK + BlkLen - 1) / BlkLen * BlkLen - CountK;
+    const float     fone                 = 1.0f;
+    std::byte *     QuantA_offset        = QuantA + CountK + 4 * ((CountK + BlkLen - 1) / BlkLen);
+    size_t          offset               = (CountK + BlkLen - 1) / BlkLen * BlkLen - CountK;
 
     if (CountK <= BlkLen) {
         float max_abs_A = 0.0f;
@@ -373,14 +358,14 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
         }
         float scale_A = max_abs_A * range_max_reciprocal;
 
-        ((float*)QuantA)[0] = scale_A;
+        ((float *) QuantA)[0] = scale_A;
 
-        auto* QuantAData_offset = (int8_t*)(QuantA + sizeof(float));
+        auto * QuantAData_offset = (int8_t *) (QuantA + sizeof(float));
 
         for (size_t k = 0; k < CountK; k++) {
             QuantAData_offset[k] =
-                (int8_t)std::clamp(roundf(A[k] / scale_A), (float)std::numeric_limits<int8_t>::lowest(),
-                                   (float)std::numeric_limits<int8_t>::max());
+                (int8_t) std::clamp(roundf(A[k] / scale_A), (float) std::numeric_limits<int8_t>::lowest(),
+                                    (float) std::numeric_limits<int8_t>::max());
         }
         for (size_t k = CountK; k < BlkLen; k++) {
             QuantAData_offset[k] = 0;
@@ -399,12 +384,12 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "addi         %[DST], %[DST], 128     \n\t"
             "sub          %[CNT], %[CNT], t0      \n\t"
             "bnez         %[CNT], LOOP%=          \n\t"
-            : [ DST ] "+r"(QuantA_offset), [ CNT ] "+r"(offset)
+            : [DST] "+r"(QuantA_offset), [CNT] "+r"(offset)
             :
             : "cc", "t0");
     }
     if (BlkLen == 16) {
-        float buffer[64] = {0.0f};
+        float buffer[64] = { 0.0f };
         __asm__ volatile(
             "addi         t3, zero, 16*8          \n\t"
             "addi         t2, zero, 16            \n\t"
@@ -720,8 +705,8 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "vxor.vv      v16, v16, v16           \n\t"
             "jal          x0, LOOP_K%=            \n\t"
             "END%=:                               \n\t"
-            : [ SRC ] "+r"(SRC), [ DST ] "+r"(DST), [ K ] "+r"(CountK)
-            : [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal), [ BUFFER ] "r"(buffer)
+            : [SRC] "+r"(SRC), [DST] "+r"(DST), [K] "+r"(CountK)
+            : [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal), [BUFFER] "r"(buffer)
             : "cc", "t3", "t2", "t1", "t0", "a1", "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f10", "f11", "f12",
               "f13", "f14", "f15", "f16", "f17");
     } else if (BlkLen == 32) {
@@ -856,8 +841,8 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "vxor.vv      v16, v16, v16           \n\t"
             "jal          x0, LOOP_K%=            \n\t"
             "END%=:                               \n\t"
-            : [ K ] "+r"(CountK)
-            : [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal), [ SRC ] "r"(SRC), [ DST ] "r"(DST)
+            : [K] "+r"(CountK)
+            : [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal), [SRC] "r"(SRC), [DST] "r"(DST)
             : "cc", "t3", "t2", "t1", "t0", "a1", "a2", "a3", "a4", "s1", "s2", "s3", "s4", "f10", "f11", "f12", "f13");
     } else if (BlkLen == 64) {
         __asm__ volatile(
@@ -951,8 +936,8 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "vxor.vv      v16, v16, v16           \n\t"
             "jal          x0, LOOP_K%=            \n\t"
             "END%=:                               \n\t"
-            : [ K ] "+r"(CountK)
-            : [ SRC ] "r"(SRC), [ DST ] "r"(DST), [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal)
+            : [K] "+r"(CountK)
+            : [SRC] "r"(SRC), [DST] "r"(DST), [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal)
             : "cc", "t3", "t2", "t1", "t0", "a1", "a2", "s1", "s2", "f10", "f11");
     } else if (BlkLen == 128) {
         __asm__ volatile(
@@ -1011,12 +996,12 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "jal          x0, QUANT%=             \n\t"
             "END%=:                               \n\t"
 
-            : [ DST ] "+r"(DST), [ K ] "+r"(CountK)
-            : [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal), [ SRC ] "r"(SRC)
+            : [DST] "+r"(DST), [K] "+r"(CountK)
+            : [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal), [SRC] "r"(SRC)
             : "cc", "t2", "t1", "t0", "a1", "a2", "f10", "f11");
     } else {
-        float buffer[8] = {0.0f};
-        size_t cnt = BlkLen / 256;
+        float  buffer[8] = { 0.0f };
+        size_t cnt       = BlkLen / 256;
 
         __asm__ volatile(
             "slli         t3, %[BLK], 2           \n\t"
@@ -1175,15 +1160,16 @@ QuantizeARow_CompInt8(size_t BlkLen, const float* A, size_t CountK, std::byte* Q
             "addi         %[DST], %[DST], 64      \n\t"
             "bnez         t6, TAIL_QUANT%=        \n\t"
             "END%=:                               \n\t"
-            : [ SRC ] "+r"(SRC), [ DST ] "+r"(DST), [ K ] "+r"(CountK)
-            : [ FONE ] "f"(fone), [ RMAXREC ] "f"(range_max_reciprocal), [ BLK ] "r"(BlkLen), [ BUFFER ] "r"(buffer),
-              [ CNT ] "r"(cnt)
+            : [SRC] "+r"(SRC), [DST] "+r"(DST), [K] "+r"(CountK)
+            : [FONE] "f"(fone), [RMAXREC] "f"(range_max_reciprocal), [BLK] "r"(BlkLen), [BUFFER] "r"(buffer),
+              [CNT] "r"(cnt)
             : "cc", "t1", "t0", "t6", "s1", "f0", "f1", "f2", "f3", "f4", "f5", "f6");
     }
 }
 
-namespace
-{
+}  // namespace ime1
+
+namespace {
 #define SQ4BIT_KERNEL_COMP_1x8x2_4X8X4          \
     "vmadot       v16, v14, v0            \n\t" \
     "vmadot       v18, v14, v1            \n\t" \
@@ -1467,45 +1453,43 @@ namespace
     "vadd.vi      v1, v1, -12             \n\t"
 
 template <bool HasZeroPoint>
-void
-SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
-                                           const std::byte* QuantA,
-                                           const std::byte* QuantBData,
-                                           const float* QuantBScale,
-                                           const std::byte* QuantBZeroPoint,
-                                           float* C,
-                                           size_t CountN,
-                                           size_t BlockCountK,
-                                           const float* Bias,
-                                           const size_t ldc)
-{
+void SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
+                                                const std::byte * QuantA,
+                                                const std::byte * QuantBData,
+                                                const float *     QuantBScale,
+                                                const std::byte * QuantBZeroPoint,
+                                                float *           C,
+                                                size_t            CountN,
+                                                size_t            BlockCountK,
+                                                const float *     Bias,
+                                                const size_t      ldc) {
     GGML_UNUSED(QuantBScale);
     GGML_UNUSED(QuantBZeroPoint);
-    size_t LDC = ldc * sizeof(float);
+    size_t       LDC   = ldc * sizeof(float);
     const size_t INNER = BlkLen / 16;
-    float tmp[4 * 16];
+    float        tmp[4 * 16];
 
     if constexpr (HasZeroPoint) {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t NBLKS = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +             //
-                                       n * BlockCountK * BlkLen / 2 +       // b data
-                                       n * BlockCountK * sizeof(uint8_t) +  // zp
-                                       n * BlockCountK * sizeof(__fp16);    // scale
-            float* CPtr = C + n;
+            size_t      NBLKS         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
+                                        n * BlockCountK * BlkLen / 2 +       // b data
+                                        n * BlockCountK * sizeof(uint8_t) +  // zp
+                                        n * BlockCountK * sizeof(__fp16);    // scale
+            float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
-                LDC = 16 * sizeof(float);
+                LDC  = 16 * sizeof(float);
             }
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 if (NBLKS < 16) {
                     __asm__ volatile(
                         "vsetvli        t0, %[N], e32, m2     \n\t"
                         "vle32.v        v0, (%[SRC])          \n\t"
                         "vse32.v        v0, (%[DST])          \n\t"
                         :
-                        : [ SRC ] "r"(bias), [ DST ] "r"(tmp), [ N ] "r"(NBLKS)
+                        : [SRC] "r"(bias), [DST] "r"(tmp), [N] "r"(NBLKS)
                         : "cc", "t0");
                     bias = tmp;
                 }
@@ -1583,8 +1567,8 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                                  SAVE_RESULT_4x16
 
                                  :
-                                 : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                                   [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr), [ BIAS ] "r"(bias)
+                                 : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                                   [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr), [BIAS] "r"(bias)
                                  : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1",
                                    "s2", "s3", "s4", "s5", "s6");
 
@@ -1661,32 +1645,32 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     SAVE_RESULT_4x16
 
                     :
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                      [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                      [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr)
                     : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1", "s2", "s3",
                       "s4", "s5", "s6");
             }
         }
     } else {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t NBLKS = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +           //
-                                       n * BlockCountK * BlkLen / 2 +     // b data
-                                       n * BlockCountK * sizeof(__fp16);  // scale
-            float* CPtr = C + n;
+            size_t      NBLKS         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +         //
+                                        n * BlockCountK * BlkLen / 2 +     // b data
+                                        n * BlockCountK * sizeof(__fp16);  // scale
+            float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
-                LDC = 16 * sizeof(float);
+                LDC  = 16 * sizeof(float);
             }
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 if (NBLKS < 16) {
                     __asm__ volatile(
                         "vsetvli        t0, %[N], e32, m2     \n\t"
                         "vle32.v        v0, (%[SRC])          \n\t"
                         "vse32.v        v0, (%[DST])          \n\t"
                         :
-                        : [ SRC ] "r"(bias), [ DST ] "r"(tmp), [ N ] "r"(NBLKS)
+                        : [SRC] "r"(bias), [DST] "r"(tmp), [N] "r"(NBLKS)
                         : "cc", "t0");
                     bias = tmp;
                 }
@@ -1745,8 +1729,8 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                                  SAVE_RESULT_4x16
 
                                  :
-                                 : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                                   [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr), [ BIAS ] "r"(bias)
+                                 : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                                   [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr), [BIAS] "r"(bias)
                                  : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1",
                                    "s2", "s3", "s4", "s5", "s6");
 
@@ -1807,8 +1791,8 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     SAVE_RESULT_4x16
 
                     :
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                      [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                      [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr)
                     : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1", "s2", "s3",
                       "s4", "s5", "s6");
             }
@@ -1816,9 +1800,9 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
     }
     if (CountN % 16 != 0) {
         // stroe output from tmp to C when NBLKS less than 16.
-        float* CPtr = C + CountN / 16 * 16;
-        const size_t N = CountN % 16;
-        LDC = ldc * sizeof(float);
+        float *      CPtr = C + CountN / 16 * 16;
+        const size_t N    = CountN % 16;
+        LDC               = ldc * sizeof(float);
         __asm__ volatile(
             "vsetvli            t0, %[N], e32, m2       \n\t"
             "vle32.v            v0, (%[SRC])            \n\t"
@@ -1836,50 +1820,49 @@ SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
             "vse32.v            v4, (t3)                \n\t"
             "vse32.v            v6, (t4)                \n\t"
             :
-            : [ N ] "r"(N), [ SRC ] "r"(tmp), [ DST ] "r"(CPtr), [ LDC ] "r"(LDC)
+            : [N] "r"(N), [SRC] "r"(tmp), [DST] "r"(CPtr), [LDC] "r"(LDC)
             : "cc", "t0", "t2", "t3", "t4", "s2", "s3", "s4");
     }
 }
+
 template <bool HasZeroPoint>
-void
-SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
-                                 const std::byte* QuantA,
-                                 const std::byte* QuantBData,
-                                 const float* QuantBScale,
-                                 const std::byte* QuantBZeroPoint,
-                                 float* C,
-                                 size_t CountN,
-                                 size_t BlockCountK,
-                                 const float* Bias,
-                                 const size_t ldc)
-{
+void SQ4BitGemmM4Kernel_CompInt8_Impl(size_t            BlkLen,
+                                      const std::byte * QuantA,
+                                      const std::byte * QuantBData,
+                                      const float *     QuantBScale,
+                                      const std::byte * QuantBZeroPoint,
+                                      float *           C,
+                                      size_t            CountN,
+                                      size_t            BlockCountK,
+                                      const float *     Bias,
+                                      const size_t      ldc) {
     GGML_UNUSED(QuantBScale);
     GGML_UNUSED(QuantBZeroPoint);
-    size_t LDC = ldc * sizeof(float);
+    size_t       LDC   = ldc * sizeof(float);
     const size_t INNER = BlkLen / 16;
-    float tmp[4 * 16];
+    float        tmp[4 * 16];
 
     if constexpr (HasZeroPoint) {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t NBLKS = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +             //
-                                       n * BlockCountK * BlkLen / 2 +       // b data
-                                       n * BlockCountK * sizeof(uint8_t) +  // zp
-                                       n * BlockCountK * sizeof(float);     // scale
-            float* CPtr = C + n;
+            size_t      NBLKS         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
+                                        n * BlockCountK * BlkLen / 2 +       // b data
+                                        n * BlockCountK * sizeof(uint8_t) +  // zp
+                                        n * BlockCountK * sizeof(float);     // scale
+            float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
-                LDC = 16 * sizeof(float);
+                LDC  = 16 * sizeof(float);
             }
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 if (NBLKS < 16) {
                     __asm__ volatile(
                         "vsetvli        t0, %[N], e32, m2     \n\t"
                         "vle32.v        v0, (%[SRC])          \n\t"
                         "vse32.v        v0, (%[DST])          \n\t"
                         :
-                        : [ SRC ] "r"(bias), [ DST ] "r"(tmp), [ N ] "r"(NBLKS)
+                        : [SRC] "r"(bias), [DST] "r"(tmp), [N] "r"(NBLKS)
                         : "cc", "t0");
                     bias = tmp;
                 }
@@ -1953,8 +1936,8 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
                                  SAVE_RESULT_4x16
 
                                  :
-                                 : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                                   [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr), [ BIAS ] "r"(bias)
+                                 : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                                   [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr), [BIAS] "r"(bias)
                                  : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1",
                                    "s2", "s3", "s4", "s5", "s6");
 
@@ -2031,32 +2014,32 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
                     SAVE_RESULT_4x16
 
                     :
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                      [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                      [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr)
                     : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1", "s2", "s3",
                       "s4", "s5", "s6");
             }
         }
     } else {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t NBLKS = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +          //
-                                       n * BlockCountK * BlkLen / 2 +    // b data
-                                       n * BlockCountK * sizeof(float);  // scale
-            float* CPtr = C + n;
+            size_t      NBLKS         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +        //
+                                        n * BlockCountK * BlkLen / 2 +    // b data
+                                        n * BlockCountK * sizeof(float);  // scale
+            float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
-                LDC = 16 * sizeof(float);
+                LDC  = 16 * sizeof(float);
             }
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 if (NBLKS < 16) {
                     __asm__ volatile(
                         "vsetvli        t0, %[N], e32, m2     \n\t"
                         "vle32.v        v0, (%[SRC])          \n\t"
                         "vse32.v        v0, (%[DST])          \n\t"
                         :
-                        : [ SRC ] "r"(bias), [ DST ] "r"(tmp), [ N ] "r"(NBLKS)
+                        : [SRC] "r"(bias), [DST] "r"(tmp), [N] "r"(NBLKS)
                         : "cc", "t0");
                     bias = tmp;
                 }
@@ -2115,8 +2098,8 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
                                  SAVE_RESULT_4x16
 
                                  :
-                                 : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                                   [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr), [ BIAS ] "r"(bias)
+                                 : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                                   [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr), [BIAS] "r"(bias)
                                  : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1",
                                    "s2", "s3", "s4", "s5", "s6");
 
@@ -2179,8 +2162,8 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
                     SAVE_RESULT_4x16
 
                     :
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ LDC ] "r"(LDC),
-                      [ BlockCountK ] "r"(BlockCountK), [ C ] "r"(CPtr)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [LDC] "r"(LDC),
+                      [BlockCountK] "r"(BlockCountK), [C] "r"(CPtr)
                     : "cc", "t0", "t1", "t2", "t3", "a1", "a2", "a3", "a4", "f1", "f2", "f3", "f4", "s1", "s2", "s3",
                       "s4", "s5", "s6");
             }
@@ -2188,9 +2171,9 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
     }
     if (CountN % 16 != 0) {
         // stroe output from tmp to C when NBLKS less than 16.
-        float* CPtr = C + CountN / 16 * 16;
-        const size_t N = CountN % 16;
-        LDC = ldc * sizeof(float);
+        float *      CPtr = C + CountN / 16 * 16;
+        const size_t N    = CountN % 16;
+        LDC               = ldc * sizeof(float);
         __asm__ volatile(
             "vsetvli            t0, %[N], e32, m2       \n\t"
             "vle32.v            v0, (%[SRC])            \n\t"
@@ -2208,37 +2191,36 @@ SQ4BitGemmM4Kernel_CompInt8_Impl(size_t BlkLen,
             "vse32.v            v4, (t3)                \n\t"
             "vse32.v            v6, (t4)                \n\t"
             :
-            : [ N ] "r"(N), [ SRC ] "r"(tmp), [ DST ] "r"(CPtr), [ LDC ] "r"(LDC)
+            : [N] "r"(N), [SRC] "r"(tmp), [DST] "r"(CPtr), [LDC] "r"(LDC)
             : "cc", "t0", "t2", "t3", "t4", "s2", "s3", "s4");
     }
 }
+
 template <bool HasZeroPoint>
-void
-SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
-                                           const std::byte* QuantA,
-                                           const std::byte* QuantBData,
-                                           const float* QuantBScale,
-                                           const std::byte* QuantBZeroPoint,
-                                           float* C,
-                                           size_t CountN,
-                                           size_t BlockCountK,
-                                           const float* Bias)
-{
+void SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
+                                                const std::byte * QuantA,
+                                                const std::byte * QuantBData,
+                                                const float *     QuantBScale,
+                                                const std::byte * QuantBZeroPoint,
+                                                float *           C,
+                                                size_t            CountN,
+                                                size_t            BlockCountK,
+                                                const float *     Bias) {
     GGML_UNUSED(QuantBScale);
     GGML_UNUSED(QuantBZeroPoint);
     size_t INNER = BlkLen / 16;
 
     if constexpr (HasZeroPoint) {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t nblks = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +             //
-                                       n * BlockCountK * BlkLen / 2 +       // b data
-                                       n * BlockCountK * sizeof(uint8_t) +  // zp
-                                       n * BlockCountK * sizeof(__fp16);    // scale
-            float* CPtr = C + n;
-            size_t cnt = BlockCountK;
+            size_t      nblks         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
+                                        n * BlockCountK * BlkLen / 2 +       // b data
+                                        n * BlockCountK * sizeof(uint8_t) +  // zp
+                                        n * BlockCountK * sizeof(__fp16);    // scale
+            float * CPtr = C + n;
+            size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 __asm__ volatile(
                     "addi         t3, %[NBLKS], 0         \n\t"
                     "vsetvli      t0, zero, e8, m1        \n\t"
@@ -2356,8 +2338,8 @@ SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks), [ BIAS ] "+r"(bias)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks), [BIAS] "+r"(bias)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6", "s7");
             } else {
                 __asm__ volatile(
@@ -2463,21 +2445,21 @@ SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6", "s7");
             }
         }
     } else {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t nblks = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +           //
-                                       n * BlockCountK * BlkLen / 2 +     // b data
-                                       n * BlockCountK * sizeof(__fp16);  // scale
-            float* CPtr = C + n;
-            size_t cnt = BlockCountK;
+            size_t      nblks         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +         //
+                                        n * BlockCountK * BlkLen / 2 +     // b data
+                                        n * BlockCountK * sizeof(__fp16);  // scale
+            float * CPtr = C + n;
+            size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 __asm__ volatile(
                     "addi         t3, %[NBLKS], 0         \n\t"
                     "addi         s1, %[B], 0             \n\t"
@@ -2578,8 +2560,8 @@ SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks), [ BIAS ] "+r"(bias)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks), [BIAS] "+r"(bias)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6");
             } else {
                 __asm__ volatile(
@@ -2669,8 +2651,8 @@ SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6");
             }
         }
@@ -2678,31 +2660,29 @@ SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t BlkLen,
 }
 
 template <bool HasZeroPoint>
-void
-SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
-                                 const std::byte* QuantA,
-                                 const std::byte* QuantBData,
-                                 const float* QuantBScale,
-                                 const std::byte* QuantBZeroPoint,
-                                 float* C,
-                                 size_t CountN,
-                                 size_t BlockCountK,
-                                 const float* Bias)
-{
+void SQ4BitGemmM1Kernel_CompInt8_Impl(size_t            BlkLen,
+                                      const std::byte * QuantA,
+                                      const std::byte * QuantBData,
+                                      const float *     QuantBScale,
+                                      const std::byte * QuantBZeroPoint,
+                                      float *           C,
+                                      size_t            CountN,
+                                      size_t            BlockCountK,
+                                      const float *     Bias) {
     GGML_UNUSED(QuantBScale);
     GGML_UNUSED(QuantBZeroPoint);
     const size_t INNER = BlkLen / 16;
     if constexpr (HasZeroPoint) {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t nblks = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +             //
-                                       n * BlockCountK * BlkLen / 2 +       // b data
-                                       n * BlockCountK * sizeof(uint8_t) +  // zp
-                                       n * BlockCountK * sizeof(float);     // scale
-            float* CPtr = C + n;
-            size_t cnt = BlockCountK;
+            size_t      nblks         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
+                                        n * BlockCountK * BlkLen / 2 +       // b data
+                                        n * BlockCountK * sizeof(uint8_t) +  // zp
+                                        n * BlockCountK * sizeof(float);     // scale
+            float * CPtr = C + n;
+            size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 __asm__ volatile(
                     "addi         t3, %[NBLKS], 0         \n\t"
                     "vsetvli      t0, zero, e8, m1        \n\t"
@@ -2823,8 +2803,8 @@ SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks), [ BIAS ] "+r"(bias)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks), [BIAS] "+r"(bias)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6", "s7");
             } else {
                 __asm__ volatile(
@@ -2927,21 +2907,21 @@ SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6", "s7");
             }
         }
     } else {
         for (size_t n = 0; n < CountN; n += 16) {
-            size_t nblks = (CountN - n) > 16 ? 16 : CountN - n;
-            std::byte* QuantBDataPtr = (std::byte*)QuantBData +          //
-                                       n * BlockCountK * BlkLen / 2 +    // b data
-                                       n * BlockCountK * sizeof(float);  // scale
-            float* CPtr = C + n;
-            size_t cnt = BlockCountK;
+            size_t      nblks         = (CountN - n) > 16 ? 16 : CountN - n;
+            std::byte * QuantBDataPtr = (std::byte *) QuantBData +        //
+                                        n * BlockCountK * BlkLen / 2 +    // b data
+                                        n * BlockCountK * sizeof(float);  // scale
+            float * CPtr = C + n;
+            size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
-                const float* bias = Bias + n;
+                const float * bias = Bias + n;
                 __asm__ volatile(
                     "addi         t3, %[NBLKS], 0         \n\t"
                     "addi         s1, %[B], 0             \n\t"
@@ -3035,8 +3015,8 @@ SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks), [ BIAS ] "+r"(bias)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks), [BIAS] "+r"(bias)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6");
             } else {
                 __asm__ volatile(
@@ -3120,8 +3100,8 @@ SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
                     "vse32.v      v31, (s3)               \n\t"
                     "END%=:                               \n\t"
 
-                    : [ CNT ] "+r"(cnt), [ NBLKS ] "+r"(nblks)
-                    : [ INNER ] "r"(INNER), [ A ] "r"(QuantA), [ B ] "r"(QuantBDataPtr), [ C ] "r"(CPtr)
+                    : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks)
+                    : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
                     : "cc", "t0", "t5", "t3", "f1", "s1", "s2", "s3", "s4", "s5", "s6");
             }
         }
@@ -3129,20 +3109,18 @@ SQ4BitGemmM1Kernel_CompInt8_Impl(size_t BlkLen,
 }
 
 template <bool HasZeroPoint>
-inline void
-SQ4BitGemmM4Kernel_CompInt8_DispatchOnBlkLen(size_t BlkLen,
-                                             const std::byte* QuantA,
-                                             const std::byte* QuantBData,
-                                             const float* QuantBScale,
-                                             const std::byte* QuantBZeroPoint,
-                                             float* C,
-                                             size_t CountM,
-                                             size_t CountN,
-                                             size_t BlockStrideQuantB,
-                                             const float* Bias,
-                                             const size_t ldc,
-                                             const size_t scalestride)
-{
+inline void SQ4BitGemmM4Kernel_CompInt8_DispatchOnBlkLen(size_t            BlkLen,
+                                                         const std::byte * QuantA,
+                                                         const std::byte * QuantBData,
+                                                         const float *     QuantBScale,
+                                                         const std::byte * QuantBZeroPoint,
+                                                         float *           C,
+                                                         size_t            CountM,
+                                                         size_t            CountN,
+                                                         size_t            BlockStrideQuantB,
+                                                         const float *     Bias,
+                                                         const size_t      ldc,
+                                                         const size_t      scalestride) {
     if (scalestride == 4) {
         SQ4BitGemmM4Kernel_CompInt8_Impl<HasZeroPoint>(BlkLen, QuantA, QuantBData, QuantBScale, QuantBZeroPoint, C,
                                                        CountN, BlockStrideQuantB, Bias, ldc);
@@ -3154,20 +3132,18 @@ SQ4BitGemmM4Kernel_CompInt8_DispatchOnBlkLen(size_t BlkLen,
 }
 
 template <bool HasZeroPoint>
-inline void
-SQ4BitGemmM1Kernel_CompInt8_DispatchOnBlkLen(size_t BlkLen,
-                                             const std::byte* QuantA,
-                                             const std::byte* QuantBData,
-                                             const float* QuantBScale,
-                                             const std::byte* QuantBZeroPoint,
-                                             float* C,
-                                             size_t CountM,
-                                             size_t CountN,
-                                             size_t BlockStrideQuantB,
-                                             const float* Bias,
-                                             const size_t ldc,
-                                             const size_t scalestride)
-{
+inline void SQ4BitGemmM1Kernel_CompInt8_DispatchOnBlkLen(size_t            BlkLen,
+                                                         const std::byte * QuantA,
+                                                         const std::byte * QuantBData,
+                                                         const float *     QuantBScale,
+                                                         const std::byte * QuantBZeroPoint,
+                                                         float *           C,
+                                                         size_t            CountM,
+                                                         size_t            CountN,
+                                                         size_t            BlockStrideQuantB,
+                                                         const float *     Bias,
+                                                         const size_t      ldc,
+                                                         const size_t      scalestride) {
     if (scalestride == 4) {
         SQ4BitGemmM1Kernel_CompInt8_Impl<HasZeroPoint>(BlkLen, QuantA, QuantBData, QuantBScale, QuantBZeroPoint, C,
                                                        CountN, BlockStrideQuantB, Bias);
@@ -3179,21 +3155,20 @@ SQ4BitGemmM1Kernel_CompInt8_DispatchOnBlkLen(size_t BlkLen,
 
 }  // namespace
 
-size_t
-SQ4BitGemmKernel_CompInt8(size_t BlkLen,
-                          const std::byte* QuantA,
-                          const std::byte* QuantBData,
-                          const float* QuantBScale,
-                          const std::byte* QuantBZeroPoint,
-                          float* C,
-                          size_t CountM,
-                          size_t CountN,
-                          size_t CountK,
-                          size_t BlockCountK,
-                          size_t ldc,
-                          const float* Bias,
-                          const size_t ScaleStride)
-{
+namespace ime1 {
+size_t gemm_kernel_i8i4(size_t            BlkLen,
+                        const std::byte * QuantA,
+                        const std::byte * QuantBData,
+                        const float *     QuantBScale,
+                        const std::byte * QuantBZeroPoint,
+                        float *           C,
+                        size_t            CountM,
+                        size_t            CountN,
+                        size_t            CountK,
+                        size_t            BlockCountK,
+                        size_t            ldc,
+                        const float *     Bias,
+                        const size_t      ScaleStride) {
     GGML_UNUSED(CountM);
     GGML_UNUSED(CountK);
     GGML_UNUSED(ldc);
@@ -3219,4 +3194,5 @@ SQ4BitGemmKernel_CompInt8(size_t BlkLen,
         return 1;
     }
 }
-}
+}  // namespace ime1
+}  // namespace sqnbitgemm_spacemit_ime

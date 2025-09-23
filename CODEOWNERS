@@ -10,3 +10,4 @@
 /ggml/src/gguf.cpp @JohannesGaessler
 /ggml/src/ggml-vulkan/ @0cc4m
 /ggml/src/ggml-zdnn/ @taronaeo
+/ggml/src/ggml-cpu/spacemit @alex-spacemit

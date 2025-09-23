@@ -444,7 +444,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             list(APPEND GGML_CPU_SOURCES
                 ggml-cpu/spacemit/ime.cpp
                 ggml-cpu/spacemit/ime.h
-                ggml-cpu/spacemit/ime_kernels.cpp
+                ggml-cpu/spacemit/ime1_kernels.cpp
                 ggml-cpu/spacemit/ime_kernels.h
             )
         endif()
