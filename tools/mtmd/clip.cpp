@@ -170,7 +170,9 @@ struct clip_hparams {
     int32_t projection_dim;
     int32_t n_head;
     int32_t n_layer;
-    int32_t proj_scale_factor = 0; // idefics3
+    // idefics3
+    int32_t preproc_image_size = 0;
+    int32_t proj_scale_factor = 0;
 
     float image_mean[3];
     float image_std[3];
@@ -2250,6 +2252,7 @@ struct clip_model_loader {
 
             if (is_vision) {
                 get_u32(KEY_IMAGE_SIZE, hparams.image_size);
+                get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.preproc_image_size, false);
                 get_u32(KEY_PATCH_SIZE, hparams.patch_size);
                 get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
                 get_i32(KEY_MINICPMV_VERSION, hparams.minicpmv_version, false); // legacy
@@ -3554,15 +3557,14 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
     } else if (ctx->proj_type() == PROJECTOR_TYPE_IDEFICS3) {
         // The refined size has two steps:
         // 1. Resize w/ aspect-ratio preserving such that the longer side is
-        //      image_size * scale_factor
+        //      the preprocessor longest size
         // 2. Resize w/out preserving aspect ratio such that both sides are
         //      multiples of image_size (always rounding up)
         //
         // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
-        const int32_t target_size = params.image_size * params.proj_scale_factor;
         const float scale = std::min(
-            static_cast<float>(target_size) / original_size.width,
-            static_cast<float>(target_size) / original_size.height);
+            static_cast<float>(params.preproc_image_size) / original_size.width,
+            static_cast<float>(params.preproc_image_size) / original_size.height);
         int refined_w = static_cast<int>(original_size.width * scale);
         int refined_h = static_cast<int>(original_size.height * scale);
         refined_w = static_cast<int>(params.image_size * std::ceil(static_cast<float>(refined_w) / params.image_size));
