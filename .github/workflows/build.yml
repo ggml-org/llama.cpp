@@ -1331,7 +1331,7 @@ jobs:
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-x64-nvidia-vulkan-coopmat1:
-    runs-on: [self-hosted, Linux, X64, NVIDIA]
+    runs-on: [self-hosted, Linux, X64, NVIDIA, COOPMAT2]
 
     steps:
       - name: Clone
@@ -1382,7 +1382,7 @@ jobs:
 #      - name: Test
 #        id: ggml-ci
 #        run: |
-#          amd-smi
+#          amd-smi static
 #          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
