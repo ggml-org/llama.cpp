@@ -1,15 +1,20 @@
 <script lang="ts">
-	import { Settings, Funnel, AlertTriangle, Brain, Cog, Monitor, Sun, Moon } from '@lucide/svelte';
-	import { ChatSettingsFooter, ChatSettingsSection } from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
+	import {
+		Settings,
+		Funnel,
+		AlertTriangle,
+		Brain,
+		Cog,
+		Monitor,
+		Sun,
+		Moon,
+		ChevronLeft,
+		ChevronRight
+	} from '@lucide/svelte';
+	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Input } from '$lib/components/ui/input';
-	import Label from '$lib/components/ui/label/label.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import * as Select from '$lib/components/ui/select';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
-	import { supportsVision } from '$lib/stores/server.svelte';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
@@ -224,10 +229,18 @@
 	let localConfig: SettingsConfigType = $state({ ...config() });
 	let originalTheme: string = $state('');
 
+	let canScrollLeft = $state(false);
+	let canScrollRight = $state(false);
+	let scrollContainer: HTMLDivElement | undefined = $state();
+
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
 
 		setMode(newTheme as 'light' | 'dark' | 'system');
+	}
+
+	function handleConfigChange(key: string, value: string | boolean) {
+		localConfig[key] = value;
 	}
 
 	function handleClose() {
@@ -298,18 +311,63 @@
 		onOpenChange?.(false);
 	}
 
+	function scrollToCenter(element: HTMLElement) {
+		if (!scrollContainer) return;
+
+		const containerRect = scrollContainer.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+
+		const elementCenter = elementRect.left + elementRect.width / 2;
+		const containerCenter = containerRect.left + containerRect.width / 2;
+		const scrollOffset = elementCenter - containerCenter;
+
+		scrollContainer.scrollBy({ left: scrollOffset, behavior: 'smooth' });
+	}
+
+	function scrollLeft() {
+		if (!scrollContainer) return;
+
+		scrollContainer.scrollBy({ left: -250, behavior: 'smooth' });
+	}
+
+	function scrollRight() {
+		if (!scrollContainer) return;
+
+		scrollContainer.scrollBy({ left: 250, behavior: 'smooth' });
+	}
+
+	function updateScrollButtons() {
+		if (!scrollContainer) return;
+
+		const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
+		canScrollLeft = scrollLeft > 0;
+		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1; // -1 for rounding
+	}
+
 	$effect(() => {
 		if (open) {
 			localConfig = { ...config() };
 			originalTheme = config().theme as string;
+
+			setTimeout(updateScrollButtons, 100);
+		}
+	});
+
+	$effect(() => {
+		if (scrollContainer) {
+			updateScrollButtons();
 		}
 	});
 </script>
 
 <Dialog.Root {open} onOpenChange={handleClose}>
-	<Dialog.Content class="flex h-[64vh] flex-col gap-0 p-0" style="max-width: 48rem;">
-		<div class="flex flex-1 overflow-hidden">
-			<div class="w-64 border-r border-border/30 p-6">
+	<Dialog.Content
+		class="z-999999 flex h-[100vh] flex-col gap-0 rounded-none p-0 md:h-[64vh] md:rounded-lg"
+		style="max-width: 48rem;"
+	>
+		<div class="flex flex-1 flex-col overflow-hidden md:flex-row">
+			<!-- Desktop Sidebar -->
+			<div class="hidden w-64 border-r border-border/30 p-6 md:block">
 				<nav class="space-y-1 py-2">
 					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
 
@@ -329,134 +387,79 @@
 				</nav>
 			</div>
 
-			<ScrollArea class="flex-1">
-				<div class="space-y-6 p-6">
-					<ChatSettingsSection title={currentSection.title} Icon={currentSection.icon}>
-						{#each currentSection.fields as field (field.key)}
-							<div class="space-y-2">
-								{#if field.type === 'input'}
-									<Label for={field.key} class="block text-sm font-medium">
-										{field.label}
-									</Label>
+			<!-- Mobile Header with Horizontal Scrollable Menu -->
+			<div class="flex flex-col md:hidden">
+				<div class="border-b border-border/30 py-4">
+					<Dialog.Title class="mb-6 flex items-center gap-2 px-4">Settings</Dialog.Title>
 
-									<Input
-										id={field.key}
-										value={String(localConfig[field.key] || '')}
-										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
-										placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
-										class="max-w-md"
-									/>
-									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="mt-1 text-xs text-muted-foreground">
-											{field.help || SETTING_CONFIG_INFO[field.key]}
-										</p>
-									{/if}
-								{:else if field.type === 'textarea'}
-									<Label for={field.key} class="block text-sm font-medium">
-										{field.label}
-									</Label>
+					<!-- Horizontal Scrollable Category Menu with Navigation -->
+					<div class="relative flex items-center" style="scroll-padding: 1rem;">
+						<button
+							class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
+								? 'opacity-100'
+								: 'pointer-events-none opacity-0'}"
+							onclick={scrollLeft}
+							aria-label="Scroll left"
+						>
+							<ChevronLeft class="h-4 w-4" />
+						</button>
 
-									<Textarea
-										id={field.key}
-										value={String(localConfig[field.key] || '')}
-										onchange={(e) => (localConfig[field.key] = e.currentTarget.value)}
-										placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
-										class="min-h-[100px] max-w-2xl"
-									/>
-									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="mt-1 text-xs text-muted-foreground">
-											{field.help || SETTING_CONFIG_INFO[field.key]}
-										</p>
-									{/if}
-								{:else if field.type === 'select'}
-									{@const selectedOption = field.options?.find(
-										(opt: { value: string; label: string; icon?: Component }) =>
-											opt.value === localConfig[field.key]
-									)}
-
-									<Label for={field.key} class="block text-sm font-medium">
-										{field.label}
-									</Label>
-
-									<Select.Root
-										type="single"
-										value={localConfig[field.key]}
-										onValueChange={(value) => {
-											if (field.key === 'theme' && value) {
-												handleThemeChange(value);
-											} else {
-												localConfig[field.key] = value;
-											}
+						<div
+							class="scrollbar-hide overflow-x-auto py-2"
+							bind:this={scrollContainer}
+							onscroll={updateScrollButtons}
+						>
+							<div class="flex min-w-max gap-2">
+								{#each settingSections as section (section.title)}
+									<button
+										class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
+										section.title
+											? 'bg-accent text-accent-foreground'
+											: 'text-muted-foreground'}"
+										onclick={(e: MouseEvent) => {
+											activeSection = section.title;
+											scrollToCenter(e.currentTarget as HTMLElement);
 										}}
 									>
-										<Select.Trigger class="max-w-md">
-											<div class="flex items-center gap-2">
-												{#if selectedOption?.icon}
-													{@const IconComponent = selectedOption.icon}
-													<IconComponent class="h-4 w-4" />
-												{/if}
-
-												{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
-											</div>
-										</Select.Trigger>
-										<Select.Content>
-											{#if field.options}
-												{#each field.options as option (option.value)}
-													<Select.Item value={option.value} label={option.label}>
-														<div class="flex items-center gap-2">
-															{#if option.icon}
-																{@const IconComponent = option.icon}
-																<IconComponent class="h-4 w-4" />
-															{/if}
-															{option.label}
-														</div>
-													</Select.Item>
-												{/each}
-											{/if}
-										</Select.Content>
-									</Select.Root>
-									{#if field.help || SETTING_CONFIG_INFO[field.key]}
-										<p class="mt-1 text-xs text-muted-foreground">
-											{field.help || SETTING_CONFIG_INFO[field.key]}
-										</p>
-									{/if}
-								{:else if field.type === 'checkbox'}
-									{@const isDisabled = field.key === 'pdfAsImage' && !supportsVision()}
-									<div class="flex items-start space-x-3">
-										<Checkbox
-											id={field.key}
-											checked={Boolean(localConfig[field.key])}
-											disabled={isDisabled}
-											onCheckedChange={(checked) => (localConfig[field.key] = checked)}
-											class="mt-1"
-										/>
-
-										<div class="space-y-1">
-											<label
-												for={field.key}
-												class="cursor-pointer text-sm leading-none font-medium {isDisabled
-													? 'text-muted-foreground'
-													: ''}"
-											>
-												{field.label}
-											</label>
-
-											{#if field.help || SETTING_CONFIG_INFO[field.key]}
-												<p class="text-xs text-muted-foreground">
-													{field.help || SETTING_CONFIG_INFO[field.key]}
-												</p>
-											{:else if field.key === 'pdfAsImage' && !supportsVision()}
-												<p class="text-xs text-muted-foreground">
-													PDF-to-image processing requires a vision-capable model. PDFs will be
-													processed as text.
-												</p>
-											{/if}
-										</div>
-									</div>
-								{/if}
+										<section.icon class="h-4 w-4 flex-shrink-0" />
+										<span>{section.title}</span>
+									</button>
+								{/each}
 							</div>
-						{/each}
-					</ChatSettingsSection>
+						</div>
+
+						<button
+							class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
+								? 'opacity-100'
+								: 'pointer-events-none opacity-0'}"
+							onclick={scrollRight}
+							aria-label="Scroll right"
+						>
+							<ChevronRight class="h-4 w-4" />
+						</button>
+					</div>
+				</div>
+			</div>
+
+			<ScrollArea class="max-h-[calc(100vh-13.5rem)] flex-1">
+				<div class="space-y-6 p-4 md:p-6">
+					<div>
+						<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
+							<currentSection.icon class="h-5 w-5" />
+
+							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
+						</div>
+
+						<div class="space-y-6">
+							<ChatSettingsFields
+								fields={currentSection.fields}
+								{localConfig}
+								onConfigChange={handleConfigChange}
+								onThemeChange={handleThemeChange}
+								isMobile={false}
+							/>
+						</div>
+					</div>
 
 					<div class="mt-8 border-t pt-6">
 						<p class="text-xs text-muted-foreground">
@@ -467,6 +470,6 @@
 			</ScrollArea>
 		</div>
 
-		<ChatSettingsFooter onClose={handleClose} onReset={handleReset} onSave={handleSave} />
+		<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
 	</Dialog.Content>
 </Dialog.Root>

@@ -1728,7 +1728,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_get_rows(ctx, dst);
             break;
         case GGML_OP_SET_ROWS:
-            std::cout << "lcg GGML_OP_SET_ROWS"<< std::endl;
             ggml_cann_set_rows(ctx, dst);
             break;
         case GGML_OP_DUP:
@@ -2757,7 +2756,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
     /* .graph_compute           = */ ggml_backend_cann_graph_compute,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
-    /* .optimize_graph          = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 /**
