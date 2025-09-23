@@ -283,6 +283,7 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
             {GGML_TYPE_Q4_1, ExtraQuantType::Q4_0_128},
             {GGML_TYPE_Q4_K, ExtraQuantType::Q4_0_128},
             {GGML_TYPE_Q6_K, ExtraQuantType::F16     },
+            {GGML_TYPE_Q5_K, ExtraQuantType::F16     },
         };
     }
     if (device == "GPU") {

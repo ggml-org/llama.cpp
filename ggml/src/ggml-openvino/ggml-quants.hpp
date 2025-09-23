@@ -29,6 +29,11 @@ void extract_q4_k_data(const ggml_tensor* tensor,
                        ov::Tensor& scales_arr,
                        ov::Tensor& biases_arr);
 
+void extract_q5_k_data(const ggml_tensor* tensor,
+                       ov::Tensor& weights_arr,
+                       ov::Tensor& scales_arr,
+                       ov::Tensor& biases_arr);
+
 void extract_q6_k_data(const ggml_tensor* tensor,
                        ov::Tensor& weights_arr,
                        ov::Tensor& scales_arr,
