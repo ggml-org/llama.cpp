@@ -101,7 +101,7 @@ static bool ggml_op_is_empty(enum ggml_op op) {
             return false;
     }
 }
-  
+
 static inline float softplus(float input) {
     return (input > 20.0f) ? input : logf(1 + expf(input));
 }
