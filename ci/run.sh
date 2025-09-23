@@ -103,6 +103,10 @@ if [ ! -z ${GG_BUILD_MUSA} ]; then
     MUSA_ARCH=${MUSA_ARCH:-21}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
+
+if [ ! -z ${GG_BUILD_NO_SVE} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
+fi
 ## helpers
 
 # download a file if it does not exist or if it is outdated

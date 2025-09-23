@@ -1348,7 +1348,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-nvidia-v100-cuda:
     runs-on: [self-hosted, Linux, X64, NVIDIA, V100]
