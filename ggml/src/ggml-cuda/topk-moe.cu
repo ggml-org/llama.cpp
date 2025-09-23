@@ -32,13 +32,13 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 #pragma unroll
     for (int i = 0; i < n_experts; i += WARP_SIZE) {
         const int expert        = i + threadIdx.x;
-        logits_r[i / WARP_SIZE] = expert < n_experts ? logits[expert] : -INFINITY;
+        logits_r[i / WARP_SIZE] = n_experts % WARP_SIZE == 0 || expert < n_experts ? logits[expert] : -INFINITY;
     }
 
-    float max_val = -INFINITY;
+    float max_val = logits_r[0];
 
 #pragma unroll
-    for (int i = 0; i < experts_per_thread; i++) {
+    for (int i = 1; i < experts_per_thread; i++) {
         const float val = logits_r[i];
         max_val         = max(val, max_val);
     }

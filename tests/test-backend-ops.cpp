@@ -4419,12 +4419,10 @@ struct test_argsort : public test_case {
 };
 
 struct test_topk_moe: public test_case {
-
     const std::array<int64_t, 4> ne;
     const int n_expert_used;
     test_topk_moe(std::array<int64_t, 4> ne = {10, 5, 1, 1}, int n_expert_used = 1)
-    : ne(ne),
-    n_expert_used(n_expert_used) {
+    : ne(ne), n_expert_used(n_expert_used) {
         GGML_ASSERT(n_expert_used <= ne[0]);
     }
 
