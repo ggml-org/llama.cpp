@@ -4426,10 +4426,6 @@ bool clip_is_gemma3(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_GEMMA3;
 }
 
-bool clip_is_idefics3(const struct clip_ctx * ctx) {
-    return ctx->proj_type() == PROJECTOR_TYPE_IDEFICS3;
-}
-
 bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_VISION;
 }
