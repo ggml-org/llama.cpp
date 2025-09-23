@@ -1475,7 +1475,7 @@ void SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
             std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
                                         n * BlockCountK * BlkLen / 2 +       // b data
                                         n * BlockCountK * sizeof(uint8_t) +  // zp
-                                        n * BlockCountK * sizeof(__fp16);    // scale
+                                        n * BlockCountK * sizeof(_Float16);    // scale
             float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
@@ -1656,7 +1656,7 @@ void SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
             size_t      NBLKS         = (CountN - n) > 16 ? 16 : CountN - n;
             std::byte * QuantBDataPtr = (std::byte *) QuantBData +         //
                                         n * BlockCountK * BlkLen / 2 +     // b data
-                                        n * BlockCountK * sizeof(__fp16);  // scale
+                                        n * BlockCountK * sizeof(_Float16);  // scale
             float * CPtr = C + n;
             if (NBLKS < 16) {
                 CPtr = tmp;
@@ -2216,7 +2216,7 @@ void SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
             std::byte * QuantBDataPtr = (std::byte *) QuantBData +           //
                                         n * BlockCountK * BlkLen / 2 +       // b data
                                         n * BlockCountK * sizeof(uint8_t) +  // zp
-                                        n * BlockCountK * sizeof(__fp16);    // scale
+                                        n * BlockCountK * sizeof(_Float16);    // scale
             float * CPtr = C + n;
             size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
@@ -2455,7 +2455,7 @@ void SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t            BlkLen,
             size_t      nblks         = (CountN - n) > 16 ? 16 : CountN - n;
             std::byte * QuantBDataPtr = (std::byte *) QuantBData +         //
                                         n * BlockCountK * BlkLen / 2 +     // b data
-                                        n * BlockCountK * sizeof(__fp16);  // scale
+                                        n * BlockCountK * sizeof(_Float16);  // scale
             float * CPtr = C + n;
             size_t  cnt  = BlockCountK;
             if (Bias != nullptr) {
