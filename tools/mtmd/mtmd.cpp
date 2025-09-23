@@ -114,14 +114,14 @@ struct mtmd_context {
     // for llava-uhd style models, we need special tokens in-between slices
     // minicpmv calls them "slices", llama 4 calls them "tiles"
     mtmd_slice_tmpl slice_tmpl    = MTMD_SLICE_TMPL_NONE;
-    llama_token tok_ov_img_start  = LLAMA_TOKEN_NULL; // overview image
-    llama_token tok_ov_img_end    = LLAMA_TOKEN_NULL; // overview image
-    llama_token tok_slices_start  = LLAMA_TOKEN_NULL; // start of all slices
-    llama_token tok_slices_end    = LLAMA_TOKEN_NULL; // end of all slices
-    llama_token tok_sli_img_start = LLAMA_TOKEN_NULL; // single slice start
-    llama_token tok_sli_img_end   = LLAMA_TOKEN_NULL; // single slice end
-    llama_token tok_sli_img_mid   = LLAMA_TOKEN_NULL; // between 2 slices
-    llama_token tok_row_end       = LLAMA_TOKEN_NULL; // end of row
+    std::vector<llama_token> tok_ov_img_start;  // overview image
+    std::vector<llama_token> tok_ov_img_end;    // overview image
+    std::vector<llama_token> tok_slices_start;  // start of all slices
+    std::vector<llama_token> tok_slices_end;    // end of all slices
+    std::vector<llama_token> tok_sli_img_start; // single slice start
+    std::vector<llama_token> tok_sli_img_end;   // single slice end
+    std::vector<llama_token> tok_sli_img_mid;   // between 2 slices
+    std::vector<llama_token> tok_row_end;       // end of row
     bool        tok_row_end_trail = false;
     bool        ov_img_first      = false;
 
@@ -197,13 +197,13 @@ struct mtmd_context {
             // minicpmv 2.5 format:
             // <image> (overview) </image><slice><image> (slice) </image><image> (slice) </image>\n ... </slice>
             slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_5;
-            tok_ov_img_start  = lookup_token("<image>");
-            tok_ov_img_end    = lookup_token("</image>");
-            tok_slices_start  = lookup_token("<slice>");
-            tok_slices_end    = lookup_token("</slice>");
+            tok_ov_img_start  = {lookup_token("<image>")};
+            tok_ov_img_end    = {lookup_token("</image>")};
+            tok_slices_start  = {lookup_token("<slice>")};
+            tok_slices_end    = {lookup_token("</slice>")};
             tok_sli_img_start = tok_ov_img_start;
             tok_sli_img_end   = tok_ov_img_end;
-            tok_row_end       = lookup_token("\n");
+            tok_row_end       = {lookup_token("\n")};
             tok_row_end_trail = false; // no trailing end-of-row token
             ov_img_first      = true;
 
@@ -211,11 +211,11 @@ struct mtmd_context {
             // minicpmv 2.6 format:
             // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
             slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
-            tok_ov_img_start  = lookup_token("<image>");
-            tok_ov_img_end    = lookup_token("</image>");
-            tok_sli_img_start = lookup_token("<slice>");
-            tok_sli_img_end   = lookup_token("</slice>");
-            tok_row_end       = lookup_token("\n");
+            tok_ov_img_start  = {lookup_token("<image>")};
+            tok_ov_img_end    = {lookup_token("</image>")};
+            tok_sli_img_start = {lookup_token("<slice>")};
+            tok_sli_img_end   = {lookup_token("</slice>")};
+            tok_row_end       = {lookup_token("\n")};
             tok_row_end_trail = false; // no trailing end-of-row token
             ov_img_first      = true;
 
@@ -230,9 +230,9 @@ struct mtmd_context {
             // <|image|> (overview)           <-- overview image is last
             // <|image_end|>
             slice_tmpl        = MTMD_SLICE_TMPL_LLAMA4;
-            tok_ov_img_start  = lookup_token("<|image|>");
-            tok_sli_img_mid   = lookup_token("<|tile_x_separator|>");
-            tok_row_end       = lookup_token("<|tile_y_separator|>");
+            tok_ov_img_start  = {lookup_token("<|image|>")};
+            tok_sli_img_mid   = {lookup_token("<|tile_x_separator|>")};
+            tok_row_end       = {lookup_token("<|tile_y_separator|>")};
             tok_row_end_trail = true; // add trailing end-of-row token
             ov_img_first      = false; // overview image is last
         }
@@ -517,52 +517,52 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
-                    if (ctx->tok_ov_img_start != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_ov_img_start});
+                    if (!ctx->tok_ov_img_start.empty()) {
+                        add_text(ctx->tok_ov_img_start);
                     }
                     cur.entries.emplace_back(std::move(ov_chunk));
-                    if (ctx->tok_ov_img_end != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_ov_img_end});
+                    if (!ctx->tok_ov_img_end.empty()) {
+                        add_text(ctx->tok_ov_img_end);
                     }
                 }
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
                     GGML_ASSERT((int)chunks.size() == n_row * n_col);
-                    if (ctx->tok_slices_start != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_slices_start});
+                    if (!ctx->tok_slices_start.empty()) {
+                        add_text(ctx->tok_slices_start);
                     }
                     for (int y = 0; y < n_row; y++) {
                         for (int x = 0; x < n_col; x++) {
                             const bool is_last_in_row = (x == n_col - 1);
-                            if (ctx->tok_sli_img_start != LLAMA_TOKEN_NULL) {
-                                add_text({ctx->tok_sli_img_start});
+                            if (!ctx->tok_sli_img_start.empty()) {
+                                add_text(ctx->tok_sli_img_start);
                             }
                             cur.entries.emplace_back(std::move(chunks[y * n_col + x]));
-                            if (ctx->tok_sli_img_end != LLAMA_TOKEN_NULL) {
-                                add_text({ctx->tok_sli_img_end});
+                            if (!ctx->tok_sli_img_end.empty()) {
+                                add_text(ctx->tok_sli_img_end);
                             }
-                            if (!is_last_in_row && ctx->tok_sli_img_mid != LLAMA_TOKEN_NULL) {
-                                add_text({ctx->tok_sli_img_mid});
+                            if (!is_last_in_row && !ctx->tok_sli_img_mid.empty()) {
+                                add_text(ctx->tok_sli_img_mid);
                             }
                         }
-                        if ((y != n_row - 1 || ctx->tok_row_end_trail) && ctx->tok_row_end != LLAMA_TOKEN_NULL) {
-                            add_text({ctx->tok_row_end});
+                        if ((y != n_row - 1 || ctx->tok_row_end_trail) && !ctx->tok_row_end.empty()) {
+                            add_text(ctx->tok_row_end);
                         }
                     }
-                    if (ctx->tok_slices_end != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_slices_end});
+                    if (!ctx->tok_slices_end.empty()) {
+                        add_text(ctx->tok_slices_end);
                     }
                 }
 
                 // add overview image (last)
                 if (!ctx->ov_img_first) {
-                    if (ctx->tok_ov_img_start != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_ov_img_start});
+                    if (!ctx->tok_ov_img_start.empty()) {
+                        add_text(ctx->tok_ov_img_start);
                     }
                     cur.entries.emplace_back(std::move(ov_chunk));
-                    if (ctx->tok_ov_img_end != LLAMA_TOKEN_NULL) {
-                        add_text({ctx->tok_ov_img_end});
+                    if (!ctx->tok_ov_img_end.empty()) {
+                        add_text(ctx->tok_ov_img_end);
                     }
                 }
 
