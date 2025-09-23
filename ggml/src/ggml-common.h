@@ -255,16 +255,13 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
-// Complex 2-bit quantization for Fairy±i model
-// Each complex weight has real and imaginary parts, both quantized to 2 bits
-// Effective bpw: 4.125 (2.0625 * 2 for real and imaginary parts)
+
+// ifairy_model
 typedef struct {
-    uint8_t qs_real[QK_K/4]; // 2 bits per element - real part
-    uint8_t qs_imag[QK_K/4]; // 2 bits per element - imaginary part
-    ggml_half d_real;        // scale for real part
-    ggml_half d_imag;        // scale for imaginary part
-} block_cq2_0;
-static_assert(sizeof(block_cq2_0) == 2 * sizeof(ggml_half) + 2 * QK_K / 4, "wrong cq2_0 block size/padding");
+    uint8_t qs[QK_K/4]; // 2 bits per element
+    ggml_half d_real, d_imag;
+} block_ifairy;
+static_assert(sizeof(block_ifairy) == sizeof(ggml_half) * 2 + QK_K / 4, "wrong ifairy block size/padding");
 
 //
 // Super-block quantization structures

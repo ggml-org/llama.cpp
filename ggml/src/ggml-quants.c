@@ -2270,6 +2270,83 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+// ====================== iFairy model =======================
+void quantize_row_ifairy_ref(const float * GGML_RESTRICT x_real, const float * GGML_RESTRICT x_imag, block_ifairy * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    float d_real = 0;
+    float d_imag = 0;
+
+    for (int64_t i = 0; i < k; i++) {
+        d_real = MAX(d_real, (int)fabsf(x_real[i]));
+        d_imag = MAX(d_imag, (int)fabsf(x_imag[i]));
+    }
+
+    const float id_real = d_real ? 1.0f/d_real : 0.0f;
+    const float id_imag = d_imag ? 1.0f/d_imag : 0.0f;
+
+    for (int64_t i = 0; i < nb; i++) {
+        y[i].d_real = GGML_FP32_TO_FP16(d_real);
+        y[i].d_imag = GGML_FP32_TO_FP16(d_imag);
+
+        for (size_t j = 0; j < sizeof(y->qs); j += 32) {
+            for (size_t m = 0; m < 32; ++m) {
+                uint8_t q = 0;
+                for (size_t n = 0; n < 4; ++n) {
+                    // 00, 01, 10, 11 -> -1, 1, -i, i
+                    int xi = 0;
+                    if (x_real[m + n*32] == 0) {
+                        if(x_imag[m + n*32] > 0) {
+                            xi = 3; // i
+                        } else {
+                            xi = 2; // -i
+                        }
+                    } else {
+                        if(x_real[m + n*32] > 0) {
+                            xi = 1; // 1
+                        } else {
+                            xi = 0; // -1
+                        }
+                    }
+                    q += xi << (2*n);
+                }
+                y[i].qs[j + m] = q;
+            }
+            x_real += 4*32;
+            x_imag += 4*32;
+        }
+    }
+}
+
+size_t quantize_ifairy(const float * GGML_RESTRICT src_real, const float * GGML_RESTRICT src_imag, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    const size_t row_size = ggml_row_size(GGML_TYPE_IFAIRY, n_per_row);
+    quantize_row_ifairy_ref(src_real, src_imag, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+void dequantize_row_ifairy(const block_ifairy * GGML_RESTRICT x, float * GGML_RESTRICT y_real, float * GGML_RESTRICT y_imag, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t i = 0; i < nb; ++i) {
+
+        const float d_real = GGML_FP16_TO_FP32(x[i].d_real);
+        const float d_imag = GGML_FP16_TO_FP32(x[i].d_imag);
+
+        for (size_t j = 0; j < sizeof(x->qs); j += 32) {
+            for (size_t l = 0; l < 4; ++l) {
+                for (size_t m = 0; m < 32; ++m) {
+                    int8_t q = (x[i].qs[j + m] >> (l*2)) & 3;
+                    *y_real++ = (float) ((q == 1) - (q == 0)) * d_real;
+                    *y_imag++ = (float) ((q == 3) - (q == 2)) * d_imag;
+                }
+            }
+        }
+    }
+}
+
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
@@ -5051,6 +5128,14 @@ static bool validate_e_e8m0(uint8_t e, size_t i) {
         } \
     }
 
+#define VALIDATE_ROW_DATA_D_F16_IMPL_IFAIRY(type, data, nb) \
+    const type * q = (const type *) (data); \
+    for (size_t i = 0; i < (nb); ++i) { \
+        if (!validate_fp16(q[i].d_real, i) || !validate_fp16(q[i].d_imag, i)) { \
+            return false; \
+        } \
+    }
+
 #define VALIDATE_ROW_DATA_DM_F16_IMPL(type, data, nb, d, m) \
     const type * q = (const type *) (data); \
     for (size_t i = 0; i < (nb); ++i) { \
@@ -5260,6 +5345,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_IFAIRY:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL_IFAIRY(block_ifairy, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {

@@ -873,6 +873,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
+    [39] = { // GGML_TYPE_IFAIRY
+        .type_name                = "ifairy",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_ifairy),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_ifairy,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_ifairy_ref,
+    }
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
