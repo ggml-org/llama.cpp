@@ -3551,10 +3551,52 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         // res_imgs->data[0] = *res;
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
-    }
-    else if (ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_IDEFICS3) {
+        // Do an aspect-ratio preserving resize to the max size
+        // TODO: Integrate into llava_uhd to avoid copy-paste
+        const int32_t target_size = params.image_size * params.proj_scale_factor;
+        const float scale = std::min(
+            static_cast<float>(target_size) / original_size.width,
+            static_cast<float>(target_size) / original_size.height);
+        const clip_image_size refined_size{
+            static_cast<int>(original_size.width * scale),
+            static_cast<int>(original_size.height * scale),
+        };
+        llava_uhd::slice_instructions instructions;
+        instructions.overview_size = clip_image_size{params.image_size, params.image_size};
+        instructions.refined_size = refined_size;
+        instructions.grid_size = clip_image_size{
+            static_cast<int>(std::ceil(static_cast<float>(refined_size.width) / params.image_size)),
+            static_cast<int>(std::ceil(static_cast<float>(refined_size.height) / params.image_size)),
+        };
+        instructions.padding_refined = true;
+        for (int y = 0; y < refined_size.height; y += params.image_size) {
+            for (int x = 0; x < refined_size.width; x += params.image_size) {
+                instructions.slices.push_back(llava_uhd::slice_coordinates{
+                    /* x    */x,
+                    /* y    */y,
+                    /* size */clip_image_size{
+                        std::min(params.image_size, refined_size.width - x),
+                        std::min(params.image_size, refined_size.height - y)
+                    }
+                });
+            }
+        }
+        auto imgs = llava_uhd::slice_image(img, instructions);
+
+        // cast and normalize to f32
+        for (size_t i = 0; i < imgs.size(); ++i) {
+            // clip_image_save_to_bmp(*imgs[i], "slice_" + std::to_string(i) + ".bmp");
+            clip_image_f32_ptr res(clip_image_f32_init());
+            normalize_image_u8_to_f32(*imgs[i], *res, params.image_mean, params.image_std);
+            res_imgs->entries.push_back(std::move(res));
+        }
+
+        res_imgs->grid_x = instructions.grid_size.width;
+        res_imgs->grid_y = instructions.grid_size.height;
+        return true;
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE
             || ctx->proj_type() == PROJECTOR_TYPE_GEMMA3
-            || ctx->proj_type() == PROJECTOR_TYPE_IDEFICS3
             || ctx->proj_type() == PROJECTOR_TYPE_INTERNVL // TODO @ngxson : support dynamic resolution
     ) {
         clip_image_u8 resized_image;
