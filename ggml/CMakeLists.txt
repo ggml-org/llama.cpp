@@ -1,5 +1,41 @@
 cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
 project("ggml" C CXX ASM)
+
+### GGML Version
+set(GGML_VERSION_MAJOR 0)
+set(GGML_VERSION_MINOR 9)
+set(GGML_VERSION_PATCH 0)
+set(GGML_VERSION_DEV "-dev")  # "-dev" for development, "" for releases
+set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
+
+find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
+if(GIT_EXE)
+    # Get current git commit hash
+    execute_process(COMMAND ${GIT_EXE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE GGML_BUILD_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+
+    # Check if the working directory is dirty (i.e., has uncommitted changes)
+    execute_process(COMMAND ${GIT_EXE} diff-index --quiet HEAD -- .
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        RESULT_VARIABLE GGML_GIT_DIRTY
+        ERROR_QUIET
+    )
+endif()
+
+# Build the version string with optional -dev suffix and dirty flag
+set(GGML_VERSION "${GGML_VERSION_BASE}${GGML_VERSION_DEV}")
+if(GGML_GIT_DIRTY AND NOT GGML_GIT_DIRTY EQUAL 0)
+    set(GGML_VERSION "${GGML_VERSION}-dirty")
+endif()
+
+if(NOT GGML_BUILD_COMMIT)
+    set(GGML_BUILD_COMMIT "unknown")
+endif()
+
 include(CheckIncludeFileCXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -190,7 +226,6 @@ option(GGML_WEBGPU                          "ggml: use WebGPU"                  
 option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_ZDNN                            "ggml: use zDNN"                                  OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
-option(GGML_METAL_USE_BF16                  "ggml: use bfloat if available"                   OFF)
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
 option(GGML_METAL_SHADER_DEBUG              "ggml: compile Metal with -fno-fast-math"         OFF)
 option(GGML_METAL_EMBED_LIBRARY             "ggml: embed Metal library"                       ${GGML_METAL})
@@ -301,26 +336,6 @@ endif()
 # Create CMake package
 #
 
-# Generate version info based on git commit.
-
-if(NOT DEFINED GGML_BUILD_NUMBER)
-    find_program(GIT_EXE NAMES git git.exe REQUIRED NO_CMAKE_FIND_ROOT_PATH)
-    execute_process(COMMAND ${GIT_EXE} rev-list --count HEAD
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        OUTPUT_VARIABLE GGML_BUILD_NUMBER
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-
-    if(GGML_BUILD_NUMBER EQUAL 1)
-        message(WARNING "GGML build version fixed at 1 likely due to a shallow clone.")
-    endif()
-
-    execute_process(COMMAND ${GIT_EXE} rev-parse --short HEAD
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        OUTPUT_VARIABLE GGML_BUILD_COMMIT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-endif()
 
 
 # Capture variables prefixed with GGML_.
@@ -349,7 +364,7 @@ set(GGML_VARIABLES_EXPANDED ${variable_set_statements})
 
 # Create the CMake package and set install location.
 
-set(GGML_INSTALL_VERSION 0.0.${GGML_BUILD_NUMBER})
+set(GGML_INSTALL_VERSION ${GGML_VERSION})
 set(GGML_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(GGML_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(GGML_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")

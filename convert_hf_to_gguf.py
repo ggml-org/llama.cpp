@@ -2393,7 +2393,10 @@ class SmolVLMModel(MmprojModel):
         return [] # skip other tensors
 
 
-@ModelBase.register("Llama4ForConditionalGeneration")
+@ModelBase.register(
+    "Llama4ForConditionalGeneration",
+    "Llama4ForCausalLM",
+)
 class Llama4Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA4
     undo_permute = False
@@ -2411,6 +2414,10 @@ class Llama4Model(LlamaModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_interleave_moe_layer_step(self.hparams["interleave_moe_layer_step"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
+        if "layer_types" in self.hparams:
+            if all(lt == "full_attention" for lt in self.hparams["layer_types"]):
+                # all layers are full attention (for MobileLLM), disable swa
+                self.gguf_writer.add_sliding_window(0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         if name.startswith("language_model."):
@@ -6009,8 +6016,33 @@ class SeedOssModel(TextModel):
 
 
 @ModelBase.register("Olmo2ForCausalLM")
+@ModelBase.register("Olmo3ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_attn_factors(rope_scaling["attention_factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+        if "sliding_window" in self.hparams:
+            self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+
+            sliding_window_pattern = []
+            if "layer_types" in self.hparams:
+                sliding_window_pattern = [t == "sliding_attention" for t in self.hparams["layer_types"]]
+            else:
+                # Olmo2 does not use sliding window attention.
+                # Olmo3 defaults to using sliding window for all layers except every 4th.
+                for i in range(self.hparams["num_hidden_layers"]):
+                    sliding_window_pattern.append((i + 1) % 4 != 0)
+
+            self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
 
 @ModelBase.register("OlmoeForCausalLM")
@@ -7624,6 +7656,21 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             if i not in self._attn_layers
         ]
 
+        # There are some models in this family that are non-hybrid, but keep the
+        # same parent class by setting all layers to "attention." If this is the
+        # case, the model architecture needs to be updated to a standard
+        # "granite" or "granitemoe" model
+        if not self._ssm_layers:
+            has_experts = self.find_hparam(["num_experts_per_tok"], optional=True)
+            new_arch = (
+                gguf.MODEL_ARCH.GRANITE_MOE
+                if has_experts else
+                gguf.MODEL_ARCH.GRANITE
+            )
+            self.model_arch = new_arch
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[new_arch]
+            self.gguf_writer.add_architecture()
+
         # n_group and d_inner are used during reshape_tensors for mamba2
         # NOTE: Explicitly include hparam prefix prefix for d_model to
         #   disambiguate with top-level head_dim
@@ -7708,8 +7755,11 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_head_count_kv(head_count_kv_vec)
 
-        ## If Bamba, use rope, otherwise don't
-        use_rope = "BambaForCausalLM" in self.hparams["architectures"]
+        ## If Bamba or non-hybrid, use rope, otherwise don't
+        use_rope = (
+            "BambaForCausalLM" in self.hparams["architectures"]
+            or not self._ssm_layers
+        )
         self.gguf_writer.add_rope_scaling_finetuned(use_rope)
         if not use_rope:
             self.gguf_writer.add_context_length(2**20)
