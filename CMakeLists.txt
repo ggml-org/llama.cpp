@@ -222,10 +222,8 @@ endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
-endif()
-
-if (LLAMA_MTMD)
-  add_subdirectory(tools/mtmd)
+elseif (LLAMA_MTMD)
+    add_subdirectory(tools/mtmd)
 endif()
 
 #
