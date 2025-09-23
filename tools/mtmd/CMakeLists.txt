@@ -23,7 +23,7 @@ target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(
   mtmd
   PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_include_directories(mtmd PRIVATE ../..)
