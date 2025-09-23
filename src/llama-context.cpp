@@ -2796,18 +2796,48 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
     constexpr size_t MiB = 1024 * 1024;
     const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
 
-    // track seen host buffer types to avoid double counting:
-    std::set<ggml_backend_buffer_type_t> seen_host_buffer_types;
+    // track seen buffer types to avoid double counting:
+    std::set<ggml_backend_buffer_type_t> seen_buffer_types;
 
-    // GPU devices have their own memory, print a breakdown for each GPU on a single line:
-    for (const ggml_backend_dev_t & dev : devices) {
-        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+    // accumulative memory breakdown for each device and for host:
+    std::vector<llama_memory_breakdown_data> mb_dev(devices.size());
+    llama_memory_breakdown_data              mb_host;
+
+    for (const auto & buft_mb : memory_breakdown) {
+        ggml_backend_buffer_type_t          buft = buft_mb.first;
+        const llama_memory_breakdown_data & mb   = buft_mb.second;
+        if (ggml_backend_buft_is_host(buft)) {
+            mb_host.model   += mb.model;
+            mb_host.context += mb.context;
+            mb_host.compute += mb.compute;
+            seen_buffer_types.insert(buft);
             continue;
         }
-        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
-        const llama_memory_breakdown_data & mb = memory_breakdown[buft];
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+        if (dev) {
+            int i_dev = -1;
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i] == dev) {
+                    i_dev = i;
+                    break;
+                }
+            }
+            if (i_dev != -1) {
+                mb_dev[i_dev].model   += mb.model;
+                mb_dev[i_dev].context += mb.context;
+                mb_dev[i_dev].compute += mb.compute;
+                seen_buffer_types.insert(buft);
+                continue;
+            }
+        }
+    }
 
-        const std::string name = ggml_backend_buft_name(buft);
+    // print memory breakdown for each device:
+    for (size_t i = 0; i < devices.size(); i++) {
+        ggml_backend_dev_t          dev = devices[i];
+        llama_memory_breakdown_data mb  = mb_dev[i];
+
+        const std::string name = ggml_backend_dev_name(dev);
         std::string desc = ggml_backend_dev_description(dev);
         for (const std::string & prefix : desc_prefixes_strip) {
             if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
@@ -2831,14 +2861,28 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             std::to_string(unaccounted / MiB)});
-        seen_host_buffer_types.insert(buft);
     }
 
-    // consolidate all memory buffers not on any of the models GPU devices as host memory:
+    // print memory breakdown for host:
+    {
+        const size_t self = mb_host.model + mb_host.context + mb_host.compute;
+        table_data.push_back({
+            template_other,
+            "  - Host",
+            "", // total
+            "", // free
+            std::to_string(self / MiB),
+            std::to_string(mb_host.model / MiB),
+            std::to_string(mb_host.context / MiB),
+            std::to_string(mb_host.compute / MiB),
+            ""}); // unaccounted
+    }
+
+    // print memory breakdown for all remaining buffer types:
     for (const auto & buft_mb : memory_breakdown) {
         ggml_backend_buffer_type_t          buft = buft_mb.first;
         const llama_memory_breakdown_data & mb   = buft_mb.second;
-        if (seen_host_buffer_types.count(buft) == 1) {
+        if (seen_buffer_types.count(buft) == 1) {
             continue;
         }
         const std::string name = ggml_backend_buft_name(buft);
@@ -2853,8 +2897,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             ""}); // unaccounted
-        seen_host_buffer_types.insert(buft);
-        seen_host_buffer_types.insert(buft);
+        seen_buffer_types.insert(buft);
     }
 
     for (size_t j = 1; j < table_data[0].size(); j++) {
