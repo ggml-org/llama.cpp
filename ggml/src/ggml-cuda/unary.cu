@@ -407,7 +407,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
         return;
     }
 
-    const float xi = (float)x[i];
+    const float xi = x->type == GGML_TYPE_F32 ? (float) x[i] : __half2float(x[i]);
     const float gate_pos = (xi > 0.0f);
 
     const float y_pos = alpha_p * xi * xi + beta * xi;
@@ -417,7 +417,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
 
     const float out = gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
 
-    dst[i] = (T)out;
+    dst[i] = (T) (dst->type == GGML_TYPE_F32 ? out : __float2half(out));
 }
 
 template <typename T>
