@@ -350,6 +350,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                GGML_TYPE_Q4_0,
                                                GGML_TYPE_Q4_1,
                                                GGML_TYPE_Q4_K,
+                                               GGML_TYPE_Q5_K,
                                                GGML_TYPE_Q8_0,
                                                GGML_TYPE_Q6_K};
 

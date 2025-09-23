@@ -1,9 +1,17 @@
 #include "ggml-quants.hpp"
 
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
 #include <openvino/core/parallel.hpp>
+#include <openvino/core/shape.hpp>
+#include <openvino/core/type/element_type.hpp>
 #include <openvino/core/type/element_type_traits.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
@@ -11,9 +19,12 @@
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/subtract.hpp>
+#include <openvino/op/util/attr_types.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <string>
+#include <vector>
 
+#include "ggml-common.h"
 #include "ggml-impl.h"
 #include "ggml.h"
 
@@ -38,10 +49,10 @@ void extract_q4_0_data(const ggml_tensor* tensor,
                        ov::Tensor& scales_arr,
                        ov::Tensor& biases_arr) {
     const uint64_t bytes_per_block = 18;  // 2 bytes scale, 32x0.5 byte weights
-    auto data = static_cast<uint8_t*>(tensor->data);
-    auto weights = static_cast<uint8_t*>(weights_arr.data());
-    auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
 
     ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
         scales[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block)));
@@ -57,10 +68,10 @@ void extract_q4_1_data(const ggml_tensor* tensor,
                        ov::Tensor& scales_arr,
                        ov::Tensor& biases_arr) {
     const uint64_t bytes_per_block = 20;  // 2 bytes scale, 2 bytes bias, 32x0.5 byte weights
-    auto data = static_cast<uint8_t*>(tensor->data);
-    auto weights = static_cast<uint8_t*>(weights_arr.data());
-    auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
     ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
         scales[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block)));
         biases[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block + 2)));
@@ -76,22 +87,22 @@ void extract_q8_0_data(const ggml_tensor* tensor,
                        ov::Tensor& biases_arr) {
     const uint64_t weights_per_block = 32;
     const uint64_t bytes_per_block = 34;  // 2 bytes scale, 32x1 byte weights
-    auto data = static_cast<uint8_t*>(tensor->data);
-    auto weights = static_cast<uint8_t*>(weights_arr.data());
-    auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    for (size_t i = 0; i < scales_arr.get_size(); i++) {
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
         uint8_t* block_data = data + i * bytes_per_block;
-        scales[i] = ov::float16::from_bits(*(uint16_t*)block_data);
+        scales[i] = ov::float16::from_bits(*(uint16_t*) block_data);
         biases[i] = ov::float16(-128.f * static_cast<float>(scales[i]));
         for (size_t j = 0; j < weights_per_block; ++j) {
             uint8_t x = block_data[j + 2];  // j+2 to skip the scale bytes.
-            // Original data is in int8_t, so we add a bias of -128 and invert the
-            // first bit.
+            // Original data is in int8_t, so we add a bias of -128 and invert the first bit.
             x ^= 1 << 7;
             weights[i * weights_per_block + j] = x;
         }
-    }
+    });
 }
 
 void unpack_256_4(const uint8_t* data, uint8_t* dst) {
@@ -117,12 +128,11 @@ void extract_q4_k_data(const ggml_tensor* tensor,
                        ov::Tensor& scales_arr,
                        ov::Tensor& biases_arr) {
     const uint64_t bytes_per_block = 2 + 2 + 12 + 128;
-    // TODO tensor->nb[3]
     const uint64_t n_super_block = tensor->nb[3] / bytes_per_block;
-    auto data = static_cast<uint8_t*>(tensor->data);
-    auto weights = static_cast<uint8_t*>(weights_arr.data());
-    auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
 
     ov::parallel_for(n_super_block, [&](size_t i) {
         uint8_t* block_data = data + i * bytes_per_block;
@@ -170,28 +180,26 @@ void extract_q6_k_data(const ggml_tensor* tensor,
                        ov::Tensor& biases_arr) {
     const uint64_t bytes_per_block = 128 + 64 + 16 + 2;
     const uint64_t n_super_block = tensor->nb[3] / bytes_per_block;
-    auto data = static_cast<uint8_t*>(tensor->data);
-    auto weights = static_cast<uint8_t*>(weights_arr.data());
-    auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    // std::string name(tensor.name, tensor.namelen);
-    for (size_t i = 0; i < n_super_block; i++) {
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(n_super_block, [&](size_t i) {
         uint8_t* block_data = data + i * bytes_per_block;
 
         float scale_factor =
-            static_cast<float>(ov::float16::from_bits(*((uint16_t*)block_data + 104)));  // (128+64+16)/2
+            static_cast<float>(ov::float16::from_bits(*((uint16_t*) block_data + 104)));  // (128+64+16)/2
 
         for (size_t j = 0; j < 16; j++) {
             scales[j + i * 16] =
-                ov::float16(scale_factor * static_cast<float>(*((int8_t*)(block_data + 128 + 64 + j))));
+                ov::float16(scale_factor * static_cast<float>(*((int8_t*) (block_data + 128 + 64 + j))));
             biases[j + i * 16] = ov::float16(-32.f * static_cast<float>(scales[j + i * 16]));
         }
 
-        // Extract ql and qh
         uint8_t* ql = block_data;
         uint8_t* qh = block_data + 128;
 
-        // Extract weights
         for (int64_t j = 0; j < 32; ++j) {
             weights[i * 256 + j] = (ql[j] & 0xF) | (((qh[j] >> 0) & 3) << 4);
             weights[i * 256 + j + 32] = (ql[32 + j] & 0xF) | (((qh[j] >> 2) & 3) << 4);
@@ -202,7 +210,78 @@ void extract_q6_k_data(const ggml_tensor* tensor,
             weights[i * 256 + j + 192] = (ql[64 + j] >> 4) | (((qh[32 + j] >> 4) & 3) << 4);
             weights[i * 256 + j + 224] = (ql[96 + j] >> 4) | (((qh[32 + j] >> 6) & 3) << 4);
         }
+    });
+}
+
+static inline void get_scale_min_k4(int j, const uint8_t* q, uint8_t* d, uint8_t* m) {
+    if (j < 4) {
+        *d = q[j] & 63;
+        *m = q[j + 4] & 63;
+    } else {
+        *d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+        *m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
     }
+}
+
+void extract_q5_k_data(const ggml_tensor* tensor, ov::Tensor& weights_arr, ov::Tensor& scales_arr,
+                       ov::Tensor& biases_arr) {
+    const uint64_t bytes_per_block = 4 + 12 + 32 + 128;
+    const uint64_t n_super_block = tensor->nb[3] / bytes_per_block;
+    auto* data = static_cast<uint8_t*>(tensor->data);
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(n_super_block, [&](size_t i) {
+        uint8_t* block_data = data + i * bytes_per_block;
+
+        const float d = static_cast<float>(ov::float16::from_bits(*((uint16_t*) block_data)));
+        const float min = static_cast<float>(ov::float16::from_bits(*((uint16_t*) block_data + 1)));
+
+        const uint8_t* scales_data = block_data + 4;   // 12 bytes of scales
+        const uint8_t* qh = block_data + 4 + 12;       // 32 bytes of high bits
+        const uint8_t* ql = block_data + 4 + 12 + 32;  // 128 bytes of low bits
+
+        int is = 0;
+        uint8_t u1 = 1;
+        uint8_t u2 = 2;
+
+        // Process 2 blocks in one iteration
+        for (int j = 0; j < 256; j += 64) {  // 256 = QK_K, so 4 iterations of 64
+            uint8_t sc;
+            uint8_t m;
+
+            // Get scale and min for first 32 elements
+            get_scale_min_k4(is + 0, scales_data, &sc, &m);
+            const float d1 = d * sc;
+            const float m1 = min * m;
+
+            // Get scale and min for second 32 elements
+            get_scale_min_k4(is + 1, scales_data, &sc, &m);
+            const float d2 = d * sc;
+            const float m2 = min * m;
+
+            scales[i * 8 + is] = ov::float16(d1);
+            biases[i * 8 + is] = ov::float16(-m1);
+            scales[i * 8 + is + 1] = ov::float16(d2);
+            biases[i * 8 + is + 1] = ov::float16(-m2);
+
+            // Extract weights for first 32 elements (matching deq formula exactly)
+            for (int l = 0; l < 32; ++l) {
+                weights[i * 256 + j + l] = (ql[l] & 0xF) + ((qh[l] & u1) ? 16 : 0);
+            }
+
+            // Extract weights for second 32 elements
+            for (int l = 0; l < 32; ++l) {
+                weights[i * 256 + j + l + 32] = (ql[l] >> 4) + ((qh[l] & u2) ? 16 : 0);
+            }
+
+            ql += 32;
+            is += 2;
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    });
 }
 
 // TODO Reorder for make_intX_weights
