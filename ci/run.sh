@@ -92,6 +92,12 @@ fi
 
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
+
+    # if on Mac, disable METAL
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+    fi
+
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
