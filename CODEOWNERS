@@ -34,6 +34,7 @@
 /examples/llama.vim                     @ggerganov
 /examples/lookahead/                    @ggerganov
 /examples/lookup/                       @JohannesGaessler
+/examples/model-conversion/             @danbev
 /examples/parallel/                     @ggerganov
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
