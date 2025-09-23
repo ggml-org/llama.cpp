@@ -1328,6 +1328,7 @@ class MmprojModel(ModelBase):
         self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
 
         # load preprocessor config
+        self.preprocessor_config = {}
         if not self.is_mistral_format:
             with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
                 self.preprocessor_config = json.load(f)
@@ -1350,7 +1351,8 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
 
             # vision config
-            self.gguf_writer.add_vision_image_size(self.find_vparam(["image_size"]))
+            self.image_size = self.find_vparam(["image_size"])
+            self.gguf_writer.add_vision_image_size(self.image_size)
             self.gguf_writer.add_vision_patch_size(self.find_vparam(["patch_size"]))
             self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size"]))
             self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size"]))
@@ -2380,6 +2382,10 @@ class SmolVLMModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
         self.gguf_writer.add_vision_projector_scale_factor(self.global_config.get("scale_factor", 2))
         self.gguf_writer.add_vision_use_gelu(True)
+
+        # Add the preprocessor longest edge size
+        preproc_image_size = self.preprocessor_config.get("size", {}).get("longest_edge", self.image_size)
+        self.gguf_writer.add_vision_preproc_image_size(preproc_image_size)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".embeddings." in name:
