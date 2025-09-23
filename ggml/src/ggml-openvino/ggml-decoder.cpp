@@ -448,6 +448,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
                                         GGML_TYPE_Q4_0,
                                         GGML_TYPE_Q4_1,
                                         GGML_TYPE_Q4_K,
+                                        GGML_TYPE_Q5_K,
                                         GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
         throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
@@ -486,12 +487,12 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
     ov::element::Type weight_type;
     if (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_1 || tensor->type == GGML_TYPE_Q4_K) {
         weight_type = ov::element::u4;
-    } else {  // tensor.type == GGUF_TYPE_Q8_0 || tensor.type == GGUF_TYPE_Q6_K
+    } else {  // tensor.type == GGUF_TYPE_Q8_0 || tensor.type == GGUF_TYPE_Q6_K || tensor.type == GGUF_TYPE_Q5_K
         weight_type = ov::element::u8;
     }
 
     uint64_t weights_per_block;
-    // here we only consider sub block, q6k:16 q4k:32
+    // here we only consider sub block, q6k:16 q4k:32 q5k:32
     if (tensor->type == GGML_TYPE_Q6_K) {
         weights_per_block = 16;
     } else {
@@ -526,6 +527,9 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor,
     } else if (tensor->type == GGML_TYPE_Q4_K) {
         extract_q4_k_data(tensor, weights, scales, biases);
         weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
+    } else if (tensor->type == GGML_TYPE_Q5_K) {
+        extract_q5_k_data(tensor, weights, scales, biases);
+        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
     }
 
     OPENVINO_ASSERT(weight_node.get_shape().size() == 2, "Weight should be 2D");
