@@ -660,7 +660,7 @@ class TextModel(ModelBase):
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                    if (added_tokens_decoder[i].special or self.does_token_look_special(token)) and "<|speech_" not in token:
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         # NOTE: this was added for Gemma.
