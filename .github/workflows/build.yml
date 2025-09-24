@@ -56,7 +56,7 @@ env:
 
 jobs:
   macOS-latest-cmake-arm64:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Clone
@@ -88,6 +88,7 @@ jobs:
             -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
 
       - name: Test
         id: cmake_test
@@ -126,7 +127,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -136,7 +138,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   macOS-latest-cmake-arm64-webgpu:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Clone
@@ -709,6 +711,7 @@ jobs:
 
   macOS-latest-swift:
     runs-on: macos-latest
+    needs: ios-xcode-build
 
     strategy:
       matrix:
@@ -724,6 +727,12 @@ jobs:
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
+
+      - name: Download xcframework artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: llama-xcframework
+          path: build-apple/llama.xcframework/
 
       - name: Dependencies
         id: depends
@@ -745,11 +754,6 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: xcodebuild for swift package
-        id: xcodebuild
-        run: |
-          ./build-xcframework.sh
 
   windows-msys2:
     runs-on: windows-2025
@@ -1050,8 +1054,12 @@ jobs:
         run:  examples/sycl/win-build-sycl.bat
 
   windows-latest-cmake-hip:
-    if: ${{ github.event.inputs.create_release != 'true' }}
     runs-on: windows-2022
+
+    env:
+      # The ROCm version must correspond to the version used in the HIP SDK.
+      ROCM_VERSION: "6.4.2"
+      HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     steps:
       - name: Clone
@@ -1061,23 +1069,46 @@ jobs:
       - name: Clone rocWMMA repository
         id: clone_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
 
-      - name: Install
+      - name: Cache ROCm Installation
+        id: cache-rocm
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Install ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
         id: depends
         run: |
           $ErrorActionPreference = "Stop"
           write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
           $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $proc.WaitForExit(600000)
+          $completed = $proc.WaitForExit(600000)
+          if (-not $completed) {
+              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
+              $proc.Kill()
+              exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
+              exit 1
+          }
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm
         id: verify
         run: |
-          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+          # Find and test ROCm installation
+          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
+          if (-not $clangPath) {
+            Write-Error "ROCm installation not found"
+            exit 1
+          }
+          & $clangPath.FullName --version
 
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1141,8 +1172,17 @@ jobs:
         run: |
           ./build-xcframework.sh
 
+      - name: Upload xcframework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-xcframework
+          path: build-apple/llama.xcframework/
+          retention-days: 1
+
       - name: Build Xcode project
-        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+        run: |
+          xcodebuild -downloadPlatform iOS
+          xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
 
   android-build:
     runs-on: ubuntu-latest
@@ -1207,3 +1247,167 @@ jobs:
               -DGGML_CANN=on \
               -DSOC_TYPE=${{ matrix.device }}
           cmake --build build -j $(nproc)
+
+# TODO: simplify the following workflows using a matrix
+# TODO: run lighter CI on PRs and the full CI only on master (if needed)
+  ggml-ci-x64-cpu-low-perf:
+    runs-on: [self-hosted, Linux, X64, CPU, low-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-low-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU, low-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-cpu-high-perf:
+    runs-on: [self-hosted, Linux, X64, CPU, high-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-high-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU, high-perf]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-cuda:
+    runs-on: [self-hosted, Linux, X64, NVIDIA]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          nvidia-smi
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-vulkan-cm:
+    runs-on: [self-hosted, Linux, X64, NVIDIA]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-vulkan-cm2:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, COOPMAT2]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-cpu-amx:
+    runs-on: [self-hosted, Linux, X64, CPU, AMX]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+#  ggml-ci-x64-amd-vulkan:
+#    runs-on: [self-hosted, Linux, X64, AMD]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          vulkaninfo --summary
+#          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+#
+#  ggml-ci-x64-amd-rocm:
+#    runs-on: [self-hosted, Linux, X64, AMD]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          amd-smi static
+#          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-mac-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-mac-vulkan:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
