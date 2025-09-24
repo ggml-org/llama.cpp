@@ -375,28 +375,6 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
     swiglu_oai_cuda(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
-/* xIELU */
-struct op_xielu_functor {
-    float alpha_n, alpha_p, beta, eps;
-
-    __host__ __device__ __forceinline__ op_xielu_functor(float a_n, float a_p, float b, float e)
-        : alpha_n(a_n), alpha_p(a_p), beta(b), eps(e) {}
-
-    __device__ __forceinline__ float operator()(float x) const {
-        const float gate_pos = (x > 0.0f);        // positive branch gate
-
-        // Positive branch: alpha_p * v^2 + beta * v
-        const float y_pos = alpha_p * x * x + beta * x;
-
-        // Negative branch:
-        const float min_v_eps = fminf(x, eps);  // works fine even if eps < 0
-        const float y_neg = (expm1f(min_v_eps) - x) * alpha_n + beta * x;
-
-        // Select the appropriate branch based on the gate
-        return gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
-    }
-};
-
 /* CUDA kernel + launcher for xIELU */
 
 template <typename T>
@@ -407,7 +385,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
         return;
     }
 
-    const float xi = x->type == GGML_TYPE_F32 ? (float) x[i] : __half2float(x[i]);
+    const float xi = sizeof(x[i]) == sizeof(half) ? __half2float(x[i]) : (float) x[i];
     const float gate_pos = (xi > 0.0f);
 
     const float y_pos = alpha_p * xi * xi + beta * xi;
@@ -417,7 +395,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
 
     const float out = gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
 
-    dst[i] = (T) (dst->type == GGML_TYPE_F32 ? out : __float2half(out));
+    dst[i] = (T) (sizeof(dst[i]) == sizeof(float)) ? out : __float2half(out));
 }
 
 template <typename T>
