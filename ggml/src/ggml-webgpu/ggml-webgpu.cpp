@@ -130,15 +130,16 @@ struct webgpu_context_struct {
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline get_rows_pipeline[30];
     wgpu::ComputePipeline get_rows_f32_no_vec_pipeline;
-    wgpu::ComputePipeline cpy_pipeline[2][2];      // src type, dst type
-    wgpu::ComputePipeline add_pipeline[2][2];      // type, inplace
-    wgpu::ComputePipeline sub_pipeline[2][2];      // type, inplace
-    wgpu::ComputePipeline mul_pipeline[2][2];      // type, inplace
-    wgpu::ComputePipeline div_pipeline[2][2];      // type, inplace
-    wgpu::ComputePipeline rms_norm_pipeline[2];    // inplace
-    wgpu::ComputePipeline rope_pipeline[2][2][2];  // type, ff, inplace
-    wgpu::ComputePipeline glu_pipeline[7][2][2];   // glu-op, type, split
-    wgpu::ComputePipeline scale_pipeline[2];       // inplace
+    wgpu::ComputePipeline cpy_pipeline[2][2];          // src type, dst type
+    wgpu::ComputePipeline add_pipeline[2][2];          // type, inplace
+    wgpu::ComputePipeline sub_pipeline[2][2];          // type, inplace
+    wgpu::ComputePipeline mul_pipeline[2][2];          // type, inplace
+    wgpu::ComputePipeline div_pipeline[2][2];          // type, inplace
+    wgpu::ComputePipeline rms_norm_pipeline[2];        // inplace
+    wgpu::ComputePipeline rope_pipeline[2][2][2];      // type, ff, inplace
+    wgpu::ComputePipeline glu_pipeline[7][2][2];       // glu-op, type, split
+    wgpu::ComputePipeline scale_pipeline[2];           // inplace
+    wgpu::ComputePipeline soft_max_pipeline[3][2][2];  // (no_mask, f32_mask, f16_mask), has_sink, inplace
 
     size_t memset_bytes_per_thread;
 
@@ -912,6 +913,79 @@ static void ggml_webgpu_scale(webgpu_context & ctx, ggml_tensor * src, ggml_tens
                                           ggml_op_name(dst->op));
 }
 
+static void ggml_webgpu_soft_max(webgpu_context & ctx,
+                                 ggml_tensor *    src0,
+                                 ggml_tensor *    src1,
+                                 ggml_tensor *    src2,
+                                 ggml_tensor *    dst) {
+    const int inplace   = ggml_webgpu_tensor_equal(src0, dst);
+    const int mask_type = (src1 != nullptr) ? src1->type : 2;  // use 2 for no mask here
+    const int has_sink  = (src2 != nullptr);
+    float     max_bias;
+    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+    float n_head_log2 = float(1u << (uint32_t) floor(log2(src0->ne[2])));
+    float m0          = powf(2.0f, -(max_bias) / n_head_log2);
+    float m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    std::vector<uint32_t> params = {
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
+        mask_type < 2 ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0,
+        has_sink ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src2) / ggml_type_size(src2->type)) : 0,
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),
+        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),
+        (uint32_t) (src0->nb[3] / ggml_type_size(src0->type)),
+        mask_type < 2 ? (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)) : 0,
+        mask_type < 2 ? (uint32_t) (src1->nb[2] / ggml_type_size(src1->type)) : 0,
+        mask_type < 2 ? (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)) : 0,
+        (uint32_t) (dst->nb[1] / ggml_type_size(dst->type)),
+        (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)),
+        (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)),
+        (uint32_t) ggml_nelements(dst),
+        (uint32_t) src0->ne[0],
+        (uint32_t) src0->ne[1],
+        (uint32_t) src0->ne[2],
+        mask_type < 2 ? (uint32_t) src1->ne[2] : 0,
+        mask_type < 2 ? (uint32_t) src1->ne[3] : 0,
+        *(uint32_t *) dst->op_params,  // scale
+        *(uint32_t *) &max_bias,
+        *(uint32_t *) &n_head_log2,
+        *(uint32_t *) &m0,
+        *(uint32_t *) &m1
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        { .binding = 0,
+         .buffer  = ggml_webgpu_tensor_buf(src0),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, src0),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, src0) }
+    };
+    uint32_t binding_num = 1;
+    if (mask_type < 2) {
+        entries.push_back({ .binding = binding_num,
+                            .buffer  = ggml_webgpu_tensor_buf(src1),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, src1) });
+        binding_num++;
+    }
+    if (has_sink) {
+        entries.push_back({ .binding = binding_num,
+                            .buffer  = ggml_webgpu_tensor_buf(src2),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, src2),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, src2) });
+        binding_num++;
+    }
+    if (!inplace) {
+        entries.push_back({ .binding = binding_num,
+                            .buffer  = ggml_webgpu_tensor_buf(dst),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
+    }
+
+    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->soft_max_pipeline[mask_type][has_sink][inplace], params, entries,
+                                          ggml_nrows(dst), ggml_op_name(dst->op));
+}
+
 // Returns true if node has enqueued work into the queue, false otherwise
 static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
     if (ggml_is_empty(node)) {
@@ -1510,6 +1584,38 @@ static void ggml_webgpu_init_scale_pipeline(webgpu_context & webgpu_ctx) {
                                 constants);
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->scale_pipeline[1], wgsl_scale_f32_inplace,
                                 "scale_f32_inplace", constants);
+}
+
+static void ggml_webgpu_init_soft_max_pipeline(webgpu_context & webgpu_ctx) {
+    std::vector<wgpu::ConstantEntry> constants(1);
+    constants[0].key   = "wg_size";
+    constants[0].value = 64;
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][0][0], wgsl_soft_max_f32,
+                                "soft_max_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][0][1], wgsl_soft_max_f32_inplace,
+                                "soft_max_f32_inplace", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][1][0], wgsl_soft_max_f32_sink,
+                                "soft_max_f32_sink", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][1][1],
+                                wgsl_soft_max_f32_sink_inplace, "soft_max_f32_sink_inplace", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][0][0], wgsl_soft_max_f32_mask_f32,
+                                "soft_max_f32_mask_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][0][1],
+                                wgsl_soft_max_f32_mask_f32_inplace, "soft_max_f32_mask_f32_inplace", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][0][0], wgsl_soft_max_f32_mask_f16,
+                                "soft_max_f32_mask_f16", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][0][1],
+                                wgsl_soft_max_f32_mask_f16_inplace, "soft_max_f32_mask_f16_inplace", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][1][0],
+                                wgsl_soft_max_f32_mask_f32_sink, "soft_max_f32_mask_f32_sink", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][1][1],
+                                wgsl_soft_max_f32_mask_f32_sink_inplace, "soft_max_f32_mask_f32_sink_inplace",
+                                constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][1][0],
+                                wgsl_soft_max_f32_mask_f16_sink, "soft_max_f32_mask_f16_sink", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][1][1],
+                                wgsl_soft_max_f32_mask_f16_sink_inplace, "soft_max_f32_mask_f16_sink_inplace",
+                                constants);
 }
 
 static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
