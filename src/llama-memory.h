@@ -2,6 +2,7 @@
 
 #include "llama.h"
 
+#include <map>
 #include <memory>
 #include <functional>
 
@@ -107,6 +108,8 @@ struct llama_memory_i {
 
     virtual llama_pos seq_pos_min(llama_seq_id seq_id) const = 0;
     virtual llama_pos seq_pos_max(llama_seq_id seq_id) const = 0;
+
+    virtual std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const = 0;
 
     //
     // state write/read
