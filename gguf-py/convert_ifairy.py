@@ -9,10 +9,6 @@ import json
 import argparse
 from pathlib import Path
 
-# 关键步骤：确保使用你修改过的 gguf-py 库
-# 假设你的 gguf-py 目录路径，请修改为你的实际路径
-#CUSTOM_GGUF_PY_PATH = "/path/to/your/gguf-py"
-#sys.path.insert(0, CUSTOM_GGUF_PY_PATH)
 
 import gguf
 import torch
@@ -47,15 +43,25 @@ def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
     return qw_real, qw_imag
 
 # 接收key和对应的tensor，返回量化后的tensor
-def quant(key, tensor, f):
+def quant(key, tensor, f, weight_map):
     if 'real' in key:
         imag_key = key.replace('real', 'imag')
-        imag_tensor = f.get_tensor(imag_key).to(torch.float16)
+        f_name = weight_map.get(imag_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                imag_tensor = f1.get_tensor(imag_key).to(torch.float16)
+        else:
+            imag_tensor = f.get_tensor(imag_key).to(torch.float16)
         q_real, q_imag = forward(tensor, imag_tensor)
         return q_real
     elif 'imag' in key:
         real_key = key.replace('imag', 'real')
-        real_tensor = f.get_tensor(real_key).to(torch.float16)
+        f_name = weight_map.get(real_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                real_tensor = f1.get_tensor(real_key).to(torch.float16)
+        else:
+            real_tensor = f.get_tensor(real_key).to(torch.float16)
         q_real, q_imag = forward(real_tensor, tensor)
         return q_imag
     else:
@@ -101,73 +107,65 @@ def main():
     writer.add_rope_freq_base(config["rope_theta"]) # 10000.0
     writer.add_file_type(gguf.LlamaFileType.MOSTLY_IFAIRY)
 
-    # 词汇表和分词器信息 (需要根据你的分词器实际情况调整)
-    writer.add_vocab_size(config["vocab_size"]) # 32000
-    # 假设使用类似 LLaMA 的分词器，请根据你的 tokenizer_config.json 确认
+    # 词汇表和分词器信息
+    writer.add_vocab_size(config["vocab_size"])
     writer.add_tokenizer_model("llama") 
 
-    # 添加自定义复数模型和量化方法的标识
-    #writer.add_custom_metadata("complex_format", "split_real_imag")
-    #writer.add_custom_metadata("quantization.method", "your_custom_i2_quantization") # 请替换为你的量化方法名
-    #writer.add_custom_metadata("model.architecture", config["model_type"]) # "complexnet"
+    index_name = "model.safetensors.index.json"
+    index_file = Path(model_dir) / index_name
 
     # 4. 处理并添加张量
-    # 确定模型权重文件
     model_files = list(Path(model_dir).glob("*.safetensors"))
     if not model_files:
         print(f"在 {model_dir} 中未找到 .safetensors 文件。")
         sys.exit(1)
 
-    # 使用第一个找到的 safetensors 文件
-    model_file_path = str(model_files[0])
-    if verbose:
-        print(f"使用模型文件: {model_file_path}")
-
-    # 确定你自定义的 I2 数据类型在 gguf 中的枚举值
-    # 假设你在 constants.py 中已定义，例如：GGML_TYPE_I2 = 100
-    # 请根据你的实际定义修改！
-    CUSTOM_GGML_TYPE_I2 = 100
+    weight_map = {}
+    if index_file.is_file():    
+        if verbose:
+            print(f"gguf: loading model weight map from '{index_name}'")
+        with open(index_file, "r", encoding="utf-8") as f:
+            index: dict[str, Any] = json.load(f)
+            weight_map = index.get("weight_map")
+            if weight_map is None or not isinstance(weight_map, dict):
+                raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
 
     try:
-        with safe_open(model_file_path, framework="pt") as f:
-            tensor_keys = f.keys()
+        for model_file_path in model_files:
+            model_file_path = str(model_file_path)
             if verbose:
-                print(f"找到 {len(tensor_keys)} 个张量")
-
-            for key in tensor_keys:
-                tensor_data = f.get_tensor(key).to(torch.float16)
-                tensor_data = quant(key, tensor_data, f)
-                numpy_array = tensor_data.cpu().numpy().astype(np.float16)
-
-                # 使用你修改后的 tensor_mapping.py 中的映射
-                # 这里假设你的映射能正确工作，将 HF 名称映射到 GGUF 名称
-                # 1. 首先，确定你的模型架构（根据你的 config.json）
-                model_arch = gguf.MODEL_ARCH.IFAIRY # 假设你在 constants.py 中定义了
-
-                # 2. 创建 TensorNameMap 实例
-                # 参数通常是：模型架构、块数量（从 config 中获取）
-                mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"]) # 例如 24 层
-
-                # 3. 使用 mapper 的 get_name 或类似方法来获取映射后的名称
-                # 你需要查看 tensor_mapping.py 中 TensorNameMap 类的具体方法名
-                # 假设方法名为 get_gguf_name，它接收原始名称并返回映射后的名称
-                try:
-                    if "lm_head" in key:
-                        key = "lm_head"
-                    mapped_name = mapper.get_name(key) # 这是关键调用！
-                    if mapped_name is None:
-                        # 如果没有找到映射，可以跳过或按原名称处理（不推荐）
-                        print(f"Warning: No mapping found for tensor '{key}'. Skipping or using original name.")
-                        continue # 或者 mapped_name = key
-                except Exception as e:
-                    print(f"Error mapping tensor name '{key}': {e}")
-                    continue
-
-                # 添加张量，指定自定义的 I2 类型
-                writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
-
+                print(f"gguf: loading model weights from '{model_file_path}'")
+            with safe_open(model_file_path, framework="pt") as f:
+                tensor_keys = f.keys()
                 if verbose:
-                    print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}, 原始类型: F16, 目标类型: I2)")
+                    print(f"找到 {len(tensor_keys)} 个张量")
+
+                for key in tensor_keys:
+                    tensor_data = f.get_tensor(key).to(torch.float16)
+                    tensor_data = quant(key, tensor_data, f, weight_map)
+                    numpy_array = tensor_data.cpu().numpy().astype(np.float16)
+
+                    model_arch = gguf.MODEL_ARCH.IFAIRY
+
+                    mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
+
+                    try:
+                        if "lm_head" in key:
+                            key = "lm_head"
+                        mapped_name = mapper.get_name(key)
+                        if mapped_name is None:
+                            # 如果没有找到映射，可以跳过或按原名称处理（不推荐）
+                            print(f"Warning: No mapping found for tensor '{key}'. Skipping or using original name.")
+                            continue
+                    except Exception as e:
+                        print(f"Error mapping tensor name '{key}': {e}")
+                        continue
+
+                    # 添加张量，指定自定义的 I2 类型
+                    writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
+
+                    if verbose:
+                        print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
 
     except Exception as e:
         print(f"处理张量时出错: {e}")
