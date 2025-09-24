@@ -385,17 +385,30 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
         return;
     }
 
-    const float xi = sizeof(x[i]) == sizeof(half) ? __half2float(x[i]) : (float) x[i];
+    float xi;
+#if __CUDA_ARCH__ >= 530
+    if constexpr (std::is_same<T, half>::value) {
+        xi = __half2float(x[i]);
+    } else
+#endif
+    {
+        xi = (float)x[i];
+    }
+
     const float gate_pos = (xi > 0.0f);
-
     const float y_pos = alpha_p * xi * xi + beta * xi;
-
     const float min_v_eps = fminf(xi, eps);
     const float y_neg = (expm1f(min_v_eps) - xi) * alpha_n + beta * xi;
-
     const float out = gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
 
-    dst[i] = (T) (sizeof(dst[i]) == sizeof(float)) ? out : __float2half(out));
+#if __CUDA_ARCH__ >= 530
+    if constexpr (std::is_same<T, half>::value) {
+        dst[i] = __float2half(out);
+    } else
+#endif
+    {
+        dst[i] = (T)out;
+    }
 }
 
 template <typename T>
