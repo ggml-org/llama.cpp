@@ -49,6 +49,7 @@
 
 	function handleConfirmEdit() {
 		if (!editedName.trim()) return;
+		showEditDialog = false;
 		onEdit?.(conversation.id, editedName);
 	}
 
