@@ -417,4 +417,10 @@ bool is_rope_supported(const npu_device_tensor_op_spec * op_spec,
     return true;  // ROPE operation is not supported yet
 }
 
+bool is_rope_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+    NPU_UNUSED(op);
+    NPU_UNUSED(next_op);
+    return false;
+}
+
 }  // namespace hexagon

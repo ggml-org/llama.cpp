@@ -6,7 +6,7 @@ namespace hexagon {
 
 compute_func_type get_compute_func(tensor * dst);
 
-bool requires_thread_barrier(npu_device_tensor_op op);
+bool requires_thread_barrier(npu_device_tensor_op op, npu_device_tensor_op next_op);
 
 bool support_op(const npu_device_tensor_op_spec * op_spec,
                 const npu_device_tensor_spec *    dst,

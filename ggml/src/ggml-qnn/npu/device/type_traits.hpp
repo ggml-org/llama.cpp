@@ -55,32 +55,14 @@ inline auto make_scoped_op_perf_timer(tensor * op, size_t tidx) {
     auto * src1 = op->get_src(1);
     char   buffer[512];
     if (src1 == nullptr) {
-        snprintf(buffer,
-                 sizeof(buffer),
-                 "[%s][%lldx%lldx%lldx%lld%s], tidx: %zu",
-                 op_get_name(op->get_op()),
-                 src0->get_ne(0),
-                 src0->get_ne(1),
-                 src0->get_ne(2),
-                 src0->get_ne(3),
-                 get_type_name(src0->get_type()),
+        snprintf(buffer, sizeof(buffer), "[%s][%lldx%lldx%lldx%lld%s], tidx: %zu", op_get_name(op->get_op()),
+                 src0->get_ne(0), src0->get_ne(1), src0->get_ne(2), src0->get_ne(3), get_type_name(src0->get_type()),
                  tidx);
     } else {
-        snprintf(buffer,
-                 sizeof(buffer),
-                 "[%s][%lldx%lldx%lldx%lld%s],[%lldx%lldx%lldx%lld%s], tidx: %zu",
-                 op_get_name(op->get_op()),
-                 src0->get_ne(0),
-                 src0->get_ne(1),
-                 src0->get_ne(2),
-                 src0->get_ne(3),
-                 get_type_name(src0->get_type()),
-                 src1->get_ne(0),
-                 src1->get_ne(1),
-                 src1->get_ne(2),
-                 src1->get_ne(3),
-                 get_type_name(src1->get_type()),
-                 tidx);
+        snprintf(buffer, sizeof(buffer), "[%s][%lldx%lldx%lldx%lld%s],[%lldx%lldx%lldx%lld%s], tidx: %zu",
+                 op_get_name(op->get_op()), src0->get_ne(0), src0->get_ne(1), src0->get_ne(2), src0->get_ne(3),
+                 get_type_name(src0->get_type()), src1->get_ne(0), src1->get_ne(1), src1->get_ne(2), src1->get_ne(3),
+                 get_type_name(src1->get_type()), tidx);
     }
     return npu_scoped_timer<1024>(buffer);
 }
@@ -102,8 +84,7 @@ inline auto make_scoped_op_perf_timer(tensor * op, size_t tidx) {
 
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(tracker_name, idx, sub_prefix) \
         hexagon::npu_sub_process_scoped_timer<                                                   \
-            std::remove_reference_t<decltype(__npu_op_timer_##tracker_name)>::kBufferCount,      \
-            idx>                                                                                 \
+            std::remove_reference_t<decltype(__npu_op_timer_##tracker_name)>::kBufferCount, idx> \
         __npu_op_sub_timer##sub_prefix(__npu_op_timer_##tracker_name, #sub_prefix)
 
 #else

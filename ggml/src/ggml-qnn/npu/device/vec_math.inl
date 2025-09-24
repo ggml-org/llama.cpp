@@ -469,7 +469,7 @@ inline HVX_Vector qhmath_hvx_exp_vhf(HVX_Vector sline) {
 
 inline HVX_VectorPair_x4 qhmath_load_div_sf_ltu() {
     /* Coefficients in float representation */
-    constexpr const float c0_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c0_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -503,7 +503,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_sf_ltu() {
         2.0993232550771013,
         2.032425103348979,
     };
-    constexpr const float c1_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c1_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -537,7 +537,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_sf_ltu() {
         -1.6526109646324616,
         -1.5489652830974667,
     };
-    constexpr const float c2_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c2_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -571,7 +571,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_sf_ltu() {
         0.5781761255999769,
         0.5246475096790261,
     };
-    constexpr const float c3_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c3_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -750,7 +750,7 @@ inline HVX_Vector qhmath_hvx_div_vf(HVX_Vector num, HVX_Vector denom, HVX_Vector
 
 inline HVX_VectorPair_x4 qhmath_load_div_hf_ltu() {
     /* Coefficients in float representation */
-    constexpr const float c0_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c0_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -784,7 +784,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_hf_ltu() {
         2.0981551828382417,
         2.0319234960945,
     };
-    constexpr const float c1_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c1_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -818,7 +818,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_hf_ltu() {
         -1.6507730169513504,
         -1.5482028127706613,
     };
-    constexpr const float c2_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c2_coeffs[32] = {
         0.0,
         0.0,
         0.0,
@@ -852,7 +852,7 @@ inline HVX_VectorPair_x4 qhmath_load_div_hf_ltu() {
         0.5772121720355701,
         0.524261196551401,
     };
-    constexpr const float c3_coeffs[32] __attribute__((aligned(hexagon::kBytesPerVector))) = {
+    alignas(hexagon::kBytesPerVector) constexpr const float c3_coeffs[32] = {
         0.0,
         0.0,
         0.0,

@@ -448,8 +448,8 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_output_type * d
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
     constexpr const uint32_t kSizeOfQs = sizeof(npu_device_block_q4_0::qs);
 
-    static const auto       load_masks = make_quad_block_mask<npu_device_block_q4_0>();
-    static const HVX_Vector scale_indices __attribute__((aligned(hexagon::kBytesPerVector))) =
+    static const auto load_masks = make_quad_block_mask<npu_device_block_q4_0>();
+    alignas(hexagon::kBytesPerVector) static const HVX_Vector scale_indices =
         make_scale_load_mask<npu_device_block_q4_0>();
 
     const int                      nb      = count / qk;
@@ -538,10 +538,10 @@ HVX_Vector load_dequant_table_q4_0() {
     static_assert(kTableSize <= hexagon::kBytesPerVector / sizeof(__fp16), "table too large");
 
     static const HVX_Vector result = []() -> HVX_Vector {
-        union {
+        alignas(hexagon::kBytesPerVector) union {
             HVX_Vector v;
             __fp16 f16[sizeof(HVX_Vector) / sizeof(__fp16)];
-        } table __attribute__((aligned(hexagon::kBytesPerVector)));
+        } table;
 
         table.v = Q6_V_vzero();
         for (int i = 0; i < kTableSize; ++i) {
@@ -567,10 +567,10 @@ HVX_Vector load_dequant_table_q4_k() {
     static_assert(kTableSize <= hexagon::kBytesPerVector / sizeof(__fp16), "table too large");
 
     const static HVX_Vector result = []() -> HVX_Vector {
-        union {
+        alignas(hexagon::kBytesPerVector) union {
             HVX_Vector v;
             __fp16 f16[sizeof(HVX_Vector) / sizeof(__fp16)];
-        } table __attribute__((aligned(hexagon::kBytesPerVector)));
+        } table;
 
         table.v = Q6_V_vzero();
         for (int i = 0; i < kTableSize; ++i) {
@@ -591,10 +591,10 @@ void dequantize_row_q4_K(const void * src, hexagon::dequant_output_type * dst, s
 
     const HVX_VectorPred scale_mask = Q6_Q_vsetq_R(hexagon::kBytesPerVector / 2);
 
-    union {
+    alignas(hexagon::kBytesPerVector * 4) union {
         HVX_VectorPair p[2];
         HVX_Vector     v[4];
-    } dual_pair __attribute__((aligned(hexagon::kBytesPerVector * 4)));
+    } dual_pair;
 
     for (int i = 0; i < nb; i++) {
         const uint8_t * q = src_ptr[i].qs;
@@ -674,40 +674,21 @@ void copy_row_f32(const void * src, hexagon::dequant_output_type * dst, size_t c
 }
 
 constexpr const hexagon::device_type_traits kDeviceTypeTraits[] = {
-    { NPU_DATA_TYPE_F32,
-     "F32", 1,
-     sizeof(float),
-     false, copy_row_f32,
-     nullptr, hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>,
+    { NPU_DATA_TYPE_F32, "F32", 1, sizeof(float), false, copy_row_f32, nullptr,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>,
      hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f32_f32>,
      hexagon::type_erase_dot_func<hexagon::is_f32_f32_dot_product_aligned> },
-    { NPU_DATA_TYPE_F16,
-     "F16", 1,
-     sizeof(npu_device_fp16_t),
-     false, copy_row_f16,
-     quantize_row_fp16, hexagon::type_erase_dot_func<hexagon::vec_dot_product_f16_f16>,
+    { NPU_DATA_TYPE_F16, "F16", 1, sizeof(npu_device_fp16_t), false, copy_row_f16, quantize_row_fp16,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f16_f16>,
      hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f16_f16>,
      hexagon::type_erase_dot_func<hexagon::is_f16_f16_dot_product_aligned> },
     { NPU_DATA_TYPE_I32, "I32", 1, sizeof(int32_t), false },
-    { NPU_DATA_TYPE_Q8_0,
-     "Q8_0", QUANT_BLOCK_SIZE,
-     sizeof(npu_device_block_q8_0),
-     true, dequantize_row_q8_0,
+    { NPU_DATA_TYPE_Q8_0, "Q8_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q8_0), true, dequantize_row_q8_0,
      quantize_row_q8_0 },
-    { NPU_DATA_TYPE_Q4_0,
-     "Q4_0", QUANT_BLOCK_SIZE,
-     sizeof(npu_device_block_q4_0),
-     true, dequantize_row_q4_0,
-     quantize_row_q4_0, nullptr,
-     nullptr, nullptr,
-     load_dequant_table_q4_0 },
-    { NPU_DATA_TYPE_Q4_K,
-     "Q4_K", QUANT_K_BLOCK_SIZE,
-     sizeof(npu_device_block_q4_k),
-     true, dequantize_row_q4_K,
-     quantize_row_q4_K, nullptr,
-     nullptr, nullptr,
-     load_dequant_table_q4_k },
+    { NPU_DATA_TYPE_Q4_0, "Q4_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q4_0), true, dequantize_row_q4_0,
+     quantize_row_q4_0, nullptr, nullptr, nullptr, load_dequant_table_q4_0 },
+    { NPU_DATA_TYPE_Q4_K, "Q4_K", QUANT_K_BLOCK_SIZE, sizeof(npu_device_block_q4_k), true, dequantize_row_q4_K,
+     quantize_row_q4_K, nullptr, nullptr, nullptr, load_dequant_table_q4_k },
 };
 
 static_assert(std::size(kDeviceTypeTraits) == NPU_DATA_TYPE_COUNT,

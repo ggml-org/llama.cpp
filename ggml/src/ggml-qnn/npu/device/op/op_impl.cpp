@@ -87,46 +87,89 @@ template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::co
         return false;
     }
 
-    uint8_t * dst_ptr = out->get_write_buffer();
-    if (!dst_ptr) {
-        DEVICE_LOG_ERROR("element_wise_op: dst_ptr is not writable, tensor: %p, type: %s\n",
-                         (void *) out,
-                         hexagon::get_type_name(out->get_type()));
-        return false;
-    }
-
-    const uint8_t * src0_ptr      = src0->get_read_buffer();
-    const uint8_t * src1_ptr      = src1->get_read_buffer();
-    auto            total_rows    = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
-    const auto      rows_per_cube = out->get_ne(2) * out->get_ne(1);
-    const auto      start_end     = params->get_work_slice(total_rows);
+    const auto total_rows = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
+    const auto start_end  = params->get_work_slice(total_rows);
     if (start_end.first >= start_end.second) {
         return true;
     }
 
-    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER(out, params->get_thread_index());
+    const auto src_row_bytes         = src0->get_ne(0) * sizeof(data_type);
+    const auto src_row_bytes_aligned = hexagon::get_aligned_size(src_row_bytes);
+    uint8_t *  src_cache_ptr         = params->get_vtcm_cache(src_row_bytes_aligned * 4);
+    if (!src_cache_ptr) {
+        DEVICE_LOG_ERROR("element_wise_op: failed to get VTCM cache, size: %zu\n", size_t(src_row_bytes_aligned * 4));
+        return false;
+    }
 
-    const size_t valid_row_bytes = src0->get_ne(0) * sizeof(data_type);
-    for (int64_t ir = start_end.first; ir < start_end.second; ++ir) {
-        const auto i03 = ir / rows_per_cube;
-        const auto i02 = ir / out->get_ne(1) - i03 * out->get_ne(2);
-        const auto i01 = ir % out->get_ne(1);  // TODO: should we use divide instead of mod?
+    uint8_t * dst_ptr = out->get_write_buffer();
+    if (!dst_ptr) {
+        DEVICE_LOG_ERROR("element_wise_op: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
+                         hexagon::get_type_name(out->get_type()));
+        return false;
+    }
+
+    const uint8_t * src0_ptr      = src0->get_read_buffer(true);  // TODO: avoid invalidation
+    const uint8_t * src1_ptr      = src1->get_read_buffer(true);  // TODO: avoid invalidation
+    const auto      rows_per_cube = out->get_ne(2) * out->get_ne(1);
+
+    uint8_t * src0_read_cache_ptr  = src_cache_ptr;
+    uint8_t * src0_write_cache_ptr = src_cache_ptr + src_row_bytes_aligned;
+    uint8_t * src1_read_cache_ptr  = src_cache_ptr + src_row_bytes_aligned * 2;
+    uint8_t * src1_write_cache_ptr = src_cache_ptr + src_row_bytes_aligned * 3;
+
+    {
+        const auto i03 = start_end.first / rows_per_cube;
+        const auto i02 = start_end.first / out->get_ne(1) - i03 * out->get_ne(2);
+        const auto i01 = start_end.first % out->get_ne(1);  // TODO: should we use divide instead of mod?
         const auto i13 = i03 % src1->get_ne(3);
         const auto i12 = i02 % src1->get_ne(2);
         const auto i11 = i01 % src1->get_ne(1);
 
-        auto * src1_plane = src1_ptr + i13 * src1->get_nb(3) + i12 * src1->get_nb(2);
-        auto * src0_row   = src0_ptr + i03 * src0->get_nb(3) + i02 * src0->get_nb(2) + i01 * src0->get_nb(1);
-        auto * src1_row   = src1_plane + i11 * src1->get_nb(1);
-        auto * dst_row    = dst_ptr + i03 * out->get_nb(3) + i02 * out->get_nb(2) + i01 * out->get_nb(1);
-        if (ir + 1 < start_end.second) {
-            hexagon::l2fetch_row(src0_row + src0->get_nb(1), valid_row_bytes);
-            hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row_bytes);
+        auto * src0_row = src0_ptr + i03 * src0->get_nb(3) + i02 * src0->get_nb(2) + i01 * src0->get_nb(1);
+        auto * src1_row = src1_ptr + i13 * src1->get_nb(3) + i12 * src1->get_nb(2) + i11 * src1->get_nb(1);
+        if (!params->initiate_dma_row_transfer(src0_row, src0_write_cache_ptr, src1_row, src1_write_cache_ptr,
+                                               src_row_bytes)) {
+            DEVICE_LOG_ERROR("element_wise_op: failed to initiate dma transfer\n");
+            return false;
+        }
+    }
+
+    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER(out, params->get_thread_index());
+
+    for (int64_t ir = start_end.first; ir < start_end.second; ++ir) {
+        const auto i03     = ir / rows_per_cube;
+        const auto i02     = ir / out->get_ne(1) - i03 * out->get_ne(2);
+        const auto i01     = ir % out->get_ne(1);  // TODO: should we use divide instead of mod?
+        const auto ir_next = ir + 1;
+
+        auto * dst_row = dst_ptr + i03 * out->get_nb(3) + i02 * out->get_nb(2) + i01 * out->get_nb(1);
+        {
+            std::swap(src0_read_cache_ptr, src0_write_cache_ptr);
+            std::swap(src1_read_cache_ptr, src1_write_cache_ptr);
+            params->wait_for_dma();
         }
 
-        _RowFunc(reinterpret_cast<const data_type *>(src0_row),
-                 reinterpret_cast<const data_type *>(src1_row),
-                 reinterpret_cast<data_type *>(dst_row),
+        if (ir_next < start_end.second) {
+            const auto i03_next = ir_next / rows_per_cube;
+            const auto i02_next = ir_next / out->get_ne(1) - i03_next * out->get_ne(2);
+            const auto i01_next = ir_next % out->get_ne(1);
+            const auto i13_next = i03_next % src1->get_ne(3);
+            const auto i12_next = i02_next % src1->get_ne(2);
+            const auto i11_next = i01_next % src1->get_ne(1);
+
+            auto * src0_next_row =
+                src0_ptr + i03_next * src0->get_nb(3) + i02_next * src0->get_nb(2) + i01_next * src0->get_nb(1);
+            auto * src1_next_row =
+                src1_ptr + i13_next * src1->get_nb(3) + i12_next * src1->get_nb(2) + i11_next * src1->get_nb(1);
+            if (!params->initiate_dma_row_transfer(src0_next_row, src0_write_cache_ptr, src1_next_row,
+                                                   src1_write_cache_ptr, src_row_bytes)) {
+                DEVICE_LOG_ERROR("element_wise_op: failed to continue DMA transfer\n");
+                return false;
+            }
+        }
+
+        _RowFunc(reinterpret_cast<const data_type *>(src0_read_cache_ptr),
+                 reinterpret_cast<const data_type *>(src1_read_cache_ptr), reinterpret_cast<data_type *>(dst_row),
                  static_cast<size_t>(out->get_ne(0)));
     }
 
@@ -152,31 +195,27 @@ bool is_element_wise_op_supported(const npu_device_tensor_op_spec * op_spec,
     const auto & src0 = srcs[0];
     const auto & src1 = srcs[1];
     if (dst->type != src0.type || dst->type != src1.type) {
-        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n",
-                         hexagon::op_get_name(op),
-                         hexagon::get_type_name(src0.type),
-                         hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
         return false;
     }
 
     if (dst->type != NPU_DATA_TYPE_F32 && dst->type != NPU_DATA_TYPE_F16) {
-        DEVICE_LOG_DEBUG(
-            "[%s]unsupported data type: %s\n", hexagon::op_get_name(op), hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(dst->type));
         return false;
     }
 
     // TODO: fix FP16 add/sub
     if (dst->type == NPU_DATA_TYPE_F16 && op != NPU_OP_MUL) {
-        DEVICE_LOG_DEBUG(
-            "[%s]unsupported data type: %s\n", hexagon::op_get_name(op), hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(dst->type));
         return false;
     }
 
     if (src0.ne[0] != src1.ne[0]) {
-        DEVICE_LOG_DEBUG("[%s]src0.ne[0] and src1.ne[0] not match: %ld vs %ld\n",
-                         hexagon::op_get_name(op),
-                         (long) src0.ne[0],
-                         (long) src1.ne[0]);
+        DEVICE_LOG_DEBUG("[%s]src0.ne[0] and src1.ne[0] not match: %ld vs %ld\n", hexagon::op_get_name(op),
+                         (long) src0.ne[0], (long) src1.ne[0]);
         return false;
     }
 
@@ -186,6 +225,11 @@ bool is_element_wise_op_supported(const npu_device_tensor_op_spec * op_spec,
     }
 
     return true;
+}
+
+bool is_element_wise_op_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+    NPU_UNUSED(op);
+    return next_op == NPU_OP_MUL_MAT;
 }
 
 void rms_norm_vec_f32(const float * src, float * dst, size_t count, float eps) {
@@ -220,7 +264,7 @@ void rms_norm_vec_f32(const float * src, float * dst, size_t count, float eps) {
             (leftover_bytes + hexagon::unaligned_bytes(src_vec_ptr) > hexagon::kBytesPerVector) ? *src_vec_ptr : prev;
         curr = Q6_V_valign_VVR(curr, prev, (size_t) src);
         sum  = Q6_Vqf32_vadd_Vqf32Vqf32(sum,
-                                       Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr, curr), Q6_V_vzero(), leftover_bytes));
+                                        Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr, curr), Q6_V_vzero(), leftover_bytes));
     }
 
     const float mean  = hexagon::vec_reduction_f32_qf32(sum) / count;  // TODO: figure out how to do division in vector
@@ -245,8 +289,7 @@ template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_p
 
     auto * dst_ptr = out->get_write_buffer();
     if (!dst_ptr) {
-        DEVICE_LOG_ERROR("unary_op: dst_ptr is not writable, tensor: %p, type: %s\n",
-                         (void *) out,
+        DEVICE_LOG_ERROR("unary_op: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
                          hexagon::get_type_name(out->get_type()));
         return false;
     }
@@ -274,10 +317,8 @@ template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_p
             hexagon::l2fetch_row(src0_row + src0->get_nb(1), valid_row_bytes);
         }
 
-        _RowFunc(reinterpret_cast<const data_type *>(src0_row),
-                 reinterpret_cast<data_type *>(dst_row),
-                 static_cast<size_t>(out->get_ne(0)),
-                 param);
+        _RowFunc(reinterpret_cast<const data_type *>(src0_row), reinterpret_cast<data_type *>(dst_row),
+                 static_cast<size_t>(out->get_ne(0)), param);
     }
 
     out->release_write_buffer();  // mark the output tensor as modified
@@ -301,16 +342,14 @@ bool is_unary_op_supported(const npu_device_tensor_op_spec * op_spec,
 
     const auto & src0 = srcs[0];
     if (dst->type != src0.type) {
-        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n",
-                         hexagon::op_get_name(op),
-                         hexagon::get_type_name(src0.type),
-                         hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
         return false;
     }
 
     if (dst->type != NPU_DATA_TYPE_F32) {
-        DEVICE_LOG_DEBUG(
-            "[%s]unsupported data type: %s\n", hexagon::op_get_name(op), hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(dst->type));
         return false;
     }
 
@@ -322,70 +361,71 @@ bool is_unary_op_supported(const npu_device_tensor_op_spec * op_spec,
     return true;
 }
 
+bool is_unary_op_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+    NPU_UNUSED(op);
+    return next_op == NPU_OP_MUL_MAT;
+}
+
 struct op_capabilities {
-    npu_device_tensor_op               op;
-    hexagon::op_is_supported_func_type is_supported;
-    hexagon::compute_func_type         compute_funcs[NPU_DATA_TYPE_COUNT];
-    bool                               requires_thread_barrier = false;
+    npu_device_tensor_op                op;
+    hexagon::op_is_supported_func_type  is_supported;
+    hexagon::op_required_sync_func_type requires_thread_barrier_func;
+    hexagon::compute_func_type          compute_funcs[NPU_DATA_TYPE_COUNT];
 };
 
 constexpr const op_capabilities kOpCapabilities[] = {
     {
-     NPU_OP_MUL_MAT, hexagon::is_mul_mat_supported,
+     NPU_OP_MUL_MAT,                   hexagon::is_mul_mat_supported,
+     hexagon::is_mul_mat_required_sync,
      {
             hexagon::mul_mat_f32,  // NPU_DATA_TYPE_F32
             nullptr,               // NPU_DATA_TYPE_F16
-        }, true,                      // requires_thread_barrier
-    },
+        }, },
     {
-     NPU_OP_ADD, is_element_wise_op_supported,
-     {
+     NPU_OP_ADD,                               is_element_wise_op_supported,
+     is_element_wise_op_required_sync,                                     {
             element_wise_op<vec_op_f32_f32<vadd_f32_f32>>,  // NPU_DATA_TYPE_F32
             element_wise_op<vec_op_f16_f16<vadd_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, false,
-     },
+        }, },
     {
      NPU_OP_SUB, is_element_wise_op_supported,
-     {
+     is_element_wise_op_required_sync, {
             element_wise_op<vec_op_f32_f32<vsub_f32_f32>>,  // NPU_DATA_TYPE_F32
             element_wise_op<vec_op_f16_f16<vsub_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, false,
-     },
+        }, },
     {
-     NPU_OP_MUL, is_element_wise_op_supported,
-     {
+     NPU_OP_MUL,                       is_element_wise_op_supported,
+     is_element_wise_op_required_sync,               {
             element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
             element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, false,
-     },
+        }, },
     {
-     NPU_OP_RMS_NORM, is_unary_op_supported,
-     {
+     NPU_OP_RMS_NORM,                               is_unary_op_supported,
+     is_unary_op_required_sync,                                     {
             unary_op<rms_norm_vec_f32>,  // NPU_DATA_TYPE_F32
             nullptr,                     // NPU_DATA_TYPE_F16
-        }, false,
-     },
+        }, },
     {
      NPU_OP_FLASH_ATTN, hexagon::is_flash_attn_supported,
+     hexagon::is_flash_attn_required_sync,
      {
             hexagon::flash_attn_f32,  // NPU_DATA_TYPE_F32
             nullptr,                  // NPU_DATA_TYPE_F16
-        }, true,                         // requires_thread_barrier
-    },
+        }, },
     {
-     NPU_OP_ROPE, hexagon::is_rope_supported,
+     NPU_OP_ROPE,                  hexagon::is_rope_supported,
+     hexagon::is_rope_required_sync,
      {
             hexagon::rope_f32,  // NPU_DATA_TYPE_F32
             nullptr,            // NPU_DATA_TYPE_F16
-        }, false,
-     },
+        }, },
     {
-     NPU_OP_GLU, hexagon::is_glu_op_supported,
+     NPU_OP_GLU,                               hexagon::is_glu_op_supported,
+     hexagon::is_glu_required_sync,
      {
             hexagon::glu_f32,  // NPU_DATA_TYPE_F32
             hexagon::glu_f16,  // NPU_DATA_TYPE_F16
-        }, true,                  // TODO: should we avoid using thread barrier?
-    },
+        }, },
 };
 
 static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] == hexagon::mul_mat_f32,
@@ -417,12 +457,13 @@ compute_func_type get_compute_func(tensor * dst) {
     return get_compute_func_impl(dst->get_op(), dst->get_type());
 }
 
-bool requires_thread_barrier(npu_device_tensor_op op) {
+bool requires_thread_barrier(npu_device_tensor_op op, npu_device_tensor_op next_op) {
     if (op >= NPU_OP_COUNT) {
         return false;
     }
 
-    return kOpCapabilities[op].requires_thread_barrier;
+    auto requires_thread_barrier_func = kOpCapabilities[op].requires_thread_barrier_func;
+    return requires_thread_barrier_func && requires_thread_barrier_func(op, next_op);
 }
 
 bool support_op(const npu_device_tensor_op_spec * op_spec,
@@ -442,8 +483,8 @@ bool support_op(const npu_device_tensor_op_spec * op_spec,
     }
 
     if (get_compute_func_impl(op, dst->type) == nullptr) {
-        DEVICE_LOG_DEBUG(
-            "[%s]unsupported, get_compute_func failed, type: %s\n", op_get_name(op), get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]unsupported, get_compute_func failed, type: %s\n", op_get_name(op),
+                         get_type_name(dst->type));
         return false;
     }
 

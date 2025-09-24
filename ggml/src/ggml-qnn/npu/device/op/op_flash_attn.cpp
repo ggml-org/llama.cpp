@@ -28,8 +28,7 @@ void flash_attn_impl(hexagon::tensor *         out,
 
     if (k->get_type() != kKvDataType || v->get_type() != k->get_type()) {
         DEVICE_LOG_ERROR("flash_attn_impl: k and v must have same type, got k: %s, v: %s\n",
-                         hexagon::get_type_name(k->get_type()),
-                         hexagon::get_type_name(v->get_type()));
+                         hexagon::get_type_name(k->get_type()), hexagon::get_type_name(v->get_type()));
         return;
     }
 
@@ -92,8 +91,7 @@ void flash_attn_impl(hexagon::tensor *         out,
     const auto     out_rows_per_batch = out->get_ne(2) * out->get_ne(1);
     uint8_t *      dst_ptr            = out->get_write_buffer();
     if (!dst_ptr) {
-        DEVICE_LOG_ERROR("flash_attn_impl: dst_ptr is not writable, tensor: %p, type: %s\n",
-                         (void *) out,
+        DEVICE_LOG_ERROR("flash_attn_impl: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
                          hexagon::get_type_name(out->get_type()));
         return;
     }
@@ -114,15 +112,15 @@ void flash_attn_impl(hexagon::tensor *         out,
         const auto iq2 = (ir - iq3 * rows_per_batch) / q->get_ne(1);
         const auto iq1 = (ir - iq3 * rows_per_batch - iq2 * q->get_ne(1));
 
+        const auto * q_data = q_ptr + (iq1 * q->get_nb(1) + iq2 * q->get_nb(2) + iq3 * q->get_nb(3));
+        hexagon::l2fetch_row(q_data, row_bytes_q);
+
         const uint32_t h = iq2;  // head index
         const float    slope =
             (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1) : 1.0f;
 
         float S = 0.0f;       // sum
         float M = -INFINITY;  // maximum KQ value
-
-        const auto * q_data = q_ptr + (iq1 * q->get_nb(1) + iq2 * q->get_nb(2) + iq3 * q->get_nb(3));
-        hexagon::l2fetch_row(q_data, row_bytes_q);
 
         if constexpr (is_v_f16) {
             memset(VKQ16, 0, DV * sizeof(npu_device_fp16_t));
@@ -341,9 +339,7 @@ bool is_flash_attn_supported(const npu_device_tensor_op_spec * op_spec,
 
     const auto * v = &srcs[2];
     if (v->type != k->type) {  // TODO: support more v types
-        DEVICE_LOG_DEBUG("[%s]v type is not the same as k: %s vs %s\n",
-                         op_get_name(op),
-                         get_type_name(v->type),
+        DEVICE_LOG_DEBUG("[%s]v type is not the same as k: %s vs %s\n", op_get_name(op), get_type_name(v->type),
                          get_type_name(k->type));
         return false;
     }
@@ -358,47 +354,30 @@ bool is_flash_attn_supported(const npu_device_tensor_op_spec * op_spec,
         DEVICE_LOG_DEBUG(
             "[%s]dst shape does not match q and v: dst ne: %lld, %lld, %lld, %lld, q ne: %lld, %lld, %lld, %lld, "
             "v ne: %lld, %lld, %lld, %lld\n",
-            op_get_name(op),
-            dst->ne[0],
-            dst->ne[1],
-            dst->ne[2],
-            dst->ne[3],
-            q->ne[0],
-            q->ne[1],
-            q->ne[2],
-            q->ne[3],
-            v->ne[0],
-            v->ne[1],
-            v->ne[2],
-            v->ne[3]);
+            op_get_name(op), dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], q->ne[0], q->ne[1], q->ne[2], q->ne[3],
+            v->ne[0], v->ne[1], v->ne[2], v->ne[3]);
         return false;
     }
 
     if (is_transposed_or_permuted(dst->nb)) {
-        DEVICE_LOG_DEBUG("[%s]dst cannot be transposed or permuted, nb: %zu, %zu, %zu, %zu\n",
-                         op_get_name(op),
-                         (size_t) dst->nb[0],
-                         (size_t) dst->nb[1],
-                         (size_t) dst->nb[2],
-                         (size_t) dst->nb[3]);
+        DEVICE_LOG_DEBUG("[%s]dst cannot be transposed or permuted, nb: %zu, %zu, %zu, %zu\n", op_get_name(op),
+                         (size_t) dst->nb[0], (size_t) dst->nb[1], (size_t) dst->nb[2], (size_t) dst->nb[3]);
         return false;
     }
 
     if (q->ne[0] != k->ne[0]) {
         DEVICE_LOG_DEBUG(
             "[%s]q and k shapes do not match: q ne: %lld, %lld, %lld, %lld, k ne: %lld, %lld, %lld, %lld\n",
-            op_get_name(op),
-            q->ne[0],
-            q->ne[1],
-            q->ne[2],
-            q->ne[3],
-            k->ne[0],
-            k->ne[1],
-            k->ne[2],
-            k->ne[3]);
+            op_get_name(op), q->ne[0], q->ne[1], q->ne[2], q->ne[3], k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
         return false;
     }
 
+    return true;
+}
+
+bool is_flash_attn_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+    NPU_UNUSED(op);
+    NPU_UNUSED(next_op);
     return true;
 }
 

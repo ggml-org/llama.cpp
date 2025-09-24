@@ -111,8 +111,8 @@ class tensor {
 
     npu_device_tensor_data_type get_type() const { return _info.type; }
 
-    const uint8_t * get_read_buffer() const {
-        if (!_info.is_constant && _has_modified) {
+    const uint8_t * get_read_buffer(const bool force_invalidate = false) const {
+        if (force_invalidate || (!_info.is_constant && _has_modified)) {
             invalidate();
             const_cast<tensor *>(this)->_has_modified = false;  // TODO: avoid const_cast
         }

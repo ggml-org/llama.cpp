@@ -6,6 +6,7 @@
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 #include <HAP_power.h>
+#include <qurt.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -94,6 +95,22 @@ inline bool is_same_shape(const npu_device_ne_type & src, const npu_device_ne_ty
 inline bool is_same_shape(const npu_device_tensor_spec & src, const npu_device_tensor_spec & dst) {
     return is_same_shape(src.ne, dst.ne);
 }
+
+class qurt_mutex {
+  public:
+    qurt_mutex() { qurt_mutex_init(&_mutex); }
+
+    ~qurt_mutex() { qurt_mutex_destroy(&_mutex); }
+
+    void lock() { qurt_mutex_lock(&_mutex); }
+
+    void unlock() { qurt_mutex_unlock(&_mutex); }
+
+  private:
+    qurt_mutex_t _mutex;
+
+    DISABLE_COPY_AND_MOVE(qurt_mutex);
+};
 
 class power_utils {
   public:

@@ -53,6 +53,29 @@ struct compute_params {
     size_t get_thread_count() const { return thread_params->tcnt; }
 
     size_t get_thread_index() const { return thread_params->tidx; }
+
+    bool initiate_dma_row_transfer(const uint8_t * src, uint8_t * dst, size_t size) {
+        return thread_params->initiate_dma_row_transfer(src, dst, size);
+    }
+
+    bool initiate_dma_row_transfer(const uint8_t * src0,
+                                   uint8_t *       dst0,
+                                   const uint8_t * src1,
+                                   uint8_t *       dst1,
+                                   size_t          size) {
+        return thread_params->initiate_dma_row_transfer(src0, dst0, src1, dst1, size);
+    }
+
+    bool initiate_dma_plane_transfer(const uint8_t * src,
+                                     uint8_t *       dst,
+                                     size_t          width,
+                                     size_t          height,
+                                     size_t          src_stride,
+                                     size_t          dst_stride) {
+        return thread_params->initiate_dma_plane_transfer(src, dst, width, height, src_stride, dst_stride);
+    }
+
+    void wait_for_dma() { thread_params->wait_for_dma(); }
 };
 
 typedef bool (*compute_func_type)(tensor * dst, compute_params * params);
@@ -60,5 +83,6 @@ typedef bool (*op_is_supported_func_type)(const npu_device_tensor_op_spec * op_s
                                           const npu_device_tensor_spec *    dst,
                                           const npu_device_tensor_spec *    srcs,
                                           size_t                            src_len);
+typedef bool (*op_required_sync_func_type)(const npu_device_tensor_op op, const npu_device_tensor_op next_op);
 
 }  // namespace hexagon

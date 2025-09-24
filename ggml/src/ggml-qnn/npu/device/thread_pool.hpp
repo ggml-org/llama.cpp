@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dma_transfer.hpp"
 #include "util.hpp"
 #include "vtcm_mem.hpp"
 
@@ -98,6 +99,8 @@ template <size_t _ThreadCount> class thread_pool {
 
         std::unique_ptr<vtcm_mem> vtcm_cache;
 
+        hexagon::dma::dma_transfer dma;
+
         void init_vtcm_cache() { vtcm_cache = std::make_unique<vtcm_mem>(vtcm_quota_size, false); }
 
         uint8_t * get_vtcm_cache(size_t size) {
@@ -113,15 +116,39 @@ template <size_t _ThreadCount> class thread_pool {
 
             return vtcm_cache->get_mem();
         }
+
+        bool initiate_dma_row_transfer(const uint8_t * src, uint8_t * dst, size_t size) {
+            return dma.submit1d(src, dst, size);
+        }
+
+        bool initiate_dma_row_transfer(const uint8_t * src0,
+                                       uint8_t *       dst0,
+                                       const uint8_t * src1,
+                                       uint8_t *       dst1,
+                                       size_t          size) {
+            return dma.submit1d(src0, dst0, src1, dst1, size);
+        }
+
+        bool initiate_dma_plane_transfer(const uint8_t * src,
+                                         uint8_t *       dst,
+                                         size_t          width,
+                                         size_t          height,
+                                         size_t          src_stride,
+                                         size_t          dst_stride) {
+            return dma.submit2d(src, dst, width, height, src_stride, dst_stride);
+        }
+
+        void wait_for_dma() { dma.wait(); }
     };
 
     typedef void (*task_type)(thread_pool * pool, thread_params * param, void * arg);
 
     thread_pool() {
+        const auto quota_size = hexagon::vtcm_mem::get_avail_block_size() / kMaxThreadCount;
         for (size_t i = 0; i < kMaxThreadCount; ++i) {
             auto & thread_param          = _thread_params[i];
             thread_param.tidx            = i;
-            thread_param.vtcm_quota_size = hexagon::vtcm_mem::get_avail_block_size() / kMaxThreadCount;
+            thread_param.vtcm_quota_size = quota_size;
             thread_param.pool            = this;
 
             thread_param.init_vtcm_cache();
@@ -143,7 +170,7 @@ template <size_t _ThreadCount> class thread_pool {
             _threads[i] = std::move(thread);
         }
 
-        DEVICE_LOG_DEBUG("thread_pool.created: %zu\n", kMaxSubThreadCount);
+        DEVICE_LOG_DEBUG("thread_pool.created: %zu, vtcm_quota_size: %zu\n", kMaxSubThreadCount, quota_size);
     }
 
     ~thread_pool() {

@@ -225,4 +225,9 @@ bool is_glu_op_supported(const npu_device_tensor_op_spec * op_spec,
     return true;
 }
 
+bool is_glu_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+    NPU_UNUSED(op);
+    return next_op == NPU_OP_MUL_MAT;
+}
+
 }  // namespace hexagon
