@@ -276,15 +276,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     var cache: array<f32, CACHE_SIZE>;
 
     var max_val = lower_max_bound(i2);
+    var col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
-        let col = j * wg_size + lid.x;
-        if (col < params.ne0) {
-            let val = src[i_src0_row + col] * params.scale + slope * mask_val(i_src1_row + col);
-            max_val = max(max_val, val);
-            if (col < CACHE_SIZE) {
-                cache[col] = val;
-            }
+        if (col >= params.ne0) {
+            break;
         }
+        let val = src[i_src0_row + col] * params.scale + slope * mask_val(i_src1_row + col);
+        max_val = max(max_val, val);
+        if (col < CACHE_SIZE) {
+            cache[col] = val;
+        }
+        col += wg_size;
     }
 
     scratch[lid.x] = max_val;
@@ -300,19 +302,21 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let row_max = scratch[0];
 
     var sum = 0.0f;
+    col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
-        let col = j * wg_size + lid.x;
-        if (col < params.ne0) {
-            let val = select(src[i_src0_row + col] * params.scale + slope * mask_val(i_src1_row + col),
-                             cache[col], col < CACHE_SIZE);
-            let ex = exp(val - row_max);
-            sum += ex;
-            if (col < CACHE_SIZE) {
-                cache[col] = ex;
-            } else {
-                update(i_dst_row + col, ex);
-            }
+        if (col >= params.ne0) {
+            break;
         }
+        let val = select(src[i_src0_row + col] * params.scale + slope * mask_val(i_src1_row + col),
+                         cache[col], col < CACHE_SIZE);
+        let ex = exp(val - row_max);
+        sum += ex;
+        if (col < CACHE_SIZE) {
+            cache[col] = ex;
+        } else {
+            update(i_dst_row + col, ex);
+        }
+        col += wg_size;
     }
 
     scratch[lid.x] = sum;
@@ -328,11 +332,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let row_sum = add_sinks(scratch[0], i2, row_max);
 
     let sum_recip = 1.0 / row_sum;
+    col = lid.x;
     for  (var j: u32 = 0; j < elems; j++) {
-        let col = j * wg_size + lid.x;
-        if (col < params.ne0) {
-            update(i_dst_row + col, select(inter_value(i_dst_row + col), cache[col], col < CACHE_SIZE) * sum_recip);
+        if (col >= params.ne0) {
+            break;
         }
+        update(i_dst_row + col, select(inter_value(i_dst_row + col), cache[col], col < CACHE_SIZE) * sum_recip);
+        col += wg_size;
     }
 }
 #end(SHADER)
