@@ -89,7 +89,10 @@
 >
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="text flex min-w-0 flex-1 items-center space-x-3" onclick={handleMobileSidebarItemClick}>
+	<div
+		class="text flex min-w-0 flex-1 items-center space-x-3"
+		onclick={handleMobileSidebarItemClick}
+	>
 		<div class="min-w-0 flex-1">
 			<p class="truncate text-sm font-medium">{conversation.name}</p>
 
