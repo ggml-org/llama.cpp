@@ -198,7 +198,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
-    const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
@@ -208,8 +207,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
 
     const int cc = ggml_cuda_info().devices[device].cc;
-    const int warp_size = ggml_cuda_info().devices[device].warp_size;
-    const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(KQV);
 
     switch (K->ne[0]) {
         case  64:
@@ -267,29 +264,31 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % (2*warp_size) == 0;
+    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0;
 
     // If Turing tensor cores available, use them except for some cases with batch size 1:
     if (turing_mma_available(cc)) {
         best_fattn_kernel best = BEST_FATTN_KERNEL_MMA_F16;
 
-        if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
-            if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
-                best = BEST_FATTN_KERNEL_VEC;
-            }
-        } else {
-            if (cc >= GGML_CUDA_CC_ADA_LOVELACE) {
-                if (Q->ne[1] <= 2) {
+        if (can_use_vector_kernel) {
+            if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
+                if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
                     best = BEST_FATTN_KERNEL_VEC;
                 }
             } else {
-                if (Q->ne[1] == 1) {
-                    best = BEST_FATTN_KERNEL_VEC;
+                if (cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+                    if (Q->ne[1] <= 2) {
+                        best = BEST_FATTN_KERNEL_VEC;
+                    }
+                } else {
+                    if (Q->ne[1] == 1) {
+                        best = BEST_FATTN_KERNEL_VEC;
+                    }
                 }
             }
-        }
-        if ((gqa_ratio % 2 != 0 || !mask) && Q->ne[1] == 1) {
-            best = BEST_FATTN_KERNEL_VEC; // GQA-specific optimizations in the mma kernel do not apply.
+            if ((gqa_ratio % 2 != 0 || !mask) && Q->ne[1] == 1) {
+                best = BEST_FATTN_KERNEL_VEC; // GQA-specific optimizations in the mma kernel do not apply.
+            }
         }
 
         return best;
