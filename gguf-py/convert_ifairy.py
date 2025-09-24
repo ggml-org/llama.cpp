@@ -20,6 +20,47 @@ from safetensors import safe_open
 from transformers import AutoConfig, AutoModel
 import numpy as np
 
+# 从hf上直接扒下来的
+def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
+    w_imag = w_imag.to('cuda') # 本来没这两行，我这里不写不支持angle操作
+    w_real = w_real.to('cuda')
+
+    phase = torch.angle(w_real + 1j * w_imag)
+    real_pos = (phase >= -torch.pi / 4) & (phase < torch.pi / 4)
+    real_neg = (phase >= 3 * torch.pi / 4) | (phase < -3 * torch.pi / 4)
+    imag_pos = (phase >= torch.pi / 4) & (phase < 3 * torch.pi / 4)
+    imag_neg = (phase >= -3 * torch.pi / 4) & (phase < -torch.pi / 4)
+    real_scale = 1.0 / torch.clamp(w_real[real_pos|real_neg].abs().mean(), min=1e-5)
+    imag_scale = 1.0 / torch.clamp(w_imag[imag_pos|imag_neg].abs().mean(), min=1e-5)
+    
+    qw_real = torch.zeros_like(w_real)
+    qw_imag = torch.zeros_like(w_imag)
+
+    qw_real[real_pos] = 1.0
+    qw_imag[imag_pos] = 1.0
+    qw_real[real_neg] = -1.0
+    qw_imag[imag_neg] = -1.0
+
+    qw_real = qw_real / real_scale
+    qw_imag = qw_imag / imag_scale
+
+    return qw_real, qw_imag
+
+# 接收key和对应的tensor，返回量化后的tensor
+def quant(key, tensor, f):
+    if 'real' in key:
+        imag_key = key.replace('real', 'imag')
+        imag_tensor = f.get_tensor(imag_key).to(torch.float16)
+        q_real, q_imag = forward(tensor, imag_tensor)
+        return q_real
+    elif 'imag' in key:
+        real_key = key.replace('imag', 'real')
+        real_tensor = f.get_tensor(real_key).to(torch.float16)
+        q_real, q_imag = forward(real_tensor, tensor)
+        return q_imag
+    else:
+        return tensor
+
 def main():
     parser = argparse.ArgumentParser(description='Convert Hugging Face ComplexNetLM to GGUF with custom I2 type')
     parser.add_argument('model_dir', type=str, help='Path to the source Hugging Face model directory')
@@ -58,6 +99,7 @@ def main():
     writer.add_head_count_kv(config["num_key_value_heads"]) # 16
     writer.add_layer_norm_eps(config["rms_norm_eps"]) # 1e-05
     writer.add_rope_freq_base(config["rope_theta"]) # 10000.0
+    writer.add_file_type(gguf.LlamaFileType.MOSTLY_IFAIRY)
 
     # 词汇表和分词器信息 (需要根据你的分词器实际情况调整)
     writer.add_vocab_size(config["vocab_size"]) # 32000
@@ -94,6 +136,7 @@ def main():
 
             for key in tensor_keys:
                 tensor_data = f.get_tensor(key).to(torch.float16)
+                tensor_data = quant(key, tensor_data, f)
                 numpy_array = tensor_data.cpu().numpy().astype(np.float16)
 
                 # 使用你修改后的 tensor_mapping.py 中的映射
