@@ -6005,6 +6005,14 @@ size_t llama_model::n_devices() const {
     return devices.size();
 }
 
+std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
+    std::map<ggml_backend_buffer_type_t, size_t> ret;
+    for (const ggml_backend_buffer_ptr & buf_ptr : pimpl->bufs) {
+        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
+    }
+    return ret;
+}
+
 uint64_t llama_model::n_elements() const {
     return pimpl->n_elements;
 }

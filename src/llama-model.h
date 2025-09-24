@@ -7,6 +7,7 @@
 #include "llama-memory.h"
 #include "llama-vocab.h"
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -453,9 +454,11 @@ struct llama_model {
 
     std::string desc() const;
 
-    size_t size() const;
+    size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;
+
+    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
     uint64_t n_elements() const;
