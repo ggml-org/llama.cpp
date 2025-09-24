@@ -342,6 +342,10 @@ struct ggml_cgraph {
 // if you need the gradients, get them from the original graph
 struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
 
+// ggml-alloc.c: true if the operation can reuse memory from its sources
+GGML_API bool ggml_op_can_inplace(enum ggml_op op);
+
+
 // Memory allocation
 
 GGML_API void * ggml_aligned_malloc(size_t size);
