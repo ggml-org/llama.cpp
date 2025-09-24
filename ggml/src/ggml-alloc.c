@@ -134,7 +134,7 @@ struct ggml_dyn_tallocr {
 #endif
 };
 
-void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t offset, size_t size) {
+static void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t offset, size_t size) {
     GGML_ASSERT(chunk->n_free_blocks < MAX_FREE_BLOCKS && "out of free blocks");
     // insert the new block in the correct position to keep the array sorted by address (to make merging blocks faster)
     int insert_pos = 0;
@@ -151,7 +151,7 @@ void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t offset, 
     chunk->n_free_blocks++;
 }
 
-void ggml_dyn_tallocr_remove_block(struct tallocr_chunk * chunk, int idx) {
+static void ggml_dyn_tallocr_remove_block(struct tallocr_chunk * chunk, int idx) {
     // shift all elements after idx by 1 to the left, overwriting the element at idx
     for (int i = idx; i < chunk->n_free_blocks; i++) {
         chunk->free_blocks[i] = chunk->free_blocks[i+1];
@@ -159,7 +159,7 @@ void ggml_dyn_tallocr_remove_block(struct tallocr_chunk * chunk, int idx) {
     chunk->n_free_blocks--;
 }
 
-int ggml_dyn_tallocr_new_chunk(struct ggml_dyn_tallocr * alloc, size_t min_size) {
+static int ggml_dyn_tallocr_new_chunk(struct ggml_dyn_tallocr * alloc, size_t min_size) {
     if (alloc->n_chunks >= GGML_VBUFFER_MAX_CHUNKS) {
         return -1;
     }
@@ -210,7 +210,7 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
     int best_fit_block = -1;
     size_t max_avail = 0;
 
-    // find the best fitting free block in any chunk besides the last block
+    // find the best fitting free block besides the last block, within any chunk
     for (int c = 0; c < alloc->n_chunks; ++c) {
         struct tallocr_chunk * chunk = alloc->chunks[c];
         size_t best_fit_size = SIZE_MAX;
@@ -246,7 +246,7 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
         best_fit_chunk = ggml_dyn_tallocr_new_chunk(alloc, size);
         best_fit_block = 0;
     }
-    if (best_fit_block == -1) {
+    if (best_fit_chunk == -1) {
         // since the last chunk always has virtually endless memory, this should never happen
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %zu bytes, largest block available %zu bytes\n",
             __func__, size, max_avail);
@@ -308,7 +308,7 @@ static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, struct
     size = aligned_offset(NULL, size, alloc->alignment);
 
     AT_PRINTF("%s: freeing %s at {chunk=%d, offset=%zu} (%zu bytes) - n_free_blocks = %d\n",
-        __func__, tensor->name, addr.chunk, addr.offset, size, alloc->free_blocks_begin[alloc->n_chunks]);
+        __func__, tensor->name, addr.chunk, addr.offset, size, alloc->chunks[addr.chunk]->n_free_blocks);
 
 #ifdef GGML_ALLOCATOR_DEBUG
     remove_allocated_tensor(alloc, addr, tensor);
