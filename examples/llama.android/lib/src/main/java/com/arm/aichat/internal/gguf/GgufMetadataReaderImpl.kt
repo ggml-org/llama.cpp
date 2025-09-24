@@ -5,6 +5,7 @@ import android.net.Uri
 import com.arm.aichat.gguf.GgufMetadata
 import com.arm.aichat.gguf.GgufMetadataReader
 import com.arm.aichat.gguf.InvalidFileFormatException
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 
@@ -66,6 +67,16 @@ internal class GgufMetadataReaderImpl(
         is MetadataValue.Float64   -> value
         is MetadataValue.ArrayVal  -> elements.map { it.toPrimitive() }
     }
+
+    /**
+     * Reads the magic number from the specified file path.
+     *
+     * @param context Context for obtaining ContentResolver
+     * @param uri Uri to the GGUF file provided by ContentProvider
+     * @return true if file is valid GGUF, otherwise false
+     */
+    override suspend fun ensureSourceFileFormat(file: File): Boolean =
+        file.inputStream().buffered().use { ensureMagic(it) }
 
     /**
      * Reads the magic number from the specified file path.

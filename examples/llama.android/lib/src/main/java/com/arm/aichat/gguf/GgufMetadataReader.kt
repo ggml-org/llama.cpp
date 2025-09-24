@@ -3,6 +3,7 @@ package com.arm.aichat.gguf
 import android.content.Context
 import android.net.Uri
 import com.arm.aichat.internal.gguf.GgufMetadataReaderImpl
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 
@@ -14,8 +15,17 @@ interface GgufMetadataReader {
     /**
      * Reads the magic number from the specified file path.
      *
-     * @param context Context for obtaining ContentResolver
-     * @param uri Uri to the GGUF file provided by ContentProvider
+     * @param file Java File to the GGUF file with absolute path
+     * @return true if file is valid GGUF, otherwise false
+     * @throws InvalidFileFormatException if file format is invalid
+     */
+    suspend fun ensureSourceFileFormat(file: File): Boolean
+
+    /**
+     * Reads the magic number from the specified file path.
+     *
+     * @param context Context for obtaining [android.content.ContentProvider]
+     * @param uri Uri to the GGUF file provided by [android.content.ContentProvider]
      * @return true if file is valid GGUF, otherwise false
      * @throws InvalidFileFormatException if file format is invalid
      */
