@@ -2497,9 +2497,9 @@ kernel void kernel_argmax_f32(
     dst_i32[tgpig] = arg_val;
 }
 
-// F == 1 : rms_norm (no fuse)
-// F == 2 : rms_norm + mul
-// F == 3 : rms_norm + mul + add
+// F == 1 : norm (no fuse)
+// F == 2 : norm + mul
+// F == 3 : norm + mul + add
 template <typename T, short F>
 kernel void kernel_norm_fuse_impl(
         constant ggml_metal_kargs_norm & args,
