@@ -6625,7 +6625,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4));
     test_cases.emplace_back(new test_topk_moe({32, 22, 1, 1}, 8));
-    test_cases.emplace_back(new test_topk_moe({128, 19, 1, 1}, 16));
+    test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 128));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
