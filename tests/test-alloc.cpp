@@ -16,6 +16,7 @@ uint8_t * const alloc_base = (uint8_t *) 16;
 
 struct dummy_backend_context {
     size_t max_buffer_size = 64;
+    size_t alignment       = 8;
 
     ggml_backend_buffer_i              buffer_interface;
     std::vector<ggml_backend_buffer_t> buffers;
@@ -42,8 +43,9 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     return buffer;
 }
 
-static size_t dummy_backend_buffer_type_get_alignment(ggml_backend_buffer_type_t) {
-    return 8;
+static size_t dummy_backend_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    dummy_backend_context * ctx = (dummy_backend_context *) buft->context;
+    return ctx->alignment;
 }
 
 static size_t dummy_backend_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
@@ -88,9 +90,10 @@ struct dummy_backend {
     ggml_backend_buffer_type               buffer_type;
 };
 
-static dummy_backend dummy_backend_init(size_t max_buffer_size) {
+static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment = 8) {
     dummy_backend b{};
     b.context                  = std::make_unique<dummy_backend_context>();
+    b.context->alignment       = alignment;
     b.context->max_buffer_size = max_buffer_size;
 
     b.context->buffer_interface.free_buffer   = dummy_backend_buffer_free_buffer;
@@ -121,7 +124,7 @@ struct test_context_with_graph {
 
 static test_context_with_graph make_context() {
     ggml_init_params params{};
-    params.mem_size = 32 * ggml_tensor_overhead() + ggml_graph_overhead();
+    params.mem_size = 48 * ggml_tensor_overhead() + ggml_graph_overhead();
     params.no_alloc = true;
 
     ggml_context *   ctx     = ggml_init(params);
@@ -319,6 +322,32 @@ static void test_tensor_larger_than_max_size() {
     GGML_ASSERT(backend.context->allocated_total() == 24);
 }
 
+// This test assumes a max of 16 buffer chunks, and tries to allocate tensors that would
+// require more. Expectation is that the last buffer should grow to fit everything,
+// leaving it to the backend to error out if it can't allocate that much.
+static void test_not_enough_chunks() {
+    const int max_chunks = 16;
+    const int max_size   = 8;
+
+    dummy_backend backend      = dummy_backend_init(max_size);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[max_chunks + 1];
+    for (int i = 0; i < max_chunks + 1; ++i) {
+        x[i] = make_input_with_size(ctx, max_size);
+    }
+    ggml_tensor * acc = x[0];
+    for (int i = 0; i < max_chunks; ++i) {
+        acc = ggml_add(ctx, acc, x[i + 1]);
+    }
+    assign_names(ctx);
+
+    ggml_gallocr_ptr galloc = allocate_graph(graph, acc, &backend.buffer_type);
+    check_all_allocated(graph);
+    check_no_overlap(graph);
+    GGML_ASSERT(backend.context->allocated_total() > max_chunks * max_size);
+}
+
 // Fill up leftover unallocated space of a chunk after allocating a large tensor that
 // requires a new chunk.
 static void test_fill_leftover_space() {
@@ -403,6 +432,24 @@ static void test_merge_free_block(size_t max_buffer_size) {
     check_no_overlap(graph);
     check_max_size(ctx);
     GGML_ASSERT(backend.context->allocated_total() <= 32 + 32 + 24);
+}
+
+// Check that previously allocated but freed memory is preferred over allocating
+// additional memory, even if the remaining space in a chunk would match tensor size better
+static void test_prefer_already_allocated_memory() {
+    dummy_backend backend      = dummy_backend_init(32, /*align*/ 4);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 24);  // [24b][8b unused]
+    x[1] = ggml_mean(ctx, x[0]);           // [24b free][4b][4b unused]
+    x[2] = ggml_mean(ctx, x[1]);           // should be allocated in the 24b block
+    assign_names(ctx);
+
+    ggml_gallocr_ptr galloc = allocate_graph(graph, x[2], &backend.buffer_type);
+    check_all_allocated(graph);
+    check_no_overlap(graph);
+    GGML_ASSERT(backend.context->allocated_total() <= 28);
 }
 
 // test for allocating on multiple devices with some tensors in the graph
@@ -512,11 +559,13 @@ int main() {
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
+    run("test_not_enough_chunks", test_not_enough_chunks);
     run("test_fill_leftover_space", test_fill_leftover_space);
     run("test_view_inplace", test_view_inplace);
     run("test_reuse_and_free", test_reuse_and_free);
     run("test_merge_free_block(32)", []() { test_merge_free_block(32); });
     run("test_merge_free_block(SIZE_MAX)", []() { test_merge_free_block(SIZE_MAX); });
+    run("test_prefer_already_allocated_memory", test_prefer_already_allocated_memory);
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     return 0;
