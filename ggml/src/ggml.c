@@ -3433,7 +3433,7 @@ struct ggml_tensor * ggml_reshape_4d(
         int64_t               ne2,
         int64_t               ne3) {
     GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3);
+     GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3);
 
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 4, ne, a, 0);
@@ -5416,8 +5416,6 @@ struct ggml_tensor * ggml_gated_linear_attn(
 
     return result;
 }
-
-// ggml_rwkv_wkv7
 
 struct ggml_tensor * ggml_rwkv_wkv7(
         struct ggml_context * ctx,

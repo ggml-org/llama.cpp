@@ -811,6 +811,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx
 }
 
 struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required) {
+    LLAMA_LOG_DEBUG("%s: loading tensor %s as view\n", __func__, name.c_str());
     const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
 
     if (cur == NULL) {
