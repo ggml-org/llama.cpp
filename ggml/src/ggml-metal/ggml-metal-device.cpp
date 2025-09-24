@@ -1140,25 +1140,29 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_group_norm(ggml_metal_libr
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_norm(ggml_metal_library_t lib, const ggml_tensor * op, int n_fuse) {
     assert(op->op == GGML_OP_NORM || op->op == GGML_OP_RMS_NORM);
 
-    GGML_ASSERT(op->src[0]->ne[0] % 4 == 0);
     GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
 
     char base[256];
     char name[256];
 
+    const char * suffix = "";
+    if (op->ne[0] % 4 == 0) {
+        suffix = "_4";
+    }
+
     switch (op->op) {
         case GGML_OP_NORM:
             switch (n_fuse) {
-                case 1: snprintf(base, 256, "kernel_norm_f32");         break;
-                case 2: snprintf(base, 256, "kernel_norm_mul_f32");     break;
-                case 3: snprintf(base, 256, "kernel_norm_mul_add_f32"); break;
+                case 1: snprintf(base, 256, "kernel_norm_f32%s", suffix);         break;
+                case 2: snprintf(base, 256, "kernel_norm_mul_f32%s", suffix);     break;
+                case 3: snprintf(base, 256, "kernel_norm_mul_add_f32%s", suffix); break;
                 default: GGML_ABORT("fatal error");
             } break;
         case GGML_OP_RMS_NORM:
             switch (n_fuse) {
-                case 1: snprintf(base, 256, "kernel_rms_norm_f32");         break;
-                case 2: snprintf(base, 256, "kernel_rms_norm_mul_f32");     break;
-                case 3: snprintf(base, 256, "kernel_rms_norm_mul_add_f32"); break;
+                case 1: snprintf(base, 256, "kernel_rms_norm_f32%s", suffix);         break;
+                case 2: snprintf(base, 256, "kernel_rms_norm_mul_f32%s", suffix);     break;
+                case 3: snprintf(base, 256, "kernel_rms_norm_mul_add_f32%s", suffix); break;
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");

@@ -2472,7 +2472,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_kargs_norm args = {
         /*.ne00   =*/ ne00,
-        /*.ne00_4 =*/ ne00/4,
+        /*.ne00_t =*/ ne00 % 4 == 0 ? ne00/4 : ne00,
         /*.nb1    =*/ nb1,
         /*.nb2    =*/ nb2,
         /*.nb3    =*/ nb3,
@@ -2561,21 +2561,21 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
     int nth = 32; // SIMD width
 
-    while (nth < ne00/4 && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+    while (nth < args.ne00_t && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
         nth *= 2;
     }
 
     nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-    nth = std::min(nth, ne00/4);
+    nth = std::min(nth, args.ne00_t);
 
     const size_t smem = ggml_metal_pipeline_get_smem(pipeline);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+    ggml_metal_encoder_set_buffer  (enc, bid_src0,    1);
     ggml_metal_encoder_set_buffer  (enc, bid_fuse[0], 2);
     ggml_metal_encoder_set_buffer  (enc, bid_fuse[1], 3);
-    ggml_metal_encoder_set_buffer  (enc, bid_dst, 4);
+    ggml_metal_encoder_set_buffer  (enc, bid_dst,     4);
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
