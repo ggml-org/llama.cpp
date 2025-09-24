@@ -1982,17 +1982,19 @@ ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
 }
 
 #ifdef GGML_BUILD_TESTS
-// Test repack wrapper buffer type that stores original data before repacking.
-// The motivation for this type is that when testing repack when set_tensor is
-// called the data of the tensor is repacked and the original data is lost.
+// This section introduces a repack wrapper buffer type for testing that stores
+// the original data before repacking.
 //
-// In test-backend-ops.cpp we want to compare the results of a backend using
-// repacked input data, and compare against a backend that non-repacked data.
-// The problem arises in `ggml_backend_compare_graph_backend` where the graphs
-// are copied and ggml_backend_buffer_repack_buffer_type does not implement
+// The motivation for this type is that in test-backend-ops.cpp we want to
+// compare the results of a backend that processes repacked input data, and
+// compare the computed output against a backend that processes non-repacked data.
+//
+// A problem arises in `ggml_backend_compare_graph_backend` where the graph
+// is copied, and ggml_backend_buffer_repack_buffer_type does not implement
 // the get_tensor function, but even if it did it would return the repacked data
-// which is not what we want to compare against. This type allows proper
-// comparison between repack and non-repack data.
+// which is not what we want as this would mean that both backends are processing
+// repacked data. We want to compare the results of processing repacked data
+// against a non-repacked data and this type enables that.
 
 #include <unordered_map>
 #include <vector>
