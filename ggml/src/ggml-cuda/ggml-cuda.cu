@@ -2826,12 +2826,25 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     GGML_ASSERT(unary_ops.size() == num_unary);
 #endif
 
-    //special case for topk-moe
-    if (ops.size() == 5 && ops.begin()[0] == GGML_OP_SOFT_MAX && ops.begin()[1] == GGML_OP_RESHAPE && ops.begin()[2] == GGML_OP_ARGSORT
-        && ops.begin()[3] == GGML_OP_VIEW && ops.begin()[4] == GGML_OP_GET_ROWS) {
+    //TODO: remove special case once ggml_can_fuse can handle empty nodes
+    std::initializer_list<enum ggml_op> topk_moe_ops           = ggml_cuda_topk_moe_ops(false);
+    std::initializer_list<enum ggml_op> topk_moe_ops_with_norm = ggml_cuda_topk_moe_ops(true);
 
-        for (int i = 0; i < 5; i++) {
-            if (cgraph->nodes[node_idx + i]->op != ops.begin()[i]) return false;
+    if (ops.size() == topk_moe_ops_with_norm.size() && std::equal(ops.begin(), ops.end(), topk_moe_ops_with_norm.begin())) {
+        for (size_t i = 0; i < topk_moe_ops_with_norm.size(); i++) {
+            if (cgraph->nodes[node_idx + i]->op != topk_moe_ops_with_norm.begin()[i]) return false;
+        }
+        ggml_tensor * softmax = cgraph->nodes[node_idx];
+        ggml_tensor * weights = cgraph->nodes[node_idx+8];
+
+        if (ggml_cuda_should_use_topk_moe(softmax, weights)) {
+            return true;
+        }
+    }
+
+    if (ops.size() == topk_moe_ops.size() && std::equal(ops.begin(), ops.end(), topk_moe_ops.begin())) {
+        for (size_t i = 0; i < topk_moe_ops.size(); i++) {
+            if (cgraph->nodes[node_idx + i]->op != topk_moe_ops.begin()[i]) return false;
         }
 
         ggml_tensor * softmax = cgraph->nodes[node_idx];
@@ -2931,11 +2944,19 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
                 if (!disable_fusion) {
 
-                    if (ggml_cuda_can_fuse(cgraph, i, {GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS}, {})) {
+                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
+                        ggml_tensor * weights = cgraph->nodes[i+8];
+                        ggml_tensor * selected_experts = cgraph->nodes[i+3];
+                        ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts, /*with norm*/ true);
+                        i += 8;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ false), {})) {
 
                         ggml_tensor * weights = cgraph->nodes[i+4];
                         ggml_tensor * selected_experts = cgraph->nodes[i+3];
-                        ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts);
+                        ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts, /*with norm*/ false);
                         i += 4;
                         continue;
                     }
