@@ -256,8 +256,6 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
     // perform reorders only across these types of ops
     // can be expanded when needed
-    // IMPORTANT: do not add ops such as GGML_OP_CPY or GGML_OP_SET_ROWS
-    //            the dependencies from such ops are not always represented in the graph
     const auto & h_safe = [](ggml_op op) {
         switch (op) {
             case GGML_OP_MUL_MAT:
@@ -273,6 +271,8 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
             case GGML_OP_GLU:
             case GGML_OP_SCALE:
             case GGML_OP_GET_ROWS:
+            case GGML_OP_CPY:
+            case GGML_OP_SET_ROWS:
                 return true;
             default:
                 return ggml_op_is_empty(op);
