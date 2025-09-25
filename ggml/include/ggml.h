@@ -1181,7 +1181,7 @@ extern "C" {
      * Truncates the fractional part of each element in the tensor (towards zero).
      * For example: trunc(3.7) = 3.0, trunc(-2.9) = -2.0
      * Similar to std::trunc in C/C++.
-     */      
+     */
 
     GGML_API struct ggml_tensor * ggml_trunc(
             struct ggml_context * ctx,
