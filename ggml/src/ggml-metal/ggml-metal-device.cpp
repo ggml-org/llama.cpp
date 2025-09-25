@@ -1237,7 +1237,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_im2col(ggml_metal_library_
     char base[256];
     char name[256];
 
-    snprintf(base, 256, "kernel_im2col_ext_%s", ggml_type_name(op->type));
+    snprintf(base, 256, "kernel_im2col_%s", ggml_type_name(op->type));
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
