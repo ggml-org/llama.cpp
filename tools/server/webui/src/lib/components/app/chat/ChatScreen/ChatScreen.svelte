@@ -313,7 +313,6 @@
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
-					disabled={!!serverWarning()}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
@@ -357,7 +356,6 @@
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
 					isLoading={isLoading()}
-					disabled={!!serverWarning()}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
