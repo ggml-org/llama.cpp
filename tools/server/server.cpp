@@ -5093,21 +5093,15 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        std::vector<server_tokens> tokenized_queries = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, query, /* add_special */ false, true);
-        if (tokenized_queries.size() != 1) {
-            res_error(res, format_error_response("\"query\" must contain only a single prompt", ERROR_TYPE_INVALID_REQUEST));
-        }
-
         // create and queue the task
         json responses = json::array();
         bool error = false;
         std::unordered_set<int> task_ids;
         {
             std::vector<server_task> tasks;
-            auto tokenized_docs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, documents, /* add_special */ false, true);
-            tasks.reserve(tokenized_docs.size());
-            for (size_t i = 0; i < tokenized_docs.size(); i++) {
-                auto tmp = format_rerank(ctx_server.vocab, tokenized_queries[0], tokenized_docs[i]);
+            tasks.reserve(documents.size());
+            for (size_t i = 0; i < documents.size(); i++) {
+                auto tmp = format_rerank(ctx_server.model, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
                 server_task task   = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
