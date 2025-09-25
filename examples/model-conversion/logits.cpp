@@ -151,6 +151,35 @@ int main(int argc, char ** argv) {
         logits = llama_get_embeddings(ctx);
         n_logits = llama_model_n_embd(model) * batch.n_tokens;
         type = "-embeddings";
+
+        const int n_embd = llama_model_n_embd(model);
+        const int n_embd_count = batch.n_tokens;
+
+        printf("Embedding dimension: %d\n", n_embd);
+        printf("\n");
+
+        // Print embeddings in the specified format
+        for (int j = 0; j < n_embd_count; j++) {
+            printf("embedding %d: ", j);
+
+            // Print first 3 values
+            for (int i = 0; i < 3 && i < n_embd; i++) {
+                printf("%9.6f ", logits[j * n_embd + i]);
+            }
+
+            printf(" ... ");
+
+            // Print last 3 values
+            for (int i = n_embd - 3; i < n_embd; i++) {
+                if (i >= 0) {
+                    printf("%9.6f ", logits[j * n_embd + i]);
+                }
+            }
+
+            printf("\n");
+        }
+        printf("\n");
+
         printf("Embeddings size: %d\n", n_logits);
     } else {
         logits = llama_get_logits_ith(ctx, batch.n_tokens - 1);
@@ -183,22 +212,23 @@ int main(int argc, char ** argv) {
         return 1;
     }
     for (int i = 0; i < n_logits; i++) {
-        fprintf(f, "%d: %.6f\n", i, logits[i]);  // Added index and changed format
+        fprintf(f, "%d: %.6f\n", i, logits[i]);
     }
     fclose(f);
 
-    // Print first and last 10 logits for quick verification
-    printf("First 10 logits: ");
-    for (int i = 0; i < 10 && i < n_logits; i++) {
-        printf("%.6f ", logits[i]);
-    }
-    printf("\n");
+    if (!embedding_mode) {
+        printf("First 10 logits: ");
+        for (int i = 0; i < 10 && i < n_logits; i++) {
+            printf("%.6f ", logits[i]);
+        }
+        printf("\n");
 
-    printf("Last 10 logits: ");
-    for (int i = n_logits - 10; i < n_logits; i++) {
-        if (i >= 0) printf("%.6f ", logits[i]);
+        printf("Last 10 logits: ");
+        for (int i = n_logits - 10; i < n_logits; i++) {
+            if (i >= 0) printf("%.6f ", logits[i]);
+        }
+        printf("\n\n");
     }
-    printf("\n\n");
 
     printf("Logits saved to %s\n", bin_filename);
     printf("Logits saved to %s\n", txt_filename);

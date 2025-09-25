@@ -118,13 +118,17 @@ embedding-convert-model:
 
 embedding-run-original-model:
 	$(call validate_embedding_model_path,embedding-run-original-model)
-	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/embedding/run-original-model.py
+	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	./scripts/embedding/run-original-model.py \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-run-converted-model:
-	@CONVERTED_EMBEDDING_MODEL="$(CONVERTED_EMBEDDING_MODEL)" ./scripts/embedding/run-converted-model.sh ${CONVERTED_EMBEDDING_MODEL}
+	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
-	@./scripts/embedding/compare-embeddings-logits.sh
+	@./scripts/embedding/compare-embeddings-logits.sh \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-inspect-original-model:
 	$(call validate_embedding_model_path,embedding-inspect-original-model)
@@ -156,7 +160,8 @@ embedding-quantize-model:
 	$(call quantize_model,$(CONVERTED_EMBEDDING_MODEL),QUANTIZED_EMBEDDING_MODEL)
 
 embedding-run-quantized-model:
-	@./scripts/embedding/run-converted-model.sh ${QUANTIZED_EMBEDDING_MODEL}
+	@./scripts/embedding/run-converted-model.sh $(QUANTIZED_EMBEDDING_MODEL) \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 ###
 ### Perplexity targets/recipes
