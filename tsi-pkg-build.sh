@@ -88,7 +88,7 @@ fi
 cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 #!/bin/bash
 # Set up library paths for GCC 13.3.0 compatibility
-export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:\${LD_LIBRARY_PATH}:\$(pwd)"
+export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
 tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu")
 
 for kernel in "\${tsi_kernels[@]}"; do
