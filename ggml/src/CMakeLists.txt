@@ -397,7 +397,7 @@ if (GGML_CPU_REF_BACKEND)
     set(GGML_CPU_HBM OFF)
     set(GGML_OPENMP OFF)
     set(GGML_CPU_KLEIDIAI OFF)
-    ggml_add_cpu_backend_variant_impl(ref)
+    ggml_add_cpu_backend_variant(ref)
     target_compile_definitions(ggml PRIVATE GGML_USE_CPU_REF)
 endif()
 
