@@ -428,16 +428,11 @@ typedef struct {
     uint64_t nb1;
 } ggml_metal_kargs_mul_mv_id;
 
+// NORM
+// RMS_NORM
 typedef struct {
     int32_t  ne00;
-    int32_t  ne00_4;
-    uint64_t nb01;
-    float    eps;
-} ggml_metal_kargs_norm;
-
-typedef struct {
-    int32_t  ne00;
-    int32_t  ne00_4;
+    int32_t  ne00_t;
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
@@ -448,7 +443,7 @@ typedef struct {
     uint64_t nbf1[3];
     uint64_t nbf2[3];
     uint64_t nbf3[3];
-} ggml_metal_kargs_rms_norm;
+} ggml_metal_kargs_norm;
 
 typedef struct {
     int32_t  ne00;
