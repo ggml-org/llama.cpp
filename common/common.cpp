@@ -14,6 +14,7 @@
 #include <climits>
 #include <cmath>
 #include <codecvt>
+#include <chrono>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -960,15 +961,13 @@ struct common_init_result common_init_from_params(common_params & params) {
 
         bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
         bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
 
-        if (!has_eos && !has_sep) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
+        if (!has_eos && !has_sep && !has_rerank_prompt) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n", __func__);
             ok = false;
         } else if (!has_eos) {
             LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
-        } else if (!has_sep) {
-            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
-            ok = false;
         }
 
         if (!ok) {

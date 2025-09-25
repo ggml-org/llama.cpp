@@ -105,12 +105,12 @@ new model, the model can be converted to GGUF format using the following command
 ### Inspecting the converted model
 The converted model can be inspected using the following command:
 ```console
-(venv) $ make inspect-converted-model
+(venv) $ make causal-inspect-converted-model
 ```
 
 ### Running the converted model
 ```console
-(venv) $ make run-converted-model
+(venv) $ make causal-run-converted-model
 ```
 
 ### Model logits verfication
