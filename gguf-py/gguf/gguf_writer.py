@@ -1075,17 +1075,17 @@ class GGUFWriter:
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
 
-    def add_xielu_alpha_p(self, value: Sequence[float]):
-        self.add_array(Keys.xIELU.XIELU_ALPHA_P, value)
+    def add_xielu_alpha_p(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_P, values)
 
-    def add_xielu_alpha_n(self, value: Sequence[float]):
-        self.add_array(Keys.xIELU.XIELU_ALPHA_N, value)
+    def add_xielu_alpha_n(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_N, values)
 
-    def add_xielu_beta(self, value: Sequence[float]):
-        self.add_array(Keys.xIELU.XIELU_BETA, value)
+    def add_xielu_beta(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.BETA, values)
 
-    def add_xielu_eps(self, value: Sequence[float]):
-        self.add_array(Keys.xIELU.XIELU_EPS, value)
+    def add_xielu_eps(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.EPS, values)
 
     # diffusion models
 

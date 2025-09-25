@@ -295,10 +295,10 @@ class Keys:
         SHIFT_LOGITS        = "diffusion.shift_logits"
 
     class xIELU:
-        XIELU_ALPHA_P       = "xielu.alpha_p"
-        XIELU_ALPHA_N       = "xielu.alpha_n"
-        XIELU_BETA          = "xielu.beta"
-        XIELU_EPS           = "xielu.eps"
+        ALPHA_P             = "xielu.alpha_p"
+        ALPHA_N             = "xielu.alpha_n"
+        BETA                = "xielu.beta"
+        EPS                 = "xielu.eps"
 
 
 #
@@ -458,10 +458,6 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
     FFN_UP_SHEXP         = auto()
-    FFN_ACT_ALPHA_N      = auto()
-    FFN_ACT_ALPHA_P      = auto()
-    FFN_ACT_BETA         = auto()
-    FFN_ACT_EPS          = auto()
     FFN_EXP_PROBS_B      = auto()
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()

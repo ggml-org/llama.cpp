@@ -8772,7 +8772,7 @@ class ApertusModel(LlamaModel):
 
     def modify_tensors(self, data_torch, name, bid):
         # Handle xIELU activation parameters
-        n_layers = self.hparams.get("num_hidden_layers")
+        n_layers = self.hparams["num_hidden_layers"]
         if name.endswith(".act_fn.alpha_n"):
             self._alpha_n[bid] = data_torch.to("cpu").float().item()
             if (len(self._alpha_n) == n_layers):

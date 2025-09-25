@@ -451,22 +451,6 @@ class TensorNameMap:
             "layers.{bid}.mlp.gate_proj",                 # qwen3-embedding
         ),
 
-        MODEL_TENSOR.FFN_ACT_ALPHA_N: (
-            "model.layers.{bid}.mlp.act_fn.alpha_n",      # apertus xIELU
-        ),
-
-        MODEL_TENSOR.FFN_ACT_ALPHA_P: (
-            "model.layers.{bid}.mlp.act_fn.alpha_p",      # apertus xIELU
-        ),
-
-        MODEL_TENSOR.FFN_ACT_BETA: (
-            "model.layers.{bid}.mlp.act_fn.beta",         # apertus xIELU
-        ),
-
-        MODEL_TENSOR.FFN_ACT_EPS: (
-            "model.layers.{bid}.mlp.act_fn.eps",          # apertus xIELU
-        ),
-
         MODEL_TENSOR.FFN_GATE_EXP: (
             "layers.{bid}.feed_forward.experts.w1",                     # mixtral (merged)
             "transformer.decoder_layer.{bid}.moe.linear",               # Grok (merged)
@@ -1489,34 +1473,6 @@ class TensorNameMap:
             ),
             MODEL_TENSOR.FFN_NORM_EXP: (
                 "model.layers.{bid}.post_attention_layernorm",
-            ),
-        },
-        MODEL_ARCH.APERTUS: {
-            MODEL_TENSOR.ATTN_NORM: (
-                "model.layers.{bid}.attention_layernorm",
-            ),
-            MODEL_TENSOR.ATTN_Q_NORM: (
-                "model.layers.{bid}.attention.query_layernorm",
-                "model.layers.{bid}.self_attn.q_norm",
-            ),
-            MODEL_TENSOR.ATTN_K_NORM: (
-                "model.layers.{bid}.attention.key_layernorm",
-                "model.layers.{bid}.self_attn.k_norm",
-            ),
-            MODEL_TENSOR.FFN_NORM: (
-                "model.layers.{bid}.feedforward_layernorm",
-            ),
-            MODEL_TENSOR.FFN_ACT_ALPHA_N: (
-                "model.layers.{bid}.mlp.act_fn.alpha_n",
-            ),
-            MODEL_TENSOR.FFN_ACT_ALPHA_P: (
-                "model.layers.{bid}.mlp.act_fn.alpha_p",
-            ),
-            MODEL_TENSOR.FFN_ACT_BETA: (
-                "model.layers.{bid}.mlp.act_fn.beta",
-            ),
-            MODEL_TENSOR.FFN_ACT_EPS: (
-                "model.layers.{bid}.mlp.act_fn.eps",
             ),
         },
     }
