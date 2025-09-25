@@ -6994,7 +6994,9 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
 
     size_t n_ok = 0;
     for (auto & test : test_cases) {
-        if (test->eval(backend_variant, backend_ref, op_names_filter, output_printer)) {
+        // Switch the order so that we copy from the reference backend to the
+        // variant backend.
+        if (test->eval(backend_ref, backend_variant, op_names_filter, output_printer)) {
             n_ok++;
         }
     }
