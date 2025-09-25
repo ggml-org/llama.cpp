@@ -394,14 +394,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
     const float y_neg = (expm1f(min_v_eps) - xi) * alpha_n + beta * xi;
     const float out = gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
 
-#if __CUDA_ARCH__ >= 530
-    if constexpr (std::is_same<T, half>::value) {
-        dst[i] = __float2half(out);
-    } else
-#endif
-    {
-        dst[i] = (T)out;
-    }
+    dst[i] = ggml_cuda_cast<T>(out);
 }
 
 template <typename T>
