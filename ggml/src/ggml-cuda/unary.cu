@@ -385,15 +385,7 @@ static __global__ void xielu_kernel(const T * x, T * dst, const int k, float alp
         return;
     }
 
-    float xi;
-#if __CUDA_ARCH__ >= 530
-    if constexpr (std::is_same<T, half>::value) {
-        xi = __half2float(x[i]);
-    } else
-#endif
-    {
-        xi = (float)x[i];
-    }
+    const float xi = ggml_cuda_cast<float>(x[i]);
 
     const float gate_pos = (xi > 0.0f);
     const float y_pos = alpha_p * xi * xi + beta * xi;
