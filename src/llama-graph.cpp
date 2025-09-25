@@ -817,6 +817,63 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
+static void mask_expert_groups(struct ggml_tensor * dst, const struct ggml_tensor * a, const struct ggml_tensor * b, int ith, int nth, void * userdata) {
+    GGML_ASSERT(ggml_are_same_shape(dst, a));
+    GGML_ASSERT(a->type == dst->type);
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->type == GGML_TYPE_I32);
+
+    const int n_expert_groups = static_cast<int>(*((uint32_t *) userdata));
+    const int n_group_exp     = (int)ggml_nelements(b);
+
+    const float   * a_data   = ggml_get_data_f32(a);
+    const int32_t * b_data   = (const int32_t *)ggml_get_data(b);
+    float         * dst_data = ggml_get_data_f32(dst);
+
+    // parallelize by groups
+    const int nr = (int)ggml_nrows(dst);
+    // number of columns
+    const int nc = (int)dst->ne[0];
+    // number of groups per thread
+    const int dg = (n_expert_groups + nth - 1) / nth;
+    // group range for this thread
+    const int ig0 = dg * ith;
+    const int ig1 = std::min(ig0 + dg, n_expert_groups);
+    // number of columns per group
+    const int ncg = nc / n_expert_groups;
+    // number of bytes per group
+    const size_t nbg = ncg * dst->nb[0];
+
+    // this assumes that the tensors are contiguous
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_is_contiguous(b));
+
+    unsigned int group_sel_mask = 0;
+    GGML_ASSERT(sizeof(group_sel_mask) * 8 >= static_cast<size_t>(n_expert_groups));
+
+    for (int i = 0; i < n_group_exp; ++i) {
+        const int32_t group_idx = b_data[i];
+        GGML_ASSERT(group_idx >= 0);
+        GGML_ASSERT(n_expert_groups > group_idx);
+        group_sel_mask |= 1 << group_idx;
+    }
+
+    for (int ig = ig0; ig < ig1; ++ig) {
+        const bool group_sel = ig & group_sel_mask;
+
+        for (int ir = 0; ir < nr; ++ir) {
+            const int i = ir * nc + ig * ncg;
+
+            if (group_sel) {
+                memcpy(dst_data + i, a_data + i, nbg);
+            } else {
+                memset(dst_data + i, (uint32_t) -INFINITY, nbg);
+            }
+        }
+    }
+}
+
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
@@ -923,6 +980,27 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         selection_probs = logits;
     }
 
+    // select top n_group_exp expert groups
+    if (arch == LLM_ARCH_BAILINGMOE2) {
+        const int64_t n_exp_per_group = n_expert / hparams.n_expert_groups;
+
+        // organize experts into n_expert_groups
+        ggml_tensor * group_scores = ggml_transpose(ctx0, ggml_view_2d(ctx0, selection_probs, hparams.n_expert_groups, n_tokens * n_exp_per_group, selection_probs->nb[1] * n_exp_per_group, 0)); // [n_tokens, n_expert_groups]
+        group_scores = ggml_top_k(ctx0, ggml_cont(ctx0, group_scores), 2); // [2, n_expert_groups]
+        group_scores = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ggml_cast(ctx0, group_scores, GGML_TYPE_F32), 1, 2, hparams.n_expert_groups), group_scores); // [1, 2, n_expert_groups]
+        group_scores = ggml_reshape_2d(ctx0, group_scores, 2, hparams.n_expert_groups); // [2, n_expert_groups]
+
+        // get top n_group_exp expert groups
+        group_scores = ggml_transpose(ctx0, ggml_sum_rows(ctx0, group_scores)); // [n_expert_groups, 1]
+        ggml_tensor * expert_groups = ggml_top_k(ctx0, ggml_cont(ctx0, group_scores), hparams.n_group_exp); // [n_group_exp, 1]
+        cb(expert_groups->src[0], "ffn_moe_group_argsort", il);
+        cb(expert_groups, "ffn_moe_group_topk", il);
+
+        // mask out the other groups
+        selection_probs = ggml_map_custom2(ctx0, selection_probs, expert_groups, mask_expert_groups, GGML_N_TASKS_MAX, (void *)(intptr_t)&hparams.n_expert_groups); // [n_expert, n_tokens]
+        cb(selection_probs, "ffn_moe_probs_masked", il);
+    }
+
     // select experts
     ggml_tensor * selected_experts = ggml_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
@@ -945,6 +1023,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
+
+        if (arch == LLM_ARCH_BAILINGMOE2) {
+            weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0, 1e-20);
+            cb(weights_sum, "ffn_moe_weights_sum_biased", il);
+        }
 
         weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
         cb(weights, "ffn_moe_weights_norm", il);

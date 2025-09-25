@@ -71,6 +71,8 @@ struct llama_hparams {
     uint32_t n_ff_shexp         = 0;
     uint32_t n_expert_shared    = 0;
     uint32_t n_norm_groups      = 0;
+    uint32_t n_expert_groups    = 0;
+    uint32_t n_group_exp        = 0;
 
     float    expert_weights_scale = 0.0;
     bool     expert_weights_norm  = false;
