@@ -3,6 +3,7 @@
 	import {
 		ChatForm,
 		ChatScreenHeader,
+		ChatScreenWarning,
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
@@ -30,6 +31,7 @@
 		supportsVision,
 		supportsAudio,
 		serverLoading,
+		serverWarning,
 		serverStore
 	} from '$lib/stores/server.svelte';
 	import { contextService } from '$lib/services';
@@ -304,9 +306,14 @@
 		>
 			<ChatProcessingInfo />
 
+			{#if serverWarning()}
+				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
+			{/if}
+
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
+					disabled={!!serverWarning()}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
@@ -320,7 +327,7 @@
 {:else if isServerLoading}
 	<!-- Server Loading State -->
 	<ServerLoadingSplash />
-{:else if serverStore.error}
+{:else if serverStore.error && !serverStore.modelName}
 	<ServerErrorSplash error={serverStore.error} />
 {:else if serverStore.modelName}
 	<div
@@ -343,9 +350,14 @@
 				<ServerInfo />
 			</div>
 
+			{#if serverWarning()}
+				<ChatScreenWarning />
+			{/if}
+
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
 					isLoading={isLoading()}
+					disabled={!!serverWarning()}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}

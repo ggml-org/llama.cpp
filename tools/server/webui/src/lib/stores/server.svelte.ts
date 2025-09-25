@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { SERVER_PROPS_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys';
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
@@ -35,7 +36,6 @@ import { config } from '$lib/stores/settings.svelte';
  * - Slots endpoint availability (for processing state monitoring)
  * - Context window size and token limits
  */
-const SERVER_PROPS_STORAGE_KEY = 'llama.cpp.serverProps';
 
 class ServerStore {
 	constructor() {
@@ -50,13 +50,14 @@ class ServerStore {
 	private _serverProps = $state<ApiLlamaCppServerProps | null>(null);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
+	private _serverWarning = $state<string | null>(null);
 	private _slotsEndpointAvailable = $state<boolean | null>(null);
 
 	private readCachedServerProps(): ApiLlamaCppServerProps | null {
 		if (!browser) return null;
 
 		try {
-			const raw = localStorage.getItem(SERVER_PROPS_STORAGE_KEY);
+			const raw = localStorage.getItem(SERVER_PROPS_LOCALSTORAGE_KEY);
 			if (!raw) return null;
 
 			return JSON.parse(raw) as ApiLlamaCppServerProps;
@@ -71,9 +72,9 @@ class ServerStore {
 
 		try {
 			if (props) {
-				localStorage.setItem(SERVER_PROPS_STORAGE_KEY, JSON.stringify(props));
+				localStorage.setItem(SERVER_PROPS_LOCALSTORAGE_KEY, JSON.stringify(props));
 			} else {
-				localStorage.removeItem(SERVER_PROPS_STORAGE_KEY);
+				localStorage.removeItem(SERVER_PROPS_LOCALSTORAGE_KEY);
 			}
 		} catch (error) {
 			console.warn('Failed to persist server props to localStorage:', error);
@@ -90,6 +91,10 @@ class ServerStore {
 
 	get error(): string | null {
 		return this._error;
+	}
+
+	get serverWarning(): string | null {
+		return this._serverWarning;
 	}
 
 	get modelName(): string | null {
@@ -163,6 +168,7 @@ class ServerStore {
 	async fetchServerProps(): Promise<void> {
 		this._loading = true;
 		this._error = null;
+		this._serverWarning = null;
 
 		try {
 			console.log('Fetching server properties...');
@@ -198,11 +204,19 @@ class ServerStore {
 				}
 			}
 
+			const is500Error = error instanceof Error && error.message.includes('500');
+
 			if (!hadCachedProps) {
 				const cachedProps = this.readCachedServerProps();
 				if (cachedProps) {
 					this._serverProps = cachedProps;
 					this._error = null;
+
+					// For 500 errors with cached props, show as warning instead of error
+					if (is500Error) {
+						this._serverWarning = errorMessage;
+					}
+
 					console.warn(
 						'Failed to refresh server properties, using cached values from localStorage:',
 						errorMessage
@@ -212,6 +226,12 @@ class ServerStore {
 				}
 			} else {
 				this._error = null;
+
+				// For 500 errors with cached props, show as warning instead of error
+				if (is500Error) {
+					this._serverWarning = errorMessage;
+				}
+
 				console.warn(
 					'Failed to refresh server properties, continuing with cached values:',
 					errorMessage
@@ -229,6 +249,7 @@ class ServerStore {
 	clear(): void {
 		this._serverProps = null;
 		this._error = null;
+		this._serverWarning = null;
 		this._loading = false;
 		this._slotsEndpointAvailable = null;
 		this.persistServerProps(null);
@@ -240,6 +261,7 @@ export const serverStore = new ServerStore();
 export const serverProps = () => serverStore.serverProps;
 export const serverLoading = () => serverStore.loading;
 export const serverError = () => serverStore.error;
+export const serverWarning = () => serverStore.serverWarning;
 export const modelName = () => serverStore.modelName;
 export const supportedModalities = () => serverStore.supportedModalities;
 export const supportsVision = () => serverStore.supportsVision;
