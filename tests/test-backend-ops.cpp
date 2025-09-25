@@ -1137,43 +1137,7 @@ struct test_case {
         add_sentinel(ctx);
 
         // allocate
-        std::vector<ggml_backend_buffer_type_t> extra_buft_list;
-        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
-        auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
-            ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
-
-        if (get_extra_bufts_fn) {
-            ggml_backend_buffer_type_t * extra_bufts = get_extra_bufts_fn(cpu_dev);
-            while (extra_bufts && *extra_bufts) {
-                extra_buft_list.push_back(*extra_bufts);
-                ++extra_bufts;
-            }
-        }
-
-        // Try to find test repack wrapper buffer type among the extra buffer types
-        ggml_backend_buffer_type_t test_repack_buft = nullptr;
-        for (auto buft : extra_buft_list) {
-            const char* buft_name = ggml_backend_buft_name(buft);
-            if (buft_name && strstr(buft_name, "CPU_REPACK_TEST")) {
-                test_repack_buft = buft;
-                break;
-            }
-        }
-
-        ggml_backend_buffer_t buf = nullptr;
-        if (test_repack_buft) {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, test_repack_buft);
-        } else {
-            // Fallback to regular allocation
-            buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
-        }
-
-        if (buf == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            ggml_free(ctx);
-            return false;
-        }
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
 
         // build graph
         ggml_build_forward_expand(gf, out);

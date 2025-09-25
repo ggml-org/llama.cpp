@@ -55,11 +55,6 @@ std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_type
         if (ggml_backend_cpu_repack_buffer_type()) {
             bufts.push_back(ggml_backend_cpu_repack_buffer_type());
         }
-#ifdef GGML_BUILD_TESTS
-        if (ggml_backend_cpu_repack_test_buffer_type()) {
-            bufts.push_back(ggml_backend_cpu_repack_test_buffer_type());
-        }
-#endif // GGML_BUILD_TESTS
 #endif
 
         return bufts;

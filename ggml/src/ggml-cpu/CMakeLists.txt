@@ -502,10 +502,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
     endif()
 
-    if (GGML_BUILD_TESTS)
-        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_BUILD_TESTS)
-    endif()
-
     if (GGML_CPU_KLEIDIAI)
         message(STATUS "Using KleidiAI optimized kernels if applicable")
 
