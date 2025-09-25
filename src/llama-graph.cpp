@@ -929,8 +929,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
-    //call early so that softmax->topk->get_rows can be fused
-    ggml_build_forward_expand(gf, weights);
 
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
@@ -954,6 +952,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         weights = ggml_scale(ctx0, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
     }
+
+    //call early so that topk-moe can be used
+    ggml_build_forward_expand(gf, weights);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 

@@ -2953,7 +2953,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ false), {})) {
-
                         ggml_tensor * weights = cgraph->nodes[i+4];
                         ggml_tensor * selected_experts = cgraph->nodes[i+3];
                         ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts, /*with norm*/ false);

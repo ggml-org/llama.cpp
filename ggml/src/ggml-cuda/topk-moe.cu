@@ -74,7 +74,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     float wt_sum = 0.f;
 
     extern __shared__ float data_topk_shared[];
-    float *                 wt_shared_ptr = data_topk_shared + row * n_expert_used;
+    float * wt_shared_ptr = data_topk_shared + threadIdx.y * n_expert_used;
 
     for (int k = 0; k < n_expert_used; k++) {
         float max_val    = wt[0];
@@ -83,7 +83,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 #pragma unroll
         for (int i = 1; i < experts_per_thread; i++) {
             const int expert = threadIdx.x + i * WARP_SIZE;
-            if (expert < n_experts && wt[i] > max_val) {
+            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
                 max_val    = wt[i];
                 max_expert = expert;
             }
