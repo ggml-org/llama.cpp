@@ -6938,6 +6938,24 @@ static void show_test_coverage() {
     printf("  Coverage: %.1f%%\n", (double)covered_ops.size() / all_ops.size() * 100.0);
 }
 
+static void print_backend_features(ggml_backend_t backend) {
+    auto device = ggml_backend_get_device(backend);
+    auto reg = ggml_backend_dev_backend_reg(device);
+    auto name = ggml_backend_dev_name(device);
+    auto * get_features_fn = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+    if (get_features_fn) {
+        ggml_backend_feature * features = get_features_fn(reg);
+        printf("%s features:\n", name);
+        if (features->name == nullptr) {
+            printf("  (no features reported)\n");
+        } else {
+            for (; features->name; features++) {
+                printf("  %s = %s\n", features->name, features->value);
+            }
+        }
+    }
+}
+
 static bool test_cpu_variant(const char * variant_name, const char * op_names_filter,
         const char * params_filter, printer * output_printer) {
 
@@ -6946,6 +6964,7 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
         printf("Error: CPU-ref backend not found. Make sure it's built and available.\n");
         return false;
     }
+    print_backend_features(backend_ref);
 
     ggml_backend_t backend_variant = ggml_backend_init_by_name(variant_name, nullptr);
     if (backend_variant == nullptr) {
@@ -6954,6 +6973,7 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
         ggml_backend_free(backend_ref);
         return false;
     }
+    print_backend_features(backend_variant);
 
     printf("Testing CPU variant '%s' against cpu-ref backend...\n\n", variant_name);
 
