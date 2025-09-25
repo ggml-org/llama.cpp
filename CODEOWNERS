@@ -63,7 +63,7 @@
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
-/ggml/src/ggml-zdnn/                    @taronaeo
+/ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
@@ -95,12 +95,12 @@
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
-.clang-format                           @slaren
-.clang-tidy                             @slaren
-AUTHORS                                 @ggerganov
-CMakeLists.txt                          @ggerganov
-CONTRIBUTING.md                         @ggerganov
-LICENSE                                 @ggerganov
-README.md                               @ggerganov
-SECURITY.md                             @ggerganov
+/.clang-format                          @slaren
+/.clang-tidy                            @slaren
+/AUTHORS                                @ggerganov
+/CMakeLists.txt                         @ggerganov
+/CONTRIBUTING.md                        @ggerganov
+/LICENSE                                @ggerganov
+/README.md                              @ggerganov
+/SECURITY.md                            @ggerganov
 requirements*.txt                       @CISC
