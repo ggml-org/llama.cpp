@@ -123,7 +123,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_mul_mv_id         (ggml_me
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_argmax            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_argsort           (ggml_metal_library_t lib, const struct ggml_tensor * op);
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_bin               (ggml_metal_library_t lib, enum ggml_op op, int32_t n_fuse, bool row);
-ggml_metal_pipeline_t ggml_metal_library_get_pipeline_rms_norm          (ggml_metal_library_t lib, const struct ggml_tensor * op, int32_t n_fuse);
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_rms_norm          (ggml_metal_library_t lib, const struct ggml_tensor * op, int32_t n_fuse, int32_t fuse_type);
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_l2_norm           (ggml_metal_library_t lib, const struct ggml_tensor * op);
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_group_norm        (ggml_metal_library_t lib, const struct ggml_tensor * op);
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_norm              (ggml_metal_library_t lib, const struct ggml_tensor * op);
