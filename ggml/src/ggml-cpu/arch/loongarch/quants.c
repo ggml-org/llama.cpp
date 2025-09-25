@@ -105,6 +105,18 @@ static inline float hsum_float_4x4(const __m128 a, const __m128 b, const __m128 
 
     return ((v4f32)res)[0];
 }
+
+// multiply int8_t, add results pairwise twice
+static inline __m128i mul_sum_i8_pairs(const __m128i x, const __m128i y) {
+    // Get absolute values of x vectors
+    const __m128i ax = __lsx_vsigncov_b(x, x);
+    // Sign the values of the y vectors
+    const __m128i sy = __lsx_vsigncov_b(x, y);
+    // Perform multiplication and create 16-bit values
+    const __m128i dot = lsx_maddubs_h(ax, sy);
+    const __m128i ones = __lsx_vreplgr2vr_h(1);
+    return lsx_madd_h(ones, dot);
+}
 #endif
 
 #if defined(__loongarch_asx)
@@ -321,18 +333,6 @@ static inline __m256i lasx_xvandi_b_bit(__m256i a, const unsigned int b) {
         case 7: return __lasx_xvandi_b(a, 1 << 7);
         default: __builtin_unreachable();
     }
-}
-
-// multiply int8_t, add results pairwise twice
-static inline __m128i mul_sum_i8_pairs(const __m128i x, const __m128i y) {
-    // Get absolute values of x vectors
-    const __m128i ax = __lsx_vsigncov_b(x, x);
-    // Sign the values of the y vectors
-    const __m128i sy = __lsx_vsigncov_b(x, y);
-    // Perform multiplication and create 16-bit values
-    const __m128i dot = lsx_maddubs_h(ax, sy);
-    const __m128i ones = __lsx_vreplgr2vr_h(1);
-    return lsx_madd_h(ones, dot);
 }
 
 // horizontally add 8 floats
