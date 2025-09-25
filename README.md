@@ -178,6 +178,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Clojure: [phronmophobic/llama.clj](https://github.com/phronmophobic/llama.clj)
 - React Native: [mybigday/llama.rn](https://github.com/mybigday/llama.rn)
 - Java: [kherud/java-llama.cpp](https://github.com/kherud/java-llama.cpp)
+- Java: [QuasarByte/llama-cpp-jna](https://github.com/QuasarByte/llama-cpp-jna)
 - Zig: [deins/llama.cpp.zig](https://github.com/Deins/llama.cpp.zig)
 - Flutter/Dart: [netdur/llama_cpp_dart](https://github.com/netdur/llama_cpp_dart)
 - Flutter: [xuegao-tzx/Fllama](https://github.com/xuegao-tzx/Fllama)
