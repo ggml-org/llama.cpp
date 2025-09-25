@@ -233,18 +233,18 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
-};
+}
 
 ggml_tensor * llm_build_gemma3n_iswa::calc_magnitude(ggml_tensor * x) {
     return ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, x)));
-};
+}
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
 ggml_tensor * llm_build_gemma3n_iswa::view_2d_slice(ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
-};
+}
 
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_altup, n_layer, n_tokens]
@@ -264,7 +264,7 @@ ggml_tensor * llm_build_gemma3n_iswa::get_per_layer_inputs() {
     }
     res->add_input(std::move(inp));
     return inp_per_layer;
-};
+}
 
 // equivalent to project_per_layer_inputs() in python code
 // this calculates the per-layer inputs, so the final tensor shape will have n_layer as the last dim
@@ -287,7 +287,7 @@ ggml_tensor * llm_build_gemma3n_iswa::project_per_layer_inputs(ggml_tensor * inp
     // permute to shape: [n_embd_altup, n_tokens, n_layer]
     inp_per_layer = ggml_cont(ctx0, ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3));
     return inp_per_layer;
-};
+}
 
 // input cur shape: [n_altup, n_tokens]
 // output    shape: [n_altup, n_tokens]
@@ -299,7 +299,7 @@ ggml_tensor * llm_build_gemma3n_iswa::laurel(ggml_tensor * cur, int il) {
     tmp               = ggml_add(ctx0, tmp, cur);
     cb(tmp, "laurel_out", il);
     return tmp;
-};
+}
 
 // input x shape: [n_embd, n_tokens]
 // output  shape: [n_embd, n_tokens]
@@ -309,7 +309,7 @@ ggml_tensor * llm_build_gemma3n_iswa::gaussian_topk(ggml_tensor * x) {
                                                     1.0f / (float) (x->ne[0] - 1)));
     ggml_tensor * cutoff_x = ggml_add(ctx0, mean, ggml_scale(ctx0, std, f_sparsity_std_mul));
     return ggml_relu(ctx0, ggml_sub(ctx0, x, cutoff_x));
-};
+}
 
 //
 // altup functions
@@ -326,7 +326,7 @@ ggml_tensor * llm_build_gemma3n_iswa::altup_compute_router_modalities(ggml_tenso
 
     ggml_tensor * output = ggml_mul_mat(ctx0, model.layers[il].altup_router, router_inputs);
     return ggml_tanh(ctx0, output);  // [n_altup, n_tokens]
-};
+}
 
 // input cur shape: [n_embd, n_tokens, n_altup]
 // output    shape: [n_embd, n_tokens, n_altup]
@@ -350,7 +350,7 @@ ggml_tensor * llm_build_gemma3n_iswa::altup_predict(ggml_tensor * cur, int il) {
     cb(predictions, "predictions", il);
 
     return predictions;
-};
+}
 
 // input predictions       shape: [n_embd, n_tokens, n_altup]
 // input activated         shape: [n_embd, n_tokens]
