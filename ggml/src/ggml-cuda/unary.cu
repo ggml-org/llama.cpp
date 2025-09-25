@@ -1,4 +1,5 @@
 #include "unary.cuh"
+#include "convert.cuh"
 
 static __device__ __forceinline__ float op_abs(float x) {
     return fabsf(x);
