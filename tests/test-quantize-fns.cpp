@@ -177,7 +177,7 @@ int main(int argc, char * argv[]) {
             }
 
             // Test i8mm path (nrc=2) for supported types
-            if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q8_0 || 
+            if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q8_0 ||
                 type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q6_K) {
 #if defined(__ARM_FEATURE_MATMUL_INT8)
                 const float vec_dot_error_i8mm = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data(), 2);
