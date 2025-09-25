@@ -383,6 +383,7 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
         // fuse only ops that start with these operations
         // can be expanded when needed
         if (node.op() == GGML_OP_ADD ||
+            node.op() == GGML_OP_NORM ||
             node.op() == GGML_OP_RMS_NORM) {
             ops[0] = node.op();
 
@@ -392,6 +393,7 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
                 // can be expanded when needed
                 if (gf->nodes[f]->op != GGML_OP_ADD &&
                     gf->nodes[f]->op != GGML_OP_MUL &&
+                    gf->nodes[f]->op != GGML_OP_NORM &&
                     gf->nodes[f]->op != GGML_OP_RMS_NORM) {
                     break;
                 }
