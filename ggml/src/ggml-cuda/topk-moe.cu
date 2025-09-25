@@ -74,7 +74,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     float wt_sum = 0.f;
 
     extern __shared__ float data_topk_shared[];
-    float * wt_shared_ptr = data_topk_shared + threadIdx.y * n_expert_used;
+    float *                 wt_shared_ptr = data_topk_shared + threadIdx.y * n_expert_used;
 
     for (int k = 0; k < n_expert_used; k++) {
         float max_val    = wt[0];
@@ -114,17 +114,13 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         wt_sum              = warp_reduce_sum(wt_sum);
         const float inv_sum = 1.0f / wt_sum;
 
-        if (threadIdx.x == 0) {
-            for (int i = 0; i < n_expert_used; i++) {
-                wt_shared_ptr[i] = wt_shared_ptr[i] * inv_sum;
-            }
+        for (int i = threadIdx.x; i < n_expert_used; i += WARP_SIZE) {
+            wt_shared_ptr[i] = wt_shared_ptr[i] * inv_sum;
         }
     }
 
-    if (threadIdx.x == 0) {
-        for (int i = 0; i < n_expert_used; i++) {
-            weights[i] = wt_shared_ptr[i];
-        }
+    for (int i = threadIdx.x; i < n_expert_used; i += WARP_SIZE) {
+        weights[i] = wt_shared_ptr[i];
     }
 }
 
