@@ -75,43 +75,6 @@ static bool is_quantizable(const std::string & name, const llm_arch arch, const 
     return q;
 }
 
-static bool is_iq(const enum ggml_type t) {
-    switch (t) {
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_IQ4_XS:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool is_iq(const enum llama_ftype t) {
-    switch (t) {
-        case LLAMA_FTYPE_MOSTLY_IQ1_S:
-        case LLAMA_FTYPE_MOSTLY_IQ1_M:
-        case LLAMA_FTYPE_MOSTLY_IQ2_XXS:
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:
-        case LLAMA_FTYPE_MOSTLY_IQ2_S:
-        case LLAMA_FTYPE_MOSTLY_IQ2_M:
-        case LLAMA_FTYPE_MOSTLY_IQ3_XXS:
-        case LLAMA_FTYPE_MOSTLY_IQ3_XS:
-        case LLAMA_FTYPE_MOSTLY_IQ3_S:
-        case LLAMA_FTYPE_MOSTLY_IQ3_M:
-        case LLAMA_FTYPE_MOSTLY_IQ4_XS:
-        case LLAMA_FTYPE_MOSTLY_IQ4_NL:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static enum ggml_type fallback_type(const enum ggml_type new_type) {
     switch (new_type) {
         case GGML_TYPE_TQ1_0:
@@ -678,33 +641,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t n_elements = 0;
     };
 
-    constexpr ggml_type k_quants[] = {
-        GGML_TYPE_Q2_K,
-        GGML_TYPE_Q3_K,
-        GGML_TYPE_Q4_K,
-        GGML_TYPE_Q5_K,
-        GGML_TYPE_Q6_K,
-        GGML_TYPE_Q8_0,
-// TODO: find better way to handle F16/BF16
-#ifdef GGML_USE_METAL
-        GGML_TYPE_F16
-#else
-        GGML_TYPE_BF16
-#endif
-    };
-
-    constexpr ggml_type iq_quants[] = {
+    // subset of quantization types with the best accuracy/size tradeoff
+    constexpr ggml_type quant_types[] = {
         GGML_TYPE_IQ1_S,
+        GGML_TYPE_IQ1_M,
         GGML_TYPE_IQ2_XXS,
-        GGML_TYPE_IQ2_XS,
-        GGML_TYPE_IQ2_S,
-        GGML_TYPE_IQ3_S,
+        GGML_TYPE_Q2_K,
+        GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_Q3_K,
         GGML_TYPE_IQ4_XS,
-        GGML_TYPE_IQ4_NL,
+        GGML_TYPE_Q4_1,
+        GGML_TYPE_Q4_K,
+        GGML_TYPE_Q5_1,
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
         GGML_TYPE_Q8_0,
-        // TODO: find better way to handle F16/BF16
 #ifdef GGML_USE_METAL
         GGML_TYPE_F16
 #else
@@ -896,7 +847,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         // Compute error per slice with trimmed aggregation
-        auto trimmed_sum = [&](std::vector<double> & v) -> double {
+        auto trimmed_sum = [](std::vector<double> & v) -> double {
             const int64_t n = (int64_t)v.size();
             if (n == 0) { return 0.0; }
             if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0); } // use all samples for small datasets
@@ -978,7 +929,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Returns lambda per slice or 0.0 if no activations
-    auto estimate_lambda = [&](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
+    auto estimate_lambda = [](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
         const int64_t ns = std::max<int64_t>(1, ne2);
         std::vector<float> lambdas(ns, 0.0f);
         if (!activations) { return lambdas; }
@@ -1141,8 +1092,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         // Build list of candidate types first (compatible ones)
         const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
         size_t max_row_sz = 0;
-        const ggml_type * base_arr = is_iq(params->ftype) ? iq_quants : k_quants;
-        const size_t base_sz = is_iq(params->ftype) ? std::size(iq_quants) : std::size(k_quants);
+        const ggml_type * base_arr = quant_types;
+        const size_t base_sz = std::size(quant_types);
         std::vector<ggml_type> compatible_candidates;
         compatible_candidates.reserve(base_sz);
 
