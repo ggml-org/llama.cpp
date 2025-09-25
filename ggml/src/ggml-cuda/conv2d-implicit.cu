@@ -185,9 +185,10 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
 
 #pragma unroll
             for (int i = 0; i < 8; ++i){
+                auto weight_frag_i = ggml_cuda_cast<float>(weight_frag[subcrs % 2][i]);
 #pragma unroll
                 for (int j = 0; j < 8; ++j){
-                    output_frag[i][j] += ggml_cuda_cast<float>(weight_frag[subcrs % 2][i]) * input_frag[subcrs % 2][j];
+                    output_frag[i][j] += weight_frag_i * input_frag[subcrs % 2][j];
                 }
             }
         }

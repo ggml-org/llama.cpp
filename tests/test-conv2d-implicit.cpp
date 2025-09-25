@@ -52,8 +52,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     }
 
     // Convert adata to fp16 format
-    // std::vector<ggml_fp16_t> hadata(KW * KH * IC * OC);
-    // ggml_fp32_to_fp16_row(adata.data(), hadata.data(), KW * KH * IC * OC);
+    std::vector<ggml_fp16_t> hadata(KW * KH * IC * OC);
+    ggml_fp32_to_fp16_row(adata.data(), hadata.data(), KW * KH * IC * OC);
 
     // Initialize bdata
     std::vector<float> bdata(IW * IH * IC * N);
@@ -63,7 +63,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     size_t buffer_size = 0;
     {
-        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
+        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
+        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
         buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
         buffer_size += 1024; // overhead
     }
@@ -111,7 +112,7 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     model.ctx = ggml_init(params);
 
     // create tensors
-    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32,  KW, KH, IC, OC);
+    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
 
     // create a allocator
@@ -122,9 +123,9 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
-        memcpy(model.a->data, adata.data(), ggml_nbytes(model.a));
+        memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
     } else {
-        ggml_backend_tensor_set(model.a, adata.data(), 0, ggml_nbytes(model.a));
+        ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
     }
 
     // alloc memory
@@ -216,7 +217,50 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
 
 
+    // struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    ggml_set_name(wino_res, "wino_res");
+    ggml_build_forward_expand(gf, wino_res);
+    // ne = wino_res->ne;
+    // printf("wino: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
+    ggml_free(ctx0);
+    return gf;
+}
+
+struct ggml_cgraph * build_graph_2(const test_model& model) {
+    static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
+    static std::vector<uint8_t> buf(buf_size);
+
+    struct ggml_init_params params0 = {
+        /*.mem_size   =*/ buf_size,
+        /*.mem_buffer =*/ buf.data(),
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_gallocr_alloc_graph()
+    };
+
+    // create a temporally context to build the graph
+    struct ggml_context * ctx0 = ggml_init(params0);
+
+    struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
+
+    int s0 = 1;
+    int s1 = 1;
+    int p0 = 1;
+    int p1 = 1;
+    int d0 = 1;
+    int d1 = 1;
+
+
+
+    // recalculate for avoid fragmentation
+    // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    // ggml_set_name(conv2d_res, "conv2d_res");
+    // ggml_build_forward_expand(gf, conv2d_res);
+    // int64_t *ne = conv2d_res->ne;
+    // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
+
+
     struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    // struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     ggml_set_name(wino_res, "wino_res");
     ggml_build_forward_expand(gf, wino_res);
     // ne = wino_res->ne;
@@ -353,16 +397,39 @@ int main(void)
         double run_time1;
         std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
 
+
+        ggml_gallocr_free(allocr);
+
+        allocr = NULL;
+
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+
+        //create the worst case graph for memory usage estimation
+        gf = build_graph_2(model);
+
+        // compute the required memory
+        ggml_gallocr_reserve(allocr, gf);
+        size_t mem_size2 = ggml_gallocr_get_buffer_size(allocr, 0);
+            // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
+
+
+        struct ggml_cgraph * gf_res_2 = NULL;
+
+        double run_time2;
+        wino_data = compute_graph(model, allocr, build_graph_2, iterations, &run_time2);
+
+
         if(k==0) { 
             k = 1;
-            fprintf(stderr, "| (IC, OC, IW, IH) | im2col+GEMM TIME | im2col+GEMM VRAM |  implicit GEMM TIME | implicit GEMM VRAM \n");
-            fprintf(stderr, "| --- | --- | --- |  --- | --- \n");
+            fprintf(stderr, "| (IC, OC, IW, IH) | im2col+GEMM TIME | im2col+GEMM VRAM | direct TIME |  direct VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
+            fprintf(stderr, "| --- | --- | --- |  --- | --- | --- | --- \n");
         }
 
-        fprintf(stderr, " | (%d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
+        fprintf(stderr, " | (%d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
                 std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c),
                 run_time0, mem_size0/1024.0f/1024.0f,
-                run_time1, mem_size1/1024.0f/1024.0f);
+                run_time1, mem_size1/1024.0f/1024.0f,
+                run_time2, mem_size2/1024.0f/1024.0f);
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
