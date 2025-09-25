@@ -427,6 +427,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
         ),
 
+        MODEL_TENSOR.FFN_UP_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.up_proj",           # grovemoe
+        ),
+
         # AWQ-activation gate
         MODEL_TENSOR.FFN_ACT: (
             "transformer.blocks.{bid}.ffn.act",  # mpt
@@ -466,6 +470,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_experts.gate_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_GATE_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
         # Feed-forward down
@@ -522,6 +530,10 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
             "model.layers.{bid}.shared_mlp.output_linear",             # granitemoe
             "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_DOWN_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.down_proj",           # grovemoe
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (

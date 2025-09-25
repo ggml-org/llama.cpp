@@ -275,6 +275,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_shexp     = nullptr;
     struct ggml_tensor * ffn_up_shexp       = nullptr;
 
+    // ff adjugate experts (chexps)
+    struct ggml_tensor * ffn_gate_chexps     = nullptr;
+    struct ggml_tensor * ffn_down_chexps     = nullptr;
+    struct ggml_tensor * ffn_up_chexps       = nullptr;
+
     // ff bias
     struct ggml_tensor * ffn_gate_b = nullptr;
     struct ggml_tensor * ffn_down_b = nullptr; // b2
