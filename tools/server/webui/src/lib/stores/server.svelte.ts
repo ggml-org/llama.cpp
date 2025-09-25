@@ -182,21 +182,29 @@ class ServerStore {
 		} catch (error) {
 			const hadCachedProps = this._serverProps !== null;
 			let errorMessage = 'Failed to connect to server';
+			let isOfflineLikeError = false;
+			let isServerSideError = false;
 
 			if (error instanceof Error) {
 				// Handle specific error types with user-friendly messages
 				if (error.name === 'TypeError' && error.message.includes('fetch')) {
 					errorMessage = 'Server is not running or unreachable';
+					isOfflineLikeError = true;
 				} else if (error.message.includes('ECONNREFUSED')) {
 					errorMessage = 'Connection refused - server may be offline';
+					isOfflineLikeError = true;
 				} else if (error.message.includes('ENOTFOUND')) {
 					errorMessage = 'Server not found - check server address';
+					isOfflineLikeError = true;
 				} else if (error.message.includes('ETIMEDOUT')) {
 					errorMessage = 'Connection timeout - server may be overloaded';
+					isOfflineLikeError = true;
 				} else if (error.message.includes('503')) {
 					errorMessage = 'Server temporarily unavailable - try again shortly';
+					isServerSideError = true;
 				} else if (error.message.includes('500')) {
 					errorMessage = 'Server error - check server logs';
+					isServerSideError = true;
 				} else if (error.message.includes('404')) {
 					errorMessage = 'Server endpoint not found';
 				} else if (error.message.includes('403') || error.message.includes('401')) {
@@ -204,16 +212,15 @@ class ServerStore {
 				}
 			}
 
-			const is500Error = error instanceof Error && error.message.includes('500');
+			let cachedProps: ApiLlamaCppServerProps | null = null;
 
 			if (!hadCachedProps) {
-				const cachedProps = this.readCachedServerProps();
+				cachedProps = this.readCachedServerProps();
 				if (cachedProps) {
 					this._serverProps = cachedProps;
 					this._error = null;
 
-					// For 500 errors with cached props, show as warning instead of error
-					if (is500Error) {
+					if (isOfflineLikeError || isServerSideError) {
 						this._serverWarning = errorMessage;
 					}
 
@@ -227,8 +234,7 @@ class ServerStore {
 			} else {
 				this._error = null;
 
-				// For 500 errors with cached props, show as warning instead of error
-				if (is500Error) {
+				if (isOfflineLikeError || isServerSideError) {
 					this._serverWarning = errorMessage;
 				}
 
