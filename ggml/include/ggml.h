@@ -1150,7 +1150,8 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // xIELU activation function
-    // x = x * (alpha_n + alpha_p * sigmoid(beta * x)) + eps * (x > 0)
+    // https://arxiv.org/abs/2411.13010
+    // x = (x > 0) ? a_p * x^2 + b * x : (exmp1(min(x, eps)) - x) * a_n + b * x
     GGML_API struct ggml_tensor * ggml_xielu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
