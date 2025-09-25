@@ -1,6 +1,3 @@
-// Copyright (c) 2025 SpacemiT. All rights reserved.
-// Licensed under the MIT License.
-
 #pragma once
 
 #include "ggml-alloc.h"

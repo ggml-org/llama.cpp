@@ -1,5 +1,3 @@
-// Copyright (c) 2025 SpacemiT. All rights reserved.
-// Licensed under the MIT License.
 #include "ggml.h"
 #include "ime_kernels.h"
 

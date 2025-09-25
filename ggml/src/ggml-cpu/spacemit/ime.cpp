@@ -1,5 +1,3 @@
-// Copyright (c) 2025 SpacemiT. All rights reserved.
-// Licensed under the MIT License.
 #define GGML_COMMON_IMPL_CPP
 #define GGML_COMMON_DECL_CPP
 
