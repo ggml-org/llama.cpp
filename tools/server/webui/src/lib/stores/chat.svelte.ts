@@ -898,6 +898,59 @@ class ChatStore {
 	}
 
 	/**
+	 * Downloads a conversation as JSON file
+	 * @param convId - The conversation ID to download
+	 */
+	async downloadConversation(convId: string): Promise<void> {
+	    if (!this.activeConversation || this.activeConversation.id !== convId) {
+		// Load the conversation if not currently active
+		const conversation = await DatabaseStore.getConversation(convId);
+		if (!conversation) return;
+
+		const messages = await DatabaseStore.getConversationMessages(convId);
+		const conversationData = {
+		    ...conversation,
+		    messages
+		};
+
+		this.triggerDownload(conversationData);
+	    } else {
+		// Use current active conversation data
+		const conversationData = {
+		    ...this.activeConversation,
+		    messages: this.activeMessages
+		};
+
+		this.triggerDownload(conversationData);
+	    }
+	}
+
+	/**
+	 * Triggers file download in browser
+	 * @param data - Data to download
+	 * @param filename - Optional filename
+	 */
+	private triggerDownload(data: any, filename?: string): void {
+		const conversationName = data.name || '';
+		const truncatedSuffix = conversationName.toLowerCase()
+			.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').substring(0, 20);
+		const downloadFilename = filename || `conversation_${data.id}_${truncatedSuffix}.json`;
+
+		const conversationJson = JSON.stringify(data, null, 2);
+		const blob = new Blob([conversationJson], {
+			type: 'application/json',
+		});
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = downloadFilename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	/**
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
@@ -1369,6 +1422,7 @@ export const isInitialized = () => chatStore.isInitialized;
 export const maxContextError = () => chatStore.maxContextError;
 
 export const createConversation = chatStore.createConversation.bind(chatStore);
+export const downloadConversation = chatStore.downloadConversation.bind(chatStore);
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
