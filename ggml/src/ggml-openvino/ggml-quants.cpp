@@ -425,6 +425,8 @@ std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType r
     int64_t block_size = node_shape[1];
     if (requant_type == ExtraQuantType::Q4_0_128) {
         block_size = 128;
+    } else if (requant_type == ExtraQuantType::Q8_0_32) {
+        block_size = 32;
     }
     auto scales_shape = ov::Shape{node_shape[0], node_shape[1] / block_size};
 
@@ -432,7 +434,7 @@ std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType r
     ov::Tensor scales(ov::element::f16, scales_shape);
     ov::Tensor bias(ov::element::f16, scales_shape);
 
-    if (requant_type == ExtraQuantType::Q4_0_C) {
+    if (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128) {
         weights = ov::Tensor(ov::element::u4, node_shape);
         quantize_q4_0(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
         weight_node = make_int4_weights(weights, scales, bias, block_size).get_node_shared_ptr();
@@ -440,10 +442,10 @@ std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType r
         weights = ov::Tensor(ov::element::u8, node_shape);
         quantize_q8_1(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
         weight_node = make_int8_weights(weights, scales, bias, block_size).get_node_shared_ptr();
-    } else if (requant_type == ExtraQuantType::Q4_0_128) {
-        weights = ov::Tensor(ov::element::u4, node_shape);
-        quantize_q4_0(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
-        weight_node = make_int4_weights(weights, scales, bias, block_size).get_node_shared_ptr();
+    } else if (requant_type == ExtraQuantType::Q8_0_C || requant_type == ExtraQuantType::Q8_0_32) {
+        weights = ov::Tensor(ov::element::u8, node_shape);
+        quantize_q8_0(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
+        weight_node = make_int8_weights(weights, scales, bias, block_size).get_node_shared_ptr();
     }
 
     weight_node->set_friendly_name(tensor->name);
@@ -481,6 +483,37 @@ void quantize_q4_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_a
             const uint8_t xi0 = MIN(15, (int8_t) (x0 + 8.5f));
             const uint8_t xi1 = MIN(15, (int8_t) (x1 + 8.5f));
             weights[i * qk / 2 + j] = xi0 | (xi1 << 4);
+        }
+    }
+}
+
+void quantize_q8_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,
+                   int64_t qk) {
+    assert(k % qk == 0);
+    const int nb = k / qk;
+
+    auto* weights = static_cast<uint8_t*>(weights_arr.data());
+    auto* scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto* biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f;  // absolute max
+
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i * qk + j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+            }
+        }
+
+        const float d = amax / 127.0f;
+        const float id = d ? 1.0f / d : 0.0f;
+        scales[i] = ov::float16(d);
+        biases[i] = ov::float16(-128.0f * d);
+
+        for (int j = 0; j < qk; ++j) {
+            const float x0 = x[i * qk + j] * id;
+            const int8_t xi0 = roundf(x0);
+            weights[i * qk + j] = (uint8_t) (xi0 + 128);
         }
     }
 }
