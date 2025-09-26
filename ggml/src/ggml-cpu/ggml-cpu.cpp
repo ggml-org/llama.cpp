@@ -516,6 +516,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         ggml_cpu_init();
 
         std::vector<ggml_backend_feature> features;
+        if (ggml_cpu_has_sse2()) {
+            features.push_back({ "SSE2", "1" });
+        }
         if (ggml_cpu_has_sse3()) {
             features.push_back({ "SSE3", "1" });
         }
