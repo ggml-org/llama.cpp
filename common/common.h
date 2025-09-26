@@ -436,6 +436,10 @@ struct common_params {
     int reasoning_budget = -1;
     bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
 
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    bool use_systemd = false;  // use systemd socket and readiness notification
+#endif
+
     std::vector<std::string> api_keys;
 
     std::string ssl_file_key  = "";                                                                         // NOLINT
