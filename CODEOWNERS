@@ -103,4 +103,5 @@
 /LICENSE                                @ggerganov
 /README.md                              @ggerganov
 /SECURITY.md                            @ggerganov
+/build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC
