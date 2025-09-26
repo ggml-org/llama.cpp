@@ -1,0 +1,21 @@
+name: Precompile Checks
+
+on:
+  push:
+    branches:
+      - master
+    paths: ['**/*.c', '**/*.cpp']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ['**/*.c', '**/*.cpp']
+
+jobs:
+  precompile-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Forbidden Includes Check
+        run: bash scripts/precompile-checks.sh
