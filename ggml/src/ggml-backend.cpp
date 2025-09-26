@@ -1945,6 +1945,30 @@ struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, s
 
     // allocate nodes
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx_allocated, backend);
+
+    // This is an absolute hack, but it is only to try to force the use of the
+    // extra repack buffers to see if I can come up with a better way or get
+    // some feeback from others how to go about doing this.
+    ggml_backend_buffer_t extra_buffer = nullptr;
+    std::vector<ggml_backend_buffer_type_t> extra_buft_list;
+    auto * dev = ggml_backend_get_device(backend);
+    auto * reg = ggml_backend_dev_backend_reg(dev);
+    auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts");
+    if (get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = get_extra_bufts_fn(dev);
+        while (extra_bufts && *extra_bufts) {
+            extra_buft_list.push_back(*extra_bufts);
+            ++extra_bufts;
+        }
+    }
+    if (extra_buft_list.size() > 0) {
+        // Setting size to 1 just to ensure that the underlying extra buffer
+        // allocation is called. In the case of the repack buffer it does not
+        // really use the buffer and the repacking is done directory on the
+        // tensor data.
+        extra_buffer = ggml_backend_buft_alloc_buffer(extra_buft_list[0], 1);
+    }
+
     if (buffer == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate buffer for graph copy\n", __func__);
         ggml_hash_set_free(&hash_set);
@@ -1952,6 +1976,7 @@ struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, s
         free(node_init);
         ggml_free(ctx_allocated);
         ggml_free(ctx_unallocated);
+        ggml_backend_buffer_free(extra_buffer);
         return {
             /* .buffer           = */ NULL,
             /* .ctx_allocated    = */ NULL,
@@ -1965,6 +1990,20 @@ struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, s
     // copy data and init views
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
+
+        // Again just here to see if I can get the repacking to work.
+        if (extra_buffer && !ggml_op_is_empty(node->op) && node->src[0]) {
+            auto dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(extra_buffer));
+            if (ggml_backend_dev_supports_op(dev, node)) {
+                size_t id = ggml_hash_find(&hash_set, node->src[0]);
+                ggml_status status = ggml_backend_buffer_init_tensor(extra_buffer, node_copies[id]);
+                if (status != GGML_STATUS_SUCCESS) {
+                    GGML_LOG_ERROR("%s: failed to initialize tensor in extra buffer for graph copy\n", __func__);
+                }
+                node_copies[id]->buffer = extra_buffer;
+            }
+        }
+
         graph_copy_init_tensor(&hash_set, node_copies, node_init, node);
     }
 
@@ -1980,6 +2019,7 @@ struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, s
     ggml_hash_set_free(&hash_set);
     free(node_copies);
     free(node_init);
+    ggml_backend_buffer_free(extra_buffer);
 
     return {
         /* .buffer           = */ buffer,
