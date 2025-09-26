@@ -217,7 +217,8 @@ int main(int argc, char ** argv) {
     if (params.conversation_mode) {
         if (params.enable_chat_template) {
             if (!params.prompt.empty() && params.system_prompt.empty()) {
-                LOG_WRN("*** User-specified prompt will pre-start conversation, did you mean to set --system-prompt (-sys) instead?\n");
+                LOG_WRN("*** Chat template is active: -p is treated as a user message (pre-starts the conversation).\n");
+                LOG_INF ("*** If you intended a system instruction, use the -sys flag (e.g., -sys \"You are a helpful assistant\").\n");
             }
 
             LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs).c_str());
