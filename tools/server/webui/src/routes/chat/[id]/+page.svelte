@@ -26,7 +26,7 @@
 			await gracefulStop();
 
 			if (to?.url) {
-				await goto(to.url.pathname + to.url.search);
+				await goto(to.url.pathname + to.url.search + to.url.hash);
 			}
 		}
 	});
@@ -44,7 +44,7 @@
 				const success = await chatStore.loadConversation(chatId);
 
 				if (!success) {
-					await goto('/');
+					await goto('#/');
 				}
 			})();
 		}
