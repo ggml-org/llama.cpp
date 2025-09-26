@@ -196,7 +196,7 @@
 
 <style>
 	/* Base typography styles */
-	div :global(p) {
+	div :global(p:not(:last-child)) {
 		margin-bottom: 1rem;
 		line-height: 1.75;
 	}
