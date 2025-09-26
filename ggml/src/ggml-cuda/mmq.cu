@@ -81,7 +81,7 @@ static __global__ void mmq_ids_helper(
 #pragma unroll
             for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
                 const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, warp_size);
-                if (threadIdx.x >= offset) {
+                if (threadIdx.x >= static_cast<unsigned int>(offset)) {
                     it_compact_add_lower += tmp;
                 }
             }
@@ -110,7 +110,7 @@ static __global__ void mmq_ids_helper(
 
     expert_bounds[expert] = nex_prev;
 
-    if (expert < gridDim.x - 1) {
+    if (expert < static_cast<int>(gridDim.x) - 1) {
         return;
     }
 
