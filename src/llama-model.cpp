@@ -675,15 +675,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_MINICPM:
             {
-                // Backward-compatible defaults for older MiniCPM GGUFs:
-                // historical MiniCPM graph constants:
-                // n_embd_base = 256, scale_embd = 12.0f, scale_depth = 1.4f
-
+                // Backward-compatible defaults for older MiniCPM GGUFs
                 hparams.f_embedding_scale = 12.0f;
-                const float scale_depth   = 1.4f;
-                hparams.f_residual_scale  = scale_depth / sqrtf((float) hparams.n_layer);
-                const float n_embd_base   = 256.0f;
-                hparams.f_logit_scale     = hparams.n_embd ? (n_embd_base / float(hparams.n_embd)) : 1.0f;
+                hparams.f_residual_scale  = 1.4f / sqrtf(float(hparams.n_layer));
+                hparams.f_logit_scale     = hparams.n_embd ? (256.0f / float(hparams.n_embd)) : 1.0f;
+
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 // Optional KV reads, override defaults if present in newer GGUF exports
