@@ -288,8 +288,8 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
     }
     if (device == "GPU") {
         return {
-            // CVS-166739
-            {GGML_TYPE_Q6_K, ExtraQuantType::Q8_1_C},
+            // gs16 is WIP
+            {GGML_TYPE_Q6_K, ExtraQuantType::Q8_0_32},
         };
     }
     return {};
