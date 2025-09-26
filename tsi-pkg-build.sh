@@ -22,13 +22,13 @@ echo 'creating fpga kernel'
 cd fpga-kernel
 cmake -B build-fpga
 ./create-all-kernels.sh
-#The for Posix Use cases 
+#The for Posix Use cases
 
 echo 'creating posix kernel'
 cd ../posix-kernel/
 ./create-all-kernels.sh
 
-#Change directory to top level llama.cpp  
+#Change directory to top level llama.cpp
 
 cd ../../
 
@@ -89,7 +89,8 @@ cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 #!/bin/bash
 # Set up library paths for GCC 13.3.0 compatibility
 export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
-tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu")
+
+tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm)
 
 for kernel in "\${tsi_kernels[@]}"; do
     mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel

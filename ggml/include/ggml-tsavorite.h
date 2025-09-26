@@ -126,6 +126,7 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_NEG,
   GGML_TSAVORITE_KERNEL_TYPE_ABS,
   GGML_TSAVORITE_KERNEL_TYPE_SIN,
+  GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM,
   GGML_TSAVORITE_KERNEL_TYPE_SIGMOID,
   GGML_TSAVORITE_KERNEL_TYPE_SILU,
 
@@ -162,11 +163,15 @@ extern void _mlir_ciface_txe_abs_host(void *a, void *res);
 extern void _mlir_ciface_txe_sin_host(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid_host(void *a, void *res);
 extern void _mlir_ciface_txe_silu_host(void *a, void *res);
+extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
+
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 #define NUM_OF_TXES 1
-// GML supports a maximum tensor rank of 4
+
+// GGML supports tensors with a maximum rank of 4
 #define MEM_REF_DESCRIPTOR_RANK 4
+#define TSI_TVU_LOAD_SIZE 32
 
 //
 // backend API
