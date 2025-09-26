@@ -50,7 +50,7 @@
 
 <div class="relative {justify === 'start' ? 'mt-2' : ''} flex h-6 items-center justify-{justify}">
 	<div
-		class="flex items-center text-xs text-muted-foreground transition-opacity group-hover:opacity-0"
+		class="hidden items-center text-xs text-muted-foreground transition-opacity md:flex md:group-hover:opacity-0"
 	>
 		{new Date(message.timestamp).toLocaleTimeString(undefined, {
 			hour: '2-digit',
@@ -61,14 +61,14 @@
 	<div
 		class="absolute top-0 {actionsPosition === 'left'
 			? 'left-0'
-			: 'right-0'} flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100"
+			: 'right-0'} flex items-center gap-2 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
 	>
 		{#if siblingInfo && siblingInfo.totalSiblings > 1}
 			<ChatMessageBranchingControls {siblingInfo} {onNavigateToSibling} />
 		{/if}
 
 		<div
-			class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
+			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100"
 		>
 			<ActionButton icon={Copy} tooltip="Copy" onclick={onCopy} />
 

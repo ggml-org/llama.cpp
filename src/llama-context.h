@@ -17,8 +17,16 @@ class llama_batch_allocr;
 class llama_io_read_i;
 class llama_io_write_i;
 
+// "memory" as in abstract memory for the context
 struct llama_memory_i;
 struct llama_memory_context_i;
+
+// "memory" as in physical memory for a buffer type, in bytes
+struct llama_memory_breakdown_data {
+    size_t model   = 0; // memory allocated for the model
+    size_t context = 0; // memory allocated for the context
+    size_t compute = 0; // memory allocated for temporary compute buffers
+};
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -143,6 +151,8 @@ struct llama_context {
 
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
+
+    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown() const;
 
     //
     // training
