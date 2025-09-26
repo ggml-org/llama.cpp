@@ -6922,8 +6922,11 @@ static void print_backend_features(ggml_backend_t backend) {
 
 static bool test_cpu_variant(const char * variant_name, const char * op_names_filter,
         const char * params_filter, printer * output_printer) {
+    std::string backend_ref_name = "CPU-ref";
+    ggml_backend_reg_t * backend_regs = ggml_backend_load_cpu_variants();
+    free(backend_regs);
 
-    ggml_backend_t backend_ref = ggml_backend_init_by_name("CPU-ref", nullptr);
+    ggml_backend_t backend_ref = ggml_backend_init_by_name(backend_ref_name.c_str(), nullptr);
     if (backend_ref == nullptr) {
         printf("Error: CPU-ref backend not found. Make sure it's built and available.\n");
         return false;
@@ -6939,7 +6942,7 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
     }
     print_backend_features(backend_variant);
 
-    printf("Testing CPU variant '%s' against cpu-ref backend...\n\n", variant_name);
+    printf("Testing CPU variant '%s' against '%s' backend...\n\n", variant_name, backend_ref_name.c_str());
 
     auto test_cases = make_test_cases_eval();
 
@@ -6974,20 +6977,19 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
 }
 
 static void list_cpu_variants() {
-    ggml_backend_load_all();
-
     std::unordered_map<std::string, std::string> variant_names;
-    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
-        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
-        if (strstr(ggml_backend_reg_name(reg), "CPU") != nullptr) {
-            for (size_t j = 0; j < ggml_backend_reg_dev_count(reg); j++) {
-                ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, j);
+    ggml_backend_reg_t * backend_regs = ggml_backend_load_cpu_variants();
+    if (backend_regs) {
+        for (ggml_backend_reg_t * reg = backend_regs; *reg != nullptr; ++reg) {
+            for (size_t j = 0; j < ggml_backend_reg_dev_count(*reg); j++) {
+                ggml_backend_dev_t dev = ggml_backend_reg_dev_get(*reg, j);
                 const char * name = ggml_backend_dev_name(dev);
                 if (strcmp(name, "CPU-ref") != 0) {
                     variant_names.emplace(name, ggml_backend_dev_description(dev));
                 }
             }
         }
+        free(backend_regs);
     }
 
     if (variant_names.size() == 0) {
@@ -7093,8 +7095,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // load and enumerate backends
-    ggml_backend_load_all();
 
     // Create printer for output format
     std::unique_ptr<printer> output_printer = create_printer(output_format);
@@ -7111,6 +7111,9 @@ int main(int argc, char ** argv) {
 
         return test_cpu_variant(cpu_variant_name, op_names_filter, params_filter, output_printer.get()) ? 0 : 1;
     }
+
+    // load and enumerate backends
+    ggml_backend_load_all();
 
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));
 
