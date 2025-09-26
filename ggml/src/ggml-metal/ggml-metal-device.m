@@ -1176,6 +1176,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
+        GGML_ASSERT(buf_src);
+
         // dst
         struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensor);
         bid_dst.offs += offset;
@@ -1231,6 +1233,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
+
+        GGML_ASSERT(buf_dst);
 
         id<MTLCommandQueue>  queue   = buf->queue;
         id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
