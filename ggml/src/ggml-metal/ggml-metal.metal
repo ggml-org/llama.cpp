@@ -66,6 +66,10 @@ static inline float e8m0_to_fp32(uint8_t x) {
     return as_type<float>(bits);
 }
 
+static inline float dot(float x, float y) {
+    return x*y;
+}
+
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>
 void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
@@ -2493,30 +2497,43 @@ kernel void kernel_argmax_f32(
     dst_i32[tgpig] = arg_val;
 }
 
-kernel void kernel_norm_f32(
+// F == 1 : norm (no fuse)
+// F == 2 : norm + mul
+// F == 3 : norm + mul + add
+template <typename T, short F>
+kernel void kernel_norm_fuse_impl(
         constant ggml_metal_kargs_norm & args,
         device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
         device       char * dst,
         threadgroup float * shmem_f32 [[threadgroup(0)]],
-        uint   tgpig[[threadgroup_position_in_grid]],
-        ushort tpitg[[thread_position_in_threadgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]],
-        ushort tiisg[[thread_index_in_simdgroup]],
-        ushort   ntg[[threads_per_threadgroup]]) {
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
     if (sgitg == 0) {
         shmem_f32[tiisg] = 0.0f;
     }
 
-    device const float4 * x = (device const float4 *) (src0 + tgpig*args.nb01);
+    const int i01 = tgpig.x;
+    const int i02 = tgpig.y;
+    const int i03 = tgpig.z;
 
-    float4 sumf4(0.0f);
+    device const T * x = (device const T *) (src0 + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
+
+    device const T * f0 = (device const T *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
+    device const T * f1 = (device const T *) (src1_1 + (i03%args.nef3[2])*args.nbf3[2] + (i02%args.nef2[2])*args.nbf2[2] + (i01%args.nef1[2])*args.nbf1[2]);
+
+    T sumft(0.0f);
 
     float sumf = 0.0f;
 
-    for (int i00 = tpitg; i00 < args.ne00_4; i00 += ntg) {
-        sumf4 += x[i00];
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        sumft += x[i00];
     }
-    sumf = sumf4[0] + sumf4[1] + sumf4[2] + sumf4[3];
+    sumf = dot(sumft, T(1.0f));
     sumf = simd_sum(sumf);
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2532,10 +2549,10 @@ kernel void kernel_norm_f32(
 
     const float mean = sumf/args.ne00;
 
-    device float4 * y = (device float4 *) dst + tgpig*args.ne00_4;
+    device T * y = (device T *) (dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
 
     sumf = 0.0f;
-    for (int i00 = tpitg; i00 < args.ne00_4; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
         y[i00] = x[i00] - mean;
         sumf += dot(y[i00], y[i00]);
     }
@@ -2555,17 +2572,35 @@ kernel void kernel_norm_f32(
     const float variance = sumf/args.ne00;
 
     const float scale = 1.0f/sqrt(variance + args.eps);
-    for (int i00 = tpitg; i00 < args.ne00_4; i00 += ntg) {
-        y[i00] = y[i00] * scale;
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        if (F == 1) {
+            y[i00] = (y[i00]*scale);
+        }
+        if (F == 2) {
+            y[i00] = (y[i00]*scale)*f0[i00];
+        }
+        if (F == 3) {
+            y[i00] = (y[i00]*scale)*f0[i00] + f1[i00];
+        }
     }
 }
+
+typedef decltype(kernel_norm_fuse_impl<float4, 1>) kernel_norm_fuse_t;
+
+template [[host_name("kernel_norm_f32")]]         kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float, 1>;
+template [[host_name("kernel_norm_mul_f32")]]     kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float, 2>;
+template [[host_name("kernel_norm_mul_add_f32")]] kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float, 3>;
+
+template [[host_name("kernel_norm_f32_4")]]         kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float4, 1>;
+template [[host_name("kernel_norm_mul_f32_4")]]     kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float4, 2>;
+template [[host_name("kernel_norm_mul_add_f32_4")]] kernel kernel_norm_fuse_t kernel_norm_fuse_impl<float4, 3>;
 
 // F == 1 : rms_norm (no fuse)
 // F == 2 : rms_norm + mul
 // F == 3 : rms_norm + mul + add
-template <short F>
+template <typename T, short F>
 kernel void kernel_rms_norm_fuse_impl(
-        constant ggml_metal_kargs_rms_norm & args,
+        constant ggml_metal_kargs_norm & args,
         device const char * src0,
         device const char * src1_0,
         device const char * src1_1,
@@ -2584,15 +2619,15 @@ kernel void kernel_rms_norm_fuse_impl(
     const int i02 = tgpig.y;
     const int i03 = tgpig.z;
 
-    device const float4 * x = (device const float4 *) (src0 + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
+    device const T * x = (device const T *) (src0 + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
 
-    device const float4 * f0 = (device const float4 *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
-    device const float4 * f1 = (device const float4 *) (src1_1 + (i03%args.nef3[2])*args.nbf3[2] + (i02%args.nef2[2])*args.nbf2[2] + (i01%args.nef1[2])*args.nbf1[2]);
+    device const T * f0 = (device const T *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
+    device const T * f1 = (device const T *) (src1_1 + (i03%args.nef3[2])*args.nbf3[2] + (i02%args.nef2[2])*args.nbf2[2] + (i01%args.nef1[2])*args.nbf1[2]);
 
     float sumf = 0.0f;
 
     // parallel sum
-    for (int i00 = tpitg.x; i00 < args.ne00_4; i00 += ntg.x) {
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
         sumf += dot(x[i00], x[i00]);
     }
     sumf = simd_sum(sumf);
@@ -2611,8 +2646,8 @@ kernel void kernel_rms_norm_fuse_impl(
     const float mean  = sumf/args.ne00;
     const float scale = 1.0f/sqrt(mean + args.eps);
 
-    device float4 * y = (device float4 *) (dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
-    for (int i00 = tpitg.x; i00 < args.ne00_4; i00 += ntg.x) {
+    device T * y = (device T *) (dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
         if (F == 1) {
             y[i00] = (x[i00]*scale);
         }
@@ -2625,11 +2660,15 @@ kernel void kernel_rms_norm_fuse_impl(
     }
 }
 
-typedef decltype(kernel_rms_norm_fuse_impl<1>) kernel_rms_norm_fuse_t;
+typedef decltype(kernel_rms_norm_fuse_impl<float4, 1>) kernel_rms_norm_fuse_t;
 
-template [[host_name("kernel_rms_norm_f32")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<1>;
-template [[host_name("kernel_rms_norm_mul_f32")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<2>;
-template [[host_name("kernel_rms_norm_mul_add_f32")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<3>;
+template [[host_name("kernel_rms_norm_f32")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float, 1>;
+template [[host_name("kernel_rms_norm_mul_f32")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float, 2>;
+template [[host_name("kernel_rms_norm_mul_add_f32")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float, 3>;
+
+template [[host_name("kernel_rms_norm_f32_4")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 1>;
+template [[host_name("kernel_rms_norm_mul_f32_4")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 2>;
+template [[host_name("kernel_rms_norm_mul_add_f32_4")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 3>;
 
 kernel void kernel_l2_norm_f32(
         constant ggml_metal_kargs_l2_norm & args,
@@ -3987,60 +4026,7 @@ template [[host_name("kernel_rope_multi_f16")]] kernel kernel_rope_multi_t kerne
 template [[host_name("kernel_rope_vision_f32")]] kernel kernel_rope_vision_t kernel_rope_vision<float>;
 template [[host_name("kernel_rope_vision_f16")]] kernel kernel_rope_vision_t kernel_rope_vision<half>;
 
-// TODO: obolete -- remove
-//typedef void (im2col_t)(
-//        constant ggml_metal_kargs_im2col & args,
-//        device const float * x,
-//        device        char * dst,
-//        uint3 tgpig[[threadgroup_position_in_grid]],
-//        uint3  tgpg[[threadgroups_per_grid]],
-//        uint3 tpitg[[thread_position_in_threadgroup]],
-//        uint3   ntg[[threads_per_threadgroup]]);
-//
-//template <typename T>
-//kernel void kernel_im2col(
-//        constant ggml_metal_kargs_im2col & args,
-//        device const float * x,
-//        device        char * dst,
-//        uint3 tgpig[[threadgroup_position_in_grid]],
-//        uint3  tgpg[[threadgroups_per_grid]],
-//        uint3 tpitg[[thread_position_in_threadgroup]],
-//        uint3   ntg[[threads_per_threadgroup]]) {
-////    const int64_t IC = tgpg[0];
-//    const int64_t OH = tgpg[1];
-//    const int64_t OW = tgpg[2];
-//
-////    const int64_t N  = ntg[0];
-//    const int64_t KH = ntg[1];
-//    const int64_t KW = ntg[2];
-//
-//    const int64_t in  = tpitg[0];
-//    const int64_t ikh = tpitg[1];
-//    const int64_t ikw = tpitg[2];
-//
-//    const int64_t iic = tgpig[0];
-//    const int64_t ioh = tgpig[1];
-//    const int64_t iow = tgpig[2];
-//
-//    const int64_t iiw = iow*args.s0 + ikw*args.d0 - args.p0;
-//    const int64_t iih = ioh*args.s1 + ikh*args.d1 - args.p1;
-//
-//    const int64_t offset_dst = (in*OH*OW + ioh*OW + iow)*args.CHW + (iic*(KH*KW) + ikh*KW + ikw);
-//
-//    device T * pdst = (device T *) (dst);
-//
-//    if (iih < 0 || iih >= args.IH || iiw < 0 || iiw >= args.IW) {
-//        pdst[offset_dst] = 0.0f;
-//    } else {
-//        const int64_t offset_src = in*args.ofs0 + iic*args.ofs1 + iih*args.IW + iiw;
-//        pdst[offset_dst] = x[offset_src];
-//    }
-//}
-//
-//template [[host_name("kernel_im2col_f32")]] kernel im2col_t kernel_im2col<float>;
-//template [[host_name("kernel_im2col_f16")]] kernel im2col_t kernel_im2col<half>;
-
-typedef void (im2col_ext_t)(
+typedef void (im2col_t)(
         constant ggml_metal_kargs_im2col & args,
         device const float * x,
         device        char * dst,
@@ -4050,48 +4036,113 @@ typedef void (im2col_ext_t)(
         uint3   ntg[[threads_per_threadgroup]]);
 
 template <typename T>
-kernel void kernel_im2col_ext(
+kernel void kernel_im2col(
         constant ggml_metal_kargs_im2col & args,
         device const float * x,
         device        char * dst,
         uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3  tgpg[[threadgroups_per_grid]],      // tgpg[0] = D x IC x KH x KW, CHW = IC x KH x KW
+        uint3  tgpg[[threadgroups_per_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
-        uint3   ntg[[threads_per_threadgroup]]) {  // [M, 1, 1]
-    const int64_t KHW = (int64_t)args.KHW;
+        uint3   ntg[[threads_per_threadgroup]]) {
+//    const int64_t IC = tgpg[0];
+    const int64_t OH = tgpg[1];
+    const int64_t OW = tgpg[2];
 
-    const int64_t d   = tgpig[0] / args.CHW;
-    const int64_t chw = tgpig[0] % args.CHW;
-    const int64_t tgpig_0 = chw / KHW;  // 0 ~ (IC - 1)
-    const int64_t HW = tgpig[0] % KHW;
+    const int64_t KH = ntg[1];
+    const int64_t KW = ntg[2];
 
-    const int64_t tpitg_0 = (d * ntg[0]) + tpitg[0];
-    if (tpitg_0 >= args.N) {
-        return;
-    }
+          int64_t in  = tpitg[0];
+    const int64_t ikh = tpitg[1];
+    const int64_t ikw = tpitg[2];
 
-    const int64_t tpitg_1 = HW / args.KW;
-    const int64_t tpitg_2 = HW % args.KW;
+    const int64_t iic = tgpig[0];
+    const int64_t ioh = tgpig[1];
+    const int64_t iow = tgpig[2];
 
-    const int64_t iiw = tgpig[2] * args.s0 + tpitg_2 * args.d0 - args.p0;
-    const int64_t iih = tgpig[1] * args.s1 + tpitg_1 * args.d1 - args.p1;
+    const int64_t iiw = iow*args.s0 + ikw*args.d0 - args.p0;
+    const int64_t iih = ioh*args.s1 + ikh*args.d1 - args.p1;
 
-    const int64_t offset_dst =
-        (tpitg_0 * tgpg[1] * tgpg[2] + tgpig[1] * tgpg[2] + tgpig[2]) * args.CHW +
-        (tgpig_0 * KHW + tpitg_1 * args.KW + tpitg_2);
+    int64_t offset_dst = (in*OH*OW + ioh*OW + iow)*args.CHW + (iic*(KH*KW) + ikh*KW + ikw);
 
     device T * pdst = (device T *) (dst);
 
     if (iih < 0 || iih >= args.IH || iiw < 0 || iiw >= args.IW) {
-        pdst[offset_dst] = 0.0f;
+        while (in < args.N) {
+            pdst[offset_dst] = 0.0f;
+            offset_dst += ntg[0]*args.CHW*OH*OW;
+
+            in += ntg[0];
+        }
     } else {
-        const int64_t offset_src = tpitg_0 * args.ofs0 + tgpig_0 * args.ofs1;
-        pdst[offset_dst] = x[offset_src + iih * args.IW + iiw];
+        int64_t offset_src = in*args.ofs0 + iic*args.ofs1 + iih*args.IW + iiw;
+
+        while (in < args.N) {
+            pdst[offset_dst] = x[offset_src];
+
+            offset_dst += ntg[0]*args.CHW*OH*OW;
+            offset_src += ntg[0]*args.ofs0;
+
+            in += ntg[0];
+        }
     }
 }
 
-template [[host_name("kernel_im2col_ext_f32")]] kernel im2col_ext_t kernel_im2col_ext<float>;
-template [[host_name("kernel_im2col_ext_f16")]] kernel im2col_ext_t kernel_im2col_ext<half>;
+template [[host_name("kernel_im2col_f32")]] kernel im2col_t kernel_im2col<float>;
+template [[host_name("kernel_im2col_f16")]] kernel im2col_t kernel_im2col<half>;
+
+// TODO: obolete -- remove
+//typedef void (im2col_ext_t)(
+//        constant ggml_metal_kargs_im2col & args,
+//        device const float * x,
+//        device        char * dst,
+//        uint3 tgpig[[threadgroup_position_in_grid]],
+//        uint3  tgpg[[threadgroups_per_grid]],
+//        uint3 tpitg[[thread_position_in_threadgroup]],
+//        uint3   ntg[[threads_per_threadgroup]]);
+//
+//template <typename T>
+//kernel void kernel_im2col_ext(
+//        constant ggml_metal_kargs_im2col & args,
+//        device const float * x,
+//        device        char * dst,
+//        uint3 tgpig[[threadgroup_position_in_grid]],
+//        uint3  tgpg[[threadgroups_per_grid]],      // tgpg[0] = D x IC x KH x KW, CHW = IC x KH x KW
+//        uint3 tpitg[[thread_position_in_threadgroup]],
+//        uint3   ntg[[threads_per_threadgroup]]) {  // [M, 1, 1]
+//    const int64_t KHW = (int64_t)args.KHW;
+//
+//    const int64_t d   = tgpig[0] / args.CHW;
+//    const int64_t chw = tgpig[0] % args.CHW;
+//    const int64_t tgpig_0 = chw / KHW;  // 0 ~ (IC - 1)
+//    const int64_t HW = tgpig[0] % KHW;
+//
+//    const int64_t tpitg_0 = (d * ntg[0]) + tpitg[0];
+//    if (tpitg_0 >= args.N) {
+//        return;
+//    }
+//
+//    const int64_t tpitg_1 = HW / args.KW;
+//    const int64_t tpitg_2 = HW % args.KW;
+//
+//    const int64_t iiw = tgpig[2] * args.s0 + tpitg_2 * args.d0 - args.p0;
+//    const int64_t iih = tgpig[1] * args.s1 + tpitg_1 * args.d1 - args.p1;
+//
+//    const int64_t offset_dst =
+//        (tpitg_0 * tgpg[1] * tgpg[2] + tgpig[1] * tgpg[2] + tgpig[2]) * args.CHW +
+//        (tgpig_0 * KHW + tpitg_1 * args.KW + tpitg_2);
+//
+//    device T * pdst = (device T *) (dst);
+//
+//    if (iih < 0 || iih >= args.IH || iiw < 0 || iiw >= args.IW) {
+//        pdst[offset_dst] = 0.0f;
+//    } else {
+//        const int64_t offset_src = tpitg_0 * args.ofs0 + tgpig_0 * args.ofs1;
+//        pdst[offset_dst] = x[offset_src + iih * args.IW + iiw];
+//    }
+//}
+//
+//template [[host_name("kernel_im2col_ext_f32")]] kernel im2col_ext_t kernel_im2col_ext<float>;
+//template [[host_name("kernel_im2col_ext_f16")]] kernel im2col_ext_t kernel_im2col_ext<half>;
 
 typedef void (conv_transpose_1d_t)(
         constant ggml_metal_kargs_conv_transpose_1d & args,

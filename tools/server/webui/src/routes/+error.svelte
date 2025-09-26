@@ -17,7 +17,7 @@
 
 	function handleRetry() {
 		// Navigate back to home page after successful API key validation
-		goto('/');
+		goto('#/');
 	}
 </script>
 
@@ -60,7 +60,7 @@
 				</p>
 			</div>
 			<button
-				onclick={() => goto('/')}
+				onclick={() => goto('#/')}
 				class="rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
 			>
 				Go Home
