@@ -19618,6 +19618,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
 
+    // cast output to F32
+    llm->cast_outputs();
+
     return llm->res->get_gf();
 }
 

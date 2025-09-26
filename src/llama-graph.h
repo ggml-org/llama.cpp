@@ -814,6 +814,8 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b) const;
+
+    void cast_outputs() const;
 };
 
 // TODO: better name
