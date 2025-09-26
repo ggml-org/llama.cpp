@@ -51,6 +51,8 @@ static __global__ __launch_bounds__(CUDA_PAD_REFLECT_1D_BLOCK_SIZE, 1) void
     }
     const float value               = *(const float *) (src0_ptr + src_idx * nb00);
     *(float *) (dst_ptr + i0 * nb0) = value;
+
+    GGML_UNUSED(p1);
 }
 
 void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
