@@ -45,6 +45,7 @@
 #include "ggml-cuda/sumrows.cuh"
 #include "ggml-cuda/mean.cuh"
 #include "ggml-cuda/tsembd.cuh"
+#include "ggml-cuda/topk-moe.cuh"
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/wkv.cuh"
@@ -2825,6 +2826,44 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     GGML_ASSERT(unary_ops.size() == num_unary);
 #endif
 
+    //TODO: remove special case once ggml_can_fuse can handle empty nodes
+    std::initializer_list<enum ggml_op> topk_moe_ops           = ggml_cuda_topk_moe_ops(false);
+    std::initializer_list<enum ggml_op> topk_moe_ops_with_norm = ggml_cuda_topk_moe_ops(true);
+
+    if (ops.size() == topk_moe_ops_with_norm.size() && std::equal(ops.begin(), ops.end(), topk_moe_ops_with_norm.begin())) {
+
+        if (node_idx + topk_moe_ops_with_norm.size() > (size_t)cgraph->n_nodes) {
+            return false;
+        }
+
+        for (size_t i = 0; i < topk_moe_ops_with_norm.size(); i++) {
+            if (cgraph->nodes[node_idx + i]->op != topk_moe_ops_with_norm.begin()[i]) return false;
+        }
+        ggml_tensor * softmax = cgraph->nodes[node_idx];
+        ggml_tensor * weights = cgraph->nodes[node_idx+8];
+
+        if (ggml_cuda_should_use_topk_moe(softmax, weights)) {
+            return true;
+        }
+    }
+
+    if (ops.size() == topk_moe_ops.size() && std::equal(ops.begin(), ops.end(), topk_moe_ops.begin())) {
+
+        if (node_idx + topk_moe_ops.size() > (size_t)cgraph->n_nodes) {
+            return false;
+        }
+
+        for (size_t i = 0; i < topk_moe_ops.size(); i++) {
+            if (cgraph->nodes[node_idx + i]->op != topk_moe_ops.begin()[i]) return false;
+        }
+
+        ggml_tensor * softmax = cgraph->nodes[node_idx];
+        ggml_tensor * weights = cgraph->nodes[node_idx+4];
+        if (ggml_cuda_should_use_topk_moe(softmax, weights)) {
+            return true;
+        }
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -2914,6 +2953,22 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                 static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
                 if (!disable_fusion) {
+
+                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
+                        ggml_tensor * weights = cgraph->nodes[i+8];
+                        ggml_tensor * selected_experts = cgraph->nodes[i+3];
+                        ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts, /*with norm*/ true);
+                        i += 8;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ false), {})) {
+                        ggml_tensor * weights = cgraph->nodes[i+4];
+                        ggml_tensor * selected_experts = cgraph->nodes[i+3];
+                        ggml_cuda_op_topk_moe(*cuda_ctx, node, weights, selected_experts, /*with norm*/ false);
+                        i += 4;
+                        continue;
+                    }
 
                     if (node->op == GGML_OP_ADD) {
                         int n_fuse = 0;
