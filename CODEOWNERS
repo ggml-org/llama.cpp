@@ -61,6 +61,7 @@
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
+/ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
@@ -89,6 +90,7 @@
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
+/tools/rpc/                             @rgerganov
 /tools/run/                             @ericcurtin
 /tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
 /tools/server/webui/                    @allozaur
