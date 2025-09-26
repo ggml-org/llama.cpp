@@ -9,9 +9,7 @@ module load tsi4 gcc/13.3.0
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.1.9
 echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
-
 source blob-creation/bin/activate
-
 echo 'installing mlir and python dependencies'
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
 pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.4.2-py3-none-any.whl
@@ -24,16 +22,18 @@ echo 'creating fpga kernel'
 cd fpga-kernel
 cmake -B build-fpga
 ./create-all-kernels.sh
+#The for Posix Use cases
 
-#The for Posix Use cases 
 echo 'creating posix kernel'
 cd ../posix-kernel/
 ./create-all-kernels.sh
 
-#Change directory to top level llama.cpp  
+#Change directory to top level llama.cpp
+
 cd ../../
 
 #Compile for posix with build-posix as a target folder
+
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
 cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
 cmake --build build-posix --config Release
@@ -88,8 +88,8 @@ fi
 cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 #!/bin/bash
 # Set up library paths for GCC 13.3.0 compatibility
-export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:\${LD_LIBRARY_PATH}:\$(pwd)"
-tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm")
+export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
+tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm)
 
 for kernel in "\${tsi_kernels[@]}"; do
     mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel
