@@ -3067,7 +3067,7 @@ struct image_manipulation {
         dst.buf.resize(3 * target_width * target_height);
 
         float Cc;
-        float C[5];
+        float C[5] = {};
         float d0, d2, d3, a0, a1, a2, a3;
         int i, j, k, jj;
         int x, y;
