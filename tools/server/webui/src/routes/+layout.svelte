@@ -49,7 +49,7 @@
 
 		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
 			event.preventDefault();
-			goto('/?new_chat=true');
+			goto('?new_chat=true#/');
 		}
 
 		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
@@ -115,7 +115,7 @@
 				headers.Authorization = `Bearer ${apiKey.trim()}`;
 			}
 
-			fetch('/props', { headers })
+			fetch(`./props`, { headers })
 				.then((response) => {
 					if (response.status === 401 || response.status === 403) {
 						window.location.reload();

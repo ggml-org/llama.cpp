@@ -138,7 +138,7 @@ export class SlotsService {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch('/slots', {
+			const response = await fetch(`./slots`, {
 				headers: {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
