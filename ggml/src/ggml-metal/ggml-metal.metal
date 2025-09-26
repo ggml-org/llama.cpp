@@ -7856,6 +7856,8 @@ kernel void kernel_set_rows_f(
     }
 }
 
+constant bool FC_mul_mm_bounds_check [[function_constant(FC_MUL_MM + 0)]];
+
 #define BLOCK_SIZE_M 64 // 8 simdgroup matrices from matrix A
 #define BLOCK_SIZE_N 32 // 4 simdgroup matrices from matrix B
 #define BLOCK_SIZE_K 32
@@ -7913,27 +7915,58 @@ kernel void kernel_mul_mm(
     device const block_q * x = (device const block_q *)(src0
         + args.nb01*(r0*BLOCK_SIZE_M + thread_row) + offset0) + offset1;
 
+    const short iy = (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL));
+
     device const U * y = (device const U *)(src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1*BLOCK_SIZE_N + thread_col)
-        + args.nb10*(BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
+        + args.nb10*iy);
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
-        T4x4 temp_a;
-        dequantize_func(x, il, temp_a);
+        if (is_same<T4x4, block_q>::value) {
+            // no need for dequantization
+            threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+            if (FC_mul_mm_bounds_check) {
+                // bounds checks are required
+                #pragma unroll(16)
+                for (short i = 0; i < 16; i++) {
+                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
+                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
+                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = loop_k + 16*il + i < args.ne00 ? ((device T *) x)[16*il + i] : 0;
+                }
+            } else {
+                // do not perform bounds checks
+                #pragma unroll(16)
+                for (short i = 0; i < 16; i++) {
+                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
+                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
+                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = ((device T *) x)[i];
+                }
+            }
+        } else {
+            T4x4 temp_a;
+            dequantize_func(x, il, temp_a);
 
-        #pragma unroll(16)
-        for (short i = 0; i < 16; i++) {
-            *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
-            +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
-            +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            #pragma unroll(16)
+            for (short i = 0; i < 16; i++) {
+                *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
+                +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
+                +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
+            }
         }
 
-        *(threadgroup half2x4 *)(sb + 32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL)) = (half2x4)(*((device U2x4 *) y));
+        if (FC_mul_mm_bounds_check) {
+            for (short i = 0; i < 8; ++i) {
+                sb[32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL) + i] = loop_k + iy + i < args.ne00 ? ((device U *) y)[i] : 0;
+            }
+        } else {
+            *(threadgroup half2x4 *)(sb + 32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL)) = (half2x4)(*((device U2x4 *) y));
+        }
 
         il = (il + 2 < nl) ? il + 2 : il % 2;
         x  = (il < 2) ? x + (2 + nl - 1)/nl : x;
