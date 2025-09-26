@@ -7933,7 +7933,6 @@ kernel void kernel_mul_mm(
             // no need for dequantization
             if (FC_mul_mm_bounds_check) {
                 // bounds checks are required
-                #pragma unroll(16)
                 for (short i = 0; i < 16; i++) {
                     *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                     +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
@@ -7941,8 +7940,7 @@ kernel void kernel_mul_mm(
                 }
             } else {
                 // do not perform bounds checks
-                #pragma unroll(16)
-                for (short i = 0; i < 16; i++) {
+                FOR_UNROLL (short i = 0; i < 16; i++) {
                     *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                     +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
                     +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = ((device T0 *) x)[i];
@@ -7954,8 +7952,7 @@ kernel void kernel_mul_mm(
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
-            #pragma unroll(16)
-            for (short i = 0; i < 16; i++) {
+            FOR_UNROLL (short i = 0; i < 16; i++) {
                 *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                 +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
                 +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
@@ -8188,7 +8185,6 @@ kernel void kernel_mul_mm_id(
             // no need for dequantization
             if (FC_mul_mm_bounds_check) {
                 // bounds checks are required
-                #pragma unroll(16)
                 for (short i = 0; i < 16; i++) {
                     *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                     +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
@@ -8196,8 +8192,7 @@ kernel void kernel_mul_mm_id(
                 }
             } else {
                 // do not perform bounds checks
-                #pragma unroll(16)
-                for (short i = 0; i < 16; i++) {
+                FOR_UNROLL (short i = 0; i < 16; i++) {
                     *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                     +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
                     +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = ((device T0 *) x)[i];
@@ -8209,8 +8204,7 @@ kernel void kernel_mul_mm_id(
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
-            #pragma unroll(16)
-            for (short i = 0; i < 16; i++) {
+            FOR_UNROLL (short i = 0; i < 16; i++) {
                 *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
                 +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
                 +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
