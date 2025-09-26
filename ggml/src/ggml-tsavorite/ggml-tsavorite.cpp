@@ -776,6 +776,10 @@ static MemRefDescriptor<Rank>* create_mlir_buf(int K) {
     MemRefDescriptor<Rank>* header = (MemRefDescriptor<Rank>*) tsi_alloc(
         sizeof(MemRefDescriptor<Rank>) + num_of_elem * sizeof(float)
     );
+
+    if (!header) {
+        return header;
+    }
     // Advance pointer to skip header and get to data
     int32_t* data = (int32_t*)(header + 1);
 
