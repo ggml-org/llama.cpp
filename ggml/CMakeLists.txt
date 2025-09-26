@@ -177,7 +177,7 @@ set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
 
 
 if (MINGW)
-    set(GGML_WIN_VER "0x602" CACHE STRING   "ggml: Windows version")
+    set(GGML_WIN_VER "0xA00" CACHE STRING   "ggml: Windows version")
 endif()
 
 # ggml core
