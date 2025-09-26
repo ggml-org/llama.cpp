@@ -75,7 +75,8 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
         for (int j = 0; j < 8; j++) {
             const float32x4_t v = vec_mul(srcv[j], vec_splats(id));
-            const int32x4_t vi = vec_signed(v);
+            /* Uses non-default rounding for vec_signed or vec_round */
+            const int32x4_t vi = vec_signed(__builtin_s390_vfisb(v, 4, 1));
 
             y[i].qs[4*j + 0] = vec_extract(vi, 0);
             y[i].qs[4*j + 1] = vec_extract(vi, 1);
@@ -122,7 +123,8 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
         for (int j = 0; j < 8; j++) {
             const float32x4_t v = vec_mul(srcv[j], vec_splats(id));
-            const int32x4_t vi = vec_signed(v);
+            /* Uses non-default rounding for vec_signed or vec_round */
+            const int32x4_t vi = vec_signed(__builtin_s390_vfisb(v, 4, 1));
 
             y[i].qs[4*j + 0] = vec_extract(vi, 0);
             y[i].qs[4*j + 1] = vec_extract(vi, 1);
@@ -731,7 +733,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     uint8x16_t q3h[4];
     uint8x16_t q3b[2];
     int8x16_t q3bytes[4];
-    int8x16_t q8bytes[4];
+    int8x16_t q8bytes[8];
     uint8x16_t qhbits[2];
 
     float sum = 0;

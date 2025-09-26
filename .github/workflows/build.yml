@@ -192,6 +192,10 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-22.04-arm
+          - build: 's390x'
+            os: ubuntu-24.04-s390x
+          - build: 'ppc64le'
+            os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -206,11 +210,28 @@ jobs:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
+      - name: Build Dependencies
+        id: build_depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev \
+            libjpeg-dev build-essential libcurl4-openssl-dev \
+            git-lfs
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ./gguf-py
+
+      - name: Swap Endianness
+        id: endianness
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          for f in models/*.gguf; do
+            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+          done
 
       - name: Build
         id: cmake_build
@@ -228,6 +249,7 @@ jobs:
 
       - name: Test llama2c conversion
         id: llama2c_test
+        if: ${{ matrix.build != 's390x' }}
         run: |
           cd build
           echo "Fetch tokenizer"
@@ -236,6 +258,15 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+      - name: Test llama2c (s390x)
+        id: llama2c_test_s390x
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          cd build
+          echo "Fetch llama2c big-endian model"
+          wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
+          ./bin/llama-cli -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
