@@ -3,9 +3,11 @@
 	import {
 		ChatForm,
 		ChatScreenHeader,
+		ChatScreenWarning,
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
+		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
 		ConfirmationDialog
@@ -29,6 +31,7 @@
 		supportsVision,
 		supportsAudio,
 		serverLoading,
+		serverWarning,
 		serverStore
 	} from '$lib/stores/server.svelte';
 	import { contextService } from '$lib/services';
@@ -303,6 +306,10 @@
 		>
 			<ChatProcessingInfo />
 
+			{#if serverWarning()}
+				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
+			{/if}
+
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
@@ -319,6 +326,8 @@
 {:else if isServerLoading}
 	<!-- Server Loading State -->
 	<ServerLoadingSplash />
+{:else if serverStore.error && !serverStore.modelName}
+	<ServerErrorSplash error={serverStore.error} />
 {:else if serverStore.modelName}
 	<div
 		aria-label="Welcome screen with file drop zone"
@@ -339,6 +348,10 @@
 			<div class="mb-6 flex justify-center" in:fly={{ y: 10, duration: 300, delay: 200 }}>
 				<ServerInfo />
 			</div>
+
+			{#if serverWarning()}
+				<ChatScreenWarning />
+			{/if}
 
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
