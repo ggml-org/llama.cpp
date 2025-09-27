@@ -33,9 +33,9 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     float logits_r[experts_per_thread];
 
 #pragma unroll
-    for (int i = 0; i < n_experts; i += WARP_SIZE) {
+    for (int i = 0; i < static_cast<int>(n_experts); i += WARP_SIZE) {
         const int expert        = i + threadIdx.x;
-        logits_r[i / WARP_SIZE] = n_experts % WARP_SIZE == 0 || expert < n_experts ? logits[expert] : -INFINITY;
+        logits_r[i / WARP_SIZE] = n_experts % WARP_SIZE == 0 || expert < static_cast<int>(n_experts) ? logits[expert] : -INFINITY;
     }
 
     float max_val = logits_r[0];
@@ -83,7 +83,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 #pragma unroll
         for (int i = 1; i < experts_per_thread; i++) {
             const int expert = threadIdx.x + i * WARP_SIZE;
-            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
+            if ((n_experts % WARP_SIZE == 0 || expert < static_cast<int>(n_experts)) && wt[i] > max_val) {
                 max_val    = wt[i];
                 max_expert = expert;
             }
@@ -203,8 +203,6 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
     int32_t *     ids_d     = (int32_t *) ids->data;
 
     GGML_ASSERT(ids->nb[1] / ggml_type_size(ids->type) == (size_t) n_experts);
-
-    cudaStream_t stream = ctx.stream();
 
     const int n_expert_used = weights->ne[1];
 
