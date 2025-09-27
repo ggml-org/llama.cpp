@@ -132,7 +132,7 @@ static void usage(const char * executable) {
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
-    printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 16.0\n");
+    printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 8.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
     printf("  --no-bias: use mean square error estimation only (no aligment bias)\n");
     printf("      Advanced option use MSE only and disable aligment bias error estimation\n");
@@ -484,13 +484,13 @@ static bool parse_target_bpw(const char * data, float & target_bpw) {
 
     try {
         target_bpw = std::stof(data);
-        if (target_bpw < 0.0f || target_bpw > 16.0f) {
-            printf("\n%s: target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__);
+        if (target_bpw < 0.0f || target_bpw > 8.0f) {
+            printf("\n%s: target bits per weight (bpw) must be a positive number between 0.0 and 8.0\n\n", __func__);
             return false;
         }
     }
     catch (const std::exception & e) {
-        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__, data);
+        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 8.0\n\n", __func__, data);
         return false;
     }
 
