@@ -1,16 +1,8 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
 
-// Currenlty llvm with the amdgcn target dose not support unrolling loops
-// that contain a break that can not be resolved at compile time.
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpass-failed"
-#endif // __clang__
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap> // D == head size
-#ifndef GGML_USE_HIP
-__launch_bounds__(D, 1)
-#endif // GGML_USE_HIP
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+__launch_bounds__(D, 2)
 static __global__ void flash_attn_vec_ext_f16(
         const char * __restrict__ Q,
         const char * __restrict__ K,
@@ -35,7 +27,6 @@ static __global__ void flash_attn_vec_ext_f16(
                             const int32_t nb31, const int32_t nb32, const int64_t nb33) {
 #if defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
 
-    // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         NO_DEVICE_CODE;
         return;
@@ -45,19 +36,18 @@ static __global__ void flash_attn_vec_ext_f16(
         NO_DEVICE_CODE;
         return;
     }
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif
 
-    //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
     constexpr vec_dot_KQ_f16_t vec_dot_KQ = get_vec_dot_KQ_f16<D>(type_K);
     constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16;
     constexpr dequantize_1_f16_t dequantize_1_v = get_dequantize_1_f16(type_V);
 
-    const int ic0 = blockIdx.x * ncols; // Index of the Q/QKV column to work on.
+    const int ic0 = blockIdx.x * ncols;
 
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
-    const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
+    const int gqa_ratio = ne02 / ne12;
     Q += nb03*sequence + nb02* head              + nb01*ic0;
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
@@ -95,6 +85,11 @@ static __global__ void flash_attn_vec_ext_f16(
     }
 
     __shared__ half maskh_shared[ncols*D];
+
+    constexpr int V_CACHE_CHUNK_SIZE = 16;
+    constexpr int MAX_BLOCKS_PER_SEQUENCE = (D + QK8_0 - 1) / QK8_0;
+    extern __shared__ char dynamic_smem[];
+
 #pragma unroll
     for (int j = 0; j < ncols; ++j) {
         maskh_shared[j*D + tid] = 0.0f;
@@ -102,7 +97,6 @@ static __global__ void flash_attn_vec_ext_f16(
 
     __syncthreads();
 
-    // Convert Q to half2 (f16 K) or q8_1 (quantized K) and store in registers:
     half2  Q_h2[ncols][D/(2*WARP_SIZE)];
     int   Q_i32[ncols][D/(sizeof(int)*QK8_1) == 0 ? 1 : D/(sizeof(int)*QK8_1)];
     half2  Q_ds[ncols][D/QK8_1 == 0 ? 1 : D/QK8_1];
@@ -115,11 +109,9 @@ static __global__ void flash_attn_vec_ext_f16(
                 break;
             }
 
-            // Reuse KQ as temporary storage for converting Q to q8_1:
             int   * tmp_q_i32 = (int   *) &KQ[j*D];
             half2 * tmp_q_ds  = (half2 *) (tmp_q_i32 + D/sizeof(int));
 
-            // Set memory to zero if out of bounds:
             if (ncols > 2 && ic0 + j >= ne01) {
 #pragma unroll
                 for (int i0 = 0; i0 < D/sizeof(int); i0 += WARP_SIZE) {
@@ -180,6 +172,9 @@ static __global__ void flash_attn_vec_ext_f16(
     __syncthreads();
 
     half2 VKQ[ncols] = {{0.0f, 0.0f}};
+#ifdef GGML_USE_HIP
+    float VKQ_f32[ncols] = {0.0f};
+#endif
 
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
     K     += blockIdx.y*D * nb11;
@@ -189,7 +184,6 @@ static __global__ void flash_attn_vec_ext_f16(
              // Increment pointers after each loop:
              K += gridDim.y*D*nb11, V += gridDim.y*D*nb21, maskh += gridDim.y*D) {
 
-        // Calculate KQ tile and keep track of new maximum KQ values:
 
         if (mask) {
 #pragma unroll
@@ -199,9 +193,6 @@ static __global__ void flash_attn_vec_ext_f16(
             __syncthreads();
         }
 
-        // For unknown reasons using a half array of size 1 for kqmax_new causes a performance regression,
-        // see https://github.com/ggerganov/llama.cpp/pull/7061 .
-        // Therefore this variable is defined twice but only used once (so that the compiler can optimize out the unused variable).
         half kqmax_new = kqmax[0];
         half kqmax_new_arr[ncols];
 #pragma unroll
@@ -263,23 +254,100 @@ static __global__ void flash_attn_vec_ext_f16(
             kqsum[j] = kqsum[j]*KQ_max_scale + val;
             KQ[j*D + tid] = val;
 
+#ifdef GGML_USE_HIP
+                    const float scale_f32 = __half2float(KQ_max_scale);
+            VKQ_f32[j] *= scale_f32;
+#else
             VKQ[j] *= __half2half2(KQ_max_scale);
+#endif
         }
 
         __syncthreads();
 
-#pragma unroll
-        for (int k0 = 0; k0 < D; k0 += 2) {
-            if (FATTN_KQ_STRIDE % D != 0 && k_VKQ_0 + k0 >= ne11) {
-                break;
-            }
+        if constexpr (type_V == GGML_TYPE_Q8_0) {
+            block_q8_0* V_q8_0_blocks = (block_q8_0*)dynamic_smem;
+            half* V_dequant_cache = (half*)(dynamic_smem + V_CACHE_CHUNK_SIZE * MAX_BLOCKS_PER_SEQUENCE * sizeof(block_q8_0));
 
-            half2 V_k;
-            reinterpret_cast<half&>(V_k.x) = dequantize_1_v(V + (k0 + 0)*nb21, tid);
-            reinterpret_cast<half&>(V_k.y) = dequantize_1_v(V + (k0 + 1)*nb21, tid);
+            for (int k_chunk = 0; k_chunk < D; k_chunk += V_CACHE_CHUNK_SIZE) {
+                const int chunk_size = min(V_CACHE_CHUNK_SIZE, D - k_chunk);
+
+                if (FATTN_KQ_STRIDE % D != 0 && k_VKQ_0 + k_chunk >= ne11) {
+                    break;
+                }
+
+                const int total_blocks_needed = chunk_size * MAX_BLOCKS_PER_SEQUENCE;
+
+                for (int load_idx = threadIdx.x + threadIdx.y * WARP_SIZE; load_idx < total_blocks_needed; load_idx += blockDim.x) {
+                    const int load_k_local = load_idx / MAX_BLOCKS_PER_SEQUENCE;
+                    const int load_block_idx = load_idx % MAX_BLOCKS_PER_SEQUENCE;
+
+                    if (load_k_local < chunk_size) {
+                        const char* V_seq = V + (k_chunk + load_k_local) * nb21;
+                        const block_q8_0* V_q8_0_seq = (const block_q8_0*)V_seq;
+                        V_q8_0_blocks[load_k_local * MAX_BLOCKS_PER_SEQUENCE + load_block_idx] = V_q8_0_seq[load_block_idx];
+                    }
+                }
+                __syncthreads();
+
+                for (int k_local = 0; k_local < chunk_size; k_local++) {
+                    if (k_chunk + k_local < D) {
+                        const int block_idx = tid / QK8_0;
+                        const int local_idx = tid % QK8_0;
+
+                        if (block_idx < MAX_BLOCKS_PER_SEQUENCE) {
+                            const block_q8_0& block = V_q8_0_blocks[k_local * MAX_BLOCKS_PER_SEQUENCE + block_idx];
+                            const half d = block.d;
+                            const float dequant_val = __half2float(d) * (float)block.qs[local_idx];
+                            V_dequant_cache[k_local * D + tid] = __float2half(dequant_val);
+                        } else {
+                            V_dequant_cache[k_local * D + tid] = __float2half(0.0f);
+                        }
+                    } else {
+                        V_dequant_cache[k_local * D + tid] = __float2half(0.0f);
+                    }
+                }
+                __syncthreads();
+
+                for (int k_local = 0; k_local < chunk_size; k_local += 2) {
+                    if (k_chunk + k_local >= D) break;
+
+                    half2 V_k = make_half2(
+                        V_dequant_cache[k_local * D + tid],
+                        (k_local + 1 < chunk_size && k_chunk + k_local + 1 < D) ?
+                            V_dequant_cache[(k_local + 1) * D + tid] : __float2half(0.0f)
+                    );
+
 #pragma unroll
-            for (int j = 0; j < ncols; ++j) {
-                VKQ[j] += V_k*KQ2[j*(D/2) + k0/2];
+                    for (int j = 0; j < ncols; ++j) {
+                        half2 KQ_k = KQ2[j*(D/2) + (k_chunk + k_local)/2];
+#ifdef GGML_USE_HIP
+                        ggml_cuda_mad(VKQ_f32[j], V_k, KQ_k);
+#else
+                        VKQ[j] += V_k * KQ_k;
+#endif
+                    }
+                }
+                __syncthreads();
+            }
+        } else {
+#pragma unroll
+            for (int k0 = 0; k0 < D; k0 += 2) {
+                if (FATTN_KQ_STRIDE % D != 0 && k_VKQ_0 + k0 >= ne11) {
+                    break;
+                }
+
+                half2 V_k;
+                reinterpret_cast<half&>(V_k.x) = dequantize_1_v(V + (k0 + 0)*nb21, tid);
+                reinterpret_cast<half&>(V_k.y) = dequantize_1_v(V + (k0 + 1)*nb21, tid);
+#pragma unroll
+                for (int j = 0; j < ncols; ++j) {
+#ifdef GGML_USE_HIP
+                    // Optimized DOT2 accumulation: pure F32 accumulation without conversions
+                    ggml_cuda_mad(VKQ_f32[j], V_k, KQ2[j*(D/2) + k0/2]);
+#else
+                    VKQ[j] += V_k*KQ2[j*(D/2) + k0/2];
+#endif
+                }
             }
         }
 
@@ -313,7 +381,12 @@ static __global__ void flash_attn_vec_ext_f16(
                 kqsum[j] += val;
             }
 
+#ifdef GGML_USE_HIP
+                    const float scale_f32 = __half2float(KQ_max_scale);
+            VKQ_f32[j] *= scale_f32;
+#else
             VKQ[j] *= __half2half2(KQ_max_scale);
+#endif
         }
 
         __syncthreads();
@@ -338,7 +411,11 @@ static __global__ void flash_attn_vec_ext_f16(
         kqsum[j_VKQ] = kqsum_shared[j_VKQ][threadIdx.x];
         kqsum[j_VKQ] = warp_reduce_sum((float)kqsum[j_VKQ]);
 
+#ifdef GGML_USE_HIP
+        half dst_val = __float2half(VKQ_f32[j_VKQ]);
+#else
         half dst_val = (__low2half(VKQ[j_VKQ]) + __high2half(VKQ[j_VKQ]));
+#endif
         if (gridDim.y == 1) {
             dst_val /= kqsum[j_VKQ];
         }
@@ -349,21 +426,9 @@ static __global__ void flash_attn_vec_ext_f16(
         dst_meta[((sequence*ne01 + ic0 + tid)*ne02 + head)*gridDim.y + blockIdx.y] = make_float2(kqmax[tid], kqsum[tid]);
     }
 #else
-    GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
-        max_bias, m0, m1, n_head_log2, logit_softcap,
-        ne00, ne01, ne02, ne03,
-              nb01, nb02, nb03,
-        ne10, ne11, ne12, ne13,
-              nb11, nb12, nb13,
-              nb21, nb22, nb23,
-              ne31, ne32, ne33,
-              nb31, nb32, nb33);
     NO_DEVICE_CODE;
-#endif // defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
+#endif
 }
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif // __clang__
 
 template <int D, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
 void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -371,7 +436,14 @@ void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx,
     fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f16<D, cols_per_block, type_K, type_V, use_logit_softcap>;
     constexpr bool need_f16_K = D != 128;
     constexpr bool need_f16_V = D != 128 && D != 64;
-    constexpr size_t nbytes_shared = 0;
+
+    constexpr size_t V_CACHE_CHUNK_SIZE = 16;
+    constexpr size_t MAX_BLOCKS_PER_SEQUENCE = (D + QK8_0 - 1) / QK8_0;
+    constexpr size_t q8_0_cache_bytes = (type_V == GGML_TYPE_Q8_0) ?
+        (V_CACHE_CHUNK_SIZE * MAX_BLOCKS_PER_SEQUENCE * sizeof(block_q8_0) +
+         V_CACHE_CHUNK_SIZE * D * sizeof(half)) : 0;
+    constexpr size_t nbytes_shared = q8_0_cache_bytes;
+
     launch_fattn<D, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
@@ -382,8 +454,6 @@ void ggml_cuda_flash_attn_ext_vec_f16_case(ggml_backend_cuda_context & ctx, ggml
     const ggml_tensor * K   = dst->src[1];
     const ggml_tensor * V   = dst->src[2];
 
-    const int32_t precision = KQV->op_params[3];
-    GGML_ASSERT(precision == GGML_PREC_DEFAULT);
 
     GGML_ASSERT(K->type == type_K);
     GGML_ASSERT(V->type == type_V);
