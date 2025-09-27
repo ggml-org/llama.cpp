@@ -456,7 +456,6 @@
 								{localConfig}
 								onConfigChange={handleConfigChange}
 								onThemeChange={handleThemeChange}
-								isMobile={false}
 							/>
 						</div>
 					</div>
