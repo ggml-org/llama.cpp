@@ -261,6 +261,7 @@ class Keys:
 
     class ClipVision:
         IMAGE_SIZE          = "clip.vision.image_size"
+        PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
         FEED_FORWARD_LENGTH = "clip.vision.feed_forward_length"
