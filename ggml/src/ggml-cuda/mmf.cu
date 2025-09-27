@@ -84,7 +84,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
     }
 }
 
-bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * src0_ne, const int src1_ncols) {
+bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * src0_ne, const int src1_ncols, bool mul_mat_id) {
 
     if (ggml_is_quantized(type)) {
         return false;
@@ -96,8 +96,18 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
     if (src0_ne[1] % MMF_ROWS_PER_BLOCK != 0) {
         return false;
     }
-    if (src1_ncols > 16) {
-        return false;
+
+    if (mul_mat_id) {
+        if (type == GGML_TYPE_F32 && src1_ncols > 32) {
+            return false;
+        }
+        if ((type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) && src1_ncols > 64) {
+            return false;
+        }
+    } else {
+        if (src1_ncols > 16) {
+            return false;
+        }
     }
 
     switch (type) {
