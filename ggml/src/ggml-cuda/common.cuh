@@ -387,6 +387,99 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+// AMD GFX906-optimized DS_SWIZZLE reduction primitives
+#ifdef GGML_USE_HIP
+// Forward declarations
+template <int warp_size, typename T>
+__device__ __forceinline__ T amd_wave_reduce_sum(T value);
+
+template <int warp_size, typename T>
+__device__ __forceinline__ T amd_wave_reduce_max(T value);
+
+template <int warp_size>
+__device__ __forceinline__ half amd_wave_reduce_max(half value);
+
+__device__ __forceinline__ float ds_swizzle_xor(float value, int xor_mask) {
+    // AMD compiler intrinsic for ds_swizzle_b32 - no inline assembly overhead!
+    int int_value = __float_as_int(value);
+    int result_int;
+
+    switch(xor_mask) {
+        case 1:  // SWAPX1: XOR bit 0 (swap adjacent lanes)
+            result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x041F);
+            break;
+        case 2:  // SWAPX2: XOR bit 1 (swap pairs)
+            result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x081F);
+            break;
+        case 4:  // SWAPX4: XOR bit 2 (swap quads)
+            result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x101F);
+            break;
+        case 8:  // SWAPX8: XOR bit 3 (swap groups of 8)
+            result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x201F);
+            break;
+        case 16: // SWAPX16: XOR bit 4 (swap groups of 16)
+            result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x401F);
+            break;
+        default:
+            result_int = int_value; // No swizzle for unknown mask
+            break;
+    }
+    return __int_as_float(result_int);
+}
+
+// AMD GFX906-optimized wave reduction functions using DS_SWIZZLE
+template <int warp_size, typename T>
+__device__ __forceinline__ T amd_wave_reduce_sum(T value) {
+    if constexpr (sizeof(T) == 4) {
+        // Native DS_SWIZZLE for 32-thread groups (1-cycle latency vs 3-cycle)
+        value += ds_swizzle_xor(value, 1);   // SWAPX1 - swap adjacent
+        value += ds_swizzle_xor(value, 2);   // SWAPX2 - swap pairs
+        value += ds_swizzle_xor(value, 4);   // SWAPX4 - swap quads
+        value += ds_swizzle_xor(value, 8);   // SWAPX8 - swap groups of 8
+        value += ds_swizzle_xor(value, 16);  // SWAPX16 - swap 16-thread groups
+
+        // Cross-wave for full 64-thread reduction
+        if (warp_size == 64) {
+            value += __shfl_xor_sync(0xffffffff, value, 32, 64);
+        }
+    }
+    return value;
+}
+
+template <int warp_size, typename T>
+__device__ __forceinline__ T amd_wave_reduce_max(T value) {
+    if constexpr (sizeof(T) == 4) {
+        T shuffled;
+        // Use DS_SWIZZLE for 32-thread groups (1-cycle latency vs 3-cycle)
+        shuffled = ds_swizzle_xor(value, 1);
+        value = (value > shuffled) ? value : shuffled;
+        shuffled = ds_swizzle_xor(value, 2);
+        value = (value > shuffled) ? value : shuffled;
+        shuffled = ds_swizzle_xor(value, 4);
+        value = (value > shuffled) ? value : shuffled;
+        shuffled = ds_swizzle_xor(value, 8);
+        value = (value > shuffled) ? value : shuffled;
+        shuffled = ds_swizzle_xor(value, 16);
+        value = (value > shuffled) ? value : shuffled;
+
+        // Cross-wave communication for 64-thread reduction
+        if (warp_size == 64) {
+            shuffled = __shfl_xor_sync(0xffffffff, value, 32, 64);
+            value = (value > shuffled) ? value : shuffled;
+        }
+    }
+    return value;
+}
+
+// Specialization for __half
+template <int warp_size>
+__device__ __forceinline__ half amd_wave_reduce_max(half value) {
+    float float_val = __half2float(value);
+    float float_result = amd_wave_reduce_max<warp_size>(float_val);
+    return __float2half(float_result);
+}
+#endif // GGML_USE_HIP
+
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
@@ -402,11 +495,17 @@ static __device__ __forceinline__ int warp_reduce_sum(int x) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
+#ifdef GGML_USE_HIP
+    // Use optimized AMD DS_SWIZZLE implementation when available
+    return amd_wave_reduce_sum<width>(x);
+#else
+    // Standard CUDA implementation
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
         x += __shfl_xor_sync(0xffffffff, x, offset, width);
     }
     return x;
+#endif // GGML_USE_HIP
 }
 
 template<int width = WARP_SIZE>
@@ -462,11 +561,17 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
+#ifdef GGML_USE_HIP
+    // Use optimized AMD DS_SWIZZLE implementation when available
+    return amd_wave_reduce_max<width>(x);
+#else
+    // Standard CUDA implementation
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
     }
     return x;
+#endif // GGML_USE_HIP
 }
 
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
@@ -497,6 +602,7 @@ static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const hal
     return ret;
 #endif
 }
+
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
