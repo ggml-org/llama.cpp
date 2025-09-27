@@ -135,7 +135,6 @@
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"
-					{message}
 					{onConfirmDelete}
 					{onCopy}
 					{onDelete}

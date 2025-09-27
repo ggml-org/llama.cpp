@@ -138,7 +138,6 @@
 
 	{#if message.timestamp && !isEditing}
 		<ChatMessageActions
-			{message}
 			role="assistant"
 			justify="start"
 			actionsPosition="left"
