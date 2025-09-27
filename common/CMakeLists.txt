@@ -87,11 +87,13 @@ if (LLAMA_CURL)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
+endif()
 
-elseif (LLAMA_OPENSSL)
+if (LLAMA_OPENSSL)
     find_package(OpenSSL)
     if (OpenSSL_FOUND)
         include(CheckCSourceCompiles)
+        set(SAVED_CMAKE_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
         set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
         check_c_source_compiles("
         #include <openssl/opensslv.h>
@@ -106,6 +108,7 @@ elseif (LLAMA_OPENSSL)
         #endif
         int main() { return 0; }
         " OPENSSL_VERSION_SUPPORTED)
+        set(CMAKE_REQUIRED_INCLUDES ${SAVED_CMAKE_REQUIRED_INCLUDES})
         if (OPENSSL_VERSION_SUPPORTED)
             message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
             target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
