@@ -847,8 +847,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (n == 0) { return 0.0; }
             if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0); } // use all samples for small datasets
 
-            int64_t k = (int64_t) std::floor(0.02 * (double)n); // trim 2% from each tail of the distribution
-            k = std::clamp<int64_t>(k, 0, std::min(n / 32, n / 2 - 1)); // cap trimming at ~3% (1/32) or half the samples - 1
+            int64_t k = (int64_t) std::floor(0.025 * (double)n); // trim 2.5% from each tail of the distribution
             std::sort(v.begin(), v.end());
             return std::accumulate(v.begin() + k, v.begin() + (n - k), 0.0);
         };
