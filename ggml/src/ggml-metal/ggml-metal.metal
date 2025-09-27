@@ -7927,24 +7927,14 @@ kernel void kernel_mul_mm(
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
-        if (is_same<T0_4x4, block_q>::value) {
+        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bounds_check) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             // no need for dequantization
-            if (FC_mul_mm_bounds_check) {
-                // bounds checks are required
-                for (short i = 0; i < 16; i++) {
-                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
-                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
-                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = loop_k + 16*il + i < args.ne00 ? ((device T0 *) x)[i] : 0;
-                }
-            } else {
-                // do not perform bounds checks
-                FOR_UNROLL (short i = 0; i < 16; i++) {
-                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
-                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
-                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = ((device T0 *) x)[i];
-                }
+            for (short i = 0; i < 16; i++) {
+                *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
+                +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
+                +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = loop_k + 16*il + i < args.ne00 ? ((device T0 *) x)[i] : 0;
             }
         } else {
             S0_4x4 temp_a;
@@ -8179,24 +8169,14 @@ kernel void kernel_mul_mm_id(
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
-        if (is_same<T0_4x4, block_q>::value) {
+        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bounds_check) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             // no need for dequantization
-            if (FC_mul_mm_bounds_check) {
-                // bounds checks are required
-                for (short i = 0; i < 16; i++) {
-                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
-                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
-                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = loop_k + 16*il + i < args.ne00 ? ((device T0 *) x)[i] : 0;
-                }
-            } else {
-                // do not perform bounds checks
-                FOR_UNROLL (short i = 0; i < 16; i++) {
-                    *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
-                    +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
-                    +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = ((device T0 *) x)[i];
-                }
+            for (short i = 0; i < 16; i++) {
+                *(sa + SG_MAT_SIZE * ((tiitg/THREAD_PER_ROW/8) \
+                +                     (tiitg%THREAD_PER_ROW)*16 + (i/8)*8) \
+                +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = loop_k + 16*il + i < args.ne00 ? ((device T0 *) x)[i] : 0;
             }
         } else {
             S0_4x4 temp_a;
