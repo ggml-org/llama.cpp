@@ -271,7 +271,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 - Using `CMake`:
 
   ```bash
-  cmake -B build -DLLAMA_SERVER_SSL=ON
+  cmake -B build -DLLAMA_OPENSSL=ON
   cmake --build build --config Release -t llama-server
   ```
 
