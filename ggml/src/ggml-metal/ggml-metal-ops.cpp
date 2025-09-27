@@ -49,6 +49,10 @@ struct ggml_metal_op {
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
+
+        // filter empty nodes
+        // TODO: this can be removed when the allocator starts filtering them earlier
+        //       https://github.com/ggml-org/llama.cpp/pull/16130#issuecomment-3327905830
         for (int i = idx_start; i < idx_end; i++) {
             if (!ggml_op_is_empty(gf->nodes[i]->op) && !ggml_is_empty(gf->nodes[i])) {
                 idxs.push_back(i);
