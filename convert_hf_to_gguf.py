@@ -4250,7 +4250,8 @@ class Plamo2Model(TextModel):
         # This logic matches modeling_plamo.py's is_mamba function
         mamba_step = hparams.get("mamba_step", 2)
         mamba_enabled = hparams.get("mamba_enabled", True)
-        mamba_layers = []
+        num_key_value_heads = []
+        num_attention_heads = []
 
         if mamba_enabled:
             for i in range(block_count):
@@ -4260,17 +4261,21 @@ class Plamo2Model(TextModel):
                 else:
                     is_mamba = (i % mamba_step) != (mamba_step // 2)
                 if is_mamba:
-                    mamba_layers.append(0)
+                    num_key_value_heads.append(0)
+                    num_attention_heads.append(0)
                 else:
-                    mamba_layers.append(hparams.get("num_key_value_heads", 4))
+                    num_key_value_heads.append(hparams.get("num_key_value_heads", 4))
+                    num_attention_heads.append(hparams.get("num_attention_heads", 32))
 
-        if mamba_layers:
-            self.gguf_writer.add_head_count_kv(mamba_layers)
+        if num_key_value_heads and num_attention_heads:
+            self.gguf_writer.add_head_count_kv(num_key_value_heads)
+            self.gguf_writer.add_head_count(num_attention_heads)
 
         self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 2048))
         self.gguf_writer.add_embedding_length(hparams.get("hidden_size", 4096))
+        self.gguf_writer.add_key_length(hparams.get("hidden_size_per_head", 128))
+        self.gguf_writer.add_value_length(hparams.get("hidden_size_per_head", 128))
         self.gguf_writer.add_block_count(block_count)
-        self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 32))
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-06))
         self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10000))
 
