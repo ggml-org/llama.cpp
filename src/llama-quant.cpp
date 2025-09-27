@@ -1136,7 +1136,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 std::vector<uint8_t> tl_quantized_buffer(quantized_buffer.size());
                 std::vector<float> tl_dequantized_buffer(dequantized_buffer.size());
                 for (;;) {
-                    const size_t i = cidx.fetch_add(1, std::memory_order_relaxed);
+                    const size_t i = cidx.fetch_add(1, std::memory_order_acq_rel);
                     if (i >= compatible_candidates.size()) { break; }
 
                     const ggml_type tensor_types = compatible_candidates[i];
