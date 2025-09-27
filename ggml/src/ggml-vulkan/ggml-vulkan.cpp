@@ -83,6 +83,9 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_APPLE 0x106b
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
+#define VK_VENDOR_ID_ARM 0x13B5
+#define VK_VENDOR_ID_QUALCOMM 0x5143
+
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -458,6 +461,8 @@ struct vk_device_struct {
     vk_matmul_pipeline pipeline_matmul_bf16 {};
     vk_matmul_pipeline2 pipeline_matmul_f16;
     vk_matmul_pipeline2 pipeline_matmul_f16_f32;
+    vk_pipeline pipeline_matmul_f16_f32_embed;
+    vk_pipeline pipeline_matmul_f32_f32_embed;
 
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat[GGML_TYPE_COUNT];
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_COUNT];
@@ -3080,6 +3085,40 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_MXFP4,   pipeline_dequant_mul_mat_mat_id[GGML_TYPE_MXFP4].f32acc,   matmul_id_mxfp4_f32,   , mmq_wg_denoms, warptile_mmqid, vk_mat_mat_id_push_constants, 4, _id, 0);
         }
     }
+
+    if (device->vendor_id == VK_VENDOR_ID_ARM || device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+        // Shader workgroup size is 16x8 = 128
+        const uint32_t wg_x = 16;
+        const uint32_t wg_y = 8;
+
+        // Tile sizes for the workgroup
+        uint32_t bm, bn, bk;
+
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            bm = 32;
+            bn = 128;
+            bk = 8;
+        } else {
+            bm = 64;
+            bn = 64;
+            bk = 16;
+        }
+
+        // Threads per tile
+        const uint32_t tm = bm / wg_y;
+        const uint32_t tn = bn / wg_x;
+
+        const std::vector<uint32_t> embed_spec_constants = {bm, bn, bk, tm, tn};
+        const std::array<uint32_t, 3> embed_wg_denoms = {bm, bn, 1};
+
+        ggml_vk_create_pipeline(device, device->pipeline_matmul_f16_f32_embed, "mul_mat_f16_f32_embed",
+                                mul_mat_f16_f32_embed_len, mul_mat_f16_f32_embed_data, "main", 3,
+                                sizeof(vk_mat_mat_push_constants), embed_wg_denoms, embed_spec_constants, 1);
+        ggml_vk_create_pipeline(device, device->pipeline_matmul_f32_f32_embed, "mul_mat_f32_f32_embed",
+                                mul_mat_f32_f32_embed_len, mul_mat_f32_f32_embed_data, "main", 3,
+                                sizeof(vk_mat_mat_push_constants), embed_wg_denoms, embed_spec_constants, 1);
+    }
+
     // reusing CREATE_MM from the fp32 path
     if ((device->coopmat2 || device->coopmat_support)
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
@@ -5996,6 +6035,114 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     const uint64_t ne11 = src1->ne[1];
     const uint64_t ne12 = src1->ne[2];
     const uint64_t ne13 = src1->ne[3];
+
+    if ((ctx->device->vendor_id == VK_VENDOR_ID_ARM || ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM) &&
+        (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type)) &&
+        src1->type == GGML_TYPE_F32 && ggml_vk_dim01_contiguous(src1) &&
+        ne02 == 1 && ne03 == 1 &&
+        ne12 == 1 && ne13 == 1) {
+
+        ggml_backend_vk_buffer_context * dst_buf_ctx = (ggml_backend_vk_buffer_context *)dst->buffer->context;
+        ggml_backend_vk_buffer_context * src0_buf_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
+        ggml_backend_vk_buffer_context * src1_buf_ctx = (ggml_backend_vk_buffer_context *)src1->buffer->context;
+        vk_buffer d_Qx = nullptr, d_Qy = nullptr, d_D = nullptr;
+        size_t qx_buf_offset = 0, qy_buf_offset = 0, d_buf_offset = 0;
+        bool src0_uma = false, src1_uma = false, dst_uma = false;
+
+        if (ctx->device->uma) {
+            ggml_vk_host_get(ctx->device, src0->data, d_Qx, qx_buf_offset);
+            ggml_vk_host_get(ctx->device, src1->data, d_Qy, qy_buf_offset);
+            ggml_vk_host_get(ctx->device, dst->data, d_D, d_buf_offset);
+            src0_uma = d_Qx != nullptr;
+            src1_uma = d_Qy != nullptr;
+            dst_uma = d_D != nullptr;
+        }
+
+        if (!src0_uma) { d_Qx = src0_buf_ctx->dev_buffer; qx_buf_offset = vk_tensor_offset(src0) + src0->view_offs; }
+        if (!src1_uma) { d_Qy = src1_buf_ctx->dev_buffer; qy_buf_offset = vk_tensor_offset(src1) + src1->view_offs; }
+        if (!dst_uma) { d_D = dst_buf_ctx->dev_buffer; d_buf_offset = vk_tensor_offset(dst) + dst->view_offs; }
+
+        const uint32_t M = ne01;
+        const uint32_t N = ne11;
+        const uint32_t K = ne10;
+
+        vk_pipeline pipeline = nullptr;
+        vk_buffer d_X;
+        uint64_t x_buf_offset;
+        uint32_t stride_a;
+        bool dequantized = false;
+
+        if (ggml_is_quantized(src0->type)) {
+            vk_pipeline dequant_pipeline = ggml_vk_get_to_fp16(ctx, src0->type);
+
+            if (dequant_pipeline) {
+                dequantized = true;
+                const uint64_t x_sz = sizeof(ggml_fp16_t) * M * K;
+
+                if (dryrun) {
+                    if (ctx->prealloc_size_x < x_sz) {
+                        ctx->prealloc_size_x = x_sz;
+                    }
+                    ggml_pipeline_request_descriptor_sets(ctx, dequant_pipeline, 1);
+                    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_f16_f32_embed, 1);
+                    return;
+                }
+
+                const std::vector<uint32_t> pc = { (uint32_t)M, (uint32_t)K, (uint32_t)K, (uint32_t)K, (uint32_t)(ggml_nelements(src0)) };
+
+                ggml_vk_dispatch_pipeline(ctx, subctx, dequant_pipeline, {
+                    vk_subbuffer{ d_Qx, qx_buf_offset, VK_WHOLE_SIZE },
+                    vk_subbuffer{ ctx->prealloc_x, 0, VK_WHOLE_SIZE }
+                }, pc, { (uint32_t)(ggml_nelements(src0)), 1, 1});
+
+                d_X = ctx->prealloc_x;
+                x_buf_offset = 0;
+                stride_a = K;
+                pipeline = ctx->device->pipeline_matmul_f16_f32_embed;
+            }
+        } else {
+            if (src0->type == GGML_TYPE_F16) {
+                pipeline = ctx->device->pipeline_matmul_f16_f32_embed;
+            } else {
+                pipeline = ctx->device->pipeline_matmul_f32_f32_embed;
+            }
+
+            if (dryrun) {
+                ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+                return;
+            }
+
+            d_X = d_Qx;
+            x_buf_offset = qx_buf_offset;
+            stride_a = src0->nb[1] / ggml_type_size(src0->type);
+        }
+
+        if (pipeline != nullptr) {
+            if (dequantized) {
+                ggml_vk_sync_buffers(ctx, subctx); // Ensure dequant is finished
+            }
+
+            const uint32_t stride_b = src1->nb[1] / ggml_type_size(src1->type);
+            const uint32_t stride_d = dst->nb[1] / ggml_type_size(dst->type);
+
+            const vk_mat_mat_push_constants pc = { M, N, K, stride_a, stride_b, stride_d, M * K, K * N, M * N, K, 1, 1, 1, 1, N };
+
+            vk_buffer d_Y = d_Qy;
+            const uint64_t y_buf_offset = qy_buf_offset;
+
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, {
+                vk_subbuffer{ d_X, x_buf_offset, VK_WHOLE_SIZE },
+                vk_subbuffer{ d_Y, y_buf_offset, VK_WHOLE_SIZE },
+                vk_subbuffer{ d_D, d_buf_offset, VK_WHOLE_SIZE },
+            }, pc, { M, N, 1 });
+
+            if (dequantized) {
+                ctx->prealloc_x_need_sync = true;
+            }
+
+            return;
+        }
+    }
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
