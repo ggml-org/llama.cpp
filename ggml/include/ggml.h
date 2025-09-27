@@ -574,6 +574,7 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_XIELU,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1147,6 +1148,17 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
+    // xIELU activation function
+    // https://arxiv.org/abs/2411.13010
+    // x = (x > 0) ? a_p * x^2 + b * x : (exmp1(min(x, eps)) - x) * a_n + b * x
+    GGML_API struct ggml_tensor * ggml_xielu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float alpha_n,
+            float alpha_p,
+            float beta,
+            float eps);
 
     // gated linear unit ops
     // A: n columns, r rows,
