@@ -232,7 +232,7 @@ extern "C" {
 
         llama_token  *  token;
         float        *  embd;
-        llama_pos    *  pos;
+        llama_pos    *  pos;      // first `n_tokens` elements are always linearly increasing position for traditional llm
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits;   // TODO: rename this to "output"
