@@ -1615,9 +1615,14 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                     )
                 );
             });
+            
+            auto not_end = builder.add_rule("not-end",
+                "[^<] | \"<\" [^|] | \"<|\" [^e] | \"<|e\" [^n] | \"<|en\" [^d] | \"<|end\" [^|] | \"<|end|\" [^>]");
+            auto analysis = builder.add_rule("analysis",
+                "\"<|channel|>analysis<|message|>\" ( " + not_end + " )* \"<|end|>\"");
 
             auto recipient_in_role = builder.add_rule("recipient_in_role",
-                "\"<|start|>assistant\"? \" to=functions.\" ( " +
+                "(" + analysis + ")?" + "\"<|start|>assistant\"? \" to=functions.\" ( " +
                 string_join(tool_rules_recipient_in_role, " | ") + " )"
             );
 
