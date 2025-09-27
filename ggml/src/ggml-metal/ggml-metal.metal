@@ -7857,7 +7857,8 @@ kernel void kernel_set_rows_f(
     }
 }
 
-constant bool FC_mul_mm_bounds_check [[function_constant(FC_MUL_MM + 0)]];
+constant bool FC_mul_mm_bc_inp [[function_constant(FC_MUL_MM + 0)]];
+constant bool FC_mul_mm_bc_out [[function_constant(FC_MUL_MM + 1)]];
 
 #define BLOCK_SIZE_M 64 // 8 simdgroup matrices from matrix A
 #define BLOCK_SIZE_N 32 // 4 simdgroup matrices from matrix B
@@ -7927,7 +7928,7 @@ kernel void kernel_mul_mm(
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
-        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bounds_check) {
+        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bc_inp) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             // no need for dequantization
@@ -7949,7 +7950,7 @@ kernel void kernel_mul_mm(
             }
         }
 
-        if (FC_mul_mm_bounds_check) {
+        if (FC_mul_mm_bc_inp) {
             for (short i = 0; i < 8; ++i) {
                 sb[32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL) + i] = loop_k + iy + i < args.ne00 ? (S1) ((device T1 *) y)[i] : 0;
             }
@@ -7993,7 +7994,8 @@ kernel void kernel_mul_mm(
         }
     }
 
-    if ((r0 + 1) * BLOCK_SIZE_M <= args.ne0 && (r1 + 1) * BLOCK_SIZE_N <= args.ne1) {
+    if (!FC_mul_mm_bc_out || ((r0 + 1) * BLOCK_SIZE_M <= args.ne0 && (r1 + 1) * BLOCK_SIZE_N <= args.ne1)) {
+        // if no bounds checks on the output are needed, we can directly write to device memory
         device float * C = (device float *) dst +
             (BLOCK_SIZE_M * r0 + 32*(sgitg &  1)) + \
             (BLOCK_SIZE_N * r1 + 16*(sgitg >> 1)) * args.ne0 + im*args.ne1*args.ne0;
@@ -8169,7 +8171,7 @@ kernel void kernel_mul_mm_id(
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
-        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bounds_check) {
+        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bc_inp) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             // no need for dequantization
@@ -8191,7 +8193,7 @@ kernel void kernel_mul_mm_id(
             }
         }
 
-        if (FC_mul_mm_bounds_check) {
+        if (FC_mul_mm_bc_inp) {
             for (short i = 0; i < 8; ++i) {
                 sb[32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL) + i] = loop_k + iy + i < args.ne00 ? (S1) ((device T1 *) y)[i] : 0;
             }
