@@ -87,7 +87,7 @@
 		<Sidebar.GroupContent>
 			<Sidebar.Menu>
 				{#each filteredConversations as conversation (conversation.id)}
-					<Sidebar.MenuItem class="mb-1" onclick={handleMobileSidebarItemClick}>
+					<Sidebar.MenuItem class="mb-1">
 						<ChatSidebarConversationItem
 							conversation={{
 								id: conversation.id,
@@ -95,6 +95,7 @@
 								lastModified: conversation.lastModified,
 								currNode: conversation.currNode
 							}}
+							{handleMobileSidebarItemClick}
 							isActive={currentChatId === conversation.id}
 							onSelect={selectConversation}
 							onEdit={editConversation}
