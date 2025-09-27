@@ -79,6 +79,10 @@ struct ggml_metal_op {
         assert(use_fusion);
         assert(i0 >= 0 && i0 < n_nodes());
 
+        if (i0 + n_ops > n_nodes()) {
+            return false;
+        }
+
         return ggml_can_fuse_ext(gf, idxs.data() + i0, ops, n_ops);
     }
 
@@ -2290,7 +2294,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
 
         // note: in metal, we sometimes encode the graph in parallel so we have to avoid fusing ops
         //       across splits. idx_end indicates the last node in the current split
-        for (n_fuse = 0; n_fuse <= 6 && idx + n_fuse + 1 < ctx->n_nodes(); ++n_fuse) {
+        for (n_fuse = 0; n_fuse <= 6; ++n_fuse) {
             if (!ctx->can_fuse(idx + n_fuse, fops + n_fuse, 2)) {
                 break;
             }
@@ -2527,7 +2531,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         fops[1] = GGML_OP_MUL;
         fops[2] = GGML_OP_ADD;
 
-        for (n_fuse = 0; n_fuse <= 1 && idx + n_fuse + 1 < ctx->n_nodes(); ++n_fuse) {
+        for (n_fuse = 0; n_fuse <= 1; ++n_fuse) {
             if (!ctx->can_fuse(idx + n_fuse, fops + n_fuse, 2)) {
                 break;
             }
