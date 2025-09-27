@@ -819,25 +819,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         // Dequantize into dequantized_buffer
         {
             const ggml_type_traits * traits = ggml_get_type_traits(quant_type);
-            if (traits && traits->to_float && quant_type != GGML_TYPE_F16 && quant_type != GGML_TYPE_BF16) {
-                traits->to_float(quantized_buffer.data(), dequantized_buffer.data(), (int)(sample_rows * (size_t)n_per_row));
-            } else {
-                for (size_t r = 0; r < sample_rows; ++r) {
-                    const uint8_t * src = quantized_buffer.data() + r * row_sz;
-                    float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
-                    if (quant_type == GGML_TYPE_F16) {
-                        ggml_fp16_to_fp32_row((const ggml_fp16_t *)src, dst, (int)n_per_row);
-                    } else if (quant_type == GGML_TYPE_BF16) {
-                        ggml_bf16_to_fp32_row((const ggml_bf16_t *)src, dst, (int)n_per_row);
-                    } else {
-                        if (!traits || !traits->to_float) {
-                            if (out_mse) { *out_mse = infinity; }
-                            if (out_proj) { *out_proj = 0.0; }
-                            return infinity;
-                        }
-                        traits->to_float(src, dst, (int)n_per_row);
-                    }
-                }
+            if (!traits || !traits->to_float) {
+                if (out_mse) { *out_mse = infinity; }
+                if (out_proj) { *out_proj = 0.0; }
+                return infinity;
+            }
+
+            for (size_t r = 0; r < sample_rows; ++r) {
+                const uint8_t * src = quantized_buffer.data() + r * row_sz;
+                float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
+                traits->to_float(src, dst, (int)n_per_row);
             }
         }
 
