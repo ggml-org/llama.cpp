@@ -104,10 +104,10 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
         if ((type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) && src1_ncols > 64) {
             return false;
         }
-    }
-
-    if (!mul_mat_id && src1_ncols > 16) {
-        return false;
+    } else {
+        if (src1_ncols > 16) {
+            return false;
+        }
     }
 
     switch (type) {
