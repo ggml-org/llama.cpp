@@ -169,15 +169,23 @@ struct common_params_sampling {
 
 
     std::vector<enum common_sampler_type> samplers = {
+        // Order matters here, place the samplers that process raw logits before
+        // samplers that process probabilities.
+
+        // Logits samplers:
         COMMON_SAMPLER_TYPE_PENALTIES,
         COMMON_SAMPLER_TYPE_DRY,
+        COMMON_SAMPLER_TYPE_TEMPERATURE,
         COMMON_SAMPLER_TYPE_TOP_N_SIGMA,
+
+        // Can handle both logits and probabilities:
         COMMON_SAMPLER_TYPE_TOP_K,
+
+        // Probabilities samplers:
         COMMON_SAMPLER_TYPE_TYPICAL_P,
         COMMON_SAMPLER_TYPE_TOP_P,
         COMMON_SAMPLER_TYPE_MIN_P,
         COMMON_SAMPLER_TYPE_XTC,
-        COMMON_SAMPLER_TYPE_TEMPERATURE,
     };
 
     std::string                         grammar; // optional BNF-like grammar to constrain sampling

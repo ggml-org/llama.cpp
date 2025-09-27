@@ -269,20 +269,20 @@ int main(int argc, char ** argv) {
 
                         LOG_DBG("verifying sequence #%d at pos #%d from %d active sequence(s)\n", s, i_dft, (int) active_seqs.size());
                         float r = u_dist(rng);
-                        llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data() , drafts[s].dists[i_dft].size(), LLAMA_TOKEN_NULL, true };
+                        llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data(), true, drafts[s].dists[i_dft].size(), LLAMA_TOKEN_NULL, true };
 
                         //GGML_ASSERT(dist_tgt.size <= dist_dft.size);
 
                         // acquire the token probabilities assigned by the draft and target models
                         for (size_t i = 0; i < dist_tgt.size; i++) {
                             if (dist_tgt.data[i].id == drafts[s].tokens[i_dft]) {
-                                p_tgt = dist_tgt.data[i].p;
+                                p_tgt = dist_tgt.data[i].score;
                                 break;
                             }
                         }
                         for (size_t i = 0; i < dist_dft.size; i++) {
                             if (dist_dft.data[i].id == drafts[s].tokens[i_dft]) {
-                                p_dft = dist_dft.data[i].p;
+                                p_dft = dist_dft.data[i].score;
                                 break;
                             }
                         }
@@ -316,21 +316,21 @@ int main(int argc, char ** argv) {
 
                             for (size_t i = 0; i < dist_tgt.size; i++) {
                                 if (i < dist_dft.size) {
-                                    dist_tgt.data[i].p = std::max(0.0f, dist_tgt.data[i].p - dist_dft.data[i].p);
+                                    dist_tgt.data[i].score = std::max(0.0f, dist_tgt.data[i].score - dist_dft.data[i].score);
                                 } else {
-                                    dist_tgt.data[i].p = std::max(0.0f, dist_tgt.data[i].p);
+                                    dist_tgt.data[i].score = std::max(0.0f, dist_tgt.data[i].score);
                                 }
 
-                                sum_probs += dist_tgt.data[i].p;
+                                sum_probs += dist_tgt.data[i].score;
                             }
 
                             for (size_t i = 0; i < dist_tgt.size; i++) {
-                                dist_tgt.data[i].p /= sum_probs;
+                                dist_tgt.data[i].score /= sum_probs;
                             }
 
                             // sort dist_tgt by p desc
                             std::sort(dist_tgt.data, dist_tgt.data + dist_tgt.size, [](const llama_token_data &a, const llama_token_data &b) {
-                                return a.p > b.p;
+                                return a.score > b.score;
                             });
                         }
 
@@ -355,7 +355,7 @@ int main(int argc, char ** argv) {
                         LOG_DBG("all drafted tokens were rejected, sampling from residual distribution\n");
                         std::vector<float> probs(dist_tgt.size);
                         for (size_t i = 0; i < dist_tgt.size; ++i) {
-                            probs[i] = dist_tgt.data[i].p;
+                            probs[i] = dist_tgt.data[i].score;
                         }
 
                         std::discrete_distribution<> dist(probs.begin(), probs.end());
@@ -497,14 +497,14 @@ int main(int argc, char ** argv) {
 
                 for (int k = 0; k < std::min(n_seq_dft + 3, (int) cur_p->size); ++k) {
                     LOG_DBG(" - draft candidate %3d for seq %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                            k, s, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                            k, s, i, cur_p->data[k].id, cur_p->data[k].score, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                 }
 
                 std::vector<int> sa(1, s);
 
                 // attempt to split the branch if the probability is high enough
                 for (int f = 1; f < 8; ++f) {
-                    if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
+                    if (n_seq_cur < n_seq_dft && cur_p->data[f].score > p_draft_split) {
                         LOG_DBG("splitting seq %3d into %3d\n", s, n_seq_cur);
 
                         llama_memory_seq_rm(mem_dft,    n_seq_cur, -1, -1);

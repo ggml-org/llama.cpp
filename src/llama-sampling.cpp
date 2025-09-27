@@ -131,7 +131,7 @@ struct ring_buffer {
 // writes result in res, does not mutate cur
 static void llama_token_data_array_partial_sort(const llama_token_data_array & cur, int npartial, std::vector<llama_token_data> & res) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
+        return a.score > b.score;
     };
 
     constexpr int   nbuckets     = 128;
@@ -148,7 +148,7 @@ static void llama_token_data_array_partial_sort(const llama_token_data_array & c
     bucket_idx.reserve(cur.size);
 
     for (int i = 0; i < (int)cur.size; ++i) {
-        const float val = cur.data[i].logit;
+        const float val = cur.data[i].score;
         int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
         ib = std::max(0, std::min(nbuckets - 1, ib));
         bucket_idx.push_back(ib);
@@ -189,7 +189,7 @@ static void llama_token_data_array_partial_sort(const llama_token_data_array & c
 // reduces the size of cur_p to npartial, keeping only the top npartial elements
 static void llama_token_data_array_partial_sort_inplace(llama_token_data_array * cur_p, int npartial) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
+        return a.score > b.score;
     };
 
     if (npartial <= 128) {
@@ -229,7 +229,7 @@ static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng)
 
         bool operator==(const probs_iterator & other) const { return data == other.data; }
         bool operator!=(const probs_iterator & other) const { return data != other.data; }
-        const float & operator*() const { return data->p; }
+        const float & operator*() const { return data->score; }
         probs_iterator & operator++() { ++data; return *this; }
         probs_iterator operator++(int) { probs_iterator tmp = *this; ++data; return tmp; }
     };
@@ -260,18 +260,19 @@ static void llama_log_softmax(float * array, size_t size) {
 */
 
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
+    GGML_ASSERT(cur_p->raw);
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
         size_t max_i = 0;
-        float  max_l = cur_p->data[0].logit;
+        float  max_l = cur_p->data[0].score;
 
         for (size_t i = 1; i < cur_p->size; ++i) {
-            if (cur_p->data[i    ].logit > max_l) {
-                cur_p->data[max_i].logit = -INFINITY;
+            if (cur_p->data[i    ].score > max_l) {
+                cur_p->data[max_i].score = -INFINITY;
                 max_i = i;
-                max_l = cur_p->data[i].logit;
+                max_l = cur_p->data[i].score;
             } else {
-                cur_p->data[i].logit = -INFINITY;
+                cur_p->data[i].score = -INFINITY;
             }
         }
 
@@ -279,7 +280,7 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
     }
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].logit /= temp;
+        cur_p->data[i].score /= temp;
     }
 }
 
@@ -291,24 +292,25 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
         llama_token_data_array_partial_sort_inplace(cur_p, cur_p->size);
     }
 
-    float max_l = cur_p->data[0].logit;
+    float max_l = cur_p->data[0].score;
     if (!cur_p->sorted) {
         for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
+            max_l = std::max(max_l, cur_p->data[i].score);
         }
     }
 
     float cum_sum = 0.0f;
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        float p = expf(cur_p->data[i].logit - max_l);
-        cur_p->data[i].p = p;
+        float p = expf(cur_p->data[i].score - max_l);
+        cur_p->data[i].score = p;
         cum_sum += p;
     }
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= cum_sum;
+        cur_p->data[i].score /= cum_sum;
     }
+    cur_p->raw = false;
 }
 
 static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) {
@@ -416,11 +418,12 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     std::vector<llama_token_data> cur;
     cur.reserve(n_vocab);
     for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+        cur.emplace_back(llama_token_data{token_id, logits[token_id]});
     }
 
     llama_token_data_array cur_p = {
         /* .data       = */ cur.data(),
+        /* .raw        = */ true,
         /* .size       = */ cur.size(),
         /* .selected   = */ -1,
         /* .sorted     = */ false,
@@ -566,7 +569,7 @@ static const char * llama_sampler_greedy_name(const struct llama_sampler * /*smp
 static void llama_sampler_greedy_apply(struct llama_sampler * /*smpl*/, llama_token_data_array * cur_p) {
     cur_p->selected = 0;
     for (size_t i = 1; i < cur_p->size; ++i) {
-        if (cur_p->data[i].logit > cur_p->data[cur_p->selected].logit) {
+        if (cur_p->data[i].score > cur_p->data[cur_p->selected].score) {
             cur_p->selected = i;
         }
     }
@@ -613,24 +616,33 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     cur_p->selected = 0;
 
     if (cur_p->size == 1) {
-        cur_p->data[0].p = 1.0f;
+        cur_p->data[0].score = 1.0f;
         return;
     }
 
-    // max logit for numerical stability
-    float max_l = cur_p->data[0].logit;
-    if (!cur_p->sorted) {
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
-        }
-    }
-
-    // apply softmax to obtain the probabilities
     double sum_cum = 0.0f;
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        float p = expf(cur_p->data[i].logit - max_l);
-        cur_p->data[i].p = p;
-        sum_cum += p;
+
+    if (cur_p->raw) {
+        // max logit for numerical stability
+        float max_l = cur_p->data[0].score;
+        if (!cur_p->sorted) {
+            for (size_t i = 1; i < cur_p->size; ++i) {
+                max_l = std::max(max_l, cur_p->data[i].score);
+            }
+        }
+
+        // apply softmax to obtain the probabilities
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            float p = expf(cur_p->data[i].score - max_l);
+            cur_p->data[i].score = p;
+            sum_cum += p;
+        }
+        cur_p->raw = false;
+    } else {
+        // Input is already probabilities - just calculate sum for renormalization
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            sum_cum += cur_p->data[i].score;
+        }
     }
 
 #if 1
@@ -647,7 +659,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (!found) {
             // accumulate probs until we reach the target sum
-            sum_run += cur_p->data[i].p;
+            sum_run += cur_p->data[i].score;
             if (sum_run >= sum_tgt) {
                 cur_p->selected = i;
                 found = true;
@@ -655,7 +667,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
         }
 
         // normalize probs
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].score /= sum_cum;
     }
 
     // fallback to the last token (don't think this can happen)
@@ -666,7 +678,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 #else
     // for clarity, this is the same as above but does one pass for normalization and one extra pass for sampling
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].score /= sum_cum;
     }
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
@@ -780,7 +792,9 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, false);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, false);
+    }
 
     size_t k = cur_p->size;
     auto * pdata = cur_p->data;
@@ -802,7 +816,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
     size_t last_idx = cur_p->size;
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cum_sum += pdata[i].p;
+        cum_sum += pdata[i].score;
 
         // Check if the running sum is at least p or if we have kept at least min_keep tokens
         // we set the last index to i+1 to indicate that the current iterate should be included in the set
@@ -883,12 +897,12 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
         float max_logit = -FLT_MAX;
         for (size_t i = 0; i < cur_p->size; ++i) {
-            max_logit = std::max(max_logit, cur_p->data[i].logit);
+            max_logit = std::max(max_logit, cur_p->data[i].score);
         }
         const float min_logit = max_logit + logf(ctx->p); // min logit for p_i >= p * p_max
 
         for (size_t i = 0; i < cur_p->size; ++i) {
-            if (cur_p->data[i].logit >= min_logit) {
+            if (cur_p->data[i].score >= min_logit) {
                 filtered_tokens.push_back(cur_p->data[i]);
             }
         }
@@ -908,11 +922,11 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
             llama_token_data_array_partial_sort_inplace(cur_p, cur_p->size);
         }
 
-        const float min_logit = cur_p->data[0].logit + logf(ctx->p); // min logit for p_i >= p * p_max
+        const float min_logit = cur_p->data[0].score + logf(ctx->p); // min logit for p_i >= p * p_max
         size_t i = 1; // first token always matches
 
         for (; i < cur_p->size; ++i) {
-            if (cur_p->data[i].logit < min_logit && i >= ctx->min_keep) {
+            if (cur_p->data[i].score < min_logit && i >= ctx->min_keep) {
                 break; // prob too small
             }
         }
@@ -971,17 +985,19 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     }
 
     // Compute the softmax of logits and calculate entropy
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     float entropy = 0.0f;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        entropy += -cur_p->data[i].p * logf(cur_p->data[i].p);
+        entropy += -cur_p->data[i].score * logf(cur_p->data[i].score);
     }
 
     // Compute the absolute difference between negative log probability and entropy for each candidate
     std::vector<float> shifted_scores;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        float shifted_score = fabsf(-logf(cur_p->data[i].p) - entropy);
+        float shifted_score = fabsf(-logf(cur_p->data[i].score) - entropy);
         shifted_scores.push_back(shifted_score);
     }
 
@@ -999,7 +1015,7 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
 
     for (size_t i = 0; i < indices.size(); ++i) {
         size_t idx = indices[i];
-        cum_sum += cur_p->data[idx].p;
+        cum_sum += cur_p->data[idx].score;
 
         // Check if the running sum is greater than typical or if we have kept at least min_keep tokens
         if (cum_sum > ctx->p && (ctx->min_keep == 0 || i >= ctx->min_keep - 1)) {
@@ -1120,12 +1136,14 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
         // Calculate maximum possible entropy
         float max_entropy = -logf(1.0f / cur_p->size);
 
-        llama_sampler_softmax_impl(cur_p, true);
+        if (cur_p->raw) {
+            llama_sampler_softmax_impl(cur_p, true);
+        }
 
         // Calculate entropy of the softmax probabilities
         float entropy = 0.0f;
         for (size_t i = 0; i < cur_p->size; ++i) {
-            float prob = cur_p->data[i].p;
+            float prob = cur_p->data[i].score;
             if (prob > 0.0f) { // Ensure no log(0)
                 entropy -= prob * logf(prob);
             }
@@ -1150,24 +1168,24 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
         llama_sampler_temp_impl(cur_p, dyn_temp);
 
         // Re-compute softmax probabilities after scaling logits with dynamic temperature
-        const double max_l_double = cur_p->data[0].logit;
+        const double max_l_double = cur_p->data[0].score;
 
         double cum_sum_double = 0.0;
         for (size_t i = 0; i < cur_p->size; ++i) {
-            double p = exp(cur_p->data[i].logit - max_l_double);
-            cur_p->data[i].p = p; // Store the scaled probability
+            double p = exp(cur_p->data[i].score - max_l_double);
+            cur_p->data[i].score = p; // Store the scaled probability
             cum_sum_double += p;
         }
 
         for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].p /= cum_sum_double; // Re-normalize the probabilities
+            cur_p->data[i].score /= cum_sum_double; // Re-normalize the probabilities
         }
 
     #ifdef DEBUG
         // Print the updated top 25 probabilities after temperature scaling
         LLAMA_LOG_INFO("\nUpdated Top 25 Probabilities After Dynamic Temperature Scaling (in percentages):\n");
         for (size_t i = 0; i < 25 && i < cur_p->size; ++i) {
-            LLAMA_LOG_INFO("Token %zu: %f%%\n", i + 1, cur_p->data[i].p * 100.0f);
+            LLAMA_LOG_INFO("Token %zu: %f%%\n", i + 1, cur_p->data[i].score * 100.0f);
         }
     #endif
     } else {
@@ -1236,12 +1254,14 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     int pos_last = 0;
 
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].p >= ctx->threshold) {
+        if (cur_p->data[i].score >= ctx->threshold) {
             pos_last = i;
         } else {
             break;
@@ -1327,7 +1347,9 @@ static const char * llama_sampler_mirostat_name(const struct llama_sampler * /*s
 static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     // Estimate s_hat using the most probable m tokens
     float s_hat = 0.0;
@@ -1335,7 +1357,7 @@ static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_toke
     float sum_ti_sq = 0.0;
     for (size_t i = 0; i < size_t(ctx->m - 1) && i < cur_p->size - 1; ++i) {
         float t_i = logf(float(i + 2) / float(i + 1));
-        float b_i = logf(cur_p->data[i].p / cur_p->data[i + 1].p);
+        float b_i = logf(cur_p->data[i].score / cur_p->data[i + 1].score);
         sum_ti_bi += t_i * b_i;
         sum_ti_sq += t_i * t_i;
     }
@@ -1353,7 +1375,7 @@ static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_toke
 
     cur_p->selected = idx;
 
-    float observed_surprise = -log2f(cur_p->data[idx].p);
+    float observed_surprise = -log2f(cur_p->data[idx].score);
     float e = observed_surprise - ctx->tau;
 
     // Update mu using the learning rate and error
@@ -1433,11 +1455,13 @@ static const char * llama_sampler_mirostat_v2_name(const struct llama_sampler * 
 static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat_v2 *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     // Truncate the words with surprise values greater than mu
     cur_p->size = std::distance(cur_p->data, std::find_if(cur_p->data, cur_p->data + cur_p->size, [&](const llama_token_data & candidate) {
-        return -log2f(candidate.p) > ctx->mu;
+        return -log2f(candidate.score) > ctx->mu;
     }));
 
     if (cur_p->size == 0) {
@@ -1451,7 +1475,7 @@ static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_t
 
     cur_p->selected = idx;
 
-    float observed_surprise = -log2f(cur_p->data[idx].p);
+    float observed_surprise = -log2f(cur_p->data[idx].score);
     float e = observed_surprise - ctx->tau;
 
     // Update mu using the learning rate and error
@@ -1752,6 +1776,8 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
         return;
     }
 
+    GGML_ASSERT(cur_p->raw);
+
     // Apply frequency and presence penalties to the cur_p
     for (size_t i = 0; i < cur_p->size; ++i) {
         const auto token_iter = ctx->token_count.find(cur_p->data[i].id);
@@ -1765,13 +1791,13 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
 
         // The academic publication that described this technique actually just only divided, but that would cause tokens with negative logits to become more likely, which is obviously wrong.
         // This is common fix for this problem, which is to multiply by the penalty instead of dividing.
-        if (cur_p->data[i].logit <= 0) {
-            cur_p->data[i].logit *= ctx->penalty_repeat;
+        if (cur_p->data[i].score <= 0) {
+            cur_p->data[i].score *= ctx->penalty_repeat;
         } else {
-            cur_p->data[i].logit /= ctx->penalty_repeat;
+            cur_p->data[i].score /= ctx->penalty_repeat;
         }
 
-        cur_p->data[i].logit -= float(count) * ctx->penalty_freq + float(count > 0) * ctx->penalty_present;
+        cur_p->data[i].score -= float(count) * ctx->penalty_freq + float(count > 0) * ctx->penalty_present;
     }
 
     cur_p->sorted = false;
@@ -1845,6 +1871,7 @@ static const char * llama_sampler_top_n_sigma_name(const struct llama_sampler * 
 }
 
 static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    GGML_ASSERT(cur_p->raw);
     auto * ctx = (llama_sampler_top_n_sigma *) smpl->ctx;
 
     if (ctx->n <= 0.0f || cur_p->size <= 1) {
@@ -1852,16 +1879,16 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
     }
 
     // find max logit and calculate mean
-    float max = cur_p->data[0].logit;
+    float max = cur_p->data[0].score;
     float logits_sum = 0;
     size_t valid_count = 0;
     for (size_t i = 0; i < cur_p->size; ++i) {
         // Only count non-negative infinity values
-        if (cur_p->data[i].logit != -INFINITY) {
-            if (cur_p->data[i].logit > max) {
-                max = cur_p->data[i].logit;
+        if (cur_p->data[i].score != -INFINITY) {
+            if (cur_p->data[i].score > max) {
+                max = cur_p->data[i].score;
             }
-            logits_sum += cur_p->data[i].logit;
+            logits_sum += cur_p->data[i].score;
             valid_count++;
         }
     }
@@ -1871,20 +1898,22 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
     float acc = 0;
     for (size_t i = 0; i < cur_p->size; ++i) {
         // Skip -infinity in std calculation
-        if (cur_p->data[i].logit != -INFINITY) {
-            acc += pow(cur_p->data[i].logit - mean, 2);
+        if (cur_p->data[i].score != -INFINITY) {
+            acc += pow(cur_p->data[i].score - mean, 2);
         }
     }
     float std = valid_count > 0 ? sqrt(acc/valid_count) : 0;
 
     // apply mask
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].logit < max - (ctx->n * std)) {
-            cur_p->data[i].logit = -INFINITY;
+        if (cur_p->data[i].score < max - (ctx->n * std)) {
+            cur_p->data[i].score = -INFINITY;
         }
     }
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 }
 
 static struct llama_sampler * llama_sampler_top_n_sigma_clone(const struct llama_sampler * smpl) {
@@ -1993,6 +2022,8 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
     if (ctx->dry_multiplier == 0.0f || ctx->dry_base < 1.0f || ctx->dry_penalty_last_n == 0) {
         return;
     }
+
+    GGML_ASSERT(cur_p->raw);
 
     int32_t effective_dry_penalty_last_n = (ctx->dry_penalty_last_n == -1) ? ctx->total_context_size : std::max(ctx->dry_penalty_last_n, 0);
     int last_n_repeat = std::min(std::min((int)ctx->last_tokens.size(), effective_dry_penalty_last_n), ctx->total_context_size);
@@ -2187,7 +2218,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
                     repeat_exp = max_exponent;
                 }
                 float penalty = ctx->dry_multiplier * std::pow(ctx->dry_base, repeat_exp);
-                cur_p->data[i].logit -= penalty;
+                cur_p->data[i].score -= penalty;
             }
         }
     }
@@ -2337,7 +2368,7 @@ static void llama_sampler_logit_bias_apply(struct llama_sampler * smpl, llama_to
     // update the candidates that have not been shuffled in the vocabulary (i.e. idx == id)
     for (const auto & lb : ctx->logit_bias) {
         if (lb.token >= 0 && cur_p->size > (size_t) lb.token && cur_p->data[lb.token].id == lb.token) {
-            cur_p->data[lb.token].logit += lb.bias;
+            cur_p->data[lb.token].score += lb.bias;
         } else {
             ctx->to_search.push_back(lb);
         }
@@ -2351,7 +2382,7 @@ static void llama_sampler_logit_bias_apply(struct llama_sampler * smpl, llama_to
     for (size_t i = 0; i < cur_p->size; ++i) {
         for (const auto & lb : ctx->to_search) {
             if (cur_p->data[i].id == lb.token) {
-                cur_p->data[i].logit += lb.bias;
+                cur_p->data[i].score += lb.bias;
                 break;
             }
         }
@@ -2408,7 +2439,9 @@ static const char * llama_sampler_infill_name(const struct llama_sampler * /*smp
 static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_infill *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (cur_p->raw) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
 #if defined(GGML_DEBUG_SAMPLER_INFILL)
 #define LOG_DBG_CUR LLAMA_LOG_DEBUG
@@ -2425,9 +2458,9 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
 
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (ctx->vocab->is_eog(cur_p->data[i].id)) {
-            p_eog_sum += cur_p->data[i].p;
+            p_eog_sum += cur_p->data[i].score;
         } else {
-            p_txt_sum += cur_p->data[i].p;
+            p_txt_sum += cur_p->data[i].score;
         }
     }
 
@@ -2447,7 +2480,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
 
         for (size_t i = 0; i < size_org; ++i) {
             if (ctx->vocab->is_eog(cur_p->data[i].id)) {
-                p_sum += cur_p->data[i].p;
+                p_sum += cur_p->data[i].score;
 
                 cur_p->data[cur_p->size++] = cur_p->data[i];
             }
@@ -2455,7 +2488,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
 
         // normalize probs
         for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].p /= p_sum;
+            cur_p->data[i].score /= p_sum;
         }
 
         return;
@@ -2466,11 +2499,11 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
     // combine tokens with common prefix
     for (size_t i0 = 0; i0 < cur_p->size; ++i0) {
         for (size_t i1 = 0; i1 < cur_p->size; ++i1) {
-            if (cur_p->data[i0].logit == -INFINITY) {
+            if (cur_p->data[i0].score == -INFINITY) {
                 break;
             }
 
-            if (i0 == i1 || cur_p->data[i1].logit == -INFINITY) {
+            if (i0 == i1 || cur_p->data[i1].score == -INFINITY) {
                 continue;
             }
 
@@ -2494,13 +2527,12 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
                 int src = i1;
 
                 // merge into the token with higher probability
-                if (cur_p->data[i1].p > cur_p->data[i0].p) {
+                if (cur_p->data[i1].score > cur_p->data[i0].score) {
                     std::swap(dst, src);
                 }
 
-                cur_p->data[dst].p += cur_p->data[src].p;
-                cur_p->data[src].logit = -INFINITY;
-                cur_p->data[src].p     = 0.0f;
+                cur_p->data[dst].score += cur_p->data[src].score;
+                cur_p->data[src].score     = 0.0f;
 
                 n_combined++;
             }
@@ -2521,7 +2553,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
     for (size_t i = 0; i < size_org; ++i) {
         const bool is_eog = ctx->vocab->is_eog(cur_p->data[i].id);
 
-        if (cur_p->data[i].p < thold && !is_eog) {
+        if (cur_p->data[i].score < thold && !is_eog) {
             continue;
         }
 
@@ -2529,7 +2561,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
             ++n_non_eog;
         }
 
-        p_sum += cur_p->data[i].p;
+        p_sum += cur_p->data[i].score;
 
         // keep this token
         cur_p->data[cur_p->size++] = cur_p->data[i];
@@ -2541,16 +2573,16 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
     if (n_non_eog == 0) {
         cur_p->size = 1;
         cur_p->data[0].id = ctx->vocab->token_eot();
-        cur_p->data[0].logit = 1.0f;
+        cur_p->data[0].score = 1.0f;
 
         return;
     }
 
     // normalize probs
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= p_sum;
+        cur_p->data[i].score /= p_sum;
 
-        LOG_DBG_CUR("%s: cur_p[%3zu] = { id: %6d, p: %.6f, logit: %6.3f }\n", __func__, i, cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
+        LOG_DBG_CUR("%s: cur_p[%3zu] = { id: %6d, score: %.6f }\n", __func__, i, cur_p->data[i].id, cur_p->data[i].score);
     }
 
     size_org = cur_p->size;
@@ -2564,20 +2596,20 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
     for (size_t i = 0; i < size_org; ++i) {
         const bool is_eog = ctx->vocab->is_eog(cur_p->data[i].id);
 
-        if (cur_p->data[i].p < thold && !is_eog) {
+        if (cur_p->data[i].score < thold && !is_eog) {
             continue;
         }
 
-        p_sum += cur_p->data[i].p;
+        p_sum += cur_p->data[i].score;
 
         cur_p->data[cur_p->size++] = cur_p->data[i];
     }
 
     // normalize probs
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= p_sum;
+        cur_p->data[i].score /= p_sum;
 
-        LOG_DBG_CUR("%s: cur_p[%3zu] = { id: %6d, p: %.6f, logit: %6.3f }\n", __func__, i, cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
+        LOG_DBG_CUR("%s: cur_p[%3zu] = { id: %6d, score: %.6f }\n", __func__, i, cur_p->data[i].id, cur_p->data[i].score);
     }
 
 #undef LOG_DBG_CUR

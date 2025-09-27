@@ -64,21 +64,21 @@ static float calculate_confidence(const llama_token_data_array & cur_p,
                                   std::mt19937 &                 rng) {
     switch (algorithm) {
         case CONFIDENCE_BASED:
-            return cur_p.data[cur_p.selected].p;  // Selected token probability
+            return cur_p.data[cur_p.selected].score;  // Selected token probability
 
         case ENTROPY_BASED:
             {
                 float       entropy = 0.0f;
                 const float epsilon = 1e-10f;
                 for (size_t i = 0; i < cur_p.size; i++) {
-                    float prob = cur_p.data[i].p;
+                    float prob = cur_p.data[i].score;
                     entropy += prob * logf(prob + epsilon);
                 }
                 return -entropy;  // Higher entropy = lower confidence
             }
 
         case MARGIN_BASED:
-            return (cur_p.size > 1) ? cur_p.data[0].p - cur_p.data[1].p : cur_p.data[0].p;
+            return (cur_p.size > 1) ? cur_p.data[0].score - cur_p.data[1].score : cur_p.data[0].score;
 
         case RANDOM:
             {
@@ -87,7 +87,7 @@ static float calculate_confidence(const llama_token_data_array & cur_p,
             }
 
         case ORIGIN:
-            return cur_p.data[cur_p.selected].p;
+            return cur_p.data[cur_p.selected].score;
 
         default:
             return 0.0f;
@@ -397,12 +397,12 @@ static void diffusion_generate(llama_context *          ctx,
                         const float * pos_logits = get_logits_for_pos(pos);
                         for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
                             candidates[token_id].id    = token_id;
-                            candidates[token_id].logit = pos_logits[token_id];
-                            candidates[token_id].p     = 0.0f;
+                            candidates[token_id].score = pos_logits[token_id];
                         }
 
                         llama_token_data_array cur_p = {
                             candidates.data(),
+                            true,
                             (size_t) n_vocab,
                             -1,
                             false,
@@ -421,13 +421,13 @@ static void diffusion_generate(llama_context *          ctx,
                     const float * pos_logits = get_logits_for_pos(pos);
 
                     for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
-                        candidates[token_id].logit = pos_logits[token_id];
-                        candidates[token_id].p     = 0.0f;
+                        candidates[token_id].score = pos_logits[token_id];
                         candidates[token_id].id    = token_id;
                     }
 
                     llama_token_data_array cur_p = {
                         candidates.data(),
+                        true,
                         candidates.size(),
                         -1,
                         false,
@@ -466,11 +466,12 @@ static void diffusion_generate(llama_context *          ctx,
                         conf_candidates.clear();
                         for (size_t i = 0; i < confidences.size(); i++) {
                             float conf_logit = confidences[i].first / params.alg_temp;
-                            conf_candidates.emplace_back(llama_token_data{ (int32_t) i, conf_logit, 0.0f });
+                            conf_candidates.emplace_back(llama_token_data{ (int32_t) i, conf_logit });
                         }
 
                         llama_token_data_array conf_array = {
                             conf_candidates.data(),
+                            true,
                             conf_candidates.size(),
                             -1,
                             false,
@@ -483,7 +484,7 @@ static void diffusion_generate(llama_context *          ctx,
                             int32_t pos          = mask_positions[mask_idx];
                             output_tokens[pos]   = sampled_tokens[mask_idx];
 
-                            conf_candidates[selected_idx].p = 0.0f;
+                            conf_candidates[selected_idx].score = 0.0f;
                             conf_array.selected             = -1;
                         }
                     }

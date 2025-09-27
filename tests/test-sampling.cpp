@@ -14,7 +14,7 @@ extern struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_siz
 
 static void dump(const llama_token_data_array * cur_p) {
     for (size_t i = 0; i < cur_p->size; i++) {
-        printf("%d: %f (%f)\n", cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
+        printf("%d: %f \n", cur_p->data[i].id, cur_p->data[i].score);
     }
 }
 
@@ -25,20 +25,20 @@ struct sampler_tester {
         cur.reserve(n_vocab);
         for (llama_token token_id = 0; token_id < (llama_token)n_vocab; token_id++) {
             const float logit = logf(token_id);
-            cur.emplace_back(llama_token_data{token_id, logit, 0.0f});
+            cur.emplace_back(llama_token_data{token_id, logit});
         }
 
-        cur_p = llama_token_data_array { cur.data(), cur.size(), -1, false };
+        cur_p = llama_token_data_array { cur.data(), true, cur.size(), -1, false };
     }
 
     sampler_tester(const std::vector<float> & probs, const std::vector<float> & probs_expected) : probs_expected(probs_expected) {
         cur.reserve(probs.size());
         for (llama_token token_id = 0; token_id < (llama_token)probs.size(); token_id++) {
             const float logit = logf(probs[token_id]);
-            cur.emplace_back(llama_token_data{token_id, logit, probs[token_id]});
+            cur.emplace_back(llama_token_data{token_id, logit});
         }
 
-        cur_p = llama_token_data_array { cur.data(), cur.size(), -1, false };
+        cur_p = llama_token_data_array { cur.data(), true, cur.size(), -1, false };
     }
 
     void apply(llama_sampler * sampler) {
@@ -49,7 +49,7 @@ struct sampler_tester {
     void check() {
         GGML_ASSERT(cur_p.size == probs_expected.size());
         for (size_t i = 0; i < cur_p.size; i++) {
-            GGML_ASSERT(fabs(cur_p.data[i].p - probs_expected[i]) < 1e-5);
+            GGML_ASSERT(fabs(cur_p.data[i].score - probs_expected[i]) < 1e-5);
         }
     }
 
@@ -270,13 +270,13 @@ static void test_sampler_queue(const size_t n_vocab, const std::string & sampler
 static void bench(llama_sampler * cnstr, const char * cnstr_name, const std::vector<llama_token_data> & data, int n_iter) {
     std::vector<llama_token_data> cur(data.size());
     std::copy(data.begin(), data.end(), cur.begin());
-    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_token_data_array cur_p = { cur.data(), true, cur.size(), -1, false };
     llama_sampler_apply(cnstr, &cur_p);
     llama_sampler_reset(cnstr);
     const int64_t t_start = ggml_time_us();
     for (int i = 0; i < n_iter; i++) {
         std::copy(data.begin(), data.end(), cur.begin());
-        llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+        llama_token_data_array cur_p = { cur.data(), true, cur.size(), -1, false };
         llama_sampler_apply(cnstr, &cur_p);
         llama_sampler_reset(cnstr);
     }
@@ -295,7 +295,7 @@ static void test_perf() {
     data.reserve(n_vocab);
     for (int i = 0; i < n_vocab; i++) {
         const float logit = 2.0f*((double)(rand())/RAND_MAX - 0.5);
-        data.emplace_back(llama_token_data{i, logit, 0.0f});
+        data.emplace_back(llama_token_data{i, logit});
     }
 
     BENCH(llama_sampler_init_top_k  (40),                     data, 32);
