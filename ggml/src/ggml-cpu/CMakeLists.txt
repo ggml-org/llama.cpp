@@ -118,18 +118,18 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 # so we check for them manually and enable them if available
 
                 execute_process(
-                    COMMAND ${CMAKE_C_COMPILER} -mcpu=native -E -v -
+                    COMMAND ${CMAKE_C_COMPILER} -march=native -E -v -
                     INPUT_FILE "/dev/null"
                     OUTPUT_QUIET
                     ERROR_VARIABLE ARM_MCPU
                     RESULT_VARIABLE ARM_MCPU_RESULT
                 )
                 if (NOT ARM_MCPU_RESULT)
-                    string(REGEX MATCH "-mcpu=[^ ']+" ARM_MCPU_FLAG "${ARM_MCPU}")
+                    string(REGEX MATCH "-march=[^ ']+" ARM_MCPU_FLAG "${ARM_MCPU}")
                 endif()
                 if ("${ARM_MCPU_FLAG}" STREQUAL "")
-                    set(ARM_MCPU_FLAG -mcpu=native)
-                    message(STATUS "ARM -mcpu not found, -mcpu=native will be used")
+                    set(ARM_MCPU_FLAG -march=native)
+                    message(STATUS "ARM -mcpu not found, -march=native will be used")
                 endif()
 
                 include(CheckCXXSourceRuns)
