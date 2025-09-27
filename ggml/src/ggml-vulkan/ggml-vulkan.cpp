@@ -7,11 +7,13 @@
 
 // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+// We use VULKAN_HPP_DEFAULT_DISPATCHER, but not VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+// to avoid conflicts with applications or other libraries who might use it.
+namespace vk::detail { class DispatchLoaderDynamic; }
+vk::detail::DispatchLoaderDynamic & ggml_vk_default_dispatcher();
+#define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
 
 #include <vulkan/vulkan.hpp>
-
-// See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 #include <algorithm>
 #include <cmath>
@@ -4508,6 +4510,12 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
 static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
+static vk::detail::DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
+
+vk::detail::DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
+    return ggml_vk_default_dispatcher_instance;
+}
+
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
         return;
@@ -4515,7 +4523,7 @@ static void ggml_vk_instance_init() {
     VK_LOG_DEBUG("ggml_vk_instance_init()");
 
     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+    ggml_vk_default_dispatcher_instance.init(vkGetInstanceProcAddr);
 
     uint32_t api_version = vk::enumerateInstanceVersion();
 
