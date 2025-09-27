@@ -596,4 +596,60 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     if (backend_path) {
         ggml_backend_load(backend_path);
     }
+#ifdef GGML_USE_CPU_REF
+    ggml_backend_load_best("cpu-ref", silent, dir_path);
+#endif
+}
+
+ggml_backend_reg_t * ggml_backend_load_cpu_variants(void) {
+    // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
+    const fs::path name_path = fs::u8path("cpu");
+    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
+    const fs::path file_extension = backend_filename_extension();
+
+    std::vector<fs::path> search_paths;
+#ifdef GGML_BACKEND_DIR
+    search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
+#endif
+    // default search paths: executable directory, current directory
+    search_paths.push_back(get_executable_path());
+    search_paths.push_back(fs::current_path());
+
+    ggml_backend_reg_t * backends = nullptr;
+    size_t count = 0;
+    size_t capacity = 0;
+    for (const auto & search_path : search_paths) {
+        if (!fs::exists(search_path)) {
+            GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+            continue;
+        }
+        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
+        for (const auto & entry : dir_it) {
+            if (entry.is_regular_file()) {
+                auto filename = entry.path().filename();
+                auto ext = entry.path().extension();
+                if (filename.native().find(file_prefix.native()) == 0 && ext == file_extension) {
+                    fs::path path = search_path / filename;
+                    ggml_backend_reg_t backend = get_reg().load_backend(path, false);
+                    if (backend) {
+                        if (count >= capacity) {
+                            capacity = capacity == 0 ? 4 : capacity * 2;
+                            ggml_backend_reg_t * new_backends = (ggml_backend_reg_t *)realloc(backends, (capacity + 1) * sizeof(ggml_backend_reg_t));
+
+                            if (!new_backends) {
+                                free(backends);
+                                return nullptr;
+                            }
+                            backends = new_backends;
+                        }
+                        backends[count++] = backend;
+                    }
+                }
+            }
+        }
+    }
+    if (backends) {
+        backends[count] = nullptr;
+    }
+    return backends;
 }

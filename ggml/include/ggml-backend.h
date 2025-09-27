@@ -243,6 +243,8 @@ extern "C" {
     // Load all known backends from dynamic libraries
     GGML_API void               ggml_backend_load_all(void);
     GGML_API void               ggml_backend_load_all_from_path(const char * dir_path);
+    // Load all CPU dynamic libraries and register them
+    GGML_API ggml_backend_reg_t * ggml_backend_load_cpu_variants(void);
 
     //
     // Backend scheduler
