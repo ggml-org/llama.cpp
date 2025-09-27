@@ -556,6 +556,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_IFAIRY_ROPE,
+
         GGML_OP_COUNT,
     };
 
@@ -1641,6 +1643,13 @@ extern "C" {
     //
     // b is an int32 vector with size a->ne[2], it contains the positions
     GGML_API struct ggml_tensor * ggml_rope(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            int                   n_dims,
+            int                   mode);
+
+    GGML_API struct ggml_tensor * ggml_ifairy_rope(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,

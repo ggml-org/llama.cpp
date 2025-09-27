@@ -1861,6 +1861,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_soft_max_ext_back(params, tensor);
             } break;
+        case GGML_OP_IFAIRY_ROPE:
+            {
+                ggml_compute_forward_ifairy_rope(params, tensor);
+            } break;
         case GGML_OP_ROPE:
             {
                 ggml_compute_forward_rope(params, tensor);
@@ -2252,6 +2256,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DIAG_MASK_ZERO:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX_BACK:
+        case GGML_OP_IFAIRY_ROPE:
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
         case GGML_OP_ADD_REL_POS:
@@ -2762,6 +2767,10 @@ struct ggml_cplan ggml_graph_plan(
                         if (ggml_is_quantized(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
+                    } break;
+                case GGML_OP_IFAIRY_ROPE:
+                    {
+                        cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * 2 * n_tasks;
                     } break;
                 case GGML_OP_SOFT_MAX:
                 case GGML_OP_ROPE:
