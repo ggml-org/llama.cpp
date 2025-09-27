@@ -1204,7 +1204,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 };
 
                 while (hull.size() >= 2) {
-                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= epsilon) {
+                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= -1 * epsilon) { // very small negative tolerance
                         hull.pop_back();
                     } else {
                         break;
