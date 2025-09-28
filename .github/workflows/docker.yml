@@ -28,7 +28,7 @@ jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
 
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.config.runs_on }}
     env:
       COMMIT_SHA: ${{ github.sha }}
     strategy:
@@ -39,12 +39,12 @@ jobs:
           # Note: the arm64 images are failing, which prevents the amd64 images from being built
           # https://github.com/ggml-org/llama.cpp/issues/11888
           #- { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "cuda", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "musa", dockerfile: ".devops/musa.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          - { tag: "intel", dockerfile: ".devops/intel.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "s390x", dockerfile: ".devops/s390x.Dockerfile", platforms: "linux/s390x", full: true, light: true, server: true, free_disk_space: false }
+          - { tag: "cpu",    dockerfile: ".devops/cpu.Dockerfile",    platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
+          - { tag: "cuda",   dockerfile: ".devops/cuda.Dockerfile",   platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
+          - { tag: "musa",   dockerfile: ".devops/musa.Dockerfile",   platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
+          - { tag: "intel",  dockerfile: ".devops/intel.Dockerfile",  platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
+          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
+          - { tag: "s390x",  dockerfile: ".devops/s390x.Dockerfile",  platforms: "linux/s390x", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04-s390x" }
           # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
           #- {tag: "rocm", dockerfile: ".devops/rocm.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: true }
     steps:
@@ -54,6 +54,7 @@ jobs:
           fetch-depth: 0 # preserve git history, so we can determine the build number
 
       - name: Set up QEMU
+        if: ${{ matrix.config.tag != 's390x' }}
         uses: docker/setup-qemu-action@v3
         with:
           image: tonistiigi/binfmt:qemu-v7.0.0-28
