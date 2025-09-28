@@ -4624,7 +4624,6 @@ void kernel_flash_attn_ext_impl(
 
     // mask storage in shared mem
     threadgroup half2 * sm2 = (threadgroup half2 *) (shmem_f16 + Q*T + 2*C);
-    threadgroup half  * sm  = (threadgroup half  *) (sm2);
 
     // per-query mask pointers
     device const half2 * pm2[NQ];
@@ -4709,6 +4708,8 @@ void kernel_flash_attn_ext_impl(
                 v += (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
 
                 if (!FC_flash_attn_ext_has_mask) {
+                    threadgroup half * sm = (threadgroup half  *) (sm2);
+
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
 
