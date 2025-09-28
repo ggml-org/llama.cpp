@@ -24,7 +24,10 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout (binding = 0) readonly buffer A {A_TYPE_PACKED16 data_a[];};
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#if defined(A_TYPE_PACKED16)
+layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
+#endif
 #if defined(A_TYPE_PACKED32)
 layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
 #endif
@@ -83,6 +86,11 @@ layout (constant_id = 10) const uint WARP = 32;
 #endif
 
 shared int32_t buf_a_qs[BM * SHMEM_STRIDE];
+
+#ifdef DATA_A_QUANT_K
+#define SHMEM_SCALES_STRIDE (SCALES_PER_32 + 1)
+shared uint8_t buf_a_scales[BM * SHMEM_SCALES_STRIDE];
+#endif
 
 #ifndef COOPMAT
 #if QUANT_AUXF == 1
@@ -224,6 +232,10 @@ void main() {
 #else
     int32_t cache_a_qs[WMITER * TM * BK / 4];
 
+#ifdef DATA_A_QUANT_K
+    uint8_t cache_a_scales[WMITER * TM * SCALES_PER_32];
+#endif
+
     int32_t cache_b_qs[TN * BK / 4];
 
     ACC_TYPE sums[WMITER * TM * WNITER * TN];
@@ -243,9 +255,9 @@ void main() {
 
     for (uint block = start_k; block < end_k; block += BK) {
         [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
-            const uint ib = pos_a_ib + (loadc_a + l) * p.stride_a / BK;
-            const uint iqs = loadr_a;
             const uint buf_ib = loadc_a + l;
+            const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;
+            const uint iqs = loadr_a;
 
             if (iqs == 0) {
 #if QUANT_AUXF == 1
@@ -260,6 +272,12 @@ void main() {
             const i32vec2 vals = repack(ib, iqs);
             buf_a_qs[buf_ib * SHMEM_STRIDE + iqs    ] = vals.x;
             buf_a_qs[buf_ib * SHMEM_STRIDE + iqs + 4] = vals.y;
+#endif
+
+#ifdef DATA_A_QUANT_K
+            if (iqs % 4 == 0) {
+                buf_a_scales[buf_ib * SHMEM_SCALES_STRIDE + iqs / 4] = get_scale(ib, iqs);
+            }
 #endif
         }
         [[unroll]] for (uint l = 0; loadc_b + l < BN; l += loadstride_b) {
@@ -333,6 +351,11 @@ void main() {
                 [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
                     cache_a_qs[(wsir * TM + cr) * (BK / 4) + idx_k] = buf_a_qs[ib * SHMEM_STRIDE + idx_k];
                 }
+#ifdef DATA_A_QUANT_K
+                [[unroll]] for (uint s = 0; s < SCALES_PER_32; s++) {
+                    cache_a_scales[(wsir * TM + cr) * SCALES_PER_32 + s] = buf_a_scales[ib * SHMEM_SCALES_STRIDE + s];
+                }
+#endif
             }
         }
 
@@ -350,6 +373,8 @@ void main() {
                     [[unroll]] for (uint cr = 0; cr < TM; cr++) {
                         const uint cache_a_idx = wsir * TM + cr;
                         const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
+
+#if defined(DATA_A_QUANT_LEGACY)
                         int32_t q_sum = 0;
                         [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
                             q_sum += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
@@ -357,6 +382,36 @@ void main() {
                         }
 
                         sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc], 1);
+#elif defined(DATA_A_QUANT_K)
+                        int32_t sum_d = 0;
+                        int32_t sum_m = 0;
+
+                        const int32_t scale0 = cache_a_scales[cache_a_idx * SCALES_PER_32];
+                        const int32_t scale1 = cache_a_scales[cache_a_idx * SCALES_PER_32 + 1];
+                        int32_t scale_m = scale0 >> 4;
+                        scale_m |= scale_m << 8;
+                        scale_m |= scale_m << 16;
+
+                        [[unroll]] for (uint idx_k = 0; idx_k < BK / 8; idx_k++) {
+                            sum_d += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
+                                                     cache_b_qs[cc * (BK / 4) + idx_k]) * (scale0 & 0xF);
+                            sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[cc * (BK / 4) + idx_k]);
+                        }
+
+                        scale_m = scale1 >> 4;
+                        scale_m |= scale_m << 8;
+                        scale_m |= scale_m << 16;
+
+                        [[unroll]] for (uint idx_k = BK / 8; idx_k < BK / 4; idx_k++) {
+                            sum_d += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
+                                                     cache_b_qs[cc * (BK / 4) + idx_k]) * (scale1 & 0xF);
+                            sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[cc * (BK / 4) + idx_k]);
+                        }
+
+                        sums[sums_idx] += mul_q8_1(sum_d, sum_m, cache_a_dm[cache_a_idx], cache_b_ds[cc], 1);
+#else
+#error unsupported
+#endif
                     }
                 }
             }
