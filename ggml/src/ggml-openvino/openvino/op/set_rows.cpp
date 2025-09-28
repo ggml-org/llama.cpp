@@ -45,7 +45,9 @@ OutputVector translate_set_rows(const NodeContext& context) {
         false);
     auto indices_reshaped =
         std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-    auto data_reshaped = std::make_shared<ov::op::v0::Squeeze>(data, zero);
+    auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
+        data, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) -1, (int64_t) dst_shape[2]}), false);
+
     auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
     auto res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
     return rename_outputs_with_suffix({res}, context.get_name());
