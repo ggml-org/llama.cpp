@@ -828,7 +828,6 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            // if current token is not EOG, we add it to current assistant message
             if (params.conversation_mode && !waiting_for_first_input) {
                 if (!prompt.empty()) {
                     prompt.clear();
