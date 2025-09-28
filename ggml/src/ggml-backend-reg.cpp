@@ -149,7 +149,7 @@ struct dl_handle_deleter {
     }
 };
 
-static void * dl_load_library(const fs::path & path) {
+static dl_handle * dl_load_library(const fs::path & path) {
     dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
 
     return handle;
