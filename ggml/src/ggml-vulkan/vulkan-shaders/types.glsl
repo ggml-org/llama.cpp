@@ -66,6 +66,7 @@ struct block_q4_0_packed16
 #define QUANT_AUXF 1
 #define A_TYPE block_q4_0
 #define A_TYPE_PACKED16 block_q4_0_packed16
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q4_1 32
@@ -98,6 +99,7 @@ struct block_q4_1_packed32
 #define A_TYPE block_q4_1
 #define A_TYPE_PACKED16 block_q4_1_packed16
 #define A_TYPE_PACKED32 block_q4_1_packed32
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q5_0 32
@@ -123,6 +125,7 @@ struct block_q5_0_packed16
 #define QUANT_AUXF 1
 #define A_TYPE block_q5_0
 #define A_TYPE_PACKED16 block_q5_0_packed16
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q5_1 32
@@ -158,6 +161,7 @@ struct block_q5_1_packed32
 #define A_TYPE block_q5_1
 #define A_TYPE_PACKED16 block_q5_1_packed16
 #define A_TYPE_PACKED32 block_q5_1_packed32
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q8_0 32
@@ -186,6 +190,7 @@ struct block_q8_0_packed32
 #define A_TYPE block_q8_0
 #define A_TYPE_PACKED16 block_q8_0_packed16
 #define A_TYPE_PACKED32 block_q8_0_packed32
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q8_1 32
@@ -226,21 +231,21 @@ struct block_q2_K
 {
     uint8_t scales[QUANT_K_Q2_K/16];
     uint8_t qs[QUANT_K_Q2_K/4];
-    f16vec2 d;
+    f16vec2 dm;
 };
 
 struct block_q2_K_packed16
 {
     uint16_t scales[QUANT_K_Q2_K/16/2];
     uint16_t qs[QUANT_K_Q2_K/4/2];
-    f16vec2 d;
+    f16vec2 dm;
 };
 
 struct block_q2_K_packed32
 {
     uint32_t scales[QUANT_K_Q2_K/16/4];
     uint32_t qs[QUANT_K_Q2_K/4/4];
-    f16vec2 d;
+    f16vec2 dm;
 };
 
 #if defined(DATA_A_Q2_K)
@@ -249,6 +254,8 @@ struct block_q2_K_packed32
 #define A_TYPE block_q2_K
 #define A_TYPE_PACKED16 block_q2_K_packed16
 #define A_TYPE_PACKED32 block_q2_K_packed32
+#define SCALES_PER_32 2
+#define DATA_A_QUANT_K
 #endif
 
 #define QUANT_K_Q3_K 256
@@ -274,6 +281,7 @@ struct block_q3_K_packed16
 #define QUANT_R 1
 #define A_TYPE block_q3_K
 #define A_TYPE_PACKED16 block_q3_K_packed16
+#define DATA_A_QUANT_K
 #endif
 
 #define QUANT_K_Q4_K 256
@@ -310,6 +318,7 @@ struct block_q4_K_packed128
 #define A_TYPE block_q4_K
 #define A_TYPE_PACKED16 block_q4_K_packed16
 #define A_TYPE_PACKED32 block_q4_K_packed32
+#define DATA_A_QUANT_K
 #endif
 
 #define QUANT_K_Q5_K 256
@@ -340,6 +349,7 @@ struct block_q5_K_packed128
 #define QUANT_R 1
 #define A_TYPE block_q5_K
 #define A_TYPE_PACKED16 block_q5_K_packed16
+#define DATA_A_QUANT_K
 #endif
 
 #define QUANT_K_Q6_K 256
@@ -365,6 +375,7 @@ struct block_q6_K_packed16
 #define QUANT_R 1
 #define A_TYPE block_q6_K
 #define A_TYPE_PACKED16 block_q6_K_packed16
+#define DATA_A_QUANT_K
 #endif
 
 // IQuants

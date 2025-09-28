@@ -134,15 +134,15 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint ib = idx / 128;                         // 2 values per idx
             const uint iqs = idx % 128;                        // 0..127
 
-            const uint qsi = (iqs / 64) * 32 + (iqs % 16) * 2; // 0,2,4..30
+            const uint qsi = (iqs / 64) * 16 + (iqs % 16);     // 0..15
             const uint scalesi = iqs / 8;                      // 0..15
             const uint qsshift = ((iqs % 64) / 16) * 2;        // 0,2,4,6
 
-            const uvec2 qs = uvec2(data_a[ib].qs[qsi], data_a[ib].qs[qsi + 1]);
+            const uvec2 qs = uvec2(unpack8(data_a_packed16[ib].qs[qsi]));
             const uint scales = data_a[ib].scales[scalesi];
-            const vec2 d = vec2(data_a[ib].d);
+            const vec2 dm = vec2(data_a[ib].dm);
 
-            const vec2 v = d.x * float(scales & 0xF) * vec2((qs >> qsshift) & 3) - d.y * float(scales >> 4);
+            const vec2 v = dm.x * float(scales & 0xF) * vec2((qs >> qsshift) & 3) - dm.y * float(scales >> 4);
 
             buf_a[buf_idx] = FLOAT_TYPE_VEC2(v.xy);
 #elif defined(DATA_A_Q3_K)

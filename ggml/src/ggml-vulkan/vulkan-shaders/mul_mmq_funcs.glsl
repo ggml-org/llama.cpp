@@ -9,8 +9,8 @@
 #if defined(DATA_A_Q4_0)
 i32vec2 repack(uint ib, uint iqs) {
     // Use 2-byte loads since a q4_0 block (18 bytes) is not divisible by 4
-    const u16vec2 quants = u16vec2(data_a[ib].qs[iqs * 2    ],
-                                   data_a[ib].qs[iqs * 2 + 1]);
+    const u16vec2 quants = u16vec2(data_a_packed16[ib].qs[iqs * 2    ],
+                                   data_a_packed16[ib].qs[iqs * 2 + 1]);
     const uint32_t vui = pack32(quants);
     return i32vec2( vui       & 0x0F0F0F0F,
                    (vui >> 4) & 0x0F0F0F0F);
@@ -37,8 +37,8 @@ ACC_TYPE mul_q8_1(const int32_t q_sum, const vec2 dma, const vec2 dsb, const int
 #if defined(DATA_A_Q5_0)
 i32vec2 repack(uint ib, uint iqs) {
     // Use 2-byte loads since a q5_0 block (22 bytes) is not divisible by 4
-    const u16vec2 quants = u16vec2(data_a[ib].qs[iqs * 2    ],
-                                   data_a[ib].qs[iqs * 2 + 1]);
+    const u16vec2 quants = u16vec2(data_a_packed16[ib].qs[iqs * 2    ],
+                                   data_a_packed16[ib].qs[iqs * 2 + 1]);
     const uint32_t vui = pack32(quants);
     const int32_t qh = int32_t((uint32_t(data_a[ib].qh[1]) << 16 | data_a[ib].qh[0]) >> (4 * iqs));
     const int32_t v0 = int32_t(vui & 0x0F0F0F0F)
@@ -77,12 +77,37 @@ ACC_TYPE mul_q8_1(const int32_t q_sum, const vec2 dma, const vec2 dsb, const int
 #if defined(DATA_A_Q8_0)
 int32_t repack(uint ib, uint iqs) {
     // Use 2-byte loads since a q8_0 block (34 bytes) is not divisible by 4
-    return pack32(i16vec2(data_a[ib].qs[iqs * 2    ],
-                          data_a[ib].qs[iqs * 2 + 1]));
+    return pack32(i16vec2(data_a_packed16[ib].qs[iqs * 2    ],
+                          data_a_packed16[ib].qs[iqs * 2 + 1]));
 }
 
 ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
     return ACC_TYPE(float(q_sum) * da * dsb.x);
+}
+#endif
+
+// For k-quants, ib and iqs still assume 32-wide blocks, but k-quants are 256-wide
+// iqs still refers to a 32-bit integer, meaning 0..r for 32-wide quants
+#if defined(DATA_A_Q2_K)
+int32_t repack(uint ib, uint iqs) {
+    const uint ib_k = ib / 8;
+    const uint iqs_k = (ib % 8) * 8 + iqs;
+
+    const uint qs_idx = (iqs_k / 32) * 8 + (iqs_k % 8);
+    const uint qs_shift = ((iqs_k % 32) / 8) * 2;
+
+    return int32_t((data_a_packed32[ib_k].qs[qs_idx] >> qs_shift) & 0x03030303);
+}
+
+uint8_t get_scale(uint ib, uint iqs) {
+    const uint ib_k = ib / 8;
+    const uint iqs_k = (ib % 8) * 8 + iqs;
+
+    return data_a[ib_k].scales[iqs_k / 4];
+}
+
+ACC_TYPE mul_q8_1(const int32_t sum_d, const int32_t sum_m, const vec2 dma, const vec2 dsb, const int32_t sum_divisor) {
+    return ACC_TYPE(dsb.x * (dma.x * float(sum_d) - dma.y * float(sum_m)));
 }
 #endif
 
@@ -101,5 +126,12 @@ FLOAT_TYPE get_d(uint ib) {
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
 FLOAT_TYPE_VEC2 get_dm(uint ib) {
     return FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+}
+#endif
+
+#if defined(DATA_A_Q2_K)
+FLOAT_TYPE_VEC2 get_dm(uint ib) {
+    const uint ib_k = ib / 8;
+    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm);
 }
 #endif
