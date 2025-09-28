@@ -80,6 +80,7 @@ EliminateZeroPoints::EliminateZeroPoints() {
 
         std::shared_ptr<ov::op::v0::Constant> new_constant;
 
+        // TODO improve performance
         if (data_type == ov::element::u4) {
             auto data_values = data_constant->cast_vector<uint8_t>();
             std::vector<int8_t> adjusted_values(total_elements);
