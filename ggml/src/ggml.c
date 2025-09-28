@@ -3687,6 +3687,7 @@ struct ggml_tensor * ggml_set_rows(
     result->op     = GGML_OP_SET_ROWS;
     result->src[0] = b;
     result->src[1] = c;
+    result->src[2] = a; // make sure a gets a backend buffer
 
     return result;
 }
