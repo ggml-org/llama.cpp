@@ -610,7 +610,7 @@ inline static void ggml_vec_mad1_f32(const int n, float * y, const float * x, co
         for (int i = 0; i < np; i += GGML_F32_STEP) {
             for (int j = 0; j < GGML_F32_ARR; j++) {
                 ay[j] = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
-                ay[j] = GGML_F32_VEC_FMA(ay[j], vs, vb);
+                ay[j] = GGML_F32_VEC_FMA(vb, ay[j], vs);
 
                 GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay[j]);
             }
