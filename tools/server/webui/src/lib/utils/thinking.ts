@@ -23,12 +23,17 @@ export function parseThinkingContent(content: string): {
 		};
 	}
 
-	const completeMatch = content.includes('</think>');
+	const completeMatch = content.match(/<think>([\s\S]*?)<\/think>/);
 
 	if (completeMatch) {
+		const thinkingContent = completeMatch[1]?.trim() ?? '';
+		const cleanContent = `${content.slice(0, completeMatch.index ?? 0)}${content.slice(
+			(completeMatch.index ?? 0) + completeMatch[0].length
+		)}`.trim();
+
 		return {
-			thinking: content.split('</think>')?.[0]?.trim(),
-			cleanContent: content.split('</think>')?.[1]?.trim()
+			thinking: thinkingContent,
+			cleanContent
 		};
 	}
 
