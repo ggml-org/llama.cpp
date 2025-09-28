@@ -198,13 +198,17 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             if (node->src[0]->op != GGML_OP_VIEW) {
                 m_op_case = 1;
             } else if (ggml_is_contiguous(node->src[0])) {
-                // Permute kv cache (view)
                 std::string src_name(node->view_src->name);
-                int layer = extract_layer_from_name(src_name);
-                if (!is_swa_layer(layer)) {
-                    m_op_case = 2;
+                if (src_name.find("cache") == std::string::npos) {
+                    m_op_case = 1;
                 } else {
-                    m_op_case = 3;
+                    // Permute kv cache (view)
+                    int layer = extract_layer_from_name(src_name);
+                    if (!is_swa_layer(layer)) {
+                        m_op_case = 2;
+                    } else {
+                        m_op_case = 3;
+                    }
                 }
             }
             break;
@@ -229,6 +233,16 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
                 m_op_case = 2;
             }
             break;
+        }
+        case GGML_OP_VIEW: {
+            if (node->src[0]->op == GGML_OP_VIEW) {
+                auto* src = node->src[0];
+                auto* view_src = src->view_src;
+                if (view_src->ne[1] != src->ne[2]) {
+                    throw std::runtime_error("Unsupported VIEW case");
+                }
+                m_op_case = 2;
+            }
         }
         default:
             break;
