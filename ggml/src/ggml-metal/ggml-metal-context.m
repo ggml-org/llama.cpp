@@ -567,13 +567,13 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->debug_graph,
             ctx->debug_fusion);
 
-        for (int idx = idx_start; idx < idx_end;) {
+        for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
             if (res == 0) {
                 break;
             }
 
-            idx += res;
+            idx += res - 1;
         }
 
         ggml_metal_op_free(ctx_op);
