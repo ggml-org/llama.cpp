@@ -1981,8 +1981,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     GGML_ASSERT(ne12 == ne22);
 
     GGML_ASSERT(!op->src[3] || op->src[3]->type == GGML_TYPE_F16);
-    GGML_ASSERT(!op->src[3] || op->src[3]->ne[1] >= GGML_PAD(op->src[0]->ne[1], 8) &&
-            "the Flash-Attention Metal kernel requires the mask to be padded to 8 and at least n_queries big");
+    GGML_ASSERT(!op->src[3] || op->src[3]->ne[1] >= op->src[0]->ne[1] &&
+            "the Flash-Attention Metal kernel requires the mask to be at least n_queries big");
 
     float scale;
     float max_bias;

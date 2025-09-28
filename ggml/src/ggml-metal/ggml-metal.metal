@@ -4525,6 +4525,8 @@ constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT 
 constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
 constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
 
+constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
+
 //constant float FC_flash_attn_ext_scale         [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 //constant float FC_flash_attn_ext_max_bias      [[function_constant(FC_FLASH_ATTN_EXT + 11)]];
 //constant float FC_flash_attn_ext_logit_softcap [[function_constant(FC_FLASH_ATTN_EXT + 12)]];
@@ -4711,7 +4713,7 @@ void kernel_flash_attn_ext_impl(
                 v += (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
 
                 if (!FC_flash_attn_ext_has_mask) {
-                    threadgroup half * sm = (threadgroup half  *) (sm2);
+                    threadgroup half * sm = (threadgroup half *) (sm2);
 
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
@@ -4741,7 +4743,12 @@ void kernel_flash_attn_ext_impl(
                 FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                     const short j = jj*NSG + sgitg;
 
-                    sm2[j*SH + tiisg] = pm2[jj][tiisg];
+                    if (FC_flash_attn_ext_bc_mask) {
+                        sm2[j*SH + tiisg] = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
+                    } else {
+                        sm2[j*SH + tiisg] = pm2[jj][tiisg];
+                    }
+
                     pm2[jj] += NW;
                 }
 
