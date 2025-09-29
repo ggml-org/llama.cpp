@@ -24,7 +24,7 @@ This fork is specifically optimized for AMD GFX906 architecture (MI50, MI60, Veg
 ### Performance comparison -- lama bench 
 - did not use the -d because long prompt processing make gpu to reach 80C and throttle, making the comparison difficult
 - all models tested with:
-| ---------- | --- | ------- | ------- | ------ | ------ | -- |
+                   
 | backend    | ngl | threads | n_batch | type_k | type_v | fa |
 | ROCm       |  99 |      12 |    1024 |   q8_0 |   q8_0 |  1 |
 | ---------- | --- | ------- | ------- | ------ | ------ | -- |
