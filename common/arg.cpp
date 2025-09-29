@@ -217,6 +217,53 @@ struct common_hf_file_res {
     std::string mmprojFile;
 };
 
+static void write_etag(const std::string & path, const std::string & etag) {
+    const std::string etag_path = path + ".etag";
+    write_file(etag_path, etag);
+    LOG_DBG("%s: file etag saved: %s\n", __func__, etag_path.c_str());
+}
+
+static std::string read_etag(const std::string & path) {
+    std::string none;
+    const std::string etag_path = path + ".etag";
+
+    if (std::filesystem::exists(etag_path)) {
+        std::ifstream etag_in(etag_path);
+        if (!etag_in) {
+            LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
+            return none;
+        }
+        std::string etag;
+        std::getline(etag_in, etag);
+        return etag;
+    }
+
+    // no etag file, but maybe there is an old .json
+    // remove this code later
+    const std::string metadata_path = path + ".json";
+
+    if (std::filesystem::exists(metadata_path)) {
+        std::ifstream metadata_in(metadata_path);
+        try {
+            nlohmann::json metadata_json;
+            metadata_in >> metadata_json;
+            LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
+                    metadata_json.dump().c_str());
+            if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
+                std::string etag = metadata_json.at("etag");
+                write_etag(path, etag);
+                if (!std::filesystem::remove(metadata_path)) {
+                    LOG_WRN("%s: failed to delete old .json metadata file: %s\n", __func__, metadata_path.c_str());
+                }
+                return etag;
+            }
+        } catch (const nlohmann::json::exception & e) {
+            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+        }
+    }
+    return none;
+}
+
 #ifdef LLAMA_USE_CURL
 
 bool common_has_curl() {
@@ -373,36 +420,15 @@ static bool common_download_head(CURL *              curl,
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
                                                const std::string & bearer_token) {
-    // If the file exists, check its JSON metadata companion file.
-    std::string metadata_path = path + ".json";
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
     for (int i = 0; i < max_attempts; ++i) {
-        nlohmann::json metadata;  // TODO @ngxson : get rid of this json, use regex instead
-        std::string    etag;
-        std::string    last_modified;
+        std::string etag;
 
         // Check if the file already exists locally
         const auto file_exists = std::filesystem::exists(path);
         if (file_exists) {
-            // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
-            std::ifstream metadata_in(metadata_path);
-            if (metadata_in.good()) {
-                try {
-                    metadata_in >> metadata;
-                    LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
-                            metadata.dump().c_str());
-                    if (metadata.contains("etag") && metadata.at("etag").is_string()) {
-                        etag = metadata.at("etag");
-                    }
-                    if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
-                        last_modified = metadata.at("lastModified");
-                    }
-                } catch (const nlohmann::json::exception & e) {
-                    LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
-                }
-            }
-            // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
+            etag = read_etag(path);
         } else {
             LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
         }
@@ -440,11 +466,6 @@ static bool common_download_file_single_online(const std::string & url,
                         headers.etag.c_str());
                 should_download              = true;
                 should_download_from_scratch = true;
-            } else if (!last_modified.empty() && last_modified != headers.last_modified) {
-                LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__,
-                        last_modified.c_str(), headers.last_modified.c_str());
-                should_download              = true;
-                should_download_from_scratch = true;
             }
         }
 
@@ -475,15 +496,9 @@ static bool common_download_file_single_online(const std::string & url,
                     }
                 }
             }
-
-            // Write the updated JSON metadata file.
-            metadata.update({
-                { "url",          url                   },
-                { "etag",         headers.etag          },
-                { "lastModified", headers.last_modified }
-            });
-            write_file(metadata_path, metadata.dump(4));
-            LOG_DBG("%s: file metadata saved: %s\n", __func__, metadata_path.c_str());
+            if (head_request_ok) {
+                write_etag(path, headers.etag);
+            }
 
             // start the download
             LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
@@ -664,51 +679,6 @@ static void print_progress(size_t current, size_t total) { // TODO isatty
     std::cout.flush();
 }
 
-struct common_file_metadata {
-    std::string etag;
-    std::string last_modified;
-};
-
-static std::optional<common_file_metadata> read_metadata(const std::string & path) {
-    if (!std::filesystem::exists(path)) {
-        return std::nullopt;
-    }
-
-    nlohmann::json metadata_json;
-    common_file_metadata metadata;
-
-    std::ifstream metadata_in(path);
-    try {
-        metadata_in >> metadata_json;
-        LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, path.c_str(),
-                metadata_json.dump().c_str());
-        if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
-            metadata.etag = metadata_json.at("etag");
-        }
-        if (metadata_json.contains("lastModified") && metadata_json.at("lastModified").is_string()) {
-            metadata.last_modified = metadata_json.at("lastModified");
-        }
-    } catch (const nlohmann::json::exception & e) {
-        LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, path.c_str(), e.what());
-        return std::nullopt;
-    }
-
-    return metadata;
-}
-
-static void write_metadata(const std::string & path,
-                           const std::string & url,
-                           const common_file_metadata & metadata) {
-    nlohmann::json metadata_json = {
-        { "url",          url                    },
-        { "etag",         metadata.etag          },
-        { "lastModified", metadata.last_modified }
-    };
-
-    write_file(path, metadata_json.dump(4));
-    LOG_DBG("%s: file metadata saved: %s\n", __func__, path.c_str());
-}
-
 static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
                              const std::string & path_tmp,
@@ -775,8 +745,6 @@ static bool common_pull_file(httplib::Client & cli,
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
                                                const std::string & bearer_token) {
-    // If the file exists, check its JSON metadata companion file.
-    std::string metadata_path = path + ".json";
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
@@ -788,12 +756,11 @@ static bool common_download_file_single_online(const std::string & url,
     }
     cli.set_default_headers(default_headers);
 
-    common_file_metadata last;
     const bool file_exists = std::filesystem::exists(path);
+
+    std::string last_etag;
     if (file_exists) {
-        if (auto opt = read_metadata(metadata_path)) {
-            last = *opt;
-        }
+        last_etag = read_etag(path);
     } else {
         LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
     }
@@ -809,14 +776,9 @@ static bool common_download_file_single_online(const std::string & url,
             }
         }
 
-        common_file_metadata current;
-        if (head_ok) {
-            if (head->has_header("ETag")) {
-                current.etag = head->get_header_value("ETag");
-            }
-            if (head->has_header("Last-Modified")) {
-                current.last_modified = head->get_header_value("Last-Modified");
-            }
+        std::string etag;
+        if (head_ok && head->has_header("ETag")) {
+            etag = head->get_header_value("ETag");
         }
 
         size_t total_size = 0;
@@ -834,16 +796,10 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         bool should_download_from_scratch = false;
-        if (head_ok) {
-            if (!last.etag.empty() && last.etag != current.etag) {
-                LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
-                        last.etag.c_str(), current.etag.c_str());
-                should_download_from_scratch = true;
-            } else if (!last.last_modified.empty() && last.last_modified != current.last_modified) {
-                LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__,
-                        last.last_modified.c_str(), current.last_modified.c_str());
-                should_download_from_scratch = true;
-            }
+        if (!last_etag.empty() && !etag.empty() && last_etag != etag) {
+            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
+                    last_etag.c_str(), etag.c_str());
+            should_download_from_scratch = true;
         }
 
         if (file_exists) {
@@ -871,9 +827,8 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         // start the download
-        LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
-                __func__, show_masked_url(parts).c_str(), path_temporary.c_str(),
-                current.etag.c_str(), current.last_modified.c_str());
+        LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
+                __func__, show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
         const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
         if (!was_pull_successful) {
             if (i + 1 < max_attempts) {
@@ -883,7 +838,6 @@ static bool common_download_file_single_online(const std::string & url,
             } else {
                 LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
             }
-
             continue;
         }
 
@@ -891,7 +845,9 @@ static bool common_download_file_single_online(const std::string & url,
             LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
             return false;
         }
-        write_metadata(metadata_path, url, current);
+        if (!etag.empty()) {
+            write_etag(path, etag);
+        }
         break;
     }
 
