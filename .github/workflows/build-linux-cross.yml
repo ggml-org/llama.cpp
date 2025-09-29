@@ -350,7 +350,7 @@ jobs:
 
     env:
       SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
-      SPACEMIT_IME_TOOLCHAIN_PATH: "/tmp/spacemit-toolchain-linux-glibc-x86_64"
+      SPACEMIT_IME_TOOLCHAIN_PATH: "spacemit-toolchain-linux-glibc-x86_64"
 
     steps:
       - uses: actions/checkout@v4
@@ -359,21 +359,21 @@ jobs:
         uses: actions/cache@v4
         id: cache-spacemit-ime-cross-toolchain
         with:
-          path: /tmp/spacemit-toolchain-linux-glibc-x86_64
-          key: ${{ runner.os }}-${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+          path: spacemit-toolchain-linux-glibc-x86_64
+          key: ${{ runner.os }}-spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
       - name: Setup Toolchain
-        if: steps.cache-spacemit-ime-cross-toolchain.outputs.cache-hit!= 'true'
+        if: steps.cache-spacemit-ime-cross-toolchain.outputs.cache-hit != 'true'
         run: |
-          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${env.SPACEMIT_IME_TOOLCHAIN_VERSION}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz
-          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
-          mkdir -p ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
-          tar xf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz -C ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }} --strip-components=1
-          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz
+          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${env.SPACEMIT_IME_TOOLCHAIN_VERSION}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          mkdir -p ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          tar xf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz -C ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }} --strip-components=1
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
 
       - name: Build
         run: |
-          export RISCV_ROOT_PATH=${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+          export RISCV_ROOT_PATH=${PWD}/${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
           cmake -B build -DLLAMA_CURL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
