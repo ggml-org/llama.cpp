@@ -348,18 +348,32 @@ jobs:
   ubuntu-24-riscv64-cpu-spacemit-ime-cross:
     runs-on: ubuntu-24.04
 
+    env:
+      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+      SPACEMIT_IME_TOOLCHAIN_PATH: "/tmp/spacemit-toolchain-linux-glibc-x86_64"
+
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Riscv
+
+      - name: Cache Toolchain
+        uses: actions/cache@v4
+        id: cache-spacemit-ime-cross-toolchain
+        with:
+          path: /tmp/spacemit-toolchain-linux-glibc-x86_64
+          key: ${{ runner.os }}-${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+
+      - name: Setup Toolchain
+        if: steps.cache-spacemit-ime-cross-toolchain.outputs.cache-hit!= 'true'
         run: |
-          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v1.1.2.tar.xz
-          rm -rf spacemit-toolchain-linux-glibc-x86_64
-          mkdir spacemit-toolchain-linux-glibc-x86_64
-          tar xf spacemit-toolchain-linux-glibc-x86_64-*.tar.xz -C spacemit-toolchain-linux-glibc-x86_64 --strip-components=1
+          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${env.SPACEMIT_IME_TOOLCHAIN_VERSION}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+          mkdir -p ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+          tar xf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz -C ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }} --strip-components=1
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz
 
       - name: Build
         run: |
-          export RISCV_ROOT_PATH=${PWD}/spacemit-toolchain-linux-glibc-x86_64
+          export RISCV_ROOT_PATH=${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
           cmake -B build -DLLAMA_CURL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
