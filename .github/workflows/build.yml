@@ -192,6 +192,10 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-22.04-arm
+          - build: 's390x'
+            os: ubuntu-24.04-s390x
+          - build: 'ppc64le'
+            os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -206,11 +210,28 @@ jobs:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
+      - name: Build Dependencies
+        id: build_depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev \
+            libjpeg-dev build-essential libcurl4-openssl-dev \
+            git-lfs
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ./gguf-py
+
+      - name: Swap Endianness
+        id: endianness
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          for f in models/*.gguf; do
+            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+          done
 
       - name: Build
         id: cmake_build
@@ -228,6 +249,7 @@ jobs:
 
       - name: Test llama2c conversion
         id: llama2c_test
+        if: ${{ matrix.build != 's390x' }}
         run: |
           cd build
           echo "Fetch tokenizer"
@@ -236,6 +258,15 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+      - name: Test llama2c (s390x)
+        id: llama2c_test_s390x
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          cd build
+          echo "Fetch llama2c big-endian model"
+          wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
+          ./bin/llama-cli -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
@@ -475,7 +506,7 @@ jobs:
 
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
+    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -1251,59 +1282,132 @@ jobs:
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
   ggml-ci-x64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, X64, CPU, low-perf]
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU, low-perf]
+    runs-on: ubuntu-22.04-arm
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, X64, CPU, high-perf]
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU, high-perf]
+    runs-on: ubuntu-22.04-arm
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-x64-nvidia-v100-cuda:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, V100]
+  ggml-ci-arm64-cpu-high-perf-sve:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf-sve
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-x64-nvidia-cuda:
+    runs-on: [self-hosted, Linux, X64, NVIDIA]
 
     steps:
       - name: Clone
@@ -1316,8 +1420,8 @@ jobs:
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-nvidia-v100-vulkan:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, V100]
+  ggml-ci-x64-nvidia-vulkan-cm:
+    runs-on: [self-hosted, Linux, X64, NVIDIA]
 
     steps:
       - name: Clone
@@ -1327,50 +1431,22 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          vulkaninfo
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-nvidia-t4-cuda:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-nvidia-t4-vulkan:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-nvidia-t4-vulkan-coopmat1:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, T4]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo
+          vulkaninfo --summary
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
+  ggml-ci-x64-nvidia-vulkan-cm2:
+    runs-on: [self-hosted, Linux, X64, NVIDIA, COOPMAT2]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-x64-cpu-amx:
     runs-on: [self-hosted, Linux, X64, CPU, AMX]
@@ -1385,32 +1461,6 @@ jobs:
         run: |
           bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-amd-v710-vulkan:
-    runs-on: [self-hosted, Linux, X64, AMD, V710]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-  ggml-ci-x64-amd-v710-rocm:
-    runs-on: [self-hosted, Linux, X64, AMD, V710]
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
 
@@ -1424,16 +1474,16 @@ jobs:
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-# TODO: install vulkan drivers
-#  ggml-ci-mac-vulkan:
-#    runs-on: [self-hosted, macOS, ARM64]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+  ggml-ci-mac-vulkan:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp

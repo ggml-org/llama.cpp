@@ -1329,24 +1329,25 @@ extern "C" {
     //
     // Performance utils
     //
-    // NOTE: Used by llama.cpp examples, avoid using in third-party apps. Instead, do your own performance measurements.
+    // NOTE: Used by llama.cpp examples/tools, avoid using in third-party apps. Instead, do your own performance measurements.
     //
 
     struct llama_perf_context_data {
-        double t_start_ms;
-        double t_load_ms;
-        double t_p_eval_ms;
-        double t_eval_ms;
+        // ms == milliseconds
+        double t_start_ms;  // absolute start time
+        double t_load_ms;   // time needed for loading the model
+        double t_p_eval_ms; // time needed for processing the prompt
+        double t_eval_ms;   // time needed for generating tokens
 
-        int32_t n_p_eval;
-        int32_t n_eval;
-        int32_t n_reused; // number of times a ggml compute graph had been reused
+        int32_t n_p_eval;   // number of prompt tokens
+        int32_t n_eval;     // number of generated tokens
+        int32_t n_reused;   // number of times a ggml compute graph had been reused
     };
 
     struct llama_perf_sampler_data {
-        double t_sample_ms;
+        double t_sample_ms; // time needed for sampling in ms
 
-        int32_t n_sample;
+        int32_t n_sample;   // number of sampled tokens
     };
 
     LLAMA_API struct llama_perf_context_data llama_perf_context      (const struct llama_context * ctx);
@@ -1357,6 +1358,9 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
+
+    // print a breakdown of per-device memory use via LLAMA_LOG:
+    LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
 
     //
     // training
