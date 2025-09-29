@@ -259,7 +259,7 @@ bool common_json_parse(
             } else {
                 // TODO: handle more unclosed top-level primitive if the stack was empty but we got an error (e.g. "tru", "\"", etc...)
                 // fprintf(stderr, "Closing: TODO\n");
-                throw std::runtime_error("Cannot heal a top-level truncated JSON object stopped in an unknown location");
+                return false;
             }
             out.json = json::parse(str);
             it = temptative_end;
