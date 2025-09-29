@@ -23,6 +23,7 @@
 		activeConversation,
 		deleteConversation,
 		isLoading,
+		isConversationLoading,
 		sendMessage,
 		stopGeneration,
 		setMaxContextError
@@ -80,6 +81,10 @@
 	);
 
 	let isServerLoading = $derived(serverLoading());
+
+	let isCurrentConversationLoading = $derived(
+		activeConversation() ? isConversationLoading(activeConversation()!.id) : false
+	);
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
@@ -261,7 +266,7 @@
 	});
 
 	$effect(() => {
-		if (isLoading() && autoScrollEnabled) {
+		if (isCurrentConversationLoading && autoScrollEnabled) {
 			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
 		} else if (scrollInterval) {
 			clearInterval(scrollInterval);
@@ -312,7 +317,7 @@
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
-					isLoading={isLoading()}
+					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
@@ -355,7 +360,7 @@
 
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
-					isLoading={isLoading()}
+					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
