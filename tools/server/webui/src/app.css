@@ -39,6 +39,7 @@
 	--sidebar-ring: oklch(0.708 0 0);
 	--code-background: oklch(0.225 0 0);
 	--code-foreground: oklch(0.875 0 0);
+	--layer-popover: 1000000;
 }
 
 .dark {
