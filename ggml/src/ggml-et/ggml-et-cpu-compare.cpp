@@ -98,8 +98,12 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
         ggml_backend_tensor_get(node->src[2], ctx->cpu_src2_data, 0, logical_size);
     }
 
-    // Zero destination buffer
-    memset(ctx->cpu_dst_data, 0, ctx->dst_size);
+    // Copy destination data from device (for operations like SET_ROWS that modify existing data)
+    // Most ops create new tensors so this is unused, but SET_ROWS requires existing dst data
+    {
+        size_t logical_size = ggml_nbytes(node);
+        ggml_backend_tensor_get(node, ctx->cpu_dst_data, 0, logical_size);
+    }
 
     // Create CPU backend for reference computation
     GGML_LOG_DEBUG("ET: Creating CPU backend for reference computation\n");
@@ -259,6 +263,25 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
             break;
         case GGML_OP_CONT:
             ctx->cpu_dst = ggml_cont(ctx->ggml_ctx, ctx->cpu_src0);
+            break;
+        case GGML_OP_SET_ROWS:
+            {
+                // SET_ROWS operation scatters src0 rows to dst[src1] positions
+                // Create destination tensor (this is the "view" that SET_ROWS returns)
+                ggml_tensor* cpu_dst_base = ggml_new_tensor(ctx->ggml_ctx, node->type, GGML_MAX_DIMS, node->ne);
+                if (!cpu_dst_base) {
+                    GGML_LOG_ERROR("ET: Failed to create CPU destination base tensor for SET_ROWS\n");
+                    return false;
+                }
+                cpu_dst_base->data = ctx->cpu_dst_data;
+                memcpy(cpu_dst_base->nb, node->nb, sizeof(node->nb));
+
+                // Note: cpu_dst_data already contains the pre-existing destination data from device
+                // SET_ROWS will update specific rows, leaving others unchanged
+
+                // Perform SET_ROWS operation: returns a view that scatters src0 rows to dst[src1] positions
+                ctx->cpu_dst = ggml_set_rows(ctx->ggml_ctx, cpu_dst_base, ctx->cpu_src0, ctx->cpu_src1);
+            }
             break;
         default:
             GGML_LOG_ERROR("ET: Unsupported operation %s for CPU comparison\n", ggml_op_name(op));

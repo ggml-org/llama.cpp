@@ -68,6 +68,14 @@ static ggml_et_cpu_compare_config cont_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config set_rows_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 2048
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -754,6 +762,108 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for CONT operation\n");
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &cont_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for CONT operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SET_ROWS operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: SET_ROWS operation missing required inputs\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    // Support F32 data with I64 indices -> F32/F16 output (scatter operation)
+    if (node->src[0]->type == GGML_TYPE_F32 &&
+        node->src[1]->type == GGML_TYPE_I64 &&
+        (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16)) {
+
+        if (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16) {
+            kernel_name = "set_rows_f32";
+        } else {
+            GGML_LOG_ERROR("ET: SET_ROWS unsupported output type: %s\n", ggml_type_name(node->type));
+            return false;
+        }
+
+    } else {
+        GGML_LOG_ERROR("ET: SET_ROWS operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    // Validate contiguity requirements
+    if (!ggml_is_contiguous_rows(node)) {
+        GGML_LOG_ERROR("ET: SET_ROWS operation requires contiguous-rows destination tensor\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous_rows(node->src[0])) {
+        GGML_LOG_ERROR("ET: SET_ROWS operation requires contiguous-rows source tensor\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node->src[1])) {
+        GGML_LOG_ERROR("ET: SET_ROWS operation requires contiguous indices tensor\n");
+        return false;
+    }
+
+    // Validate dimension constraints from ggml implementation
+    if (!(node->ne[0] == node->src[0]->ne[0] &&                    // same number of columns
+          node->ne[2] == node->src[0]->ne[2] &&                    // same batch size
+          node->ne[3] == node->src[0]->ne[3] &&                    // same outer dimension
+          node->src[0]->ne[1] == node->src[1]->ne[0] &&            // src rows = index count
+          node->src[0]->ne[2] % node->src[1]->ne[1] == 0 &&        // batch constraint
+          node->src[0]->ne[3] % node->src[1]->ne[2] == 0 &&        // outer constraint
+          node->src[1]->ne[3] == 1)) {                             // indices constraint
+        GGML_LOG_ERROR("ET: SET_ROWS operation dimension constraint failed\n");
+        return false;
+    }
+
+    ggml_et_set_rows_params params;
+    params.src0 = *node->src[0];  // F32 source data tensor
+    params.src1 = *node->src[1];  // I64 indices tensor
+    params.dst = *node;           // F32/F16 destination tensor
+
+    GGML_LOG_DEBUG("ET: Launching SET_ROWS kernel %s (F32[%lld,%lld,%lld,%lld] x I64[%lld,%lld,%lld,%lld] -> %s[%lld,%lld,%lld,%lld])\n",
+                   kernel_name,
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
+                   (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                   ggml_type_name(node->type),
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3]);
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (set_rows_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for SET_ROWS operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_SET_ROWS)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for SET_ROWS operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for SET_ROWS operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &set_rows_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for SET_ROWS operation\n");
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }

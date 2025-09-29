@@ -72,6 +72,12 @@ struct ggml_et_cont_params {
     ggml_tensor dst;      // F32 output tensor (contiguous)
 };
 
+struct ggml_et_set_rows_params {
+    ggml_tensor src0;     // F32 source data tensor
+    ggml_tensor src1;     // I64 row indices tensor
+    ggml_tensor dst;      // F32/F16 destination tensor
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
@@ -80,5 +86,6 @@ bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_ten
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);

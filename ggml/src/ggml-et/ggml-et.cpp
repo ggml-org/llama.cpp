@@ -301,6 +301,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_cont(dev_ctx, node);
                 break;
 
+            case GGML_OP_SET_ROWS:
+                ggml_et_op_set_rows(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -477,6 +481,26 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_SET_ROWS:
+            // Support F32 data with I64 indices -> F16/F32 output (scatter operation)
+            if (op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I64 &&
+                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                ggml_is_contiguous_rows(op) &&
+                ggml_is_contiguous_rows(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Validate dimension constraints from ggml implementation
+                supported = (op->ne[0] == op->src[0]->ne[0]) &&  // same number of columns
+                           (op->ne[2] == op->src[0]->ne[2]) &&   // same batch size
+                           (op->ne[3] == op->src[0]->ne[3]) &&   // same outer dimension
+                           (op->src[0]->ne[1] == op->src[1]->ne[0]) && // src rows = index count
+                           (op->src[0]->ne[2] % op->src[1]->ne[1] == 0) && // batch constraint
+                           (op->src[0]->ne[3] % op->src[1]->ne[2] == 0) && // outer constraint
+                           (op->src[1]->ne[3] == 1);                       // indices tensor constraint
+            } else {
+                supported = false;
+            }
+            break;
         case GGML_OP_NONE:
             // Always support NONE operations - they represent leaf nodes (parameters, inputs, constants)
             // No computation needed, just memory management
@@ -602,6 +626,23 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                     return false;
                 }
                 return true;
+            }
+            return false;
+        case GGML_OP_SET_ROWS:
+            if (op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I64 &&
+                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                ggml_is_contiguous_rows(op) &&
+                ggml_is_contiguous_rows(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Additional validation for dimension constraints
+                return (op->ne[0] == op->src[0]->ne[0]) &&
+                       (op->ne[2] == op->src[0]->ne[2]) &&
+                       (op->ne[3] == op->src[0]->ne[3]) &&
+                       (op->src[0]->ne[1] == op->src[1]->ne[0]) &&
+                       (op->src[0]->ne[2] % op->src[1]->ne[1] == 0) &&
+                       (op->src[0]->ne[3] % op->src[1]->ne[2] == 0) &&
+                       (op->src[1]->ne[3] == 1);
             }
             return false;
         default:
