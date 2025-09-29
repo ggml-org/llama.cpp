@@ -1,15 +1,7 @@
 #pragma once
 
-#ifdef HIP_ENABLE_WARP_SYNC_BUILTINS
-#undef HIP_ENABLE_WARP_SYNC_BUILTINS
-// HIP_ENABLE_WARP_SYNC_BUILTINS conflicts with hipblaslt_ext.hpp
-#include <hipblaslt/hipblaslt-ext.hpp>
-#define HIP_ENABLE_WARP_SYNC_BUILTINS 1
-#else
-#include <hipblaslt/hipblaslt-ext.hpp>
-#endif
-
 #include "ggml-cuda.h"
+#include <hipblaslt/hipblaslt-ext.hpp>
 
 #include <cstdlib>
 #include <mutex>
@@ -754,7 +746,7 @@ private:
     std::array<stream_batched_gemm_map, GGML_CUDA_MAX_DEVICES> batched_gemm_map_ = {{}};
 };
 
-hipblasStatus_t hipblasGemmBatchedEx(cublasHandle_t handle,
+hipblasStatus_t hipblasLtGroupedGemm(cublasHandle_t handle,
                                     cublasOperation_t transA,
                                     cublasOperation_t transB,
                                     int                m,
@@ -774,8 +766,11 @@ hipblasStatus_t hipblasGemmBatchedEx(cublasHandle_t handle,
                                     int                batchCount,
                                     cublasComputeType_t  computeType,
                                     hipblasGemmAlgo_t  algo){
-    (void) handle;
-    (void) algo;
+
+    if(handle == nullptr || A == nullptr || B == nullptr || C == nullptr || batchCount <= 0 || algo != HIPBLAS_GEMM_DEFAULT){
+        GGML_LOG_WARN("Invalid arguments to hipblasLtGroupedGemm\n");
+        return HIPBLAS_STATUS_INVALID_VALUE;
+    }
     GemmProblemDesc prob{
         .op_a = transA,
         .op_b = transB,
@@ -849,6 +844,76 @@ hipblasStatus_t hipblasGemmBatchedEx(cublasHandle_t handle,
         GGML_LOG_DEBUG("Failed to run batched gemm for device %d: %d\n", device_id, status);
         return status;
     }
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+hipblasStatus_t hipblasGemmBatchedEx(cublasHandle_t handle,
+                                    cublasOperation_t transA,
+                                    cublasOperation_t transB,
+                                    int                m,
+                                    int                n,
+                                    int                k,
+                                    const void*        alpha,
+                                    const void*        A[],
+                                    cudaDataType_t  aType,
+                                    int                lda,
+                                    const void*        B[],
+                                    cudaDataType_t  bType,
+                                    int                ldb,
+                                    const void*        beta,
+                                    void*              C[],
+                                    cudaDataType_t  cType,
+                                    int                ldc,
+                                    int                batchCount,
+                                    cublasComputeType_t  computeType,
+                                    hipblasGemmAlgo_t  algo){
+    int cur_dev_id = ggml_cuda_get_device();
+    const int cur_dev_cc = ggml_cuda_info().devices[cur_dev_id].cc;
+    if(getHipblasltBatchedGemmEnvVal() != 0 && GGML_CUDA_CC_IS_CDNA3(cur_dev_cc)){
+        hipblasStatus_t status = hipblasLtGroupedGemm(handle,
+                                    transA,
+                                    transB,
+                                    m,
+                                    n,
+                                    k,
+                                    alpha,
+                                    A,
+                                    aType,
+                                    lda,
+                                    B,
+                                    bType,
+                                    ldb,
+                                    beta,
+                                    C,
+                                    cType,
+                                    ldc,
+                                    batchCount,
+                                    computeType,
+                                    algo);
+        if(status == HIPBLAS_STATUS_SUCCESS) {
+            return status;
+        }
+    }
+    CUBLAS_CHECK(::cublasGemmBatchedEx(handle,
+                        transA,
+                        transB,
+                        m,
+                        n,
+                        k,
+                        alpha,
+                        A,
+                        aType,
+                        lda,
+                        B,
+                        bType,
+                        ldb,
+                        beta,
+                        C,
+                        cType,
+                        ldc,
+                        batchCount,
+                        computeType,
+                        algo));
     return HIPBLAS_STATUS_SUCCESS;
 }
 
