@@ -82,10 +82,13 @@ class ModelsStore {
 				const rawCapabilities = Array.isArray(details?.capabilities)
 					? [...(details?.capabilities ?? [])]
 					: [];
+				const displayNameSource =
+					details?.name && details.name.trim().length > 0 ? details.name : item.id;
+				const displayName = this.toDisplayName(displayNameSource);
 
 				return {
 					id: item.id,
-					name: details?.name || this.toDisplayName(item.id),
+					name: displayName,
 					model: details?.model || item.id,
 					description: details?.description,
 					capabilities: rawCapabilities.filter((value): value is string => Boolean(value)),
