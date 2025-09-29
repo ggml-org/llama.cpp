@@ -365,7 +365,7 @@ jobs:
       - name: Setup Toolchain
         if: steps.cache-spacemit-ime-cross-toolchain.outputs.cache-hit != 'true'
         run: |
-          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${env.SPACEMIT_IME_TOOLCHAIN_VERSION}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
+          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
           rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
           mkdir -p ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
           tar xf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz -C ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }} --strip-components=1
