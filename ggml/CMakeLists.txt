@@ -4,8 +4,7 @@ project("ggml" C CXX ASM)
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
 set(GGML_VERSION_MINOR 9)
-set(GGML_VERSION_PATCH 0)
-set(GGML_VERSION_DEV "-dev")  # "-dev" for development, "" for releases
+set(GGML_VERSION_PATCH 3)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
@@ -26,8 +25,8 @@ if(GIT_EXE)
     )
 endif()
 
-# Build the version string with optional -dev suffix and dirty flag
-set(GGML_VERSION "${GGML_VERSION_BASE}${GGML_VERSION_DEV}")
+# Build the version string with optional dirty flag
+set(GGML_VERSION "${GGML_VERSION_BASE}")
 if(GGML_GIT_DIRTY AND NOT GGML_GIT_DIRTY EQUAL 0)
     set(GGML_VERSION "${GGML_VERSION}-dirty")
 endif()
