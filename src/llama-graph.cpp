@@ -1853,6 +1853,19 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
 }
 
+void llm_graph_context::build_dense_out(
+    ggml_tensor *dense_2,
+    ggml_tensor *dense_3) const {
+    ggml_tensor * cur = res->get_embd_pooled();
+    cur = ggml_mul_mat(ctx0, dense_2, cur);
+    cb(cur, "result_embd_pooled", -1);
+    cur = ggml_mul_mat(ctx0, dense_3, cur);
+    cb(cur, "result_embd_pooled", -1);
+    res->t_embd_pooled = cur;
+    ggml_build_forward_expand(gf, cur);
+}
+
+
 void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
@@ -1936,6 +1949,7 @@ void llm_graph_context::build_pooling(
 
     ggml_build_forward_expand(gf, cur);
 }
+
 
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional) {
     // TODO move to hparams if a T5 variant appears that uses a different value

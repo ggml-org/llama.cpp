@@ -280,6 +280,8 @@ class ModelBase:
         max_name_len = max(len(s) for _, s in self.tensor_map.mapping.values()) + len(".weight,")
 
         for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors()):
+            if "dense" in name:
+                break_here = 1
             # we don't need these
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
@@ -332,6 +334,9 @@ class ModelBase:
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
+                            #gguf.MODEL_TENSOR.DENSE_2_OUT,
+                            #gguf.MODEL_TENSOR.DENSE_3_OUT,
+
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -5255,6 +5260,40 @@ class Gemma3Model(TextModel):
 @ModelBase.register("Gemma3TextModel")
 class EmbeddingGemma(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
+    module_paths = []
+    dense_tensors = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # read molues.json to determine if model has Dense layers
+        module_path = self.dir_model / "modules.json"
+        if module_path.is_file():
+            with open(module_path, encoding="utf-8") as f:
+                modules = json.load(f)
+            for mod in modules:
+                if mod["type"] == "sentence_transformers.models.Dense":
+                    module_path = mod["path"]
+                    tensors_file = self.dir_model / module_path / "model.safetensors"
+                    if tensors_file.is_file():
+                        self.module_paths.append(module_path)
+
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        from safetensors.torch import load_file
+        module_paths = list(self.module_paths)
+        for i, module_path in enumerate(module_paths):
+            tensors_file = self.dir_model / module_path / "model.safetensors"
+            local_tensors = load_file(tensors_file)
+            tensor_name = "dense_2" if module_path == "2_Dense" else "dense_3"
+            for name, local_tensor in local_tensors.items():
+                if not name.endswith(".weight"):
+                    continue
+                orig_name = name.replace("linear", tensor_name)
+                name = self.map_tensor_name(orig_name)
+                logger.info(f"Adding extra tensor {i+1}/{len(module_paths)}: {orig_name} -> {name}, shape={local_tensor.shape}")
+                yield name, local_tensor.clone()
+
+
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()

@@ -3645,6 +3645,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,   "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
 
+                    // Dense output layers
+                    //FIXME: meta_data is hardcoded for now
+                    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, 4 * n_embd}, 0);
+                    dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {4 * n_embd, n_embd}, 0);
+
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
@@ -11351,6 +11357,7 @@ struct llm_build_gemma_embedding_iswa : public llm_graph_context {
             cb(cur, "ffn_post_norm", -1);
 
             cur = ggml_add(ctx0, cur, sa_out);
+
 
             cur = build_cvec(cur, il);
             cb(cur, "l_out", il);
@@ -19628,6 +19635,13 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
+    //FIXME: remove this hack when we have a better way to handle pooling
+    //(sentence-transformer) dense layers are applied after pooling
+    // for LLM_ARCH_GEMMA_EMBEDDING mean pooling is already added to the graph
+    if (llm->arch == LLM_ARCH_GEMMA_EMBEDDING) {
+        //LLAMA_LOG_WARN("%s: adding pooling layer\n", __func__);
+        llm->build_dense_out(dense_2_out_layers,dense_3_out_layers);
+    }
 
     return llm->res->get_gf();
 }
