@@ -66,9 +66,9 @@ static __global__ void flash_attn_ext_vec(
 #ifdef RDNA
     constexpr int nthreads_KQ_q = 2;
 #else
-    constexpr int nthreads_KQ_q = 4;
+    constexpr int nthreads_KQ_q = 2;
 #endif // RDNA
-    constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
+    constexpr int nthreads_V_q  = 4;
 #else
     constexpr int nthreads_KQ_q = (D/4 < 32 ? D/4 : 32);
     constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);

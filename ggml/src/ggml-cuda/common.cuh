@@ -387,6 +387,99 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+//-----------------------------------------------------------------------------------------------------------------//
+// AMD GFX906-optimized DS_SWIZZLE reduction primitives
+#ifdef GGML_USE_HIP
+__device__ __forceinline__ __attribute__((always_inline)) float ds_swizzle_xor_isa(float value, int xor_mask) {
+    int int_value = __float_as_int(value);
+    int result_int;
+    if (xor_mask == 1) {
+        result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x041F);
+    } else if (xor_mask == 2) {
+        result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x081F);
+    } else if (xor_mask == 4) {
+        result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x101F);
+    } else if (xor_mask == 8) {
+        result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x201F);
+    } else if (xor_mask == 16) {
+        result_int = __builtin_amdgcn_ds_swizzle(int_value, 0x401F);
+    } else {
+        result_int = int_value; // No swizzle for unsupported masks
+    }
+    return __int_as_float(result_int);
+}
+
+template <int logical_width, typename T>
+__device__ __forceinline__ __attribute__((always_inline)) T amd_reduce_sum(T value) {
+    if constexpr (sizeof(T) == 4 && logical_width <= 32) {
+        if constexpr (logical_width >= 2)  value += ds_swizzle_xor_isa(value, 1);
+        if constexpr (logical_width >= 4)  value += ds_swizzle_xor_isa(value, 2);
+        if constexpr (logical_width >= 8)  value += ds_swizzle_xor_isa(value, 4);
+        if constexpr (logical_width >= 16) value += ds_swizzle_xor_isa(value, 8);
+        if constexpr (logical_width >= 32) value += ds_swizzle_xor_isa(value, 16);
+    } else {
+#pragma unroll
+        for (int offset = logical_width/2; offset > 0; offset >>= 1) {
+            value += __shfl_xor_sync(0xffffffff, value, offset, logical_width);
+        }
+    }
+    return value;
+}
+
+template <int logical_width, typename T>
+__device__ __forceinline__ __attribute__((always_inline)) T amd_reduce_max(T value) {
+    if constexpr (sizeof(T) == 4 && logical_width <= 32) {
+        T shuffled;
+        if constexpr (logical_width >= 2) {
+            shuffled = ds_swizzle_xor_isa(value, 1);
+            value = (value > shuffled) ? value : shuffled;
+        }
+        if constexpr (logical_width >= 4) {
+            shuffled = ds_swizzle_xor_isa(value, 2);
+            value = (value > shuffled) ? value : shuffled;
+        }
+        if constexpr (logical_width >= 8) {
+            shuffled = ds_swizzle_xor_isa(value, 4);
+            value = (value > shuffled) ? value : shuffled;
+        }
+        if constexpr (logical_width >= 16) {
+            shuffled = ds_swizzle_xor_isa(value, 8);
+            value = (value > shuffled) ? value : shuffled;
+        }
+        if constexpr (logical_width >= 32) {
+            shuffled = ds_swizzle_xor_isa(value, 16);
+            value = (value > shuffled) ? value : shuffled;
+        }
+    } else {
+#pragma unroll
+        for (int offset = logical_width/2; offset > 0; offset >>= 1) {
+            T shuffled = __shfl_xor_sync(0xffffffff, value, offset, logical_width);
+            value = (value > shuffled) ? value : shuffled;
+        }
+    }
+    return value;
+}
+
+template <int logical_width>
+__device__ __forceinline__ half amd_reduce_max_half(half value) {
+    if constexpr (logical_width <= 32) {
+        float float_val = __half2float(value);
+        float_val = amd_reduce_max<logical_width>(float_val);
+        return __float2half(float_val);
+    } else {
+#pragma unroll
+        for (int offset = logical_width/2; offset > 0; offset >>= 1) {
+            half shuffled = __shfl_xor_sync(0xffffffff, value, offset, logical_width);
+            float val_f = __half2float(value);
+            float shuffled_f = __half2float(shuffled);
+            value = __float2half(fmaxf(val_f, shuffled_f));
+        }
+        return value;
+    }
+}
+
+#endif 
+//-----------------------------------------------------------------------------------------------------------------//
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
@@ -397,16 +490,21 @@ static __device__ __forceinline__ int warp_reduce_sum(int x) {
         x += __shfl_xor_sync(0xffffffff, x, offset, width);
     }
     return x;
-#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#endif
 }
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
+#ifdef GGML_USE_HIP
+    return amd_reduce_sum<width>(x);
+#else
+    // Standard CUDA implementation
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
         x += __shfl_xor_sync(0xffffffff, x, offset, width);
     }
     return x;
+#endif // GGML_USE_HIP
 }
 
 template<int width = WARP_SIZE>
@@ -462,11 +560,30 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
+#ifdef GGML_USE_HIP
+    return amd_reduce_max<width>(x);
+#else
+    // Standard CUDA implementation
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
     }
     return x;
+#endif // GGML_USE_HIP
+}
+
+// Overload for half precision with DS_SWIZZLE optimization
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ half warp_reduce_max(half x) {
+#ifdef GGML_USE_HIP
+    return amd_reduce_max_half<width>(x);
+#else
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x = ggml_cuda_hmax(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+    }
+    return x;
+#endif // GGML_USE_HIP
 }
 
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
