@@ -11,10 +11,9 @@ This fork is specifically optimized for AMD GFX906 architecture (MI50, MI60, Veg
 
 ---
 
-## Key Features of fattn-vec-f16.cu - forked
+## Key Features of b6615 - forked
 
 - **Replaced bpermute instructions with swizzle** (AMD native warp reductions, main contribution)
-- **V vectors caching** (another nice bump in speed)  
 
 ---
 
