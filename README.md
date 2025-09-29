@@ -4,13 +4,6 @@ This fork is specifically optimized for AMD GFX906 architecture (MI50, MI60, Veg
 
 ---
 
-## Acknowledgments
-**Special thanks to [skyne98](https://github.com/skyne98/ggml-gfx906)** for the foundational work, of course to the whole **[ggml-org](https://github.com/ggml-org/llama.cpp)** open source community, and to all the https://discord.gg/sgjdAU9eRC people for the efforts on gfx906 optimization.
-
-**The fork is now based on llama.cpp build 051b3382 **
-
----
-
 ## Key Features of b6615 - forked
 
 - **Replaced bpermute instructions with swizzle** (AMD native warp reductions, main contribution)
