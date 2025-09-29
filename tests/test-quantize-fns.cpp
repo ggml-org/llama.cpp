@@ -176,21 +176,14 @@ int main(int argc, char * argv[]) {
                 printf("%5s dot product error:              %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error);
             }
 
-            // Test i8mm path (nrc=2) for supported types
-            if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q8_0 ||
-                type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q6_K) {
-#if defined(__ARM_FEATURE_MATMUL_INT8)
-                const float vec_dot_error_i8mm = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data(), 2);
-                failed = !(vec_dot_error_i8mm < max_allowed_error);
+            // Test nrc=2 path for types that support it
+            if (qfns_cpu->nrows == 2) {
+                const float vec_dot_error_nrc2 = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data(), 2);
+                failed = !(vec_dot_error_nrc2 < max_allowed_error);
                 num_failed += failed;
                 if (failed || verbose) {
-                    printf("%5s dot product error (i8mm):     %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error_i8mm);
+                    printf("%5s dot product error (nrc=2):    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error_nrc2);
                 }
-#else
-                if (verbose) {
-                    printf("%5s dot product (i8mm):           SKIPPED (not supported)\n", ggml_type_name(type));
-                }
-#endif
             }
         }
     }
