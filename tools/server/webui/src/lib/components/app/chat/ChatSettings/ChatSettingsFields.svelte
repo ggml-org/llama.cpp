@@ -27,9 +27,9 @@
 
 			<Input
 				id={field.key}
-				value={String(localConfig[field.key] || '')}
+				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
+				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
 				class="w-full md:max-w-md"
 			/>
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -44,9 +44,9 @@
 
 			<Textarea
 				id={field.key}
-				value={String(localConfig[field.key] || '')}
+				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
+				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
 				class="min-h-[100px] w-full md:max-w-2xl"
 			/>
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
