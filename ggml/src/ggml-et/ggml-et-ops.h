@@ -53,10 +53,19 @@ struct ggml_et_glu_params {
     int32_t swapped;      // Whether gate and value are swapped
 };
 
+struct ggml_et_softmax_params {
+    ggml_tensor src0;     // F32 input tensor
+    ggml_tensor src1;     // F32 mask tensor (optional, may be zeroed if not used)
+    ggml_tensor dst;      // F32 output tensor
+    float scale;          // Scale factor
+    float max_bias;       // Max bias for ALiBi (0.0f if not used)
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
