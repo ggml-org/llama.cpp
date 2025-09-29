@@ -342,16 +342,20 @@ class ChatStore {
 			) => {
 				slotsService.stopStreaming();
 
+				const currentModelName = serverStore.modelName;
+
 				await DatabaseStore.updateMessage(assistantMessage.id, {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent,
-					timings: timings
+					timings: timings,
+					model: currentModelName || undefined
 				});
 
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 
 				this.updateMessageAtIndex(messageIndex, {
-					timings: timings
+					timings: timings,
+					model: currentModelName || undefined
 				});
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
