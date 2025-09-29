@@ -1386,7 +1386,7 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
-    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    return std::max<uint32_t>(2048u, 32u*model.n_tensors());
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {

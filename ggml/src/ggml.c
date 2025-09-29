@@ -6629,6 +6629,10 @@ void ggml_build_backward_expand(
             case GGML_OP_ROPE:          // positions not differentiable
                 ignore_src[1] = true;
                 break;
+            case GGML_OP_SET_ROWS:
+                ignore_src[0] = true;
+                ignore_src[1] = true;
+                break;
 
             default:
                 break;
