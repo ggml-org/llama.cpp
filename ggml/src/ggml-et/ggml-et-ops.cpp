@@ -52,6 +52,14 @@ static ggml_et_cpu_compare_config softmax_cpu_compare_config = {
     /* .max_log_elements = */ 1024
 };
 
+static ggml_et_cpu_compare_config get_rows_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 2048
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -582,6 +590,97 @@ bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for SOFTMAX operation\n");
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &softmax_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for SOFTMAX operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for GET_ROWS operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1]) {
+        GGML_LOG_ERROR("ET: GET_ROWS operation missing required inputs\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[1]->type == GGML_TYPE_I32 &&
+        (node->src[0]->type == GGML_TYPE_F32 || node->src[0]->type == GGML_TYPE_Q8_0)) {
+
+        kernel_name = "get_rows_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: GET_ROWS operation with unsupported types: dst=%s src0=%s src1=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type));
+        return false;
+    }
+
+    // Validate contiguity requirements
+    if (!ggml_is_contiguous(node)) {
+        GGML_LOG_ERROR("ET: GET_ROWS operation requires contiguous destination tensor\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node->src[0])) {
+        GGML_LOG_ERROR("ET: GET_ROWS operation requires contiguous data tensor\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node->src[1])) {
+        GGML_LOG_ERROR("ET: GET_ROWS operation requires contiguous indices tensor\n");
+        return false;
+    }
+
+    // Validate dimension constraints from ggml implementation
+    if (node->src[0]->ne[2] != node->src[1]->ne[1] || node->src[1]->ne[3] != 1) {
+        GGML_LOG_ERROR("ET: GET_ROWS operation dimension constraint failed: src0.ne[2]=%lld != src1.ne[1]=%lld or src1.ne[3]=%lld != 1\n",
+                       (long long)node->src[0]->ne[2], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[3]);
+        return false;
+    }
+
+    ggml_et_get_rows_params params;
+    params.src0 = *node->src[0];  // Data tensor (F32 or Q8_0)
+    params.src1 = *node->src[1];  // Indices tensor (I32)
+    params.dst = *node;           // Output tensor (F32)
+
+    GGML_LOG_DEBUG("ET: Launching GET_ROWS kernel %s (%s[%lld,%lld,%lld,%lld] x I32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld])\n",
+                   kernel_name,
+                   ggml_type_name(node->src[0]->type),
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
+                   (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3]);
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (get_rows_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for GET_ROWS operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_GET_ROWS)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for GET_ROWS operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for GET_ROWS operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &get_rows_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for GET_ROWS operation\n");
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
