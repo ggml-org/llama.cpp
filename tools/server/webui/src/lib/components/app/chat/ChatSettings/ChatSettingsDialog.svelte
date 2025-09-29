@@ -362,8 +362,8 @@
 
 <Dialog.Root {open} onOpenChange={handleClose}>
 	<Dialog.Content
-		class="z-999999 flex h-[100dvh] min-h-[100dvh] max-h-[100dvh] flex-col gap-0 rounded-none p-0
-			md:h-[64vh] md:min-h-0 md:max-h-[64vh] md:rounded-lg"
+		class="z-999999 flex h-[100dvh] max-h-[100dvh] min-h-[100dvh] flex-col gap-0 rounded-none p-0
+			md:h-[64vh] md:max-h-[64vh] md:min-h-0 md:rounded-lg"
 		style="max-width: 48rem;"
 	>
 		<div class="flex flex-1 flex-col overflow-hidden md:flex-row">
