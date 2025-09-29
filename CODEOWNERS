@@ -50,6 +50,7 @@
 /ggml/src/ggml-blas/                    @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
