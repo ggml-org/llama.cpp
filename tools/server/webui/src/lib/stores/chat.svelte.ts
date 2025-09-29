@@ -100,7 +100,7 @@ class ChatStore {
 
 		this.maxContextError = null;
 
-		await goto(`/chat/${conversation.id}`);
+		await goto(`#/chat/${conversation.id}`);
 
 		return conversation.id;
 	}
@@ -910,7 +910,7 @@ class ChatStore {
 			if (this.activeConversation?.id === convId) {
 				this.activeConversation = null;
 				this.activeMessages = [];
-				await goto('/?new_chat=true');
+				await goto(`?new_chat=true#/`);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);

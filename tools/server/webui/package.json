@@ -4,7 +4,7 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev --host 0.0.0.0 & storybook dev -p 6006 --ci",
+		"dev": "bash scripts/dev.sh",
 		"build": "vite build && ./scripts/post-build.sh",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
@@ -20,7 +20,8 @@
 		"test:ui": "vitest --project=ui",
 		"test:unit": "vitest",
 		"storybook": "storybook dev -p 6006",
-		"build-storybook": "storybook build"
+		"build-storybook": "storybook build",
+		"cleanup": "rm -rf .svelte-kit build node_modules test-results"
 	},
 	"devDependencies": {
 		"@chromatic-com/storybook": "^4.0.1",
