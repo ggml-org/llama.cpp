@@ -6,9 +6,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
+      '.github/workflows/build-amd.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -17,9 +15,6 @@ on:
       '**/*.cpp',
       '**/*.cu',
       '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
       '**/*.comp'
     ]
 
