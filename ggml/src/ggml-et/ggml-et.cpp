@@ -477,6 +477,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_NONE:
+            // Always support NONE operations - they represent leaf nodes (parameters, inputs, constants)
+            // No computation needed, just memory management
+            supported = true;
+            break;
         default:
             supported = false;
             break;
@@ -501,6 +506,10 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
     // (i.e. large tensors)
     // We are offloading all ops for testing.
     switch (op->op) {
+        case GGML_OP_NONE:
+            // Always offload NONE operations - they are leaf nodes that need to be on device
+            // for layer offloading with -ngl to work properly
+            return true;
         case GGML_OP_MUL:
         case GGML_OP_ADD:
             return op->type == GGML_TYPE_F32 &&
