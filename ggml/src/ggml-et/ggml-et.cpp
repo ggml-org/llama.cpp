@@ -293,6 +293,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_softmax(dev_ctx, node);
                 break;
 
+            case GGML_OP_GET_ROWS:
+                ggml_et_op_get_rows(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -438,6 +442,20 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_GET_ROWS:
+            // Support F32/Q8_0 data with I32 indices -> F32 output
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Validate dimension constraints from ggml implementation
+                supported = (op->src[0]->ne[2] == op->src[1]->ne[1]) && (op->src[1]->ne[3] == 1);
+            } else {
+                supported = false;
+            }
+            break;
         default:
             supported = false;
             break;
@@ -531,6 +549,17 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                 } else {
                     return true;
                 }
+            }
+            return false;
+        case GGML_OP_GET_ROWS:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_I32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1])) {
+                // Validate dimension constraints
+                return (op->src[0]->ne[2] == op->src[1]->ne[1]) && (op->src[1]->ne[3] == 1);
             }
             return false;
         default:
