@@ -359,7 +359,7 @@ jobs:
         uses: actions/cache@v4
         id: cache-spacemit-ime-cross-toolchain
         with:
-          path: spacemit-toolchain-linux-glibc-x86_64
+          path: ./${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
           key: ${{ runner.os }}-spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
       - name: Setup Toolchain
