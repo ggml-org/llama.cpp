@@ -31,13 +31,11 @@ struct ggml_et_cpu_compare_ctx {
     ggml_tensor* cpu_src2;
     ggml_tensor* cpu_dst;
     ggml_cgraph* cpu_graph;
-
     void* cpu_src0_data;
     void* cpu_src1_data;
     void* cpu_src2_data;
     void* cpu_dst_data;
     void* et_dst_data;
-
     size_t src0_size;
     size_t src1_size;
     size_t src2_size;
