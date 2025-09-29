@@ -203,13 +203,32 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
             {
                 int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant
                 ggml_glu_op glu_op = (ggml_glu_op)glu_op_type;
-                
+
                 // Only support split tensor mode
                 if (!ctx->cpu_src1) {
                     GGML_LOG_ERROR("ET: GLU CPU comparison requires split tensor mode\n");
                     return false;
                 }
                 ctx->cpu_dst = ggml_glu_split(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, glu_op);
+            }
+            break;
+        case GGML_OP_SOFT_MAX:
+            {
+                // Extract scale and max_bias from op_params
+                float scale = 1.0f;
+                float max_bias = 0.0f;
+                if (node->op_params) {
+                    memcpy(&scale, (const float*)node->op_params + 0, sizeof(float));
+                    memcpy(&max_bias, (const float*)node->op_params + 1, sizeof(float));
+                }
+
+                if (ctx->cpu_src1 || scale != 1.0f || max_bias != 0.0f) {
+                    // Use extended softmax when mask or non-default parameters are present
+                    ctx->cpu_dst = ggml_soft_max_ext(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, scale, max_bias);
+                } else {
+                    // Use simple softmax when no mask and default parameters
+                    ctx->cpu_dst = ggml_soft_max(ctx->ggml_ctx, ctx->cpu_src0);
+                }
             }
             break;
         default:

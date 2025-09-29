@@ -44,6 +44,14 @@ static ggml_et_cpu_compare_config mul_mat_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config softmax_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 1024
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -460,6 +468,120 @@ bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for RMS_NORM operation\n");
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &rms_norm_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for RMS_NORM operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for SOFTMAX operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: SOFTMAX operation missing required input\n");
+        return false;
+    }
+
+    const char* kernel_name;
+
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_F32) {
+
+        kernel_name = "softmax_f32";
+
+    } else {
+        GGML_LOG_ERROR("ET: SOFTMAX operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    // Validate contiguity requirements
+    if (!ggml_is_contiguous(node)) {
+        GGML_LOG_ERROR("ET: SOFTMAX operation requires contiguous destination tensor\n");
+        return false;
+    }
+
+    if (!ggml_is_contiguous(node->src[0])) {
+        GGML_LOG_ERROR("ET: SOFTMAX operation requires contiguous source tensor\n");
+        return false;
+    }
+
+    // Check optional mask tensor
+    if (node->src[1]) {
+        if (node->src[1]->type != GGML_TYPE_F32) {
+            GGML_LOG_ERROR("ET: SOFTMAX operation with unsupported mask type: %s (F32 required)\n",
+                           ggml_type_name(node->src[1]->type));
+            return false;
+        }
+        if (!ggml_is_contiguous(node->src[1])) {
+            GGML_LOG_ERROR("ET: SOFTMAX operation requires contiguous mask tensor\n");
+            return false;
+        }
+    }
+
+    // Extract scale and max_bias from op_params
+    float scale = 1.0f;
+    float max_bias = 0.0f;
+    if (node->op_params) {
+        memcpy(&scale, (const float*)node->op_params + 0, sizeof(float));
+        memcpy(&max_bias, (const float*)node->op_params + 1, sizeof(float));
+    }
+
+    ggml_et_softmax_params params;
+    params.src0 = *node->src[0];  // F32 input tensor
+    if (node->src[1]) {
+        params.src1 = *node->src[1];  // F32 mask tensor
+    } else {
+        memset(&params.src1, 0, sizeof(params.src1));  // Zero if no mask
+    }
+    params.dst = *node;           // F32 output tensor
+    params.scale = scale;         // Scale factor
+    params.max_bias = max_bias;   // ALiBi bias
+
+    if (node->src[1]) {
+        GGML_LOG_DEBUG("ET: Launching SOFTMAX kernel %s with mask (F32[%lld,%lld,%lld,%lld] + F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld], scale=%.6f, max_bias=%.6f)\n",
+                       kernel_name,
+                       (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                       (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                       (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1],
+                       (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                       (long long)node->ne[0], (long long)node->ne[1],
+                       (long long)node->ne[2], (long long)node->ne[3],
+                       scale, max_bias);
+    } else {
+        GGML_LOG_DEBUG("ET: Launching SOFTMAX kernel %s (F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld], scale=%.6f, max_bias=%.6f)\n",
+                       kernel_name,
+                       (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                       (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                       (long long)node->ne[0], (long long)node->ne[1],
+                       (long long)node->ne[2], (long long)node->ne[3],
+                       scale, max_bias);
+    }
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (softmax_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for SOFTMAX operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_SOFT_MAX)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for SOFTMAX operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for SOFTMAX operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &softmax_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for SOFTMAX operation\n");
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
