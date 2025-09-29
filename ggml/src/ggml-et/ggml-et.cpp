@@ -297,6 +297,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_get_rows(dev_ctx, node);
                 break;
 
+            case GGML_OP_CONT:
+                ggml_et_op_cont(dev_ctx, node);
+                break;
+
             case GGML_OP_RESHAPE:
             case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
@@ -456,6 +460,23 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_CONT:
+            // Support F32->F32 CONT operations (rearrange non-contiguous to contiguous)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op)) {
+                // Defensive check: ensure dst and src0 are not aliased (separate buffers)
+                // While GGML design currently guarantees this, check for future robustness
+                if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
+                    GGML_LOG_WARN("ET: CONT operation detected aliased tensors (dst == src0), unsupported\n");
+                    supported = false;
+                } else {
+                    supported = true;
+                }
+            } else {
+                supported = false;
+            }
+            break;
         default:
             supported = false;
             break;
@@ -560,6 +581,18 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                 ggml_is_contiguous(op->src[1])) {
                 // Validate dimension constraints
                 return (op->src[0]->ne[2] == op->src[1]->ne[1]) && (op->src[1]->ne[3] == 1);
+            }
+            return false;
+        case GGML_OP_CONT:
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op)) {
+                // Defensive check: ensure dst and src0 are not aliased (separate buffers)
+                if (op->data && op->src[0]->data && op->data == op->src[0]->data) {
+                    GGML_LOG_WARN("ET: CONT offload rejected due to aliased tensors (dst == src0)\n");
+                    return false;
+                }
+                return true;
             }
             return false;
         default:
