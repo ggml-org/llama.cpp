@@ -26,6 +26,7 @@ This fork is specifically optimized for AMD GFX906 architecture (MI50, MI60, Veg
 - all models tested with:
                    
 | backend    | ngl | threads | n_batch | type_k | type_v | fa |
+| ---------- | --- | ------- | ------- | ------ | ------ | -- |
 | ROCm       |  99 |      12 |    1024 |   q8_0 |   q8_0 |  1 |
 | ---------- | --- | ------- | ------- | ------ | ------ | -- |
 
