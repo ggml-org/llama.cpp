@@ -114,6 +114,7 @@ if [ ! -z ${GG_BUILD_NO_SVE} ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
 fi
+
 ## helpers
 
 # download a file if it does not exist or if it is outdated
