@@ -184,7 +184,7 @@ if (Vulkan_FOUND)
         COMMENT "Generate vulkan shaders header"
     )
     target_sources(ggml-vulkan PRIVATE ${_ggml_vk_header})
-    
+
     foreach (file_full ${_ggml_vk_shader_files})
         get_filename_component(file ${file_full} NAME)
         set (_ggml_vk_target_cpp "${CMAKE_CURRENT_BINARY_DIR}/${file}.cpp")

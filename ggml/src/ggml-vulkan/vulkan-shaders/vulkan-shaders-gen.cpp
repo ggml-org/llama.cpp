@@ -563,7 +563,6 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
 }
 
 void process_shaders() {
-    //std::cout << "ggml_vulkan: Generating and compiling shaders to SPIR-V" << std::endl;
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}};
 
     // matmul
@@ -1042,14 +1041,6 @@ void write_output_files() {
 } // namespace
 
 int main(int argc, char** argv) {
-#if 0
-    std::string cmdline {};
-    for (int i = 0; i < argc; ++i) {
-        cmdline += argv[i];
-        cmdline += " ";
-    }
-    printf("%s\n", cmdline.c_str());
-#endif
     std::map<std::string, std::string> args;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
