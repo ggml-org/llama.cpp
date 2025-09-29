@@ -1,5 +1,5 @@
 
-#include "types.comp"
+#include "types.glsl"
 
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ4_0 {
    block_q4_0_packed16 block;

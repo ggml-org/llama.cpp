@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 cmake_policy(SET CMP0114 NEW)
+cmake_policy(SET CMP0116 NEW)
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
@@ -54,25 +55,25 @@ if (Vulkan_FOUND)
     # Test all shader extensions
     test_shader_extension_support(
         "GL_KHR_cooperative_matrix"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat.comp"
         "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
     )
 
     test_shader_extension_support(
         "GL_NV_cooperative_matrix2"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
         "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
     )
 
     test_shader_extension_support(
         "GL_EXT_integer_dot_product"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/integer_dot_product.comp"
         "GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
     )
 
     test_shader_extension_support(
         "GL_EXT_bfloat16"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_bfloat16_support.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/bfloat16.comp"
         "GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
     )
 
@@ -210,6 +211,7 @@ if (Vulkan_FOUND)
             DEPENDS ${file_full}
                     ${_ggml_vk_shaders_gen_sources}
                     vulkan-shaders-gen
+            DEPFILE ${_ggml_vk_source}.d
 
             COMMENT "Generate vulkan shaders for ${file}"
         )

@@ -238,6 +238,7 @@ std::string basename(const std::string &path) {
 static uint32_t compile_count = 0;
 static std::mutex compile_count_mutex;
 static std::condition_variable compile_count_cond;
+static bool generate_dep_file = true;
 
 void string_to_spv_func(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
     std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
@@ -272,6 +273,14 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
     #else
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_fname};
     #endif
+
+    if (generate_dep_file) {
+        cmd.push_back("-MD");
+        cmd.push_back("-MF");
+        cmd.push_back("\"" + target_cpp + ".d\"");
+        // Don't write the same dep file from multiple processes
+        generate_dep_file = false;
+    }
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
         cmd.push_back("-g");
