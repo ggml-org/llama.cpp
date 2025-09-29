@@ -292,7 +292,28 @@ static std::mutex compile_count_mutex;
 static std::condition_variable compile_count_cond;
 static bool generate_dep_file = true;
 
-void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat) {
+void decrement_compile_count(uint32_t * count) {
+    if (count) {
+        std::lock_guard<std::mutex> guard(compile_count_mutex);
+        assert(compile_count > 0);
+        compile_count--;
+        compile_count_cond.notify_all();
+    }
+}
+
+using compile_count_guard = std::unique_ptr<uint32_t, decltype(&decrement_compile_count)>;
+
+compile_count_guard acquire_compile_slot() {
+    // wait until fewer than N compiles are in progress.
+    // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
+    uint32_t N = 16;
+    std::unique_lock<std::mutex> guard(compile_count_mutex);
+    compile_count_cond.wait(guard, [N] { return compile_count < N; });
+    compile_count++;
+    return compile_count_guard(&compile_count, &decrement_compile_count);
+}
+
+void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
     // disable spirv-opt for coopmat shaders for https://github.com/ggerganov/llama.cpp/issues/10734
@@ -305,12 +326,10 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_path};
     #endif
 
-    if (generate_dep_file) {
+    if (dep_file) {
         cmd.push_back("-MD");
         cmd.push_back("-MF");
         cmd.push_back("\"" + target_cpp + ".d\"");
-        // Don't write the same dep file from multiple processes
-        generate_dep_file = false;
     }
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
@@ -345,12 +364,6 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     } catch (const std::exception& e) {
         std::cerr << "Error executing command for " << name << ": " << e.what() << std::endl;
     }
-    {
-        std::lock_guard<std::mutex> guard(compile_count_mutex);
-        assert(compile_count > 0);
-        compile_count--;
-    }
-    compile_count_cond.notify_all();
 }
 
 std::map<std::string, std::string> merge_maps(const std::map<std::string, std::string>& a, const std::map<std::string, std::string>& b) {
@@ -372,17 +385,12 @@ void string_to_spv(std::string name, const std::string& source, const std::map<s
         // Only compile shader variants matching the input filename
         return;
     }
-    {
-        // wait until fewer than N compiles are in progress.
-        // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
-        uint32_t N = 16;
-        std::unique_lock<std::mutex> guard(compile_count_mutex);
-        while (compile_count >= N) {
-            compile_count_cond.wait(guard);
-        }
-        compile_count++;
-    }
-    compiles.push_back(std::async(string_to_spv_func, name, input_filepath, out_path, defines, coopmat));
+
+    compile_count_guard slot = acquire_compile_slot();
+    compiles.push_back(std::async(
+        string_to_spv_func, name, input_filepath, out_path, defines, coopmat, generate_dep_file, std::move(slot)));
+    // Don't write the same dep file from multiple processes
+    generate_dep_file = false;
 }
 
 void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool coopmat2, bool f16acc) {
