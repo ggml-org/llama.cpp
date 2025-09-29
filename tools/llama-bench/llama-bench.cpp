@@ -2167,7 +2167,6 @@ int main(int argc, char ** argv) {
         llama_free(ctx);
 
         ggml_threadpool_free_fn(threadpool);
-
     }
 
     llama_model_free(lmodel);

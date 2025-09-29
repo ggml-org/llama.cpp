@@ -1982,30 +1982,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
         CUDA_CHECK(cudaGetLastError());
 
 #if defined(GGML_USE_HIP)
-        if(ggml::vendors::getHipblasltBatchedGemmEnvVal() != 0 && GGML_CUDA_CC_IS_CDNA3(cc)){
-            auto st = ggml::vendors::hipblasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
-                    ne01, ne11, ne10,
-                    alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
-                        (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
-                    beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
-                    ne23,
-                    cu_compute_type,
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-            if(st != HIPBLAS_STATUS_SUCCESS){
-                // Fallback to rocblas if hipblas fails
-                CUBLAS_CHECK(
-                cublasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
-                        ne01, ne11, ne10,
-                        alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
-                            (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
-                        beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
-                        ne23,
-                        cu_compute_type,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-            }
-        }else{
-            CUBLAS_CHECK(
-            cublasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
+        CUBLAS_CHECK(ggml::vendors::hipblasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
                     ne01, ne11, ne10,
                     alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
                         (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
@@ -2013,7 +1990,6 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
                     ne23,
                     cu_compute_type,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-        }
 #else
         CUBLAS_CHECK(
         cublasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
