@@ -4,7 +4,7 @@ This fork is specifically optimized for AMD GFX906 architecture (MI50, MI60, Veg
 
 ---
 
-## Key Features of b6615 - forked
+## Key Features of b6628 - forked
 
 - **Replaced bpermute instructions with swizzle** (AMD native warp reductions, main contribution)
 
