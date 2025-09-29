@@ -25,8 +25,7 @@ GGML_BACKEND_API void ggml_backend_rpc_start_server(const char * endpoint, const
                                                     size_t * free_mem, size_t * total_mem);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_reg(void);
-GGML_BACKEND_API int ggml_backend_rpc_get_device_count(const char * endpoint);
-GGML_BACKEND_API ggml_backend_dev_t ggml_backend_rpc_add_device(const char * endpoint, uint32_t device);
+GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint);
 
 #ifdef  __cplusplus
 }

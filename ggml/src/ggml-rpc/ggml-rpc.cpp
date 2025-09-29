@@ -856,10 +856,10 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
         /* .alignment = */ alignment,
         /* .max_size  = */ max_size
     };
-
+    auto reg = ggml_backend_rpc_add_server(endpoint);
     ggml_backend_buffer_type_t buft = new ggml_backend_buffer_type {
         /* .iface   = */ ggml_backend_rpc_buffer_type_interface,
-        /* .device  = */ ggml_backend_rpc_add_device(endpoint, device),
+        /* .device  = */ ggml_backend_reg_dev_get(reg, device),
         /* .context = */ buft_ctx
     };
     buft_map[dev_name] = buft;
@@ -873,11 +873,11 @@ ggml_backend_t ggml_backend_rpc_init(const char * endpoint, uint32_t device) {
         /* .device   = */ device,
         /* .name     = */ dev_name
     };
-
+    auto reg = ggml_backend_rpc_add_server(endpoint);
     ggml_backend_t backend = new ggml_backend {
         /* .guid    = */ ggml_backend_rpc_guid(),
         /* .iface   = */ ggml_backend_rpc_interface,
-        /* .device  = */ ggml_backend_rpc_add_device(endpoint, device),
+        /* .device  = */ ggml_backend_reg_dev_get(reg, device),
         /* .context = */ ctx
     };
     return backend;
@@ -998,10 +998,11 @@ bool rpc_server::alloc_buffer(const rpc_msg_alloc_buffer_req & request, rpc_msg_
     if (buffer != nullptr) {
         response.remote_ptr = reinterpret_cast<uint64_t>(buffer);
         response.remote_size = buffer->size;
-        LOG_DBG("[%s] size: %" PRIu64 " -> remote_ptr: %" PRIx64 ", remote_size: %" PRIu64 "\n", __func__, request.size, response.remote_ptr, response.remote_size);
+        LOG_DBG("[%s] device: %d, size: %" PRIu64 " -> remote_ptr: %" PRIx64 ", remote_size: %" PRIu64 "\n",
+            __func__, dev_id, request.size, response.remote_ptr, response.remote_size);
         buffers.insert(buffer);
     } else {
-        LOG_DBG("[%s] size: %" PRIu64 " -> failed\n", __func__, request.size);
+        LOG_DBG("[%s] device: %d, size: %" PRIu64 " -> failed\n", __func__, dev_id, request.size);
     }
     return true;
 }
@@ -1013,7 +1014,7 @@ bool rpc_server::get_alignment(const rpc_msg_get_alignment_req & request, rpc_ms
     }
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
     size_t alignment = ggml_backend_buft_get_alignment(buft);
-    LOG_DBG("[%s] alignment: %lu\n", __func__, alignment);
+    LOG_DBG("[%s] device: %d, alignment: %lu\n", __func__, dev_id, alignment);
     response.alignment = alignment;
     return true;
 }
@@ -1025,7 +1026,7 @@ bool rpc_server::get_max_size(const rpc_msg_get_max_size_req & request, rpc_msg_
     }
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
     size_t max_size = ggml_backend_buft_get_max_size(buft);
-    LOG_DBG("[%s] max_size: %lu\n", __func__, max_size);
+    LOG_DBG("[%s] device: %d, max_size: %lu\n", __func__, dev_id, max_size);
     response.max_size = max_size;
     return true;
 }
@@ -1859,31 +1860,34 @@ static const struct ggml_backend_device_i ggml_backend_rpc_device_i = {
 
 // backend reg interface
 
-static const char * ggml_backend_rpc_reg_get_name(ggml_backend_reg_t reg) {
-    return "RPC";
+struct ggml_backend_rpc_reg_context {
+    std::string                     name;
+    std::vector<ggml_backend_dev_t> devices;
+};
 
-    GGML_UNUSED(reg);
+static const char * ggml_backend_rpc_reg_get_name(ggml_backend_reg_t reg) {
+    ggml_backend_rpc_reg_context * ctx = (ggml_backend_rpc_reg_context *)reg->context;
+    return ctx ? ctx->name.c_str() : "RPC";
 }
 
 static size_t ggml_backend_rpc_reg_get_device_count(ggml_backend_reg_t reg) {
-    return 0;
-
-    GGML_UNUSED(reg);
+    ggml_backend_rpc_reg_context * ctx = (ggml_backend_rpc_reg_context *)reg->context;
+    return ctx ? ctx->devices.size() : 0;
 }
 
 static ggml_backend_dev_t ggml_backend_rpc_reg_get_device(ggml_backend_reg_t reg, size_t index) {
-    GGML_ABORT("The RPC backend does not have enumerated devices - use ggml_backend_add_device instead");
-
-    GGML_UNUSED(reg);
-    GGML_UNUSED(index);
+    ggml_backend_rpc_reg_context * ctx = (ggml_backend_rpc_reg_context *)reg->context;
+    if (ctx == nullptr) {
+        GGML_ABORT("The RPC backend does not have enumerated devices - use ggml_backend_rpc_add_server instead");
+    } else {
+        GGML_ASSERT(index < ctx->devices.size());
+        return ctx->devices[index];
+    }
 }
 
 static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    if (std::strcmp(name, "ggml_backend_rpc_get_device_count") == 0) {
-        return (void *)ggml_backend_rpc_get_device_count;
-    }
-    if (std::strcmp(name, "ggml_backend_rpc_add_device") == 0) {
-        return (void *)ggml_backend_rpc_add_device;
+    if (std::strcmp(name, "ggml_backend_rpc_add_server") == 0) {
+        return (void *)ggml_backend_rpc_add_server;
     }
     if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
         return (void *)ggml_backend_rpc_start_server;
@@ -1910,7 +1914,7 @@ ggml_backend_reg_t ggml_backend_rpc_reg(void) {
     return &ggml_backend_rpc_reg;
 }
 
-int ggml_backend_rpc_get_device_count(const char * endpoint) {
+static uint32_t ggml_backend_rpc_get_device_count(const char * endpoint) {
     auto sock = get_socket(endpoint);
     rpc_msg_device_count_rsp response;
     bool status = send_rpc_cmd(sock, RPC_CMD_DEVICE_COUNT, nullptr, 0, &response, sizeof(response));
@@ -1918,32 +1922,49 @@ int ggml_backend_rpc_get_device_count(const char * endpoint) {
     return response.device_count;
 }
 
-ggml_backend_dev_t ggml_backend_rpc_add_device(const char * endpoint, uint32_t device) {
-    static std::unordered_map<std::string, ggml_backend_dev_t> dev_map;
+static const ggml_backend_reg_i ggml_backend_rpc_reg_interface = {
+    /* .get_name          = */ ggml_backend_rpc_reg_get_name,
+    /* .get_device_count  = */ ggml_backend_rpc_reg_get_device_count,
+    /* .get_device        = */ ggml_backend_rpc_reg_get_device,
+    /* .get_proc_address  = */ ggml_backend_rpc_get_proc_address,
+};
 
+ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
+    static std::unordered_map<std::string, ggml_backend_reg_t> reg_map;
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
-
-    std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
-    if (dev_map.find(dev_name) != dev_map.end()) {
-        return dev_map[dev_name];
+    if (reg_map.find(endpoint) != reg_map.end()) {
+        return reg_map[endpoint];
     }
+    uint32_t dev_count = ggml_backend_rpc_get_device_count(endpoint);
+    if (dev_count == 0) {
+        return nullptr;
+    }
+    ggml_backend_rpc_reg_context * ctx = new ggml_backend_rpc_reg_context;
+    ctx->name = "RPC[" + std::string(endpoint) + "]";
+    for (uint32_t dev_id = 0; dev_id < dev_count; dev_id++) {
+        std::string dev_name = "RPC" + std::to_string(dev_id) + "[" + std::string(endpoint) + "]";
+        ggml_backend_rpc_device_context * dev_ctx = new ggml_backend_rpc_device_context {
+            /* .endpoint = */ endpoint,
+            /* .device   = */ dev_id,
+            /* .name     = */ dev_name,
+        };
 
-    ggml_backend_rpc_device_context * ctx = new ggml_backend_rpc_device_context {
-        /* .endpoint = */ endpoint,
-        /* .device   = */ device,
-        /* .name     = */ dev_name,
+        ggml_backend_dev_t dev = new ggml_backend_device {
+            /* .iface   = */ ggml_backend_rpc_device_i,
+            /* .reg     = */ ggml_backend_rpc_reg(),
+            /* .context = */ dev_ctx,
+        };
+        ctx->devices.push_back(dev);
+    }
+    ggml_backend_reg_t reg = new ggml_backend_reg {
+        /* .api_version = */ GGML_BACKEND_API_VERSION,
+        /* .iface       = */ ggml_backend_rpc_reg_interface,
+        /* .context     = */ ctx
     };
-
-    ggml_backend_dev_t dev = new ggml_backend_device {
-        /* .iface   = */ ggml_backend_rpc_device_i,
-        /* .reg     = */ ggml_backend_rpc_reg(),
-        /* .context = */ ctx,
-    };
-
-    dev_map[dev_name] = dev;
-
-    return dev;
+    reg_map[endpoint] = reg;
+    return reg;
 }
+
 
 GGML_BACKEND_DL_IMPL(ggml_backend_rpc_reg)
