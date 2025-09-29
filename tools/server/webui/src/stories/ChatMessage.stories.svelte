@@ -220,6 +220,11 @@
 	args={{
 		message: streamingThinkMessage
 	}}
+	parameters={{
+		test: {
+			timeout: 30000
+		}
+	}}
 	asChild
 	play={async () => {
 		// Phase 1: Stream <think> reasoning content
@@ -232,7 +237,7 @@
 		for (let i = 0; i < thinkingContent.length; i++) {
 			currentContent += thinkingContent[i];
 			streamingThinkMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 
 		// Close the thinking block
@@ -247,7 +252,7 @@
 		for (let i = 0; i < responseContent.length; i++) {
 			currentContent += responseContent[i];
 			streamingThinkMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 30));
+			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 
 		streamingThinkMessage.timestamp = Date.now();
@@ -263,6 +268,11 @@
 	args={{
 		message: streamingBracketMessage
 	}}
+	parameters={{
+		test: {
+			timeout: 30000
+		}
+	}}
 	asChild
 	play={async () => {
 		// Phase 1: Stream [THINK] reasoning content
@@ -275,7 +285,7 @@
 		for (let i = 0; i < thinkingContent.length; i++) {
 			currentContent += thinkingContent[i];
 			streamingBracketMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 25));
+			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 
 		// Close the thinking block
@@ -290,7 +300,7 @@
 		for (let i = 0; i < responseContent.length; i++) {
 			currentContent += responseContent[i];
 			streamingBracketMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 30));
+			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 
 		streamingBracketMessage.timestamp = Date.now();
