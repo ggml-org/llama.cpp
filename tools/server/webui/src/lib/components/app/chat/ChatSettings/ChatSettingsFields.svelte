@@ -5,6 +5,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { supportsVision } from '$lib/stores/server.svelte';
 	import type { Component } from 'svelte';
 
@@ -13,10 +14,11 @@
 		localConfig: SettingsConfigType;
 		onConfigChange: (key: string, value: string | boolean) => void;
 		onThemeChange?: (theme: string) => void;
-		isMobile?: boolean;
 	}
 
-	let { fields, localConfig, onConfigChange, onThemeChange, isMobile = false }: Props = $props();
+	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
+
+	let isMobile = $state(new IsMobile());
 </script>
 
 {#each fields as field (field.key)}
@@ -109,6 +111,7 @@
 			{/if}
 		{:else if field.type === 'checkbox'}
 			{@const isDisabled = field.key === 'pdfAsImage' && !supportsVision()}
+
 			<div class="flex items-start space-x-3">
 				<Checkbox
 					id={field.key}
