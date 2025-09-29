@@ -60,6 +60,14 @@ static ggml_et_cpu_compare_config get_rows_cpu_compare_config = {
     /* .max_log_elements = */ 2048
 };
 
+static ggml_et_cpu_compare_config cont_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     // Delegate to generic element map operation
     return ggml_et_op_elmap(dev_ctx, node);
@@ -681,6 +689,71 @@ bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for GET_ROWS operation\n");
         if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &get_rows_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for GET_ROWS operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    return kernel_result;
+}
+
+bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    GGML_LOG_DEBUG("ET: CONT operation called\n");
+
+    // Validate tensor types
+    if (node->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: CONT operation only supports F32 output, got %s\n", ggml_type_name(node->type));
+        return false;
+    }
+
+    if (!node->src[0] || node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: CONT operation requires F32 input tensor, got %s\n",
+                       node->src[0] ? ggml_type_name(node->src[0]->type) : "null");
+        return false;
+    }
+
+    // Validate contiguity - output must be contiguous, input can be non-contiguous
+    if (!ggml_is_contiguous(node)) {
+        GGML_LOG_ERROR("ET: CONT operation requires contiguous output tensor\n");
+        return false;
+    }
+
+    ggml_et_cont_params params;
+    params.src0 = *node->src[0];  // F32 input tensor (potentially non-contiguous)
+    params.dst = *node;           // F32 output tensor (contiguous)
+
+    GGML_LOG_DEBUG("ET: Launching CONT kernel (F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld])\n",
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
+                   (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1],
+                   (long long)node->ne[2], (long long)node->ne[3]);
+
+    GGML_LOG_DEBUG("ET: CONT tensor strides:\n");
+    GGML_LOG_DEBUG("ET:   src0 nb=[%zu,%zu,%zu,%zu] (contiguous=%s)\n",
+                   node->src[0]->nb[0], node->src[0]->nb[1], node->src[0]->nb[2], node->src[0]->nb[3],
+                   ggml_is_contiguous(node->src[0]) ? "yes" : "no");
+    GGML_LOG_DEBUG("ET:   dst  nb=[%zu,%zu,%zu,%zu] (contiguous=%s)\n",
+                   node->nb[0], node->nb[1], node->nb[2], node->nb[3],
+                   ggml_is_contiguous(node) ? "yes" : "no");
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (cont_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for CONT operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_CONT)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for CONT operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "cont_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for CONT operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &cont_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for CONT operation\n");
         }
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
