@@ -350,11 +350,9 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
                                      const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
                                      const sycl::half2 * q8_1_ds, const int & iqs) {
-        const int ib = ibx_offset.first / (QK_K / 2);
-
         const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
         const uint8_t *    qs             = base + ibx_offset.first;
-        const uint8_t *    scs            = base + d_offset.first + ib * K_SCALE_SIZE;
+        const uint8_t *    scs            = base + d_offset.first;
         const ggml_half2 * dms            = reinterpret_cast<const ggml_half2 *>(base + d_offset.second);
 
         const int        bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
@@ -427,13 +425,11 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K> {
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
                      const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr, const sycl::half2 * q8_1_ds,
                      const int iqs) {
-        const int ib = ibx_offset.first / (QK_K / 2);
-
         const uint8_t *   base   = static_cast<const uint8_t *>(vbq);
         const uint8_t *   ql     = base + ibx_offset.first;
         const uint8_t *   qh     = base + ibx_offset.second;
         const int8_t *    scales = reinterpret_cast<const int8_t *>(base + d_offset.first);
-        const ggml_half * d      = (const ggml_half *) (base + d_offset.second) + ib;
+        const ggml_half * d      = (const ggml_half *) (base + d_offset.second);
 
         const int bq8_offset   = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
         const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);

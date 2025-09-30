@@ -178,7 +178,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        // Start the non-batch threadpool in the paused state
+        // start the non-batch threadpool in the paused state
         tpp.paused = true;
     }
 
@@ -220,7 +220,7 @@ int main(int argc, char ** argv) {
                 LOG_WRN("*** User-specified prompt will pre-start conversation, did you mean to set --system-prompt (-sys) instead?\n");
             }
 
-            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja).c_str());
+            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs).c_str());
         } else {
             LOG_INF("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }
@@ -587,12 +587,12 @@ int main(int argc, char ** argv) {
 
                 if (n_past + (int) embd.size() >= n_ctx) {
                     if (!params.ctx_shift){
-                        LOG_DBG("\n\n%s: context full and context shift is disabled => stopping\n", __func__);
+                        LOG_WRN("\n\n%s: context full and context shift is disabled => stopping\n", __func__);
                         break;
                     }
 
                     if (params.n_predict == -2) {
-                        LOG_DBG("\n\n%s: context full and n_predict == -%d => stopping\n", __func__, params.n_predict);
+                        LOG_WRN("\n\n%s: context full and n_predict == %d => stopping\n", __func__, params.n_predict);
                         break;
                     }
 
@@ -706,6 +706,10 @@ int main(int argc, char ** argv) {
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
+
+            if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                assistant_ss << common_token_to_piece(ctx, id, false);
+            }
 
             // echo this to console
             input_echo = true;
@@ -824,11 +828,7 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            // if current token is not EOG, we add it to current assistant message
             if (params.conversation_mode && !waiting_for_first_input) {
-                const auto id = common_sampler_last(smpl);
-                assistant_ss << common_token_to_piece(ctx, id, false);
-
                 if (!prompt.empty()) {
                     prompt.clear();
                     is_interacting = false;
