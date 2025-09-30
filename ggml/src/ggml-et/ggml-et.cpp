@@ -481,6 +481,10 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 supported = false;
             }
             break;
+        case GGML_OP_VIEW:
+            // VIEW is a metadata-only no-op, accept any type
+            supported = true;
+            break;
         case GGML_OP_SET_ROWS:
             // Support F32 data with I64 indices -> F16/F32 output (scatter operation)
             if (op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
@@ -628,6 +632,9 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                 return true;
             }
             return false;
+        case GGML_OP_VIEW:
+            // VIEW is a metadata-only no-op, accept any type
+            return true;
         case GGML_OP_SET_ROWS:
             if (op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_I64 &&
