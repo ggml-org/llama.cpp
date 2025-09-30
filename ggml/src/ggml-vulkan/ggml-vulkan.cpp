@@ -9,8 +9,13 @@
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 // We use VULKAN_HPP_DEFAULT_DISPATCHER, but not VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 // to avoid conflicts with applications or other libraries who might use it.
+#if VK_HEADER_VERSION >= 301
 namespace vk::detail { class DispatchLoaderDynamic; }
 vk::detail::DispatchLoaderDynamic & ggml_vk_default_dispatcher();
+#else
+namespace vk { class DispatchLoaderDynamic; }
+vk::DispatchLoaderDynamic & ggml_vk_default_dispatcher();
+#endif
 #define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
 
 #include <vulkan/vulkan.hpp>
@@ -4538,9 +4543,13 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
 static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
 
+#if VK_HEADER_VERSION >= 301
 static vk::detail::DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
-
 vk::detail::DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
+#else
+static vk::DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
+vk::DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
+#endif
     return ggml_vk_default_dispatcher_instance;
 }
 
