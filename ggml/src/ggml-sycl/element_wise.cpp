@@ -418,7 +418,7 @@ static void acc_f32_sycl(const float *x, const float *y, float *dst,
 }
 
 template<typename T>
-static void arange_kernel(T * dst, const int k, T start, T step, 
+static void arange_kernel(T * dst, const int k, T start, T step,
                          const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = start + static_cast<T>(i) * step;
@@ -639,21 +639,16 @@ static inline void dispatch_ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, gg
     }
 }
 
-// ב-namespace ggml_sycl_detail:
 static inline void ggml_sycl_op_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    
     float start, stop, step;
     memcpy(&start, dst->op_params, sizeof(float));
     memcpy(&stop, (float *) dst->op_params + 1, sizeof(float));
     memcpy(&step, (float *) dst->op_params + 2, sizeof(float));
-    
     dpct::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    
     float * dst_ptr = (float *)dst->data;
-    const int k = (int)ggml_nelements(dst);  // הוספה חשובה!
-    
+    const int k = (int)ggml_nelements(dst);
     const int num_blocks = ceil_div(k, SYCL_ARANGE_BLOCK_SIZE);
     stream->parallel_for(
         sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE),
