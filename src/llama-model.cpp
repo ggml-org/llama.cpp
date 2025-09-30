@@ -11751,6 +11751,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
             // TODO: skip computing output earlier for unused tokens
 
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
+            cb(y, "mamba2_y_add_d", il);
             y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
             // grouped RMS norm
@@ -14705,6 +14706,7 @@ struct llm_build_nemotron_h : public llm_graph_context_mamba {
         ggml_tensor * inpL;
 
         inpL = build_inp_embd(model.tok_embd);
+        ggml_build_forward_expand(gf, inpL);
 
         auto * inp = build_inp_mem_hybrid();
 
@@ -14736,7 +14738,7 @@ struct llm_build_nemotron_h : public llm_graph_context_mamba {
 
             // add residual
             cur = ggml_add(ctx0, cur, inpSA);
-            cb(cur, "block_out", il);
+            cb(cur, "nemotron_h_block_out", il);
 
             // input for next layer
             inpL = cur;
