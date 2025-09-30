@@ -54,6 +54,13 @@
 #endif
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
+// isatty
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 using json = nlohmann::ordered_json;
 
 std::initializer_list<enum llama_example> mmproj_examples = {
