@@ -4687,26 +4687,24 @@ void kernel_flash_attn_ext_impl(
 
                 constexpr short NC = (C/8)/NSG;
 
-                // TODO: not good to unroll for large contexts - not sure why?
+                // note: do not unroll for large heads
+                #pragma unroll (DK <= 64 ? NC : 1)
                 for (short cc = 0; cc < NC; ++cc) {
                     qk8x8_t mqk = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
 
-                    if (DK8 % 16 != 0) {
+                    if (DK % 16 != 0) {
                         k8x8_t mk;
                         q8x8_t mq;
 
                         FOR_UNROLL (short i = 0; i < DK8; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_load(mk, pk, NS10, 0, true);
-                            simdgroup_load(mq, pq, DK);
+                            simdgroup_load(mk, pk + 8*i, NS10, 0, true);
+                            simdgroup_load(mq, pq + 8*i, DK);
 
                             simdgroup_barrier(mem_flags::mem_none);
 
                             simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
-
-                            pk += 8;
-                            pq += 8;
                         }
                     } else {
                         k8x8_t mk[2];
@@ -4715,26 +4713,22 @@ void kernel_flash_attn_ext_impl(
                         FOR_UNROLL (short i = 0; i < DK8/2; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_load(mk[0], pk + 0*8, NS10, 0, true);
-                            simdgroup_load(mk[1], pk + 1*8, NS10, 0, true);
+                            simdgroup_load(mq[0], pq + 0*8 + 16*i, DK);
+                            simdgroup_load(mq[1], pq + 1*8 + 16*i, DK);
 
-                            simdgroup_load(mq[0], pq + 0*8, DK);
-                            simdgroup_load(mq[1], pq + 1*8, DK);
+                            simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, true);
+                            simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, true);
 
                             simdgroup_barrier(mem_flags::mem_none);
 
                             simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
                             simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
-
-                            pk += 16;
-                            pq += 16;
                         }
                     }
 
                     simdgroup_store(mqk, ps, SH, 0, false);
 
-                    pk += 8*(NSG*NS10 - DK8);
-                    pq += 8*(NSG*0    - DK8);
+                    pk += 8*(NSG*NS10);
                     ps += 8*(NSG);
                 }
             } else {
@@ -4868,27 +4862,50 @@ void kernel_flash_attn_ext_impl(
                     }
 
                     {
-                        auto sst = ss;
-
                         device const v_t * pv = (device const v_t *) (v + ic*args.nb21);
 
                         pv += 8*sgitg;
 
-                        FOR_UNROLL (short cc = 0; cc < C/8; ++cc) {
-                            s8x8_t vs;
-                            simdgroup_load(vs, sst, SH, 0, false);
+                        if (DV <= 64) {
+                            FOR_UNROLL (short cc = 0; cc < C/8; ++cc) {
+                                s8x8_t vs;
+                                simdgroup_load(vs, ss + 8*cc, SH, 0, false);
 
-                            FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
-                                v8x8_t mv;
+                                FOR_UNROLL (short ii = 0; ii < NO/2; ++ii) {
+                                    v8x8_t mv[2];
 
-                                simdgroup_load(mv, pv, NS20, 0, false);
-                                simdgroup_multiply_accumulate(lo[ii], vs, mv, lo[ii]);
+                                    simdgroup_load(mv[0], pv + 0*NSG + 16*ii*NSG, NS20, 0, false);
+                                    simdgroup_load(mv[1], pv + 8*NSG + 16*ii*NSG, NS20, 0, false);
 
-                                pv += 8*NSG;
+                                    simdgroup_multiply_accumulate(lo[2*ii + 0], vs, mv[0], lo[2*ii + 0]);
+                                    simdgroup_multiply_accumulate(lo[2*ii + 1], vs, mv[1], lo[2*ii + 1]);
+                                }
+
+                                pv  += 8*NS20;
                             }
+                        } else {
+                            FOR_UNROLL (short cc = 0; cc < (C/8)/2; ++cc) {
+                                s8x8_t vs[2];
 
-                            pv  += 8*(NS20 - NO*NSG);
-                            sst += 8;
+                                simdgroup_load(vs[0], ss + 16*cc + 0, SH, 0, false);
+                                simdgroup_load(vs[1], ss + 16*cc + 8, SH, 0, false);
+
+                                FOR_UNROLL (short ii = 0; ii < NO/2; ++ii) {
+                                    v8x8_t mv[4];
+
+                                    simdgroup_load(mv[0], pv + 0*NSG + 16*ii*NSG + 0*8*NS20, NS20, 0, false);
+                                    simdgroup_load(mv[1], pv + 8*NSG + 16*ii*NSG + 0*8*NS20, NS20, 0, false);
+                                    simdgroup_load(mv[2], pv + 0*NSG + 16*ii*NSG + 1*8*NS20, NS20, 0, false);
+                                    simdgroup_load(mv[3], pv + 8*NSG + 16*ii*NSG + 1*8*NS20, NS20, 0, false);
+
+                                    simdgroup_multiply_accumulate(lo[2*ii + 0], vs[0], mv[0], lo[2*ii + 0]);
+                                    simdgroup_multiply_accumulate(lo[2*ii + 1], vs[0], mv[1], lo[2*ii + 1]);
+                                    simdgroup_multiply_accumulate(lo[2*ii + 0], vs[1], mv[2], lo[2*ii + 0]);
+                                    simdgroup_multiply_accumulate(lo[2*ii + 1], vs[1], mv[3], lo[2*ii + 1]);
+                                }
+
+                                pv  += 2*8*NS20;
+                            }
                         }
                     }
 
