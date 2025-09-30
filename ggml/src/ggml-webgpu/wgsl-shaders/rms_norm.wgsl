@@ -1,8 +1,47 @@
-@group(0) @binding(0)
-var<storage, read_write> src: array<f32>;
+#define(VARIANTS)
+
+[
+  {
+    "DECLS": ["NOT_INPLACE"]
+  },
+  {
+    "SHADER_SUFFIX": "inplace",
+    "DECLS": ["INPLACE"]
+  },
+]
+
+#end(VARIANTS)
+
+#define(DECLS)
+
+#decl(NOT_INPLACE)
+
+fn update(src_offset: u32, dst_offset: u32, scale: f32) {
+    dst[dst_offset] = scale * src[src_offset];
+}
 
 @group(0) @binding(1)
 var<storage, read_write> dst: array<f32>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+#enddecl(NOT_INPLACE)
+
+#decl(INPLACE)
+
+fn update(src_offset: u32, dst_offset: u32, scale: f32) {
+    src[dst_offset] = scale * src[src_offset];
+}
+
+@group(0) @binding(1)
+var<uniform> params: Params;
+
+#enddecl(INPLACE)
+
+#end(DECLS)
+
+#define(SHADER)
 
 struct Params {
     offset_src: u32, // in elements
@@ -23,11 +62,13 @@ struct Params {
     ne2: u32,
     ne3: u32,
 
-    eps: u32
+    eps: f32
 };
 
-@group(0) @binding(2)
-var<uniform> params: Params;
+@group(0) @binding(0)
+var<storage, read_write> src: array<f32>;
+
+DECLS
 
 override wg_size: u32;
 @compute @workgroup_size(wg_size)
@@ -49,9 +90,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var j: u32 = 0; j < params.ne0; j++) {
         sum += src[i_src_row + j] * src[i_src_row + j];
     }
-    let eps = bitcast<f32>(params.eps);
-    let scale = 1.0/sqrt(sum/f32(params.ne0) + eps);
+    let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
     for (var j: u32 = 0; j < params.ne0; j++) {
-        dst[i_dst_row + j] = scale * src[i_src_row + j];
+        update(i_src_row + j, i_dst_row + j, scale);
     }
 }
+#end(SHADER)
