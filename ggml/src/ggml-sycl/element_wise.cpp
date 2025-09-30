@@ -639,7 +639,6 @@ static inline void dispatch_ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, gg
     }
 }
 
-// ב-namespace ggml_sycl_detail:
 static inline void ggml_sycl_op_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
     
