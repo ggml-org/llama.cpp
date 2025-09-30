@@ -1814,12 +1814,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         (src1 != nullptr && ggml_nbytes(src1) > webgpu_ctx->limits.maxStorageBufferBindingSize) ||
         (src2 != nullptr && ggml_nbytes(src2) > webgpu_ctx->limits.maxStorageBufferBindingSize)) {
         supports_op = false;
-#ifdef GGML_WEBGPU_DEBUG
         WEBGPU_LOG_DEBUG("ggml_webgpu op not supported due to size: ");
-#endif
     }
 
-#ifdef GGML_WEBGPU_DEBUG
     if (!supports_op) {
         WEBGPU_LOG_DEBUG("ggml_webgpu op not supported: "
                          << ggml_op_name(op->op) << " with types dst: " << ggml_type_name(op->type)
@@ -1831,7 +1828,6 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                          << ", src0: " << (op->src[0] ? ggml_type_name(op->src[0]->type) : "null")
                          << ", src1: " << (op->src[1] ? ggml_type_name(op->src[1]->type) : "null"));
     }
-#endif
     return supports_op;
 }
 
