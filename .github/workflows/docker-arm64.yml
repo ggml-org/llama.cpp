@@ -175,28 +175,28 @@ jobs:
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
 
-  create_tag:
-    name: Create and push git tag
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+  # create_tag:
+  #   name: Create and push git tag
+  #   runs-on: ubuntu-22.04
+  #   permissions:
+  #     contents: write
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
 
-      - name: Determine source tag name
-        id: srctag
-        uses: ./.github/actions/get-tag-name
-        env:
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  #     - name: Determine source tag name
+  #       id: srctag
+  #       uses: ./.github/actions/get-tag-name
+  #       env:
+  #         BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
-      - name: Create and push git tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git tag ${{ steps.srctag.outputs.name }} || exit 0
-          git push origin ${{ steps.srctag.outputs.name }} || exit 0
+  #     - name: Create and push git tag
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         git tag ${{ steps.srctag.outputs.name }} || exit 0
+  #         git push origin ${{ steps.srctag.outputs.name }} || exit 0
