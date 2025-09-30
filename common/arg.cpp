@@ -266,10 +266,6 @@ static std::string read_etag(const std::string & path) {
 
 #ifdef LLAMA_USE_CURL
 
-bool common_has_curl() {
-    return true;
-}
-
 //
 // CURL utils
 //
@@ -584,10 +580,6 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 }
 
 #else
-
-bool common_has_curl() {
-    return false;
-}
 
 struct common_url {
     std::string scheme;
