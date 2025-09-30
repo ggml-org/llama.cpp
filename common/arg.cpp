@@ -54,6 +54,13 @@
 #endif
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
+// isatty
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 using json = nlohmann::ordered_json;
 
 std::initializer_list<enum llama_example> mmproj_examples = {
@@ -98,6 +105,14 @@ static void write_file(const std::string & fname, const std::string & content) {
 
         throw std::runtime_error(string_format("error: failed to write file '%s'\n", fname.c_str()));
     }
+}
+
+static bool is_output_a_tty() {
+#if defined(_WIN32)
+    return _isatty(_fileno(stdout));
+#else
+    return isatty(1);
+#endif
 }
 
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
@@ -652,7 +667,11 @@ static std::string show_masked_url(const common_url & parts) {
     return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + parts.host + parts.path;
 }
 
-static void print_progress(size_t current, size_t total) { // TODO isatty
+static void print_progress(size_t current, size_t total) {
+    if (!is_output_a_tty()) {
+        return;
+    }
+
     if (!total) {
         return;
     }
