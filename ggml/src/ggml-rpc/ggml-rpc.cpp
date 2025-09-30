@@ -1687,7 +1687,7 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 rpc_msg_get_device_memory_rsp response;
                 response.free_mem = free_mem[dev_id];
                 response.total_mem = total_mem[dev_id];
-                LOG_DBG("[get_device_mem] device: %u, free_mem: %zu, total_mem: %zu\n", dev_id,
+                LOG_DBG("[get_device_mem] device: %u, free_mem: %" PRIu64 ", total_mem: %" PRIu64 "\n", dev_id,
                     response.free_mem, response.total_mem);
                 if (!send_msg(sockfd, &response, sizeof(response))) {
                     return;
@@ -1703,15 +1703,15 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                   size_t dev_count, ggml_backend_t * backends,
-                                   size_t * free_mem, size_t * total_mem) {
-    if (dev_count == 0 || backends == nullptr || free_mem == nullptr || total_mem == nullptr) {
+                                   size_t n_devices, size_t n_threads,
+                                   ggml_backend_dev_t * devices, size_t * free_mem, size_t * total_mem) {
+    if (n_devices == 0 || devices == nullptr || free_mem == nullptr || total_mem == nullptr) {
         fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
         return;
     }
-    std::vector<ggml_backend_t> backends_vec(backends, backends + dev_count);
-    std::vector<size_t> free_mem_vec(free_mem, free_mem + dev_count);
-    std::vector<size_t> total_mem_vec(total_mem, total_mem + dev_count);
+    std::vector<ggml_backend_t> backends;
+    std::vector<size_t> free_mem_vec(free_mem, free_mem + n_devices);
+    std::vector<size_t> total_mem_vec(total_mem, total_mem + n_devices);
     printf("Starting RPC server v%d.%d.%d\n",
         RPC_PROTO_MAJOR_VERSION,
         RPC_PROTO_MINOR_VERSION,
@@ -1719,10 +1719,23 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
     printf("  endpoint       : %s\n", endpoint);
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("Devices:\n");
-    for (size_t i = 0; i < dev_count; i++) {
-        auto dev = ggml_backend_get_device(backends[i]);
+    for (size_t i = 0; i < n_devices; i++) {
+        auto dev = devices[i];
         printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
                total_mem[i] / 1024 / 1024, free_mem[i] / 1024 / 1024);
+        auto backend = ggml_backend_dev_init(dev, nullptr);
+        if (!backend) {
+            fprintf(stderr, "Failed to create backend for device %s\n", dev->iface.get_name(dev));
+            return;
+        }
+        backends.push_back(backend);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        if (reg) {
+            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+            if (ggml_backend_set_n_threads_fn) {
+                ggml_backend_set_n_threads_fn(backend, n_threads);
+            }
+        }
     }
 
     std::string host;
@@ -1753,13 +1766,16 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         }
         printf("Accepted client connection\n");
         fflush(stdout);
-        rpc_serve_client(backends_vec, cache_dir, client_socket->fd, free_mem_vec, total_mem_vec);
+        rpc_serve_client(backends, cache_dir, client_socket->fd, free_mem_vec, total_mem_vec);
         printf("Client connection closed\n");
         fflush(stdout);
     }
 #ifdef _WIN32
     WSACleanup();
 #endif
+    for (auto backend : backends) {
+        ggml_backend_free(backend);
+    }
 }
 
 // device interface

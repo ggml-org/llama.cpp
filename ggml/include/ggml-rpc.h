@@ -21,8 +21,8 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const c
 GGML_BACKEND_API void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, size_t * free, size_t * total);
 
 GGML_BACKEND_API void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                                    size_t dev_count, ggml_backend_t * backends,
-                                                    size_t * free_mem, size_t * total_mem);
+                                                    size_t n_devices, size_t n_threads,
+                                                    ggml_backend_dev_t * devices, size_t * free_mem, size_t * total_mem);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_reg(void);
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint);
