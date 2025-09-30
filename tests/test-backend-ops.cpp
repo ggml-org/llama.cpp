@@ -2140,6 +2140,27 @@ struct test_set_rows : public test_case {
             }
         }
     }
+
+    double max_nmse_err() override {
+        if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_IQ4_NL ||
+            type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1 || type == GGML_TYPE_Q8_0) {
+            // estimate what the max nmse error would be if one quantized value is
+            // off by one. The test values are distributed in [-1,1], so it'll be
+            // roughly (2.0 / 2^bits)^2, divided by the mean square value of the reference,
+            // which is roughly 0.25 times the number of elements.
+            double err_estimate = 1.0f/8.0f;
+            if (type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
+                err_estimate /= 2.0f;
+            }
+            if (type == GGML_TYPE_Q8_0) {
+                err_estimate /= 8.0f;
+            }
+            err_estimate *= err_estimate;
+            err_estimate /= 0.25f*float(ne[0] * r * ne[2]*nr23[0] * ne[3]*nr23[1]);
+            return err_estimate;
+        }
+        return 1e-7;
+    }
 };
 
 // GGML_OP_ARGMAX
@@ -2430,6 +2451,30 @@ struct test_cpy : public test_case {
     }
 
     double max_nmse_err() override {
+        if (type_src == type_dst) {
+            return 0.0;
+        }
+        if (type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_IQ4_NL ||
+            type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
+            // estimate what the max nmse error would be if one quantized value is
+            // off by one. The test values are distributed in [-150,150], so it'll be
+            // roughly (150*2.0 / 2^bits)^2, divided by the mean square value of the reference,
+            // which is roughly 0.25*150^2 times the number of elements.
+            double err_estimate = 1.0f/8.0f * 150.0f;
+            if (type_dst == GGML_TYPE_IQ4_NL) {
+                // iq4_nl values are a bit more spread out
+                err_estimate *= 2.0f;
+            }
+            if (type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1) {
+                err_estimate /= 2.0f;
+            }
+            if (type_dst == GGML_TYPE_Q8_0) {
+                err_estimate /= 8.0f;
+            }
+            err_estimate *= err_estimate;
+            err_estimate /= (150.0f*150.0f*0.25f)*float(ne[0] * ne[1] * ne[2] * ne[3]);
+            return err_estimate;
+        }
         return 1e-6;
     }
 
