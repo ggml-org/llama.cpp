@@ -221,69 +221,66 @@ class ChatStore {
 	 */
 	private getApiOptions(): Record<string, unknown> {
 		const currentConfig = config();
+		const hasValue = (value: unknown): boolean =>
+			value !== undefined && value !== null && value !== '';
+
 		const apiOptions: Record<string, unknown> = {
 			stream: true,
 			timings_per_token: true
 		};
 
-		if (currentConfig.temperature !== undefined && currentConfig.temperature !== null) {
+		if (hasValue(currentConfig.temperature)) {
 			apiOptions.temperature = Number(currentConfig.temperature);
 		}
-		if (currentConfig.max_tokens !== undefined && currentConfig.max_tokens !== null) {
+		if (hasValue(currentConfig.max_tokens)) {
 			apiOptions.max_tokens = Number(currentConfig.max_tokens);
 		}
-		if (currentConfig.dynatemp_range !== undefined && currentConfig.dynatemp_range !== null) {
+		if (hasValue(currentConfig.dynatemp_range)) {
 			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
 		}
-		if (currentConfig.dynatemp_exponent !== undefined && currentConfig.dynatemp_exponent !== null) {
+		if (hasValue(currentConfig.dynatemp_exponent)) {
 			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
 		}
-		if (currentConfig.top_k !== undefined && currentConfig.top_k !== null) {
+		if (hasValue(currentConfig.top_k)) {
 			apiOptions.top_k = Number(currentConfig.top_k);
 		}
-		if (currentConfig.top_p !== undefined && currentConfig.top_p !== null) {
+		if (hasValue(currentConfig.top_p)) {
 			apiOptions.top_p = Number(currentConfig.top_p);
 		}
-		if (currentConfig.min_p !== undefined && currentConfig.min_p !== null) {
+		if (hasValue(currentConfig.min_p)) {
 			apiOptions.min_p = Number(currentConfig.min_p);
 		}
-		if (currentConfig.xtc_probability !== undefined && currentConfig.xtc_probability !== null) {
+		if (hasValue(currentConfig.xtc_probability)) {
 			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
 		}
-		if (currentConfig.xtc_threshold !== undefined && currentConfig.xtc_threshold !== null) {
+		if (hasValue(currentConfig.xtc_threshold)) {
 			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
 		}
-		if (currentConfig.typ_p !== undefined && currentConfig.typ_p !== null) {
+		if (hasValue(currentConfig.typ_p)) {
 			apiOptions.typ_p = Number(currentConfig.typ_p);
 		}
-		if (currentConfig.repeat_last_n !== undefined && currentConfig.repeat_last_n !== null) {
+		if (hasValue(currentConfig.repeat_last_n)) {
 			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
 		}
-		if (currentConfig.repeat_penalty !== undefined && currentConfig.repeat_penalty !== null) {
+		if (hasValue(currentConfig.repeat_penalty)) {
 			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
 		}
-		if (currentConfig.presence_penalty !== undefined && currentConfig.presence_penalty !== null) {
+		if (hasValue(currentConfig.presence_penalty)) {
 			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
 		}
-		if (currentConfig.frequency_penalty !== undefined && currentConfig.frequency_penalty !== null) {
+		if (hasValue(currentConfig.frequency_penalty)) {
 			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
 		}
-		if (currentConfig.dry_multiplier !== undefined && currentConfig.dry_multiplier !== null) {
+		if (hasValue(currentConfig.dry_multiplier)) {
 			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
 		}
-		if (currentConfig.dry_base !== undefined && currentConfig.dry_base !== null) {
+		if (hasValue(currentConfig.dry_base)) {
 			apiOptions.dry_base = Number(currentConfig.dry_base);
 		}
-		if (
-			currentConfig.dry_allowed_length !== undefined &&
-			currentConfig.dry_allowed_length !== null
-		) {
+		if (hasValue(currentConfig.dry_allowed_length)) {
 			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
 		}
-		if (
-			currentConfig.dry_penalty_last_n !== undefined &&
-			currentConfig.dry_penalty_last_n !== null
-		) {
+		if (hasValue(currentConfig.dry_penalty_last_n)) {
 			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
 		}
 		if (currentConfig.samplers) {
