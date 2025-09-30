@@ -3727,7 +3727,6 @@ void kernel_mul_mv_t_t_short_impl(
 
     float res = 0.0f;
 
-    //dst_f32[(uint64_t)r1*args.ne0 + r0] = dot((float4) x[0], (float4) y[0]);
     for (int i = 0; i < args.ne00; ++i) {
         res += (float) x[i] * (float) y[i];
     }

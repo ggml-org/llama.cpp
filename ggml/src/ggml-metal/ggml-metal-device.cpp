@@ -495,7 +495,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             {
-                if (ne00 <= 32) {
+                if (ne00 < 32) {
                     nsg = 1;
                     nr0 = 32;
                     nr1 = 1;
