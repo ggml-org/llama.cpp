@@ -170,6 +170,8 @@ jobs:
           file: ${{ matrix.config.dockerfile }}
           target: server
           provenance: false
+          build-args: |
+            TARGETARCH=arm64
           # using github experimental cache
           # cache-from: type=gha
           # cache-to: type=gha,mode=max
