@@ -1347,12 +1347,19 @@ struct test {
 
     static std::string get_backend() {
         std::vector<std::string> backends;
+        bool                     rpc_used = false;
         for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
             auto *      reg  = ggml_backend_reg_get(i);
             std::string name = ggml_backend_reg_name(reg);
-            if (name != "CPU") {
+            if (name != "CPU" && !string_starts_with(name, "RPC")) {
                 backends.push_back(ggml_backend_reg_name(reg));
             }
+            if (string_starts_with(name, "RPC[")) {
+                rpc_used = true;
+            }
+        }
+        if (rpc_used) {
+            backends.push_back("RPC");
         }
         return backends.empty() ? "CPU" : join(backends, ",");
     }
