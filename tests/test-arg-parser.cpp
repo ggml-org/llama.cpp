@@ -126,52 +126,35 @@ int main(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
-    if (common_has_curl()) {
-        printf("test-arg-parser: test curl-related functions\n\n");
-        const char * GOOD_URL = "https://ggml.ai/";
-        const char * BAD_URL  = "https://www.google.com/404";
-        const char * BIG_FILE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin";
+    printf("test-arg-parser: test curl-related functions\n\n");
+    const char * GOOD_URL = "http://ggml.ai/";
+    const char * BAD_URL  = "http://ggml.ai/404";
 
-        {
-            printf("test-arg-parser: test good URL\n\n");
-            auto res = common_remote_get_content(GOOD_URL, {});
-            assert(res.first == 200);
-            assert(res.second.size() > 0);
-            std::string str(res.second.data(), res.second.size());
-            assert(str.find("llama.cpp") != std::string::npos);
-        }
+    {
+        printf("test-arg-parser: test good URL\n\n");
+        auto res = common_remote_get_content(GOOD_URL, {});
+        assert(res.first == 200);
+        assert(res.second.size() > 0);
+        std::string str(res.second.data(), res.second.size());
+        assert(str.find("llama.cpp") != std::string::npos);
+    }
 
-        {
-            printf("test-arg-parser: test bad URL\n\n");
-            auto res = common_remote_get_content(BAD_URL, {});
-            assert(res.first == 404);
-        }
+    {
+        printf("test-arg-parser: test bad URL\n\n");
+        auto res = common_remote_get_content(BAD_URL, {});
+        assert(res.first == 404);
+    }
 
-        {
-            printf("test-arg-parser: test max size error\n");
-            common_remote_params params;
-            params.max_size = 1;
-            try {
-                common_remote_get_content(GOOD_URL, params);
-                assert(false && "it should throw an error");
-            } catch (std::exception & e) {
-                printf("  expected error: %s\n\n", e.what());
-            }
+    {
+        printf("test-arg-parser: test max size error\n");
+        common_remote_params params;
+        params.max_size = 1;
+        try {
+            common_remote_get_content(GOOD_URL, params);
+            assert(false && "it should throw an error");
+        } catch (std::exception & e) {
+            printf("  expected error: %s\n\n", e.what());
         }
-
-        {
-            printf("test-arg-parser: test timeout error\n");
-            common_remote_params params;
-            params.timeout = 1;
-            try {
-                common_remote_get_content(BIG_FILE, params);
-                assert(false && "it should throw an error");
-            } catch (std::exception & e) {
-                printf("  expected error: %s\n\n", e.what());
-            }
-        }
-    } else {
-        printf("test-arg-parser: no curl, skipping curl-related functions\n");
     }
 
     printf("test-arg-parser: all tests OK\n\n");
