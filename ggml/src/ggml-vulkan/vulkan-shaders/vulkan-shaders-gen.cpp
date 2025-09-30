@@ -263,16 +263,16 @@ std::vector<unsigned char> read_binary_file(const std::string& path, bool may_no
     return data;
 }
 
-void write_binary_file(const std::string& path, const unsigned char * data, size_t size) {
+void write_binary_file(const std::string& path, const std::string& content) {
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) {
         std::cerr << "Error opening file for writing: " << path << " (" << strerror(errno) << ")\n";
         return;
     }
 
-    size_t write_size = fwrite(data, 1, size, f);
+    size_t write_size = fwrite(content.data(), 1, content.size(), f);
     fclose(f);
-    if (write_size != size) {
+    if (write_size != content.size()) {
         std::cerr << "Error writing file: " << path << " (" << strerror(errno) << ")\n";
         return;
     }
@@ -281,7 +281,7 @@ void write_binary_file(const std::string& path, const unsigned char * data, size
 void write_file_if_changed(const std::string& path, const std::string& content) {
     std::vector<unsigned char> existing = read_binary_file(path, true);
     if (existing.size() != content.size() || memcmp(existing.data(), content.data(), content.size()) != 0) {
-        write_binary_file(path, (const unsigned char *)content.data(), content.size());
+        write_binary_file(path, content);
     }
 }
 
@@ -1034,7 +1034,7 @@ void write_output_files() {
         write_file_if_changed(target_hpp, hdr.str());
     }
     if (target_cpp != "") {
-        write_file_if_changed(target_cpp, src.str());
+        write_binary_file(target_cpp, src.str());
     }
 }
 
