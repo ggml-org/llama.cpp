@@ -1222,11 +1222,12 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: android-build
-          evict-old-files: 1d
+      # Disabled due to size (400MB) and always 0 cache hits
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: android-build
+      #     evict-old-files: 1d
 
       - name: Set up JDK
         uses: actions/setup-java@v3
