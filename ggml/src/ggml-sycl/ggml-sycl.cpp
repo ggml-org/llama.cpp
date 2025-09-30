@@ -4261,18 +4261,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                 }
             }
-            case GGML_OP_SET:
-                 #if defined(GGML_SYCL_F16)
-                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_I32) &&
-                        (op->src[0] && op->src[1]) &&
-                        (op->src[0]->type == op->type) &&
-                        (op->src[1]->type == op->type);
-                 #else
-                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32) &&
-                        (op->src[0] && op->src[1]) &&
-                        (op->src[0]->type == op->type) &&
-                        (op->src[1]->type == op->type);
-                  #endif
+         case GGML_OP_SET:
+               return (op->type == GGML_TYPE_F32) &&
+                      (op->src[0] && op->src[1]) &&
+                      (op->src[0]->type == GGML_TYPE_F32) &&
+                      (op->src[1]->type == GGML_TYPE_F32);
+
         case GGML_OP_SET_ROWS:
             {
                 return ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
