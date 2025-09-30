@@ -482,7 +482,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_VIEW:
-            // VIEW is a metadata-only no-op, accept any type
+        case GGML_OP_PERMUTE:
+            // Metadata-only no-ops, accept any type
             supported = true;
             break;
         case GGML_OP_SET_ROWS:
@@ -633,7 +634,8 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
             }
             return false;
         case GGML_OP_VIEW:
-            // VIEW is a metadata-only no-op, accept any type
+        case GGML_OP_PERMUTE:
+            // Metadata-only no-ops, accept any type
             return true;
         case GGML_OP_SET_ROWS:
             if (op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
