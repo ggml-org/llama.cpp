@@ -247,7 +247,7 @@ bool common_json_parse(
             return true;
         }
         // handle unclosed top-level primitive
-        if (!healing_marker.empty() && err_loc.stack.empty()) {
+        if (err_loc.position != 0 && !healing_marker.empty() && err_loc.stack.empty()) {
             std::string str(it, temptative_end);
             const auto & magic_seed = out.healing_marker.marker = healing_marker;
             if (can_parse(str + "\"")) {
