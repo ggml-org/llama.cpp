@@ -5,6 +5,7 @@ find_package(runtime REQUIRED)
 ggml_add_backend_library(ggml-et
                          ggml-et.cpp
                          ggml-et-kernels.cpp
+                         ggml-et-memops.cpp
                          ggml-et-ops.cpp
                          ggml-et-cpu-compare.cpp
                         )
