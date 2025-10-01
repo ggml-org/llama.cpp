@@ -391,3 +391,14 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
 void common_chat_msg_parser::clear_tools() {
     result_.tool_calls.clear();
 }
+
+void common_chat_msg_parser::remove_content_suffix(size_t len) {
+    if (len == 0 || result_.content.empty()) {
+        return;
+    }
+    if (len >= result_.content.size()) {
+        result_.content.clear();
+        return;
+    }
+    result_.content.erase(result_.content.size() - len);
+}

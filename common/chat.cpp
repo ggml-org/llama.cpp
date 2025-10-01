@@ -2116,6 +2116,17 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
         "|<function name=\"([^\"]+)\">"  // match 5 (function name again)
     );
 
+    static const std::vector<std::string> wrapper_open_tags = {
+        "<tool_call>",
+        "<function_call>",
+        "<tool>",
+        "<tools>",
+        "<response>",
+        "<json>",
+        "<xml>",
+        "<JSON>",
+    };
+
     while (auto res = builder.try_find_regex(open_regex)) {
         const auto & block_start = res->groups[1];
         std::string block_end = block_start.empty() ? "" : "```";
@@ -2142,6 +2153,27 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
                 throw common_chat_msg_partial_exception("failed to parse tool call");
             }
         } else {
+            auto prelude = res->prelude;
+            bool prelude_wrappers_only = true;
+            auto trimmed_prelude = string_strip(prelude);
+            while (!trimmed_prelude.empty()) {
+                bool matched_wrapper = false;
+                for (const auto & tag : wrapper_open_tags) {
+                    if (string_starts_with(trimmed_prelude, tag)) {
+                        trimmed_prelude = string_strip(trimmed_prelude.substr(tag.size()));
+                        matched_wrapper = true;
+                        break;
+                    }
+                }
+                if (!matched_wrapper) {
+                    prelude_wrappers_only = false;
+                    break;
+                }
+            }
+            if (!prelude.empty() && prelude_wrappers_only) {
+                builder.remove_content_suffix(prelude.size());
+            }
+
             auto function_name = builder.str(res->groups[4]);
             if (function_name.empty()) {
                 function_name = builder.str(res->groups[5]);
@@ -2149,6 +2181,7 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
             GGML_ASSERT(!function_name.empty());
 
             close_tag = "</function>";
+            const bool had_block_start = res->prelude.find("```") != std::string::npos;
 
             if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
                 if (!builder.add_tool_call(function_name, "", arguments->value) || arguments->is_partial) {
@@ -2156,9 +2189,37 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
                 }
                 builder.consume_spaces();
                 builder.consume_literal(close_tag);
+
+                static const std::vector<std::string> wrapper_close_tags = {
+                    "</tool_call>",
+                    "</tool>",
+                    "</tools>",
+                    "</response>",
+                    "</json>",
+                    "</xml>",
+                    "</JSON>",
+                };
+
+                while (true) {
+                    builder.consume_spaces();
+                    bool matched_wrapper = false;
+                    for (const auto & wrapper_close : wrapper_close_tags) {
+                        if (builder.try_consume_literal(wrapper_close)) {
+                            matched_wrapper = true;
+                            break;
+                        }
+                    }
+                    if (!matched_wrapper) {
+                        break;
+                    }
+                }
+
                 builder.consume_spaces();
                 if (!block_end.empty()) {
                     builder.consume_literal(block_end);
+                    builder.consume_spaces();
+                } else if (had_block_start) {
+                    builder.try_consume_literal("```");
                     builder.consume_spaces();
                 }
             }

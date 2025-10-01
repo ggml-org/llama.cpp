@@ -117,4 +117,6 @@ class common_chat_msg_parser {
     );
 
     void clear_tools();
+
+    void remove_content_suffix(size_t len);
 };

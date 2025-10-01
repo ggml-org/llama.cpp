@@ -843,6 +843,16 @@ static void test_template_output_parsers() {
         assert_msg_equals(
             message_assist_call,
             common_chat_parse(
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "{\"arg1\": 1}\n"
+                "</function>\n"
+                "</tool_call>\n",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_HERMES_2_PRO}));
+        assert_msg_equals(
+            message_assist_call,
+            common_chat_parse(
                 "<tool>\n"
                 "  {\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
                 "</tool>",
