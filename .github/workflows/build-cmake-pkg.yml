@@ -25,7 +25,7 @@ jobs:
           cmake --build build --config Release
           cmake --install build --prefix "$PREFIX" --config Release
 
-          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          export LLAMA_CONFIG="$PREFIX"/share/llama/llama-config.cmake
           tclsh <<'EOF'
           set build(commit)  [string trim [exec git rev-parse --short HEAD]]
           set build(number)  [string trim [exec git rev-list  --count HEAD]]
@@ -47,5 +47,5 @@ jobs:
           EOF
 
           cd examples/simple-cmake-pkg
-          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/share
           cmake --build build
