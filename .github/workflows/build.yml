@@ -487,7 +487,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1097,10 +1097,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: Clone rocWMMA repository
-        id: clone_rocwmma
+      - name: Grab rocWMMA package
+        id: grab_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          7z x rocwmma.deb
+          7z x data.tar
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -1161,8 +1163,9 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
             -DCMAKE_BUILD_TYPE=Release `
+            -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_RPC=ON `
