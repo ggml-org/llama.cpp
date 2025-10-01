@@ -140,6 +140,8 @@
 	});
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <ModeWatcher />
 
 <Toaster richColors />
@@ -172,5 +174,3 @@
 		</Sidebar.Inset>
 	</div>
 </Sidebar.Provider>
-
-<svelte:window onkeydown={handleKeydown} />
