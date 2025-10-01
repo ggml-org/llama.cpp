@@ -810,13 +810,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_MODERN_BERT:
             {
 
-                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
 
                 hparams.set_swa_pattern(3, 0);
-                hparams.rope_freq_base_train_swa = 10000.f;
-                hparams.rope_freq_base_train = 160000.f;
-                hparams.n_swa = 128;
 
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE,             hparams.rope_freq_base_train);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa);
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
@@ -2903,23 +2902,21 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         
                         if ( i != 0 ) {
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
-                        
-                        }
-                        else{
-                            // layer 0 uses identity so we dont need weights for said layer
+                        } else{
+                            // layer 0 uses identity 
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
                         }
 
 
                         layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, 3 * n_embd }, 0);
-                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,   "weight", i), {n_embd, n_embd}, 0);
 
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, 2 * n_ff}, 0); 
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2 * n_ff}, 0); 
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                     }
 
-                    cls        = create_tensor(tn(LLM_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
+                    cls       = create_tensor(tn(LLM_TENSOR_CLS,     "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
                     cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
                     cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
 
@@ -7987,7 +7984,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * Kcur = nullptr;
             ggml_tensor * Vcur = nullptr;
 
-            const float rope_theta = il % 3 == 0 ? rope_theta_global : rope_theta_local;
+            const float rope_theta = (il % 3 == 0) ? rope_theta_global : rope_theta_local;
 
 
             // attention layer norm
@@ -8003,8 +8000,8 @@ struct llm_build_modern_bert : public llm_graph_context {
             cb(cur, "wqkv", il);
 
             Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0*sizeof(float)*(n_embd)));
-            Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd)));
-            Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd*2)));
+            Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*ggml_type_size(cur->type)*(n_embd)));
+            Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 2*ggml_type_size(cur->type)*(n_embd)));
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -8032,13 +8029,6 @@ struct llm_build_modern_bert : public llm_graph_context {
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
 
-            if (il == n_layer - 1 && pooling_type == LLAMA_POOLING_TYPE_NONE) {
-                // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
-                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-            }
-
             // re-add the layer input
             cur = ggml_add(ctx0, cur, inpL);
 
@@ -8063,10 +8053,16 @@ struct llm_build_modern_bert : public llm_graph_context {
         }
 
         cur = inpL;
-
+        
         cur = build_norm(cur,
                 model.output_norm_enc, NULL,
                 LLM_NORM, -1);
+        cb(cur, "final_norm_out", -1);
+
+        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+            ggml_tensor * inp_out_ids = build_inp_out_ids();
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
 
         cb(cur, "result_embd", -1);
         res->t_embd = cur;
