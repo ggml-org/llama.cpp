@@ -33,9 +33,7 @@ export function parseThinkingContent(content: string): {
 
 		if (startIndex !== -1 && endIndex === -1) {
 			const before = content.slice(0, startIndex);
-			const thinkingContent = content
-				.slice(startIndex + format.startTag.length)
-				.trim();
+			const thinkingContent = content.slice(startIndex + format.startTag.length).trim();
 
 			return {
 				cleanContent: buildCleanContent(before, ''),
@@ -59,9 +57,7 @@ export function parseThinkingContent(content: string): {
 		}
 
 		const before = content.slice(0, startIndex);
-		const thinkingContent = content
-			.slice(startIndex + format.startTag.length, endIndex)
-			.trim();
+		const thinkingContent = content.slice(startIndex + format.startTag.length, endIndex).trim();
 		const after = content.slice(endIndex + format.endTag.length);
 
 		return {
