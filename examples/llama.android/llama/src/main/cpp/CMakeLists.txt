@@ -21,6 +21,12 @@ project("llama-android")
 # Also provides "common"
 #FetchContent_MakeAvailable(llama)
 
+set(LLAMA_ROOT_DIR "../../../../../..")
+
+# Set global include directories that will be used by all targets
+include_directories(${LLAMA_ROOT_DIR}/include)
+include_directories(${LLAMA_ROOT_DIR}/vendor)
+
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
 # You can define multiple libraries, and CMake builds them for you.
@@ -32,7 +38,7 @@ project("llama-android")
 #
 
 #load local llama.cpp
-add_subdirectory(../../../../../../ build-llama)
+add_subdirectory(${LLAMA_ROOT_DIR}/ build-llama)
 
 # In order to load a library into your app from Java/Kotlin, you must call
 # System.loadLibrary() and pass the name of the library defined here;
@@ -51,3 +57,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         common
         android
         log)
+
+# Add include directories for llama.h and common.h
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    ${LLAMA_ROOT_DIR}/include
+    ${LLAMA_ROOT_DIR}/src
+    ${LLAMA_ROOT_DIR}/common)

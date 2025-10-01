@@ -60,7 +60,7 @@ set(${TARGET}_HEADERS
   speculative.h
 )
 
-list(TRANSFORM ${TARGET}_HEADERS PREPEND ${CMAKE_SOURCE_DIR}/common/)
+list(TRANSFORM ${TARGET}_HEADERS PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/)
 
 add_library(${TARGET} STATIC
     arg.cpp
