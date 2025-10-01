@@ -4580,9 +4580,15 @@ static void ggml_compute_forward_get_rows_f16(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        ggml_cpu_fp16_to_fp32(
-            (const ggml_fp16_t*) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                       (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        // Supports both F16 and F32 as dst type.
+        if (dst->type == GGML_TYPE_F16)
+                ggml_vec_cpy_f16(nc,
+                (ggml_fp16_t *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
+                (ggml_fp16_t *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+        else
+            ggml_cpu_fp16_to_fp32(
+                (const ggml_fp16_t*) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
+                        (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
     }
 }
 
@@ -4662,9 +4668,15 @@ static void ggml_compute_forward_get_rows_f32(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        ggml_vec_cpy_f32(nc,
+        // Supports both F16 and F32 as dst type.
+        if (dst->type == GGML_TYPE_F32)
+                ggml_vec_cpy_f32(nc,
                 (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
                 (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+        else
+            ggml_cpu_fp32_to_fp16(
+                (const float*) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
+                (ggml_fp16_t *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
     }
 }
 
