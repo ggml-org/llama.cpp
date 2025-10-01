@@ -3687,6 +3687,7 @@ struct ggml_tensor * ggml_set_rows(
     result->op     = GGML_OP_SET_ROWS;
     result->src[0] = b;
     result->src[1] = c;
+    result->src[2] = a; // note: order is weird due to legacy reasons (https://github.com/ggml-org/llama.cpp/pull/16063#discussion_r2385795931)
 
     return result;
 }
@@ -3927,7 +3928,7 @@ static struct ggml_tensor * ggml_rope_impl(
     memcpy(params +  8, &attn_factor,  sizeof(float));
     memcpy(params +  9, &beta_fast,    sizeof(float));
     memcpy(params + 10, &beta_slow,    sizeof(float));
-    if (mrope_used) {
+    if (mrope_used && sections) {
         memcpy(params + 11, sections,  sizeof(int32_t) * GGML_MROPE_SECTIONS);
     } else {
         memset(params + 11, 0,         sizeof(int32_t) * GGML_MROPE_SECTIONS);
