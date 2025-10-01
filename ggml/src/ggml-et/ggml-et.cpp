@@ -1,6 +1,7 @@
 #include "ggml-et.h"
 #include "ggml-et-common.h"
 #include "ggml-et-kernels.h"
+#include "ggml-et-memops.h"
 #include "ggml-et-ops.h"
 
 #include "ggml-impl.h"
@@ -8,6 +9,7 @@
 #include "ggml-backend.h"
 
 #include <cstring>
+#include <vector>
 
 /*
   ET Driver.
@@ -69,8 +71,42 @@ static void * ggml_backend_et_buffer_get_base(ggml_backend_buffer_t buffer) {
 }
 
 static enum ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(tensor);
+    // View tensors share buffer with their view_src, no additional initialization needed
+    if (tensor->view_src != NULL) {
+        GGML_LOG_DEBUG("ET: init_tensor for view tensor %s (view_src=%s, view_offs=%zu)\n",
+                      tensor->name, tensor->view_src->name, tensor->view_offs);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    const size_t original_size = ggml_nbytes(tensor);
+    const size_t padded_size = ggml_backend_buft_get_alloc_size(buffer->buft, tensor);
+
+    GGML_LOG_DEBUG("ET: init_tensor for tensor %s (type=%s, size=%zu bytes, padded=%zu bytes)\n",
+                  tensor->name, ggml_type_name(tensor->type), original_size, padded_size);
+
+    // Clear padding bytes to avoid NaN values
+    if (padded_size > original_size) {
+        const size_t padding_size = padded_size - original_size;
+        GGML_LOG_DEBUG("ET: Clearing %zu padding bytes for tensor %s to avoid NaN values\n",
+                      padding_size, tensor->name);
+
+        // Get device context to access memops kernel
+        ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
+        if (!dev_ctx) {
+            GGML_LOG_ERROR("ET: Failed to get device context for padding clear\n");
+            return GGML_STATUS_FAILED;
+        }
+
+        // Use device-side memset kernel for efficient padding clear
+        std::byte * padding_ptr = static_cast<std::byte*>(tensor->data) + original_size;
+        if (!ggml_et_memset(dev_ctx, padding_ptr, 0, padding_size)) {
+            GGML_LOG_ERROR("ET: Failed to clear padding using memset kernel for tensor %s\n", tensor->name);
+            return GGML_STATUS_FAILED;
+        }
+
+        GGML_LOG_DEBUG("ET: Padding cleared successfully for tensor %s using memops kernel\n", tensor->name);
+    }
+
     return GGML_STATUS_SUCCESS;
 }
 
@@ -121,8 +157,30 @@ static bool ggml_backend_et_buffer_cpy_tensor(ggml_backend_buffer_t buffer, cons
 }
 
 static void ggml_backend_et_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(value);
+    ggml_backend_et_buffer_context * ctx = (ggml_backend_et_buffer_context *)buffer->context;
+
+    GGML_LOG_DEBUG("ET: buffer_clear called for device %d (size=%zu bytes, value=0x%02x)\n",
+                  ctx->devidx, ctx->size, value);
+
+    if (ctx->size == 0 || ctx->data == nullptr) {
+        GGML_LOG_DEBUG("ET: buffer_clear skipped (empty buffer)\n");
+        return;
+    }
+
+    // Get device context to access memops kernel
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)buffer->buft->device->context;
+    if (!dev_ctx) {
+        GGML_LOG_ERROR("ET: Failed to get device context for buffer clear\n");
+        return;
+    }
+
+    // Use device-side memset kernel for efficient clearing
+    if (!ggml_et_memset(dev_ctx, ctx->data, value, ctx->size)) {
+        GGML_LOG_ERROR("ET: buffer_clear failed using memset kernel\n");
+        return;
+    }
+
+    GGML_LOG_DEBUG("ET: Buffer cleared successfully using memops kernel\n");
 }
 
 static const struct ggml_backend_buffer_i ggml_backend_et_buffer_i = {
