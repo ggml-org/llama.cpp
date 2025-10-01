@@ -34,7 +34,7 @@
 			{size}
 			{disabled}
 			{onclick}
-			class="h-6 w-6 p-0 {className}"
+			class="h-6 w-6 p-0 {className} flex"
 			aria-label={ariaLabel || tooltip}
 		>
 			{@const IconComponent = icon}

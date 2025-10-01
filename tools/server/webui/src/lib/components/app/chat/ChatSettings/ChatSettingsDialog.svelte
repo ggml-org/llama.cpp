@@ -75,6 +75,11 @@
 					key: 'pdfAsImage',
 					label: 'Parse PDF as image',
 					type: 'checkbox'
+				},
+				{
+					key: 'showModelInfo',
+					label: 'Show model information',
+					type: 'checkbox'
 				}
 			]
 		},
