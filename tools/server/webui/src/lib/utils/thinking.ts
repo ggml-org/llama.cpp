@@ -12,37 +12,62 @@ export function parseThinkingContent(content: string): {
 	thinking: string | null;
 	cleanContent: string;
 } {
+	const buildCleanContent = (before: string, after: string): string => {
+		const trimmedBefore = before.replace(/[ \t]+$/, '');
+		const trimmedAfter = after.replace(/^[ \t]+/, '');
+
+		if (trimmedBefore && trimmedAfter) {
+			const needsSeparator = !/\n\s*$/.test(trimmedBefore) && !/^\s*\n/.test(trimmedAfter);
+			const separator = needsSeparator ? '\n\n' : '';
+
+			return `${trimmedBefore}${separator}${trimmedAfter}`;
+		}
+
+		return trimmedBefore || trimmedAfter;
+	};
+
 	// Check for incomplete blocks (streaming case)
 	for (const format of THINKING_FORMATS) {
-		const hasStart = content.includes(format.startTag);
-		const hasEnd = content.includes(format.endTag);
+		const startIndex = content.indexOf(format.startTag);
+		const endIndex = content.indexOf(format.endTag, startIndex + format.startTag.length);
 
-		if (hasStart && !hasEnd) {
-			const cleanContent = content.split(format.endTag)?.[1]?.trim();
-			const thinkingContent = content.split(format.startTag)?.[1]?.trim();
+		if (startIndex !== -1 && endIndex === -1) {
+			const before = content.slice(0, startIndex);
+			const thinkingContent = content
+				.slice(startIndex + format.startTag.length)
+				.trim();
 
 			return {
-				cleanContent,
-				thinking: thinkingContent
+				cleanContent: buildCleanContent(before, ''),
+				thinking: thinkingContent || null
 			};
 		}
 	}
 
 	// Check for complete blocks
 	for (const format of THINKING_FORMATS) {
-		const match = content.match(format.regex);
+		const startIndex = content.indexOf(format.startTag);
 
-		if (match) {
-			const thinkingContent = match[1]?.trim() ?? '';
-			const cleanContent = `${content.slice(0, match.index ?? 0)}${content.slice(
-				(match.index ?? 0) + match[0].length
-			)}`.trim();
-
-			return {
-				thinking: thinkingContent,
-				cleanContent
-			};
+		if (startIndex === -1) {
+			continue;
 		}
+
+		const endIndex = content.indexOf(format.endTag, startIndex + format.startTag.length);
+
+		if (endIndex === -1) {
+			continue;
+		}
+
+		const before = content.slice(0, startIndex);
+		const thinkingContent = content
+			.slice(startIndex + format.startTag.length, endIndex)
+			.trim();
+		const after = content.slice(endIndex + format.endTag.length);
+
+		return {
+			thinking: thinkingContent || null,
+			cleanContent: buildCleanContent(before, after)
+		};
 	}
 
 	return {
