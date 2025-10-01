@@ -423,8 +423,8 @@ class MODEL_TENSOR(IntEnum):
     TOKEN_TYPES          = auto()
     POS_EMBD             = auto()
     OUTPUT               = auto()
-    DENSE_2_OUT            = auto() # embedding-gemma Dense layers
-    DENSE_3_OUT            = auto() # embedding-gemma Dense layers
+    DENSE_2_OUT          = auto() # embeddinggemma 2_Dense
+    DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
     OUTPUT_NORM          = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
@@ -767,8 +767,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
-    MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embedding-gemma Dense layers
-    MODEL_TENSOR.DENSE_3_OUT:                "dense_3", # embedding-gemma Dense layers
+    MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_3_OUT:                "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",

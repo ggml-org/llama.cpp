@@ -280,8 +280,6 @@ class ModelBase:
         max_name_len = max(len(s) for _, s in self.tensor_map.mapping.values()) + len(".weight,")
 
         for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors()):
-            if "dense" in name:
-                break_here = 1
             # we don't need these
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
@@ -334,9 +332,6 @@ class ModelBase:
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
-                            #gguf.MODEL_TENSOR.DENSE_2_OUT,
-                            #gguf.MODEL_TENSOR.DENSE_3_OUT,
-
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -5290,9 +5285,7 @@ class EmbeddingGemma(Gemma3Model):
                     continue
                 orig_name = name.replace("linear", tensor_name)
                 name = self.map_tensor_name(orig_name)
-                logger.info(f"Adding extra tensor {i+1}/{len(module_paths)}: {orig_name} -> {name}, shape={local_tensor.shape}")
                 yield name, local_tensor.clone()
-
 
 
     def set_gguf_parameters(self):
