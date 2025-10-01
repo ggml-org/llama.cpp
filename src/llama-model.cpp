@@ -36,6 +36,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_80M:           return "80M";
         case LLM_TYPE_109M:          return "109M";
         case LLM_TYPE_137M:          return "137M";
+        case LLM_TYPE_140M:          return "140M";
         case LLM_TYPE_160M:          return "160M";
         case LLM_TYPE_190M:          return "190M";
         case LLM_TYPE_220M:          return "220M";
@@ -44,6 +45,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_270M:          return "270M";
         case LLM_TYPE_335M:          return "335M";
         case LLM_TYPE_350M:          return "350M";
+        case LLM_TYPE_360M:          return "360M";
         case LLM_TYPE_410M:          return "410M";
         case LLM_TYPE_450M:          return "450M";
         case LLM_TYPE_475M:          return "475M";
@@ -51,6 +53,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_700M:          return "700M";
         case LLM_TYPE_770M:          return "770M";
         case LLM_TYPE_780M:          return "780M";
+        case LLM_TYPE_950M:          return "950M";
         case LLM_TYPE_0_3B:          return "0.3B";
         case LLM_TYPE_0_5B:          return "0.5B";
         case LLM_TYPE_0_6B:          return "0.6B";
@@ -63,6 +66,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_1_7B:          return "1.7B";
         case LLM_TYPE_1_8B:          return "1.8B";
         case LLM_TYPE_2B:            return "2B";
+        case LLM_TYPE_2_6B:          return "2.6B";
         case LLM_TYPE_2_8B:          return "2.8B";
         case LLM_TYPE_2_9B:          return "2.9B";
         case LLM_TYPE_3B:            return "3B";
@@ -622,19 +626,32 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
                 ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
 
-                hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
-                hparams.n_swa         = 8192; // should this be a gguf kv? currently it's the same for Scout and Maverick
-                hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa == 0) {
+                    hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
+                    hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
+                } else {
+                    hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
+                    hparams.n_swa         = 8192;
+                    hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
+                }
 
                 switch (hparams.n_expert) {
+                    case 0: {
+                        // MobileLLM (no MoE)
+                        switch (hparams.n_embd) {
+                            case 2048: type = LLM_TYPE_140M; break;
+                            case 4096: type = LLM_TYPE_360M; break;
+                            case 6144: type = LLM_TYPE_950M; break;
+                            default:   type = LLM_TYPE_UNKNOWN;
+                        }
+                    } break;
                     case 16:  type = LLM_TYPE_17B_16E; break;
                     case 128: type = LLM_TYPE_17B_128E; break;
                     default:  type = LLM_TYPE_UNKNOWN;
                 }
 
-                if (type == LLM_TYPE_17B_128E) {
-                    hparams.use_kq_norm = false;
-                }
+                hparams.use_kq_norm = type != LLM_TYPE_17B_128E;
             } break;
         case LLM_ARCH_ARCEE:
             {
@@ -658,10 +675,17 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_MINICPM:
             {
+                // Backward-compatible defaults for older MiniCPM GGUFs
+                hparams.f_embedding_scale = 12.0f;
+                hparams.f_residual_scale  = 1.4f / sqrtf(float(hparams.n_layer));
+                hparams.f_logit_scale     = hparams.n_embd ? (256.0f / float(hparams.n_embd)) : 1.0f;
+
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale);
-                ml.get_key(LLM_KV_RESIDUAL_SCALE,              hparams.f_residual_scale);
-                ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
+
+                // Optional KV reads, override defaults if present in newer GGUF exports
+                ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, /*required=*/false);
+                ml.get_key(LLM_KV_RESIDUAL_SCALE, hparams.f_residual_scale, /*required=*/false);
+                ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale, /*required=*/false);
 
                 // MiniCPM uses rope by default, unlike Granite which uses it as a switch
                 hparams.rope_finetuned = true;
@@ -1982,10 +2006,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
-                switch (hparams.n_embd) {
-                    case 1024: type = LLM_TYPE_350M; break;
-                    case 1536: type = LLM_TYPE_700M; break;
-                    case 2048: type = LLM_TYPE_1_2B; break;
+                switch (hparams.n_ff()) {
+                    case  4608: type = LLM_TYPE_350M; break;
+                    case  6912: type = LLM_TYPE_700M; break;
+                    case  8192: type = LLM_TYPE_1_2B; break;
+                    case 10752: type = LLM_TYPE_2_6B; break;
                     default:   type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -2009,6 +2034,19 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 switch (hparams.n_layer) {
                     case 32: type = LLM_TYPE_4B;  break;
                     case 52: type = LLM_TYPE_20B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_GROVEMOE:
+            {
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
+                ml.get_key(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
+                ml.get_key(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+
+                switch (hparams.n_layer) {
+                    case 48: type = LLM_TYPE_30B_A3B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -2475,9 +2513,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
 
-                    GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Llama 4 requires n_moe_layer_step > 0");
                     for (int i = 0; i < n_layer; ++i) {
-                        bool is_moe_layer = (i + 1) % hparams.n_moe_layer_step == 0;
+                        bool is_moe_layer = hparams.n_moe_layer_step > 0 && (i + 1) % hparams.n_moe_layer_step == 0;
 
                         auto & layer = layers[i];
 
@@ -3203,6 +3240,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (output == NULL) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
+
+                    // output rerank head
+                    cls_out = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -5874,6 +5914,53 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
                     }
                 } break;
+            case LLM_ARCH_GROVEMOE:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    GGML_ASSERT(n_expert > 0 && "n_expert must be > 0 for GROVEMOE");
+                    GGML_ASSERT(n_expert_used > 0 && "n_expert_used must be > 0 for GROVEMOE");
+                    GGML_ASSERT(hparams.n_group_experts > 0 && "n_group_experts must be > 0 for GROVEMOE");
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+
+                        // MoE branch
+                        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+                        const int64_t n_ff_chexp = hparams.n_ff_chexp ? hparams.n_ff_chexp : n_embd_head_k;
+                        const int64_t n_chunk_expert = n_expert / hparams.n_group_experts;
+
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+
+                        layer.ffn_gate_chexps = create_tensor(tn(LLM_TENSOR_FFN_GATE_CHEXPS, "weight", i), {  n_embd, n_ff_chexp, n_chunk_expert}, 0);
+                        layer.ffn_down_chexps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_CHEXPS, "weight", i), {n_ff_chexp,   n_embd, n_chunk_expert}, 0);
+                        layer.ffn_up_chexps   = create_tensor(tn(LLM_TENSOR_FFN_UP_CHEXPS,   "weight", i), {  n_embd, n_ff_chexp, n_chunk_expert}, 0);
+                    }
+                } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -6042,6 +6129,14 @@ size_t llama_model::n_devices() const {
     return devices.size();
 }
 
+std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
+    std::map<ggml_backend_buffer_type_t, size_t> ret;
+    for (const ggml_backend_buffer_ptr & buf_ptr : pimpl->bufs) {
+        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
+    }
+    return ret;
+}
+
 uint64_t llama_model::n_elements() const {
     return pimpl->n_elements;
 }
@@ -6203,6 +6298,13 @@ void llama_model::print_info() const {
     if (arch == LLM_ARCH_SMALLTHINKER) {
         LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
+    }
+
+    if (arch == LLM_ARCH_GROVEMOE) {
+        LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
+        LLAMA_LOG_INFO("%s: n_ff_chexp           = %d\n",     __func__, hparams.n_ff_chexp);
+        LLAMA_LOG_INFO("%s: n_group_experts      = %d\n",     __func__, hparams.n_group_experts);
+        LLAMA_LOG_INFO("%s: expert_group_scale   = %.2f\n",   __func__, hparams.expert_group_scale);
     }
 
     vocab.print_info();
@@ -6382,6 +6484,14 @@ struct llm_build_llama : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
+                if (hparams.use_kq_norm) {
+                    // Llama4TextL2Norm
+                    Qcur = ggml_rms_norm(ctx0, Qcur, hparams.f_norm_rms_eps);
+                    Kcur = ggml_rms_norm(ctx0, Kcur, hparams.f_norm_rms_eps);
+                    cb(Qcur, "Qcur_normed", il);
+                    cb(Kcur, "Kcur_normed", il);
+                }
+
                 cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
@@ -6489,7 +6599,8 @@ struct llm_build_llama_iswa : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
-            const bool use_rope = (il + 1) % hparams.n_no_rope_layer_step != 0;
+            const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
+                                  (il + 1) % hparams.n_no_rope_layer_step != 0;
 
             // norm
             cur = build_norm(inpL,
@@ -19003,6 +19114,156 @@ struct llm_build_smallthinker : public llm_graph_context{
     }
 };
 
+struct llm_build_grovemoe : public llm_graph_context {
+    llm_build_grovemoe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+        const int64_t n_chunk_expert = n_expert / hparams.n_group_experts;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - contains the positions
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        auto * inp_attn = build_attn_inp_kv();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self_attention
+            {
+                // compute Q and K and RoPE them
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+                cb(Qcur, "Qcur_normed", il);
+
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+                cb(Kcur, "Kcur_normed", il);
+
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // MoE branch
+            cur = build_norm(ffn_inp,
+                    model.layers[il].ffn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "ffn_norm", il);
+
+            ggml_tensor * probs = build_lora_mm(model.layers[il].ffn_gate_inp, cur); // [n_expert, n_tokens]
+            cb(probs, "ffn_moe_logits", il);
+
+            ggml_tensor * moe_out =
+                build_moe_ffn(cur,
+                        nullptr,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, true,
+                        false, 0.0,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il, probs);
+            cb(moe_out, "ffn_moe_out", il);
+            cur = moe_out;
+
+            // TODO: Only do the expert selection and weights once
+            moe_out =
+                build_moe_ffn(cur,
+                        nullptr,
+                        model.layers[il].ffn_up_chexps,
+                        model.layers[il].ffn_gate_chexps,
+                        model.layers[il].ffn_down_chexps,
+                        nullptr,
+                        n_chunk_expert, n_expert_used > n_chunk_expert ? n_chunk_expert : n_expert_used,
+                        LLM_FFN_SILU, true,
+                        false, 0.0,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il, probs);
+            cb(moe_out, "ffn_adj_moe_out", il);
+
+            cur = ggml_add(ctx0, cur, ggml_scale(ctx0, moe_out, hparams.expert_group_scale));
+            cb(cur, "ffn_final_moe_out", il);
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -19157,7 +19418,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_LLAMA4:
             {
-                llm = std::make_unique<llm_build_llama_iswa>(*this, params);
+                if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
+                    llm = std::make_unique<llm_build_llama>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_llama_iswa>(*this, params);
+                }
             } break;
         case LLM_ARCH_DECI:
             {
@@ -19529,6 +19794,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                     llm = std::make_unique<llm_build_smallthinker<false>>(*this, params);
                 }
             } break;
+        case LLM_ARCH_GROVEMOE:
+            {
+                llm = std::make_unique<llm_build_grovemoe>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -19735,6 +20004,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_SEED_OSS:
+        case LLM_ARCH_GROVEMOE:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

@@ -148,3 +148,7 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 .ccache/
+
+# IDE
+*.code-workspace
+.windsurf/

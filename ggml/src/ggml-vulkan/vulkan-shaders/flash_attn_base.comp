@@ -13,6 +13,8 @@ layout (constant_id = 6) const uint32_t D_split = 16;
 const uint32_t HSK_pad = (HSK + 15) & ~15;
 const uint32_t HSV_pad = (HSV + 15) & ~15;
 
+const bool KV_bounds_check = Clamp != 0;
+
 layout (push_constant) uniform parameter {
     uint32_t N;
     uint32_t KV;

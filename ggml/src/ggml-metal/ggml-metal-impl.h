@@ -8,6 +8,9 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
+#define N_R0_F 2
+#define N_SG_F 4
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 
@@ -32,13 +35,13 @@
 #define N_R0_Q3_K 2
 #define N_SG_Q3_K 2
 
-#define N_R0_Q4_K 4
+#define N_R0_Q4_K 2
 #define N_SG_Q4_K 2
 
 #define N_R0_Q5_K 2
 #define N_SG_Q5_K 2
 
-#define N_R0_Q6_K 1
+#define N_R0_Q6_K 2
 #define N_SG_Q6_K 2
 
 #define N_R0_IQ1_S 4
@@ -72,6 +75,8 @@
 #define FC_FLASH_ATTN_EXT              100
 #define FC_FLASH_ATTN_EXT_VEC          200
 #define FC_FLASH_ATTN_EXT_VEC_REDUCE   300
+#define FC_MUL_MV                      400
+#define FC_MUL_MM                      500
 
 // kernel argument structs
 //
@@ -164,6 +169,16 @@ typedef struct {
     uint64_t nb2;
     uint64_t nb3;
 } ggml_metal_kargs_repeat;
+
+typedef struct {
+    float scale;
+    float bias;
+} ggml_metal_kargs_scale;
+
+typedef struct {
+    float min;
+    float max;
+} ggml_metal_kargs_clamp;
 
 typedef struct {
     int64_t  ne00;
@@ -360,9 +375,6 @@ typedef struct {
     int32_t  ne1;
     int16_t  r2;
     int16_t  r3;
-    int16_t  nsg;
-    int16_t  nxpsg;
-    int16_t  r1ptg;
 } ggml_metal_kargs_mul_mv_ext;
 
 typedef struct {
@@ -417,16 +429,11 @@ typedef struct {
     uint64_t nb1;
 } ggml_metal_kargs_mul_mv_id;
 
+// NORM
+// RMS_NORM
 typedef struct {
     int32_t  ne00;
-    int32_t  ne00_4;
-    uint64_t nb01;
-    float    eps;
-} ggml_metal_kargs_norm;
-
-typedef struct {
-    int32_t  ne00;
-    int32_t  ne00_4;
+    int32_t  ne00_t;
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
@@ -437,7 +444,7 @@ typedef struct {
     uint64_t nbf1[3];
     uint64_t nbf2[3];
     uint64_t nbf3[3];
-} ggml_metal_kargs_rms_norm;
+} ggml_metal_kargs_norm;
 
 typedef struct {
     int32_t  ne00;
@@ -453,7 +460,7 @@ typedef struct {
     uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
-    int32_t  n_groups;
+    int32_t  ngrp;
     float    eps;
 } ggml_metal_kargs_group_norm;
 
@@ -506,14 +513,6 @@ typedef struct {
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;
-    int64_t  ne10;
-    int64_t  ne11;
-    int64_t  ne12;
-    int64_t  ne13;
-    uint64_t nb10;
-    uint64_t nb11;
-    uint64_t nb12;
-    uint64_t nb13;
     int64_t  ne0;
     int64_t  ne1;
     int64_t  ne2;
@@ -550,12 +549,6 @@ typedef struct {
 typedef struct {
     int64_t  ne00;
     int64_t  ne01;
-    int      n_past;
-} ggml_metal_kargs_diag_mask_inf;
-
-typedef struct {
-    int64_t  ne00;
-    int64_t  ne01;
     int64_t  ne02;
     uint64_t nb00;
     uint64_t nb01;
@@ -579,7 +572,7 @@ typedef struct {
     int64_t  n_group;
     int64_t  n_seq_tokens;
     int64_t  n_seqs;
-    int64_t  s_off;
+    uint64_t s_off;
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;
@@ -719,7 +712,12 @@ typedef struct {
     int64_t  IW;
     int64_t  OH;
     int64_t  OW;
-    int64_t  parallel_elements;
+    int64_t  np;
 } ggml_metal_kargs_pool_2d;
+
+typedef struct {
+     int64_t ne00;
+    uint64_t nb01;
+} ggml_metal_kargs_argmax;
 
 #endif // GGML_METAL_IMPL
