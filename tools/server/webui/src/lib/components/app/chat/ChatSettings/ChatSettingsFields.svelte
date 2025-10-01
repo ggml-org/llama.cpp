@@ -5,7 +5,6 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { supportsVision } from '$lib/stores/server.svelte';
 	import type { Component } from 'svelte';
 
@@ -17,8 +16,6 @@
 	}
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
-
-	let isMobile = $state(new IsMobile());
 </script>
 
 {#each fields as field (field.key)}
@@ -30,10 +27,10 @@
 
 			<Input
 				id={field.key}
-				value={String(localConfig[field.key] || '')}
+				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
-				class={isMobile ? 'w-full' : 'max-w-md'}
+				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
+				class="w-full md:max-w-md"
 			/>
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
 				<p class="mt-1 text-xs text-muted-foreground">
@@ -47,10 +44,10 @@
 
 			<Textarea
 				id={field.key}
-				value={String(localConfig[field.key] || '')}
+				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] || 'none'}`}
-				class={isMobile ? 'min-h-[100px] w-full' : 'min-h-[100px] max-w-2xl'}
+				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
+				class="min-h-[100px] w-full md:max-w-2xl"
 			/>
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
 				<p class="mt-1 text-xs text-muted-foreground">
@@ -78,7 +75,7 @@
 					}
 				}}
 			>
-				<Select.Trigger class={isMobile ? 'w-full' : 'max-w-md'}>
+				<Select.Trigger class="w-full md:w-auto md:max-w-md">
 					<div class="flex items-center gap-2">
 						{#if selectedOption?.icon}
 							{@const IconComponent = selectedOption.icon}

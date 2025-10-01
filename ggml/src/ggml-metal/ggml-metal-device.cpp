@@ -495,22 +495,17 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             {
-                if (ne00 == 4) {
+                if (ne00 < 32) {
                     nsg = 1;
                     nr0 = 32;
-                    nr1 = 4;
-                    suffix = "_c4";
-                } else if (ne00 % 4 == 0) {
-                    nsg = N_SG_F;
-                    nr0 = N_R0_F;
                     nr1 = 1;
-                    smem = 32*sizeof(float)*N_R0_F;
-                    suffix = "_4";
+                    suffix = "_short";
                 } else {
-                    nsg = N_SG_F;
-                    nr0 = N_R0_F;
+                    nsg = std::min(4, (ne00 + 127) / 128);
+                    nr0 = 2;
                     nr1 = 1;
-                    smem = 32*sizeof(float)*N_R0_F;
+                    smem = 32*sizeof(float)*nr0;
+                    suffix = ne00 % 4 == 0 ? "_4" : "";
                 }
             } break;
         case GGML_TYPE_Q4_0:
@@ -727,18 +722,11 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_mul_mv_id(ggml_metal_libra
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             {
-                if (ne00 % 4 == 0) {
-                    nsg = N_SG_F;
-                    nr0 = N_R0_F;
-                    nr1 = 1;
-                    smem = 32*sizeof(float)*N_R0_F;
-                    suffix = "_4";
-                } else {
-                    nsg = N_SG_F;
-                    nr0 = N_R0_F;
-                    nr1 = 1;
-                    smem = 32*sizeof(float)*N_R0_F;
-                }
+                nsg = std::min(4, (ne00 + 127) / 128);
+                nr0 = 2;
+                nr1 = 1;
+                smem = 32*sizeof(float)*nr0;
+                suffix = ne00 % 4 == 0 ? "_4" : "";
             } break;
         case GGML_TYPE_Q4_0:
             {

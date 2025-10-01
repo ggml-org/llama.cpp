@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
@@ -50,6 +51,7 @@
 /ggml/src/ggml-blas/                    @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
@@ -59,6 +61,7 @@
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
+/ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @rgerganov
