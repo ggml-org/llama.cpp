@@ -25,18 +25,37 @@
 #    define WEBGPU_LOG_DEBUG(msg) ((void) 0)
 #endif  // GGML_WEBGPU_DEBUG
 
-#ifdef GGML_WEBGPU_PROFILE
-#    define WEBGPU_CPU_PROFILE_START(id) auto cpu_start_##id = std::chrono::high_resolution_clock::now();
-#    define WEBGPU_CPU_PROFILE_END(id)                                                                           \
-        auto   cpu_end_##id  = std::chrono::high_resolution_clock::now();                                        \
-        double cpu_time_##id = std::chrono::duration<double, std::milli>(cpu_end_##id - cpu_start_##id).count(); \
-        ctx->cpu_time_ms[#id] += cpu_time_##id;
+#ifdef GGML_WEBGPU_CPU_PROFILE
+    // total timing (aggregated)
+#    define WEBGPU_CPU_PROFILE_TOTAL_START(id) \
+        auto cpu_total_start_##id = std::chrono::high_resolution_clock::now();
+
+#    define WEBGPU_CPU_PROFILE_TOTAL_END(id, ctx) \
+        auto cpu_total_end_##id = std::chrono::high_resolution_clock::now(); \
+        double cpu_total_time_##id = \
+            std::chrono::duration<double, std::milli>(cpu_total_end_##id - cpu_total_start_##id).count(); \
+        (ctx)->cpu_time_ms[#id] += cpu_total_time_##id;
+
+    // fine-grained timing (diagnostics only)
+#    define WEBGPU_CPU_PROFILE_DETAIL_START(id) \
+        auto cpu_detail_start_##id = std::chrono::high_resolution_clock::now();
+
+#    define WEBGPU_CPU_PROFILE_DETAIL_END(id, ctx) \
+        auto cpu_detail_end_##id = std::chrono::high_resolution_clock::now(); \
+        double cpu_detail_time_##id = \
+            std::chrono::duration<double, std::milli>(cpu_detail_end_##id - cpu_detail_start_##id).count(); \
+        (ctx)->cpu_detail_ms[#id] += cpu_detail_time_##id;
+#else
+#    define WEBGPU_CPU_PROFILE_TOTAL_START(id)
+#    define WEBGPU_CPU_PROFILE_TOTAL_END(id, ctx)
+#    define WEBGPU_CPU_PROFILE_DETAIL_START(id)
+#    define WEBGPU_CPU_PROFILE_DETAIL_END(id, ctx)
+#endif  // GGML_WEBGPU_CPU_PROFILE
+
+#ifdef GGML_WEBGPU_GPU_PROFILE
 #    define WEBGPU_NUM_TIMESTAMP_QUERY_BUFS       100
 #    define WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES 16  // e.g. enough for two timestamps
-#else
-#    define WEBGPU_CPU_PROFILE_START(id) ((void) 0)
-#    define WEBGPU_CPU_PROFILE_END(id)   ((void) 0)
-#endif  // GGML_WEBGPU_PROFILE
+#endif
 
 /* Constants */
 
@@ -183,13 +202,16 @@ struct webgpu_context_struct {
     wgpu::Buffer debug_dev_buf;
 #endif
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_CPU_PROFILE
+    // Profiling: labeled CPU time in ms (total)
+    std::unordered_map<std::string, double> cpu_time_ms;
+    // Profiling: detailed CPU time in ms
+    std::unordered_map<std::string, double> cpu_detail_ms;
+#endif
+
+#ifdef GGML_WEBGPU_GPU_PROFILE
     // Profiling: per-shader GPU time in ms
     std::unordered_map<std::string, double> shader_gpu_time_ms;
-
-    // Profiling: labeled CPU time in ms
-    std::unordered_map<std::string, double> cpu_time_ms;
-
     // Profiling: pool of timestamp query buffers (one per operation)
     webgpu_buf_pool timestamp_query_buf_pool;
 
@@ -303,7 +325,7 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
     }
 }
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
 static wgpu::FutureWaitInfo ggml_backend_webgpu_process_timestamps(webgpu_context & ctx,
                                                                    webgpu_pool_bufs ts_bufs,
                                                                    std::string      label) {
@@ -347,10 +369,13 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
 
     ctx->staged_command_bufs.clear();
     std::vector<webgpu_pool_bufs> staged_param_bufs         = std::move(ctx->staged_param_bufs);
+    ctx->staged_param_bufs.clear();
     std::vector<webgpu_pool_bufs> staged_set_row_error_bufs = std::move(ctx->staged_set_row_error_bufs);
+    ctx->staged_set_row_error_bufs.clear();
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     std::vector<std::pair<webgpu_pool_bufs, std::string>> staged_timestamp_bufs = std::move(ctx->staged_timestamp_bufs);
+    ctx->staged_timestamp_bufs.clear();
 #endif
 
     // Free the staged parameter buffers once the submission completes
@@ -384,7 +409,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
         ctx->callback_futures.push_back({ f });
     }
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     for (auto & pair : staged_timestamp_bufs) {
         auto &              ts_bufs = pair.first;
         const std::string & label   = pair.second;
@@ -465,19 +490,23 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
     wgpu::CommandEncoder encoder = ctx->device.CreateCommandEncoder();
     encoder.CopyBufferToBuffer(params_bufs.host_buf, 0, params_bufs.dev_buf, 0, params_bufs.dev_buf.GetSize());
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     // --- Profiling: GPU timestamp queries ---
     // Allocate a timestamp query buffer (2 timestamps: start/end)
+    WEBGPU_CPU_PROFILE_DETAIL_START(ts_bufs);
     webgpu_pool_bufs ts_bufs = ctx->timestamp_query_buf_pool.alloc_bufs();
     if (ts_bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
         ts_bufs.host_buf.Unmap();
     }
+    WEBGPU_CPU_PROFILE_DETAIL_END(ts_bufs, ctx);
 
     // Create a query set for 2 timestamps
+    WEBGPU_CPU_PROFILE_DETAIL_START(ts_query_set);
     wgpu::QuerySetDescriptor ts_query_set_desc = {};
     ts_query_set_desc.type                     = wgpu::QueryType::Timestamp;
     ts_query_set_desc.count                    = 2;
     wgpu::QuerySet ts_query_set                = ctx->device.CreateQuerySet(&ts_query_set_desc);
+    WEBGPU_CPU_PROFILE_DETAIL_END(ts_query_set, ctx);
 
     wgpu::PassTimestampWrites   ts_writes = { .querySet                  = ts_query_set,
                                               .beginningOfPassWriteIndex = 0,
@@ -492,10 +521,12 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
     pass.DispatchWorkgroups(wg_x, 1, 1);
     pass.End();
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     // Resolve the query set into the device buffer
+    WEBGPU_CPU_PROFILE_DETAIL_START(resolve_query_set);
     encoder.ResolveQuerySet(ts_query_set, 0, 2, ts_bufs.dev_buf, 0);
     encoder.CopyBufferToBuffer(ts_bufs.dev_buf, 0, ts_bufs.host_buf, 0, ts_bufs.host_buf.GetSize());
+    WEBGPU_CPU_PROFILE_DETAIL_END(resolve_query_set, ctx);
 #endif
 
     wgpu::CommandBuffer commands = encoder.Finish();
@@ -511,8 +542,10 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
                                       ctx->param_buf_pool.free_bufs({ params_bufs });
                                   }),
                               UINT64_MAX);
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
+        WEBGPU_CPU_PROFILE_DETAIL_START(submit_wait_process_ts);
         ctx->instance.WaitAny(ggml_backend_webgpu_process_timestamps(ctx, ts_bufs, pipeline.name).future, UINT64_MAX);
+        WEBGPU_CPU_PROFILE_DETAIL_END(submit_wait_process_ts, ctx);
 #endif
     } else {
         // Lock the context mutex when pushing to the staging vectors.
@@ -520,14 +553,15 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
         // Enqueue commands and only submit if we have enough staged commands
         ctx->staged_command_bufs.push_back(commands);
         ctx->staged_param_bufs.push_back(params_bufs);
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
         // Store timestamp buffer and label for later processing
         ctx->staged_timestamp_bufs.push_back(std::make_pair(ts_bufs, pipeline.name));
 #endif
 
         if (ctx->staged_command_bufs.size() == WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
+            WEBGPU_CPU_PROFILE_DETAIL_START(encode_submit_queue);
             ggml_backend_webgpu_submit_queue(ctx);
-            ggml_backend_webgpu_wait_on_submission(ctx);
+            WEBGPU_CPU_PROFILE_DETAIL_END(encode_submit_queue, ctx);
         }
     }
 }
@@ -559,31 +593,44 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *) backend->context;
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_free(" << ctx->name << ")");
 
-#ifdef GGML_WEBGPU_PROFILE
-    // Print detailed profiling information
-    std::cout << "\n[ggml_webgpu profiling summary]\n";
-    double total_gpu = 0.0;
-    for (const auto & kv : ctx->webgpu_ctx->shader_gpu_time_ms) {
-        total_gpu += kv.second;
-    }
+#ifdef GGML_WEBGPU_CPU_PROFILE
+    std::cout << "\n[ggml_webgpu cpu profiling summary]\n";
     double total_cpu = 0.0;
     for (const auto & kv : ctx->webgpu_ctx->cpu_time_ms) {
         total_cpu += kv.second;
     }
-    std::cout << "ggml_webgpu: total cpu time (all shaders): " << total_cpu << " ms\n";
-    std::cout << "ggml_webgpu: total gpu time (all shaders): " << total_gpu << " ms\n";
-    std::cout << "ggml_webgpu: gpu/cpu ratio: " << (total_cpu > 0.0 ? total_gpu / total_cpu : 0.0) << "\n";
+    std::cout << "ggml_webgpu: total cpu time: " << total_cpu << " ms\n";
     std::cout << "ggml_webgpu: cpu breakdown:\n";
     for (const auto & kv : ctx->webgpu_ctx->cpu_time_ms) {
         double pct = (total_cpu > 0.0) ? (kv.second / total_cpu * 100.0) : 0.0;
         std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << pct << "%)\n";
     }
+    std::cout << "\nggml_webgpu: cpu detailed breakdown:\n";
+    for (const auto & kv : ctx->webgpu_ctx->cpu_detail_ms) {
+        double pct = (total_cpu > 0.0) ? (kv.second / total_cpu * 100.0) : 0.0;
+        std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << pct << "%)\n";
+    }
+#endif
+
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    std::cout << "\n[ggml_webgpu gpu profiling summary]\n";
+    double total_gpu = 0.0;
+    for (const auto & kv : ctx->webgpu_ctx->shader_gpu_time_ms) {
+        total_gpu += kv.second;
+    }
+    std::cout << "ggml_webgpu: total gpu time (all shaders): " << total_gpu << " ms\n";
     std::cout << "\nggml_webgpu: gpu breakdown:\n";
     for (const auto & kv : ctx->webgpu_ctx->shader_gpu_time_ms) {
         double pct = (total_gpu > 0.0) ? (kv.second / total_gpu * 100.0) : 0.0;
         std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << pct << "%)\n";
     }
-#else
+#endif
+
+#if defined(GGML_WEBGPU_CPU_PROFILE) && defined(GGML_WEBGPU_GPU_PROFILE)
+    std::cout << "ggml_webgpu: gpu/cpu ratio: " << (total_cpu > 0.0 ? total_gpu / total_cpu : 0.0) << "\n";
+#endif
+
+#if !defined(GGML_WEBGPU_CPU_PROFILE) && !defined(GGML_WEBGPU_GPU_PROFILE)
     GGML_UNUSED(ctx);
 #endif
 }
@@ -1204,17 +1251,23 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     ggml_backend_webgpu_context * backend_ctx = static_cast<ggml_backend_webgpu_context *>(backend->context);
     webgpu_context                ctx         = backend_ctx->webgpu_ctx;
 
-    // --- Profiling: CPU timing for graph compute ---
-    WEBGPU_CPU_PROFILE_START(graph_compute);
+    WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
+    WEBGPU_CPU_PROFILE_DETAIL_START(graph_compute_encode);
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_webgpu_encode_node(ctx, cgraph->nodes[i]);
     }
+    WEBGPU_CPU_PROFILE_DETAIL_END(graph_compute_encode, ctx);
 
+    WEBGPU_CPU_PROFILE_DETAIL_START(graph_compute_submit);
     ggml_backend_webgpu_submit_queue(ctx);
-    ggml_backend_webgpu_wait_on_submission(ctx);
+    WEBGPU_CPU_PROFILE_DETAIL_END(graph_compute_submit, ctx);
 
-    WEBGPU_CPU_PROFILE_END(graph_compute);
+    WEBGPU_CPU_PROFILE_DETAIL_START(graph_compute_wait);
+    ggml_backend_webgpu_wait_on_submission(ctx);
+    WEBGPU_CPU_PROFILE_DETAIL_END(graph_compute_wait, ctx);
+
+    WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -1262,6 +1315,8 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
         return;
     }
 
+    WEBGPU_CPU_PROFILE_TOTAL_START(memset_tensor);
+
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_memset_tensor(" << buffer << ", " << tensor << ", " << value << ", "
                                                                  << offset << ", " << size << ")");
 
@@ -1272,6 +1327,7 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
     // This is a trick to set all bytes of a u32 to the same 1 byte value.
     uint32_t val32 = (uint32_t) value * 0x01010101;
     ggml_backend_webgpu_buffer_memset(buf_ctx->webgpu_ctx, buf_ctx->buffer, val32, total_offset, size);
+    WEBGPU_CPU_PROFILE_TOTAL_END(memset_tensor, buf_ctx->webgpu_ctx);
 }
 
 static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
@@ -1281,6 +1337,7 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                   size_t                size) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", "
                                                               << offset << ", " << size << ")");
+    WEBGPU_CPU_PROFILE_TOTAL_START(set_tensor);
     ggml_backend_webgpu_buffer_context * buf_ctx    = (ggml_backend_webgpu_buffer_context *) buffer->context;
     webgpu_context                       webgpu_ctx = buf_ctx->webgpu_ctx;
 
@@ -1305,6 +1362,7 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
         // wait for WriteBuffer to complete
         ggml_backend_webgpu_wait_on_submission(webgpu_ctx);
     }
+    WEBGPU_CPU_PROFILE_TOTAL_END(set_tensor, webgpu_ctx);
 }
 
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
@@ -1314,7 +1372,7 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                   size_t                size) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", "
                                                               << offset << ", " << size << ")");
-
+    WEBGPU_CPU_PROFILE_TOTAL_START(get_tensor);
     ggml_backend_webgpu_buffer_context * buf_ctx    = (ggml_backend_webgpu_buffer_context *) buffer->context;
     webgpu_context                       webgpu_ctx = buf_ctx->webgpu_ctx;
     wgpu::Device                         device     = webgpu_ctx->device;
@@ -1354,12 +1412,15 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
     // Copy the data from the mapped range to the output buffer
     std::memcpy(data, mapped_range, size);
     webgpu_ctx->get_tensor_staging_buf.Unmap();
+    WEBGPU_CPU_PROFILE_TOTAL_END(get_tensor, webgpu_ctx);
 }
 
 static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << (uint32_t) value << ")");
+    WEBGPU_CPU_PROFILE_TOTAL_START(clear);
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
     ggml_backend_webgpu_buffer_memset(buf_ctx->webgpu_ctx, buf_ctx->buffer, value, 0, buffer->size);
+    WEBGPU_CPU_PROFILE_TOTAL_END(clear, buf_ctx->webgpu_ctx);
 }
 
 static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
@@ -2009,6 +2070,8 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     GGML_ASSERT(index == 0);
     WEBGPU_LOG_DEBUG("ggml_backend_reg_get_device()");
 
+    WEBGPU_CPU_PROFILE_TOTAL_START(reg_get_device);
+
     ggml_backend_webgpu_reg_context * reg_ctx = static_cast<ggml_backend_webgpu_reg_context *>(reg->context);
 
     webgpu_context ctx = reg_ctx->webgpu_ctx;
@@ -2035,7 +2098,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     // Initialize device
     std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
                                                          wgpu::FeatureName::ImplicitDeviceSynchronization };
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     required_features.push_back(wgpu::FeatureName::TimestampQuery);
 #endif
 
@@ -2077,7 +2140,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
                              wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
                              wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
 
-#ifdef GGML_WEBGPU_PROFILE
+#ifdef GGML_WEBGPU_GPU_PROFILE
     // Initialize buffer pool for timestamp queries (profiling)
     ctx->timestamp_query_buf_pool.init(ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS,
                                        WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
@@ -2129,6 +2192,8 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
         /* .reg     = */ reg,
         /* .context = */ &device_ctx,
     };
+
+    WEBGPU_CPU_PROFILE_TOTAL_END(reg_get_device, ctx);
     return &device;
 }
 
