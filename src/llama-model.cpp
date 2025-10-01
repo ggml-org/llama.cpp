@@ -7987,7 +7987,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * Kcur = nullptr;
             ggml_tensor * Vcur = nullptr;
 
-            const float rope_theta = (il+1) % 3 == 0 ? rope_theta_global : rope_theta_local;
+            const float rope_theta = il % 3 == 0 ? rope_theta_global : rope_theta_local;
 
 
             // attention layer norm
