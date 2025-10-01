@@ -52,4 +52,5 @@ export interface DatabaseMessage {
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
+	model?: string;
 }
