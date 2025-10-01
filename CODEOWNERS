@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
