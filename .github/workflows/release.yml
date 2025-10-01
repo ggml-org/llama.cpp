@@ -150,7 +150,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-cpu-cmake
+          key: ubuntu-cpu-cmake-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Dependencies

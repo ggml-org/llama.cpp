@@ -207,7 +207,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-cpu-cmake
+          key: ubuntu-cpu-cmake-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Build Dependencies
@@ -1222,11 +1222,12 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: android-build
-          evict-old-files: 1d
+      # Disabled due to size (400MB) and always 0 cache hits
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: android-build
+      #     evict-old-files: 1d
 
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -1460,34 +1461,6 @@ jobs:
         id: ggml-ci
         run: |
           bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-#  ggml-ci-x64-amd-vulkan:
-#    runs-on: [self-hosted, Linux, X64, AMD]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          vulkaninfo --summary
-#          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-#
-#  ggml-ci-x64-amd-rocm:
-#    runs-on: [self-hosted, Linux, X64, AMD]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          amd-smi static
-#          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
