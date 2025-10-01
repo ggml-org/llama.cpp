@@ -543,10 +543,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: Clone rocWMMA repository
-        id: clone_rocwmma
+      - name: Grab rocWMMA package
+        id: grab_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch develop --depth 1
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.0.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.0.0.70001-42~24.04_amd64.deb"
+          7z x rocwmma.deb
+          7z x data.tar
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -601,7 +603,7 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.0.1/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
