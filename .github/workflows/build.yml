@@ -127,8 +127,9 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
-            -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
+            -DGGML_BLAS=OFF \
+            -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
