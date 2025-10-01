@@ -316,9 +316,13 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
             input_shape = ov::PartialShape{1, -1, -1};
         }
     } else if (name.find("cache_") == 0) {
-        int layer = extract_layer_from_name(name);
-        bool is_swa = is_swa_layer(layer);
-        input_shape = ov::PartialShape{is_swa ? m_context_size_swa : m_context_size, m_num_heads_kv, m_head_size};
+        if (m_is_static) {
+            int layer = extract_layer_from_name(name);
+            bool is_swa = is_swa_layer(layer);
+            input_shape = ov::PartialShape{is_swa ? m_context_size_swa : m_context_size, m_num_heads_kv, m_head_size};
+        } else {
+            input_shape = ov::PartialShape{1, -1, m_num_heads_kv, m_head_size};
+        }
     } else if (const auto* op = get_tensor_used_op(src); op && op->op == GGML_OP_SET_ROWS) {
         input_shape = ov::PartialShape{1, 1, m_is_static ? 1 : -1};
     } else if (src->op == GGML_OP_VIEW) {
