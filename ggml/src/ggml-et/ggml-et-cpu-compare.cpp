@@ -350,8 +350,6 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
     if (config->log_differences) {
         GGML_LOG_DEBUG("ET: Comparing ET vs CPU results\n");
 
-        float* cpu_float = (float*)ctx->cpu_dst_data;
-        float* et_float = (float*)ctx->et_dst_data;
         size_t num_elements = ggml_nelements(node);
         size_t max_log = std::min(num_elements, config->max_log_elements);
 
@@ -360,15 +358,29 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         float* cpu_src0_float = is_elementwise ? (float*)ctx->cpu_src0_data : nullptr;
         float* cpu_src1_float = is_elementwise ? (float*)ctx->cpu_src1_data : nullptr;
 
+        // Helper to get float value from tensor data (handles f16 and f32)
+        auto get_float = [](const void* data, size_t idx, ggml_type type) -> float {
+            if (type == GGML_TYPE_F16) {
+                const ggml_fp16_t* fp16_data = (const ggml_fp16_t*)data;
+                return ggml_fp16_to_fp32(fp16_data[idx]);
+            } else {
+                const float* float_data = (const float*)data;
+                return float_data[idx];
+            }
+        };
+
         // Compare all elements but log only the first max_log_elements
-        GGML_LOG_DEBUG("ET: First %zu elements comparison (checking all %zu elements):\n", max_log, num_elements);
+        GGML_LOG_DEBUG("ET: First %zu elements comparison (checking all %zu elements, type=%s):\n",
+                      max_log, num_elements, ggml_type_name(node->type));
         bool matches = true;
         size_t total_mismatches = 0;
 
         // First pass: check all elements for mismatches
         for (size_t i = 0; i < num_elements; i++) {
-            float diff = fabsf(cpu_float[i] - et_float[i]);
-            float rel_diff = diff / (fabsf(cpu_float[i]) + 1e-8f);
+            float cpu_val = get_float(ctx->cpu_dst_data, i, node->type);
+            float et_val = get_float(ctx->et_dst_data, i, node->type);
+            float diff = fabsf(cpu_val - et_val);
+            float rel_diff = diff / (fabsf(cpu_val) + 1e-8f);
 
             if (rel_diff > config->tolerance) {
                 matches = false;
@@ -378,18 +390,19 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
 
         // Second pass: log detailed info for first max_log elements only
         for (size_t i = 0; i < max_log; i++) {
-            float diff = fabsf(cpu_float[i] - et_float[i]);
-            float rel_diff = diff / (fabsf(cpu_float[i]) + 1e-8f);
+            float cpu_val = get_float(ctx->cpu_dst_data, i, node->type);
+            float et_val = get_float(ctx->et_dst_data, i, node->type);
+            float diff = fabsf(cpu_val - et_val);
 
             if (is_elementwise && cpu_src0_float && cpu_src1_float) {
                 GGML_LOG_DEBUG("ET: [%zu] src0=%.6f, src1=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_src0_float[i], cpu_src1_float[i], cpu_float[i], et_float[i], diff);
+                              i, cpu_src0_float[i], cpu_src1_float[i], cpu_val, et_val, diff);
             } else if (is_elementwise && cpu_src0_float) {
                 GGML_LOG_DEBUG("ET: [%zu] src0=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_src0_float[i], cpu_float[i], et_float[i], diff);
+                              i, cpu_src0_float[i], cpu_val, et_val, diff);
             } else {
                 GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_float[i], et_float[i], diff);
+                              i, cpu_val, et_val, diff);
             }
         }
 
@@ -397,10 +410,15 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         if (num_elements > max_log) {
             size_t mid = num_elements / 2;
             size_t end = num_elements - 1;
+            float cpu_mid = get_float(ctx->cpu_dst_data, mid, node->type);
+            float et_mid = get_float(ctx->et_dst_data, mid, node->type);
+            float cpu_end = get_float(ctx->cpu_dst_data, end, node->type);
+            float et_end = get_float(ctx->et_dst_data, end, node->type);
+
             GGML_LOG_DEBUG("ET: Middle element [%zu]: CPU=%.6f, ET=%.6f\n",
-                          mid, cpu_float[mid], et_float[mid]);
+                          mid, cpu_mid, et_mid);
             GGML_LOG_DEBUG("ET: Last element [%zu]: CPU=%.6f, ET=%.6f\n",
-                          end, cpu_float[end], et_float[end]);
+                          end, cpu_end, et_end);
         }
 
         GGML_LOG_DEBUG("ET: Results %s (%zu/%zu elements match within tolerance %.6f)\n",
