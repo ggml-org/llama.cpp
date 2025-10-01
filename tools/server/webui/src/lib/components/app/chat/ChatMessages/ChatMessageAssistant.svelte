@@ -3,12 +3,14 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { fade } from 'svelte/transition';
-	import { Check, X } from '@lucide/svelte';
+	import { Check, Copy, Package, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { copyToClipboard } from '$lib/utils/copy';
 
 	interface Props {
 		class?: string;
@@ -136,9 +138,25 @@
 		</div>
 	{/if}
 
+	{#if config().showModelInfo && message.model}
+		<span class="mt-6 mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground">
+			<Package class="h-3.5 w-3.5" />
+
+			<span>Model used:</span>
+
+			<button
+				class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+				onclick={() => copyToClipboard(message.model)}
+			>
+				{message.model}
+
+				<Copy class="ml-1 h-3 w-3 " />
+			</button>
+		</span>
+	{/if}
+
 	{#if message.timestamp && !isEditing}
 		<ChatMessageActions
-			{message}
 			role="assistant"
 			justify="start"
 			actionsPosition="left"

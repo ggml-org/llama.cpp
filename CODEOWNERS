@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
@@ -50,6 +51,7 @@
 /ggml/src/ggml-blas/                    @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
@@ -59,8 +61,10 @@
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
+/ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
+/ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
@@ -89,6 +93,7 @@
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
+/tools/rpc/                             @rgerganov
 /tools/run/                             @ericcurtin
 /tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
 /tools/server/webui/                    @allozaur
@@ -103,4 +108,5 @@
 /LICENSE                                @ggerganov
 /README.md                              @ggerganov
 /SECURITY.md                            @ggerganov
+/build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC

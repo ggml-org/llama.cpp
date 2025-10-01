@@ -59,7 +59,9 @@ export enum FileTypeText {
 	SWIFT = 'swift',
 	DART = 'dart',
 	VUE = 'vue',
-	SVELTE = 'svelte'
+	SVELTE = 'svelte',
+	LATEX = 'latex',
+	BIBTEX = 'bibtex'
 }
 
 // File extension enums
@@ -115,7 +117,9 @@ export enum FileExtensionText {
 	SWIFT = '.swift',
 	DART = '.dart',
 	VUE = '.vue',
-	SVELTE = '.svelte'
+	SVELTE = '.svelte',
+	TEX = '.tex',
+	BIB = '.bib'
 }
 
 // MIME type enums
@@ -174,5 +178,7 @@ export enum MimeTypeText {
 	SWIFT = 'text/x-swift',
 	DART = 'text/x-dart',
 	VUE = 'text/x-vue',
-	SVELTE = 'text/x-svelte'
+	SVELTE = 'text/x-svelte',
+	LATEX = 'text/x-tex',
+	BIBTEX = 'text/x-bibtex'
 }
