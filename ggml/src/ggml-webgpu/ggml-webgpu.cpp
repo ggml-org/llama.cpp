@@ -144,6 +144,8 @@ struct webgpu_context_struct {
     wgpu::ComputePipeline glu_pipeline[7][2][2];       // glu-op, type, split
     wgpu::ComputePipeline scale_pipeline[2];           // inplace
     wgpu::ComputePipeline soft_max_pipeline[3][2][2];  // (no_mask, f32_mask, f16_mask), has_sink, inplace
+    wgpu::ComputePipeline neg_pipeline;                
+    wgpu::ComputePipeline neg_ip_pipeline;
 
     size_t memset_bytes_per_thread;
 
@@ -992,6 +994,36 @@ static void ggml_webgpu_soft_max(webgpu_context & ctx,
                                           ggml_nrows(dst), ggml_op_name(dst->op));
 }
 
+static void ggml_webgpu_neg(      webgpu_context &        ctx,
+                                  ggml_tensor *           src,
+                                  ggml_tensor *           dst,
+                                  wgpu::ComputePipeline & pipeline,
+                                  bool                    in_place) {
+    std::vector<uint32_t> params = {
+        (uint32_t) ggml_nelements(dst)
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        { .binding = 0,
+         .buffer  = ggml_webgpu_tensor_buf(src),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, src),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, src) },
+
+    };
+    if (!in_place) {
+        entries.push_back({ .binding = 1,
+                            .buffer  = ggml_webgpu_tensor_buf(dst),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
+    }
+
+    size_t   max_wg_size = ctx->max_wg_size_x;
+    uint32_t wg_x        = (ggml_nelements(dst) + max_wg_size - 1) / max_wg_size;
+    
+    ggml_backend_webgpu_build_and_enqueue(ctx, pipeline, params, entries, wg_x, ggml_op_name(dst->op));
+}
+
+
 // Returns true if node has enqueued work into the queue, false otherwise
 static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
     if (ggml_is_empty(node)) {
@@ -1060,6 +1092,22 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_SCALE:
             ggml_webgpu_scale(ctx, src0, node);
             break;
+        case GGML_OP_UNARY: {
+            // if unary, switch on unary operators
+            const ggml_unary_op unary_op = ggml_get_unary_op(node);
+            switch (unary_op) {
+                case GGML_UNARY_OP_NEG:
+                    if (ggml_webgpu_tensor_equal(src0, node)) {
+                        ggml_webgpu_neg(ctx, src0, node, ctx->neg_ip_pipeline, true);
+                    } else {
+                        ggml_webgpu_neg(ctx, src0, src1, ctx->neg_pipeline, false);
+                    }
+                    break;
+                default:
+                    return false;
+            }
+            break;
+        }
         default:
             return false;
     }
@@ -1620,6 +1668,18 @@ static void ggml_webgpu_init_soft_max_pipeline(webgpu_context & webgpu_ctx) {
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][1][1],
                                 wgsl_soft_max_f32_mask_f16_sink_inplace, "soft_max_f32_mask_f16_sink_inplace",
                                 constants);
+}
+
+static void ggml_webgpu_init_neg_pipeline(webgpu_context & webgpu_ctx) {
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->neg_pipeline, wgsl_neg_f32, "neg_f32",
+                                ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->neg_pipeline, wgsl_neg_f16, "neg_f16",
+                                ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->neg_ip_pipeline, wgsl_neg_in_place_f32, "neg_in_place_f32",
+                                ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->neg_ip_pipeline, wgsl_neg_in_place_f16, "neg_in_place_f16",
+                                ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
+    
 }
 
 static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
