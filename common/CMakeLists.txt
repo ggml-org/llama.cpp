@@ -56,6 +56,7 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    http.h
     json-partial.cpp
     json-partial.h
     json-schema-to-grammar.cpp
