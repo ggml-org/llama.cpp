@@ -3,10 +3,12 @@
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
 #include <openvino/frontend/exception.hpp>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <openvino/op/scatter_update.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
@@ -39,17 +41,29 @@ OutputVector translate_set_rows(const NodeContext& context) {
     auto dst = context.get_input(context.get_output_name());
 
     auto zero = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {0});
-    auto dst_reshaped = std::make_shared<ov::op::v1::Reshape>(
-        dst,
-        ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) dst_shape[1], (int64_t) dst_shape[2]}),
-        false);
-    auto indices_reshaped =
-        std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-    auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
-        data, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) -1, (int64_t) dst_shape[2]}), false);
+    Output<Node> res;
+    if (context.is_static()) {
+        auto dst_reshaped = std::make_shared<ov::op::v1::Reshape>(
+            dst,
+            ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) dst_shape[1], (int64_t) dst_shape[2]}),
+            false);
+        auto indices_reshaped =
+            std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+        auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
+            data, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) -1, (int64_t) dst_shape[2]}), false);
 
-    auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
-    auto res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
+        auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
+        res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
+    } else {
+        // TODO: Better solution would be to reshape the data into 4D at first place (for stateful model)
+        if (data.get_partial_shape().rank() + 1 == dst.get_partial_shape().rank()) {
+            data = std::make_shared<ov::op::v0::Unsqueeze>(data, zero);
+        }
+	int concat_axis = 1;
+        if (context.is_static())
+            concat_axis = 0;
+        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

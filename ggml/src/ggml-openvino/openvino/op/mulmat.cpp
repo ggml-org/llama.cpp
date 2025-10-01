@@ -59,13 +59,23 @@ OutputVector translate_mulmat(const NodeContext& context) {
 
         auto Z_last_two_dims = get_dimensions(Z.get_node_shared_ptr(), {1, 2});
 
-        auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {1});
-        auto Z_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(Z, unsqueeze_axes);
-
         Output<Node> batch_small = A_batch_larger ? B_batch_node : A_batch_node;
         Output<Node> batch_large = A_batch_larger ? A_batch_node : B_batch_node;
-        auto broadcast_shape =
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_small, factor_node, Z_last_two_dims}, 0);
+
+        ov::Output<Node> broadcast_shape;
+        ov::Output<Node> Z_unsqueezed;
+        if (context.is_static()) {
+            auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {1});
+            Z_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(Z, unsqueeze_axes);
+            broadcast_shape =
+                std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_small, factor_node, Z_last_two_dims}, 0);
+        } else {
+            auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
+            Z_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(Z, unsqueeze_axes);
+            auto one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            broadcast_shape =
+                std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one_1d, batch_small, factor_node, Z_last_two_dims}, 0);
+        }
         auto Z_broadcasted = std::make_shared<ov::op::v3::Broadcast>(Z_unsqueezed, broadcast_shape);
 
         auto new_Z_shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_large, Z_last_two_dims}, 0);
