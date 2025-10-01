@@ -656,6 +656,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q8_0
     };
 
+    const char * important_tensors[] = {
+        ".output.weight",
+        ".attn_output.weight",
+        ".ffn_down.weight",
+        ".ffn_down_shexp.weight"
+    };
+
     constexpr double epsilon = 1e-12;
     constexpr double infinity = std::numeric_limits<double>::infinity();
     const char * func = __func__;
@@ -1288,6 +1295,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return emit_overrides();
     }
 
+    auto is_important = [&](const std::string & tensor_name) -> bool {
+        return std::any_of(std::begin(important_tensors), std::end(important_tensors), [&](const char* imp) {
+                return tensor_name.find(imp) != std::string::npos;
+            }
+        );
+    };
+
     // Lagrangian relaxation to minimise error subject to a bpw target constraint
     auto lagrange_penalty = [&](const double mu, std::vector<int> & choice, size_t & bytes, double & err) {
         choice.resize(all.size());
@@ -1295,11 +1309,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         err = 0.0;
         for (size_t i = 0; i < all.size(); ++i) {
             const auto & candidate = all[i].candidate;
+            const std::string tensor_name = ggml_get_name(all[i].w->tensor);
+            double effective_mu = mu;
+            if (is_important(tensor_name)) { effective_mu *= 0.1; } // important tensors get 10x lower penalty
+
             int best_j = 0;
             double best_val = infinity;
             for (int j = 0; j < (int)candidate.size(); ++j) {
                 const double bits = (double)candidate[j].bytes * 8.0;
-                const double val = candidate[j].error + mu * bits;
+                const double val = candidate[j].error + effective_mu * bits;
                 if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && candidate[j].bytes < candidate[best_j].bytes)) {
                     best_val = val;
                     best_j = j;
@@ -1402,18 +1420,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double best_gain = -1.0;
 
             for (int i = 0; i < (int)all.size(); ++i) {
-                const auto &ti = all[i];
+                const auto & ti = all[i];
+                const std::string tensor_name  = ggml_get_name(ti.w->tensor);
                 int j = ti.choice + 1;
                 while (j < (int)ti.candidate.size() && ti.candidate[j].bytes == ti.candidate[ti.choice].bytes) { ++j; }
-                if (j >= (int)ti.candidate.size()) { continue; }
+                if (j >= (int)ti.candidate.size()) { continue; } // no upgrade available
 
                 size_t delta_bytes = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
-                if (cur_bytes + delta_bytes > budget_bytes) { continue; }
+                if (cur_bytes + delta_bytes > budget_bytes) { continue; } // won't fit in budget
 
                 double err_gain = std::max(0.0, ti.candidate[ti.choice].error - ti.candidate[j].error);
-                if (err_gain < epsilon) { continue; } // no real improvement
+                if (err_gain < epsilon) { continue; } // no error improvement
 
                 double ratio = err_gain / (double)delta_bytes; // error reduction per byte
+                if (is_important(tensor_name)) { ratio *= 2.0; } // important tensors get 2x boost
+
                 // For tie-breaking, prioritize the largest absolute error improvement.
                 if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && err_gain > best_gain)) {
                     best_ratio = ratio;
