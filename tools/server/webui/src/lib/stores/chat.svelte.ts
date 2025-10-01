@@ -166,6 +166,9 @@ class ChatStore {
 
 			this.activeConversation = conversation;
 
+			// Set this conversation as active for statistics display
+			slotsService.setActiveConversation(convId);
+
 			if (conversation.currNode) {
 				const allMessages = await DatabaseStore.getConversationMessages(convId);
 				this.activeMessages = filterByLeafNodeId(
@@ -360,6 +363,8 @@ class ChatStore {
 		let streamedReasoningContent = '';
 
 		slotsService.startStreaming();
+		// Set this conversation as active for statistics display
+		slotsService.setActiveConversation(assistantMessage.convId);
 
 		await chatService.sendMessage(
 			allMessages,
@@ -419,14 +424,16 @@ class ChatStore {
 					// Clear per-conversation loading and streaming states
 					this.setConversationLoading(assistantMessage.convId, false);
 					this.clearConversationStreaming(assistantMessage.convId);
+					slotsService.clearConversationState(assistantMessage.convId);
 				},
 
 				onError: (error: Error) => {
 					slotsService.stopStreaming();
 
-					if (error.name === 'AbortError' || error instanceof DOMException) {
+					if (this.isAbortError(error)) {
 						this.setConversationLoading(assistantMessage.convId, false);
 						this.clearConversationStreaming(assistantMessage.convId);
+						slotsService.clearConversationState(assistantMessage.convId);
 						return;
 					}
 
@@ -483,6 +490,7 @@ class ChatStore {
 					console.error('Streaming error:', error);
 					this.setConversationLoading(assistantMessage.convId, false);
 					this.clearConversationStreaming(assistantMessage.convId);
+					slotsService.clearConversationState(assistantMessage.convId);
 
 					const messageIndex = this.activeMessages.findIndex(
 						(m: DatabaseMessage) => m.id === assistantMessage.id
