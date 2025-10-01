@@ -80,11 +80,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     bool is_static = device == "NPU" ? true : false;
     ov::AnyMap config;
-    if (device == "GPU") {
-        config = {
-            {"GPU_ENABLE_SDPA_OPTIMIZATION", "0"}
-        };
-    }
 
     if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
         std::string filename = "cgraph.txt";
@@ -184,6 +179,13 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
                     auto timestamp = (long long) ggml_time_us();
                     snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
                     ov::serialize(model, timestamped_filename);
+                }
+
+                auto* disable_sdpa_optimization = getenv("GGML_OPENVINO_DISABLE_SDPA_OPTIMIZATION");
+                if (disable_sdpa_optimization && std::string(disable_sdpa_optimization) != "0") {
+                    config = {
+                        {"GPU_ENABLE_SDPA_OPTIMIZATION", "0"}
+                    };
                 }
 
                 auto compiled_model = core.compile_model(model, device, config);
