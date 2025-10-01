@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import { ActionDropdown, ConfirmationDialog } from '$lib/components/app';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import Input from '$lib/components/ui/input/input.svelte';
+	import { ActionDropdown } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -10,7 +8,7 @@
 		conversation: DatabaseConversation;
 		handleMobileSidebarItemClick?: () => void;
 		onDelete?: (id: string) => void;
-		onEdit?: (id: string, name: string) => void;
+		onEdit?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		showLastModified?: boolean;
 	}
@@ -25,10 +23,7 @@
 		showLastModified = false
 	}: Props = $props();
 
-	let editedName = $state('');
-	let showDeleteDialog = $state(false);
 	let showDropdown = $state(false);
-	let showEditDialog = $state(false);
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -43,20 +38,14 @@
 		return `${days}d ago`;
 	}
 
-	function handleConfirmDelete() {
-		onDelete?.(conversation.id);
-	}
-
-	function handleConfirmEdit() {
-		if (!editedName.trim()) return;
-		showEditDialog = false;
-		onEdit?.(conversation.id, editedName);
-	}
-
 	function handleEdit(event: Event) {
 		event.stopPropagation();
-		editedName = conversation.name;
-		showEditDialog = true;
+		onEdit?.(conversation.id);
+	}
+
+	function handleDelete(event: Event) {
+		event.stopPropagation();
+		onDelete?.(conversation.id);
 	}
 
 	function handleSelect() {
@@ -122,58 +111,13 @@
 				{
 					icon: Trash2,
 					label: 'Delete',
-					onclick: (e) => {
-						e.stopPropagation();
-						showDeleteDialog = true;
-					},
+					onclick: handleDelete,
 					variant: 'destructive',
 					shortcut: ['shift', 'cmd', 'd'],
 					separator: true
 				}
 			]}
 		/>
-
-		<ConfirmationDialog
-			bind:open={showDeleteDialog}
-			title="Delete Conversation"
-			description={`Are you sure you want to delete "${conversation.name}"? This action cannot be undone and will permanently remove all messages in this conversation.`}
-			confirmText="Delete"
-			cancelText="Cancel"
-			variant="destructive"
-			icon={Trash2}
-			onConfirm={handleConfirmDelete}
-			onCancel={() => (showDeleteDialog = false)}
-		/>
-
-		<AlertDialog.Root bind:open={showEditDialog}>
-			<AlertDialog.Content>
-				<AlertDialog.Header>
-					<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
-
-					<AlertDialog.Description>
-						<Input
-							class="mt-4 text-foreground"
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.preventDefault();
-									handleConfirmEdit();
-									showEditDialog = false;
-								}
-							}}
-							placeholder="Enter a new name"
-							type="text"
-							bind:value={editedName}
-						/>
-					</AlertDialog.Description>
-				</AlertDialog.Header>
-
-				<AlertDialog.Footer>
-					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-
-					<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
-				</AlertDialog.Footer>
-			</AlertDialog.Content>
-		</AlertDialog.Root>
 	</div>
 </button>
 
