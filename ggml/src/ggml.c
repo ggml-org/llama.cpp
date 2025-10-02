@@ -1143,9 +1143,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSIGMOID",
     "EXP",
     "GELU_ERF",
+    "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
+static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
 
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
@@ -2479,6 +2480,20 @@ struct ggml_tensor * ggml_abs_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ABS);
+}
+
+// ggml_trunc
+
+struct ggml_tensor * ggml_trunc(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_TRUNC);
+}
+
+struct ggml_tensor * ggml_trunc_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_TRUNC);
 }
 
 // ggml_sgn
