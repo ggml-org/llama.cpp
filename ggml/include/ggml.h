@@ -1150,8 +1150,9 @@ extern "C" {
             struct ggml_tensor  * a);
 
     // xIELU activation function
-    // https://arxiv.org/abs/2411.13010
-    // x = (x > 0) ? a_p * x^2 + b * x : (exmp1(min(x, eps)) - x) * a_n + b * x
+    // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)
+    // where c_a = softplus and c_b(a, b) = softplus(a) + b are constraining functions
+    // that constrain the positive and negative source alpha values respectively
     GGML_API struct ggml_tensor * ggml_xielu(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
