@@ -543,6 +543,9 @@ extern "C" {
     // Returns true if the model is recurrent (like Mamba, RWKV, etc.)
     LLAMA_API bool llama_model_is_recurrent(const struct llama_model * model);
 
+    // Returns true if the model is hybrid (like Jamba, Granite, etc.)
+    LLAMA_API bool llama_model_is_hybrid(const struct llama_model * model);
+
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
@@ -791,7 +794,7 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
-#define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
+#define LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY 1
 
     typedef uint32_t llama_state_seq_flags;
 
