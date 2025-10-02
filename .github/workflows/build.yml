@@ -362,11 +362,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-cmake-rpc
-          evict-old-files: 1d
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-latest-cmake-rpc
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
