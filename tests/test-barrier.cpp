@@ -13,7 +13,7 @@
 
 int main(int argc, char *argv[]) {
 
-    int n_threads = std::min(4, (int) std::thread::hardware_concurrency());
+    int n_threads = std::max(1, std::min(4, (int) std::thread::hardware_concurrency()));
     int n_rounds  = 100;
 
     if (argc > 1) {
