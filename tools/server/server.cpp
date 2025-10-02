@@ -3565,7 +3565,7 @@ struct server_context {
                                     );
 
                                     bool do_reset = it == slot.ctx_checkpoints.rend();
-                                    printf("[DEBUG] `do_reset` was set to `%s`\n", do_reset ? "true" : "false");
+                                    //printf("[DEBUG] `do_reset` was set to `%s`\n", do_reset ? "true" : "false");
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
@@ -3575,7 +3575,7 @@ struct server_context {
                                         if (n != ctx_checkpoint_size) {
                                             SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
                                             do_reset = true;
-                                            printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
+                                            //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                                         } else {
                                             slot.n_past = std::min(slot.n_past, it->pos_max);
                                             SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
@@ -3630,7 +3630,6 @@ struct server_context {
                         // there is no common part left
                         slot.n_past                = 0;
                         slot.n_prompt_tokens_cache = 0;
-                        printf("[DEBUG] we had no choice but to truncate all tokens from this slot :( very sad");
                     }
 
                     SLT_INF(slot, "n_past = %d\n", slot.n_past);
