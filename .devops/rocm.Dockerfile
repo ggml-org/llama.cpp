@@ -36,7 +36,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN git clone https://github.com/rocm/rocwmma --branch develop --depth 1
+RUN rm -rf rocwmma && git clone https://github.com/rocm/rocwmma --branch develop --depth 1
 
 RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
     cmake -S . -B build \
