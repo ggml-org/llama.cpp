@@ -1102,6 +1102,7 @@ public:
     ~server_tokens() = default;
 
     // Prevent copying
+    // TODO: server_tokens should be copyable - remove this:
     server_tokens(const server_tokens&) = delete;
     server_tokens& operator=(const server_tokens&) = delete;
 
@@ -1119,7 +1120,7 @@ public:
         }
     }
 
-    server_tokens(llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
+    server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
 
     // for debugging
     std::string str() const {
