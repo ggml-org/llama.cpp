@@ -835,10 +835,10 @@ static ggml_backend_i ggml_backend_rpc_interface = {
 ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, uint32_t device) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
-    std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
+    std::string buft_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
     // NOTE: buffer types are allocated and never freed; this is by design
     static std::unordered_map<std::string, ggml_backend_buffer_type_t> buft_map;
-    auto it = buft_map.find(dev_name);
+    auto it = buft_map.find(buft_name);
     if (it != buft_map.end()) {
         return it->second;
     }
@@ -852,7 +852,7 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
     ggml_backend_rpc_buffer_type_context * buft_ctx = new ggml_backend_rpc_buffer_type_context {
         /* .endpoint  = */ endpoint,
         /* .device    = */ device,
-        /* .name      = */ dev_name,
+        /* .name      = */ buft_name,
         /* .alignment = */ alignment,
         /* .max_size  = */ max_size
     };
@@ -862,7 +862,7 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
         /* .device  = */ ggml_backend_reg_dev_get(reg, device),
         /* .context = */ buft_ctx
     };
-    buft_map[dev_name] = buft;
+    buft_map[buft_name] = buft;
     return buft;
 }
 
@@ -1703,7 +1703,7 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                   size_t n_devices, size_t n_threads,
+                                   size_t n_threads, size_t n_devices,
                                    ggml_backend_dev_t * devices, size_t * free_mem, size_t * total_mem) {
     if (n_devices == 0 || devices == nullptr || free_mem == nullptr || total_mem == nullptr) {
         fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
@@ -1784,6 +1784,7 @@ struct ggml_backend_rpc_device_context {
     std::string endpoint;
     uint32_t    device;
     std::string name;
+    std::string description;
 };
 
 static const char * ggml_backend_rpc_device_get_name(ggml_backend_dev_t dev) {
@@ -1795,7 +1796,7 @@ static const char * ggml_backend_rpc_device_get_name(ggml_backend_dev_t dev) {
 static const char * ggml_backend_rpc_device_get_description(ggml_backend_dev_t dev) {
     ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *)dev->context;
 
-    return ctx->name.c_str();
+    return ctx->description.c_str();
 }
 
 static void ggml_backend_rpc_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
@@ -1948,6 +1949,7 @@ static const ggml_backend_reg_i ggml_backend_rpc_reg_interface = {
 ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
     static std::unordered_map<std::string, ggml_backend_reg_t> reg_map;
     static std::mutex mutex;
+    static uint32_t dev_id = 0;
     std::lock_guard<std::mutex> lock(mutex);
     if (reg_map.find(endpoint) != reg_map.end()) {
         return reg_map[endpoint];
@@ -1958,12 +1960,14 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
     }
     ggml_backend_rpc_reg_context * ctx = new ggml_backend_rpc_reg_context;
     ctx->name = "RPC[" + std::string(endpoint) + "]";
-    for (uint32_t dev_id = 0; dev_id < dev_count; dev_id++) {
-        std::string dev_name = "RPC" + std::to_string(dev_id) + "[" + std::string(endpoint) + "]";
+    for (uint32_t ind = 0; ind < dev_count; ind++) {
+        std::string dev_name = "RPC" + std::to_string(dev_id);
+        std::string dev_desc = std::string(endpoint);
         ggml_backend_rpc_device_context * dev_ctx = new ggml_backend_rpc_device_context {
-            /* .endpoint = */ endpoint,
-            /* .device   = */ dev_id,
-            /* .name     = */ dev_name,
+            /* .endpoint    = */ endpoint,
+            /* .device      = */ ind,
+            /* .name        = */ dev_name,
+            /* .description = */ dev_desc
         };
 
         ggml_backend_dev_t dev = new ggml_backend_device {
@@ -1972,6 +1976,7 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
             /* .context = */ dev_ctx,
         };
         ctx->devices.push_back(dev);
+        dev_id++;
     }
     ggml_backend_reg_t reg = new ggml_backend_reg {
         /* .api_version = */ GGML_BACKEND_API_VERSION,

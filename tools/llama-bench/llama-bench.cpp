@@ -1351,11 +1351,14 @@ struct test {
         for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
             auto *      reg  = ggml_backend_reg_get(i);
             std::string name = ggml_backend_reg_name(reg);
-            if (name != "CPU" && !string_starts_with(name, "RPC")) {
-                backends.push_back(ggml_backend_reg_name(reg));
-            }
-            if (string_starts_with(name, "RPC[")) {
-                rpc_used = true;
+            if (string_starts_with(name, "RPC")) {
+                if (ggml_backend_reg_dev_count(reg) > 0) {
+                    rpc_used = true;
+                }
+            } else {
+                if (name != "CPU") {
+                    backends.push_back(ggml_backend_reg_name(reg));
+                }
             }
         }
         if (rpc_used) {

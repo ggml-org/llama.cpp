@@ -328,7 +328,7 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(endpoint.c_str(), cache_dir, devices.size(), params.n_threads,
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(),
         devices.data(), free_mem.data(), total_mem.data());
     return 0;
 }
