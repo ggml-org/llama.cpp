@@ -34,9 +34,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -f $OUT/*.log
+rm -f $OUT/*.exit
+rm -f $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -607,6 +607,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
+
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
@@ -623,5 +624,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
 fi
+
+cat $OUT/README.md
 
 exit $ret
