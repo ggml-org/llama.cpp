@@ -78,10 +78,7 @@ export function parseThinkingContent(content: string): {
  * @returns True if the content contains an opening thinking tag
  */
 export function hasThinkingStart(content: string): boolean {
-	return (
-		THINKING_FORMATS.some((format) => content.includes(format.startTag)) ||
-		content.includes('<|channel|>analysis')
-	);
+	return THINKING_FORMATS.some((format) => content.includes(format.startTag));
 }
 
 /**
