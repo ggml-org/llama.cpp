@@ -3796,7 +3796,7 @@ struct test_soft_max : public test_case {
         if (inplace) {
             out = ggml_soft_max_ext_inplace(ctx, a, mask, scale, max_bias);
         } else {
-            out =  ggml_soft_max_ext(ctx, a, mask, scale, max_bias);
+            out = ggml_soft_max_ext(ctx, a, mask, scale, max_bias);
         }
         ggml_soft_max_add_sinks(out, sinks);
         ggml_set_name(out, "out");
