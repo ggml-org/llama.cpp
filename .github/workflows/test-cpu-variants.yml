@@ -1,0 +1,70 @@
+name: Test CPU Variants
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Operation to test (e.g., MUL_MAT or full spec)'
+        required: false
+        default: 'MUL_MAT'
+        type: string
+      variant:
+        description: 'CPU variant to test (leave empty to list available variants)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  test-cpu-variant-sve:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt-get update
+          sudo apt-get install build-essential gcc-14 g++-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          gcc --version
+
+      - name: Build with CPU reference backend
+        run: |
+          cmake -B build -S . \
+            -DGGML_CPU_REF_BACKEND=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CPU_REPACK=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_BLAS=OFF \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+
+          cmake --build build -j8
+
+      - name: List available CPU variants
+        run: |
+          echo "Available CPU variants:"
+          ./build/bin/test-backend-ops cpu-variants --list
+
+      - name: Test CPU variant
+        if: ${{ inputs.variant != '' }}
+        run: |
+          echo "Testing variant: ${{ inputs.variant }}"
+          echo "Operation: ${{ inputs.operation }}"
+          ./build/bin/test-backend-ops cpu-variants \
+            --variant ${{ inputs.variant }} \
+            -o "${{ inputs.operation }}"
+
+      - name: Instructions
+        if: ${{ inputs.variant == '' }}
+        run: |
+          echo "=========================================="
+          echo "No variant specified - only listed available variants above"
+          echo "To test a specific variant, re-run this workflow with:"
+          echo "  - variant: one of the variants listed above"
+          echo "  - operation: your operation string (default: MUL_MAT)"
+          echo "=========================================="
