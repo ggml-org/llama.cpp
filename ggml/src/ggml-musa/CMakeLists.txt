@@ -56,7 +56,7 @@ if (MUSAToolkit_FOUND)
 
     set_source_files_properties(${GGML_SOURCES_MUSA} PROPERTIES LANGUAGE CXX)
     foreach(SOURCE ${GGML_SOURCES_MUSA})
-        set(COMPILE_FLAGS "-fsigned-char -x musa -mtgpu")
+        set(COMPILE_FLAGS "-Od3 -fno-strict-aliasing -ffast-math -fsigned-char -x musa -mtgpu -fmusa-flush-denormals-to-zero")
         foreach(ARCH ${MUSA_ARCHITECTURES})
             set(COMPILE_FLAGS "${COMPILE_FLAGS} --cuda-gpu-arch=mp_${ARCH}")
         endforeach()
