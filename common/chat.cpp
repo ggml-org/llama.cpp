@@ -9,6 +9,7 @@
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
 
+#include <cctype>
 #include <cstdio>
 #include <exception>
 #include <iostream>
@@ -41,6 +42,36 @@ static std::string string_diff(const std::string & last, const std::string & cur
         throw std::runtime_error("Invalid diff: '" + last + "' not found at start of '" + current + "'");
     }
     return current.substr(last.size());
+}
+
+static std::string string_remove_tool_wrappers_suffix(const std::string & delta) {
+    size_t cut_pos = std::string::npos;
+    auto consider = [&](const std::string & token) {
+        auto pos = delta.find(token);
+        if (pos != std::string::npos) {
+            cut_pos = cut_pos == std::string::npos ? pos : std::min(cut_pos, pos);
+        }
+    };
+
+    consider("<tool_call>");
+    consider("<tool>");
+    consider("<tools>");
+    consider("<response>");
+    consider("<json>");
+    consider("<xml>");
+    consider("<JSON>");
+    consider("<function=");
+    consider("<function ");
+
+    if (cut_pos == std::string::npos) {
+        return delta;
+    }
+
+    std::string cleaned = delta.substr(0, cut_pos);
+    while (!cleaned.empty() && std::isspace(static_cast<unsigned char>(cleaned.back()))) {
+        cleaned.pop_back();
+    }
+    return cleaned;
 }
 
 static bool has_content_or_tool_calls(const common_chat_msg & msg) {
@@ -89,8 +120,12 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
         diff.reasoning_content_delta = string_diff(previous_msg.reasoning_content, new_msg.reasoning_content);
     }
     if (previous_msg.content != new_msg.content) {
-        auto & diff = diffs.emplace_back();
-        diff.content_delta = string_diff(previous_msg.content, new_msg.content);
+        auto content_delta = string_diff(previous_msg.content, new_msg.content);
+        auto cleaned_delta = string_remove_tool_wrappers_suffix(content_delta);
+        if (!string_strip(cleaned_delta).empty()) {
+            auto & diff = diffs.emplace_back();
+            diff.content_delta = cleaned_delta;
+        }
     }
 
     if (new_msg.tool_calls.size() < previous_msg.tool_calls.size()) {
