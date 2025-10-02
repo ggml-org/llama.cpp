@@ -1,9 +1,11 @@
 #pragma once
 
 #include <runtime/IRuntime.h>
+#include <runtime/IProfiler.h>
 #include <device-layer/IDeviceLayer.h>
 #include <string>
 #include <unordered_map>
+#include <fstream>
 #include "ggml-backend-impl.h"
 
 std::shared_ptr<rt::IRuntime> ggml_et_runtime();
