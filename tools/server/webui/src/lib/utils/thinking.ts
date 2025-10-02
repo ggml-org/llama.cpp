@@ -1,8 +1,10 @@
+import { THINKING_FORMATS } from '$lib/constants/thinking-formats';
+
 /**
- * Parses thinking content from a message that may contain <think> tags or [THINK] tags
+ * Parses thinking content from a message that may contain thinking tags
  * Returns an object with thinking content and cleaned message content
  * Handles both complete blocks and incomplete blocks (streaming)
- * Supports formats: <think>...</think> and [THINK]...[/THINK]
+ * Supports formats: <think>...</think>, [THINK]...[/THINK], and ◁think▷...◁/think▷
  * @param content - The message content to parse
  * @returns An object containing the extracted thinking content and the cleaned message content
  */
@@ -10,53 +12,57 @@ export function parseThinkingContent(content: string): {
 	thinking: string | null;
 	cleanContent: string;
 } {
-	const incompleteThinkMatch = content.includes('<think>') && !content.includes('</think>');
-	const incompleteThinkBracketMatch = content.includes('[THINK]') && !content.includes('[/THINK]');
+	const buildCleanContent = (before: string, after: string): string => {
+		const trimmedBefore = before.replace(/[ \t]+$/, '');
+		const trimmedAfter = after.replace(/^[ \t]+/, '');
 
-	if (incompleteThinkMatch) {
-		const cleanContent = content.split('</think>')?.[1]?.trim();
-		const thinkingContent = content.split('<think>')?.[1]?.trim();
+		if (trimmedBefore && trimmedAfter) {
+			const needsSeparator = !/\n\s*$/.test(trimmedBefore) && !/^\s*\n/.test(trimmedAfter);
+			const separator = needsSeparator ? '\n\n' : '';
 
-		return {
-			cleanContent,
-			thinking: thinkingContent
-		};
+			return `${trimmedBefore}${separator}${trimmedAfter}`;
+		}
+
+		return trimmedBefore || trimmedAfter;
+	};
+
+	// Check for incomplete blocks (streaming case)
+	for (const format of THINKING_FORMATS) {
+		const startIndex = content.indexOf(format.startTag);
+		const endIndex = content.indexOf(format.endTag, startIndex + format.startTag.length);
+
+		if (startIndex !== -1 && endIndex === -1) {
+			const before = content.slice(0, startIndex);
+			const thinkingContent = content.slice(startIndex + format.startTag.length).trim();
+
+			return {
+				cleanContent: buildCleanContent(before, ''),
+				thinking: thinkingContent || null
+			};
+		}
 	}
 
-	if (incompleteThinkBracketMatch) {
-		const cleanContent = content.split('[/THINK]')?.[1]?.trim();
-		const thinkingContent = content.split('[THINK]')?.[1]?.trim();
+	// Check for complete blocks
+	for (const format of THINKING_FORMATS) {
+		const startIndex = content.indexOf(format.startTag);
+
+		if (startIndex === -1) {
+			continue;
+		}
+
+		const endIndex = content.indexOf(format.endTag, startIndex + format.startTag.length);
+
+		if (endIndex === -1) {
+			continue;
+		}
+
+		const before = content.slice(0, startIndex);
+		const thinkingContent = content.slice(startIndex + format.startTag.length, endIndex).trim();
+		const after = content.slice(endIndex + format.endTag.length);
 
 		return {
-			cleanContent,
-			thinking: thinkingContent
-		};
-	}
-
-	const completeThinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
-	const completeThinkBracketMatch = content.match(/\[THINK\]([\s\S]*?)\[\/THINK\]/);
-
-	if (completeThinkMatch) {
-		const thinkingContent = completeThinkMatch[1]?.trim() ?? '';
-		const cleanContent = `${content.slice(0, completeThinkMatch.index ?? 0)}${content.slice(
-			(completeThinkMatch.index ?? 0) + completeThinkMatch[0].length
-		)}`.trim();
-
-		return {
-			thinking: thinkingContent,
-			cleanContent
-		};
-	}
-
-	if (completeThinkBracketMatch) {
-		const thinkingContent = completeThinkBracketMatch[1]?.trim() ?? '';
-		const cleanContent = `${content.slice(0, completeThinkBracketMatch.index ?? 0)}${content.slice(
-			(completeThinkBracketMatch.index ?? 0) + completeThinkBracketMatch[0].length
-		)}`.trim();
-
-		return {
-			thinking: thinkingContent,
-			cleanContent
+			thinking: thinkingContent || null,
+			cleanContent: buildCleanContent(before, after)
 		};
 	}
 
@@ -68,31 +74,24 @@ export function parseThinkingContent(content: string): {
 
 /**
  * Checks if content contains an opening thinking tag (for streaming)
- * Supports both <think> and [THINK] formats
  * @param content - The message content to check
  * @returns True if the content contains an opening thinking tag
  */
 export function hasThinkingStart(content: string): boolean {
-	return (
-		content.includes('<think>') ||
-		content.includes('[THINK]') ||
-		content.includes('<|channel|>analysis')
-	);
+	return THINKING_FORMATS.some((format) => content.includes(format.startTag));
 }
 
 /**
  * Checks if content contains a closing thinking tag (for streaming)
- * Supports both </think> and [/THINK] formats
  * @param content - The message content to check
  * @returns True if the content contains a closing thinking tag
  */
 export function hasThinkingEnd(content: string): boolean {
-	return content.includes('</think>') || content.includes('[/THINK]');
+	return THINKING_FORMATS.some((format) => content.includes(format.endTag));
 }
 
 /**
  * Extracts partial thinking content during streaming
- * Supports both <think> and [THINK] formats
  * Used when we have opening tag but not yet closing tag
  * @param content - The message content to extract partial thinking from
  * @returns An object containing the extracted partial thinking content and the remaining content
@@ -101,39 +100,32 @@ export function extractPartialThinking(content: string): {
 	thinking: string | null;
 	remainingContent: string;
 } {
-	const thinkStartIndex = content.indexOf('<think>');
-	const thinkEndIndex = content.indexOf('</think>');
+	// Find all format positions and determine which appears first
+	const formatPositions = THINKING_FORMATS.map((format) => ({
+		...format,
+		startIndex: content.indexOf(format.startTag),
+		endIndex: content.indexOf(format.endTag)
+	}))
+		.filter((format) => format.startIndex !== -1)
+		.sort((a, b) => a.startIndex - b.startIndex);
 
-	const bracketStartIndex = content.indexOf('[THINK]');
-	const bracketEndIndex = content.indexOf('[/THINK]');
+	const firstFormat = formatPositions[0];
 
-	const useThinkFormat =
-		thinkStartIndex !== -1 && (bracketStartIndex === -1 || thinkStartIndex < bracketStartIndex);
-	const useBracketFormat =
-		bracketStartIndex !== -1 && (thinkStartIndex === -1 || bracketStartIndex < thinkStartIndex);
+	if (firstFormat && firstFormat.endIndex === -1) {
+		// We have an opening tag but no closing tag (streaming case)
+		const thinkingStart = firstFormat.startIndex + firstFormat.startTag.length;
 
-	if (useThinkFormat) {
-		if (thinkEndIndex === -1) {
-			const thinkingStart = thinkStartIndex + '<think>'.length;
+		return {
+			thinking: content.substring(thinkingStart),
+			remainingContent: content.substring(0, firstFormat.startIndex)
+		};
+	}
 
-			return {
-				thinking: content.substring(thinkingStart),
-				remainingContent: content.substring(0, thinkStartIndex)
-			};
-		}
-	} else if (useBracketFormat) {
-		if (bracketEndIndex === -1) {
-			const thinkingStart = bracketStartIndex + '[THINK]'.length;
-
-			return {
-				thinking: content.substring(thinkingStart),
-				remainingContent: content.substring(0, bracketStartIndex)
-			};
-		}
-	} else {
+	if (!firstFormat) {
 		return { thinking: null, remainingContent: content };
 	}
 
+	// If we have both start and end tags, use the main parsing function
 	const parsed = parseThinkingContent(content);
 
 	return {

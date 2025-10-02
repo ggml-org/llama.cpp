@@ -261,6 +261,7 @@ export class ChatService {
 		let regularContent = '';
 		let insideThinkTag = false;
 		let hasReceivedData = false;
+		let hasSeenReasoningField = false;
 		let lastTimings: ChatMessageTimings | undefined;
 
 		try {
@@ -314,13 +315,17 @@ export class ChatService {
 
 								// Track the regular content before processing this chunk
 								const regularContentBefore = regularContent;
+								const reasoningContentBefore = fullReasoningContent;
+								const shouldCaptureInlineThinking = !hasSeenReasoningField && !reasoningContent;
 
 								// Process content character by character to handle think tags
 								insideThinkTag = this.processContentForThinkTags(
 									content,
 									insideThinkTag,
-									() => {
-										// Think content is ignored - we don't include it in API requests
+									(thinkChunk) => {
+										if (shouldCaptureInlineThinking) {
+											fullReasoningContent += thinkChunk;
+										}
 									},
 									(regularChunk) => {
 										regularContent += regularChunk;
@@ -331,9 +336,20 @@ export class ChatService {
 								if (newRegularContent) {
 									onChunk?.(newRegularContent);
 								}
+
+								if (shouldCaptureInlineThinking) {
+									const newReasoningContent = fullReasoningContent.slice(
+										reasoningContentBefore.length
+									);
+
+									if (newReasoningContent) {
+										onReasoningChunk?.(newReasoningContent);
+									}
+								}
 							}
 
 							if (reasoningContent) {
+								hasSeenReasoningField = true;
 								hasReceivedData = true;
 								fullReasoningContent += reasoningContent;
 								onReasoningChunk?.(reasoningContent);
