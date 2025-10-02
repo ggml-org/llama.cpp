@@ -3552,7 +3552,7 @@ struct server_context {
 
                                 const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
 
-                                if (pos_min > pos_min_thold) {
+                                if (pos_min > pos_min_thold + 1) {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
