@@ -169,6 +169,12 @@ struct llama_hparams {
     uint32_t laurel_rank  = 64;
     uint32_t n_embd_altup = 256;
 
+    // xIELU
+    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;

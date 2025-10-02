@@ -297,6 +297,13 @@ class Keys:
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
 
+    class xIELU:
+        ALPHA_P             = "xielu.alpha_p"
+        ALPHA_N             = "xielu.alpha_n"
+        BETA                = "xielu.beta"
+        EPS                 = "xielu.eps"
+
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -405,6 +412,7 @@ class MODEL_ARCH(IntEnum):
     LLADA_MOE        = auto()
     SEED_OSS         = auto()
     GROVEMOE         = auto()
+    APERTUS          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -746,6 +754,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLADA_MOE:        "llada-moe",
     MODEL_ARCH.SEED_OSS:         "seed_oss",
     MODEL_ARCH.GROVEMOE:         "grovemoe",
+    MODEL_ARCH.APERTUS:          "apertus",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2705,6 +2714,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.APERTUS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.LLADA_MOE: [
         MODEL_TENSOR.TOKEN_EMBD,

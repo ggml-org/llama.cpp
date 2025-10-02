@@ -75,6 +75,35 @@ bool common_chat_msg_parser::add_tool_calls(const json & arr) {
     }
     return true;
 }
+
+bool common_chat_msg_parser::add_tool_call_short_form(const json & tool_call) {
+    if (!tool_call.is_object() || tool_call.size() != 1) {
+        return false;
+    }
+
+    // Get the tool name (the single key in the object)
+    auto it = tool_call.begin();
+    std::string name = it.key();
+
+    if (name.empty()) {
+        return false;
+    }
+
+    // Get the arguments (the nested object)
+    const json & args_json = it.value();
+    std::string arguments = "";
+
+    if (args_json.is_object()) {
+        arguments = args_json.dump();
+    } else if (args_json.is_string()) {
+        arguments = args_json;
+    } else if (!args_json.is_null()) {
+        // For other types, convert to string representation
+        arguments = args_json.dump();
+    }
+
+    return add_tool_call(name, "", arguments);
+}
 void common_chat_msg_parser::finish() {
     if (!is_partial_ && pos_ != input_.size()) {
         throw std::runtime_error("Unexpected content at end of input");// + input_.substr(pos_));
