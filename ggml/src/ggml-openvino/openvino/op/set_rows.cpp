@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -8,7 +9,6 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
-#include <openvino/op/unsqueeze.hpp>
 #include <openvino/op/scatter_update.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
@@ -55,14 +55,12 @@ OutputVector translate_set_rows(const NodeContext& context) {
         auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
         res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
     } else {
-        // TODO: Better solution would be to reshape the data into 4D at first place (for stateful model)
-        if (data.get_partial_shape().rank() + 1 == dst.get_partial_shape().rank()) {
-            data = std::make_shared<ov::op::v0::Unsqueeze>(data, zero);
-        }
-	int concat_axis = 1;
-        if (context.is_static())
-            concat_axis = 0;
-        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
+        assert(dst.get_partial_shape().rank() == 4 && dst.get_partial_shape()[2].is_static() && dst.get_partial_shape()[3].is_static());
+        int64_t dim2 = dst.get_partial_shape()[2].get_length();
+        int64_t dim3 = dst.get_partial_shape()[3].get_length();
+        data = std::make_shared<ov::op::v1::Reshape>(
+            data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
+        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, 1);
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }

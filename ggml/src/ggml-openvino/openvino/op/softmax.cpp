@@ -64,10 +64,10 @@ OutputVector translate_soft_max(const NodeContext& context) {
         auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
         auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,2});
-        auto leaf_8 = context.get_input("leaf_8");
-        auto shape_of_leaf_8 = std::make_shared<ov::op::v3::ShapeOf>(leaf_8);
-        auto gather_leaf_8 = std::make_shared<ov::op::v8::Gather>(shape_of_leaf_8, two_1d, zero_1d);
-        auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, gather_leaf_8}, 0);
+        auto inp_pos = context.get_input("inp_pos");
+        auto shape_of_inp_pos = std::make_shared<ov::op::v3::ShapeOf>(inp_pos);
+        auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(shape_of_inp_pos, two_1d, zero_1d);
+        auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, gather_inp_pos}, 0);
         mask_node_sliced =
             std::make_shared<ov::op::v8::Slice>(mask_node, zero_2d, stop, one_2d, axes);
         if (!(context.is_static())) {
