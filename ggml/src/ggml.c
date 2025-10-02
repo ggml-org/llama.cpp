@@ -1153,9 +1153,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "EXPM1",
     "SOFTPLUS",
     "GELU_ERF",
+    "XIELU",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 17, "GGML_UNARY_OP_COUNT != 17");
+static_assert(GGML_UNARY_OP_COUNT == 18, "GGML_UNARY_OP_COUNT != 18");
 
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
@@ -2698,6 +2699,29 @@ struct ggml_tensor * ggml_silu_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SILU);
+}
+
+// ggml_xielu
+
+struct ggml_tensor * ggml_xielu(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float alpha_n,
+        float alpha_p,
+        float beta,
+        float eps) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
+    ggml_set_op_params_f32(result, 1, beta + ggml_softplus(alpha_n));
+    ggml_set_op_params_f32(result, 2, ggml_softplus(alpha_p));
+    ggml_set_op_params_f32(result, 3, beta);
+    ggml_set_op_params_f32(result, 4, eps);
+
+    result->op     = GGML_OP_UNARY;
+    result->src[0] = a;
+
+    return result;
 }
 
 // ggml_silu_back
