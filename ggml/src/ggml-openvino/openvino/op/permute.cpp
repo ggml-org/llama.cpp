@@ -7,6 +7,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 
 #include "../node_context.hpp"
 #include "../op_table.hpp"
@@ -23,13 +24,18 @@ OutputVector translate_permute(const NodeContext& context) {
     int op_case = context.get_op_case();
     FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2 || op_case == 3, "Unsupported PERMUTE case");
     ov::Output<Node> res;
+    auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
 
     if (op_case == 1) {
         if (context.is_static()) {
             res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
                                                           ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
         } else {
-            res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
+            auto src = context.get_input(0);
+            if (src.get_partial_shape().rank() == 3) {
+                src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);
+            }
+            res = std::make_shared<ov::op::v1::Transpose>(src,
                                                           ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         }
     } else {
@@ -43,7 +49,6 @@ OutputVector translate_permute(const NodeContext& context) {
             attention_size = context.get_input("attention_size_swa");
         }
 
-        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 
         if (context.is_static()) {
@@ -57,6 +62,9 @@ OutputVector translate_permute(const NodeContext& context) {
             res = std::make_shared<ov::op::v1::Transpose>(src_slice,
                                                           ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
         } else {
+            if (src.get_partial_shape().rank() == 3) {
+                src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);
+            }
             res = std::make_shared<ov::op::v1::Transpose>(src,
                                                           ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         }
