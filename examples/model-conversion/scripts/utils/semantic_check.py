@@ -35,7 +35,11 @@ def cosine_similarity(a, b=None):
 
 def load_embeddings_from_file(filename, n_tokens, n_embd):
     embeddings = np.fromfile(filename, dtype=np.float32)
-    return embeddings.reshape(n_tokens, n_embd)
+    # Check if this is pooled (single embedding) or per-token embeddings
+    if len(embeddings) == n_embd:
+        return embeddings.reshape(1, n_embd)
+    else:
+        return embeddings.reshape(n_tokens, n_embd)
 
 def test_single_prompt_similarity(python_emb, cpp_emb, tokens, prompt):
     np.set_printoptions(suppress=True, precision=6)
@@ -48,58 +52,83 @@ def test_single_prompt_similarity(python_emb, cpp_emb, tokens, prompt):
     print(f"Embeddings shape: Python {python_emb.shape}, llama.cpp {cpp_emb.shape}")
 
     n_tokens = len(tokens)
+    is_pooled = python_emb.shape[0] == 1
 
-    # 1. Direct embedding comparison
-    print(f"\n1. Raw Embedding Magnitude Comparison:")
-    # Check if the distance of each token embedding from the origin and compare
-    # if the vectors are on the same "sphere". This does not tell us about
-    # direction (meaning of the token embedding), just magnitude.
-    for i in range(n_tokens):
-        py_mag = np.linalg.norm(python_emb[i]) # calculate standard euclidean norm for Python embeddings
-        cpp_mag = np.linalg.norm(cpp_emb[i])   # calculate standard euclidean norm for llama.cpp embeddings
+    if is_pooled:
+        print(f"\n[Pooled Embeddings Mode - comparing single sentence embeddings]")
+
+        # 1. Direct embedding comparison for pooled embeddings
+        print(f"\n1. Raw Embedding Magnitude Comparison:")
+        py_mag = np.linalg.norm(python_emb[0])
+        cpp_mag = np.linalg.norm(cpp_emb[0])
         ratio = py_mag / cpp_mag if cpp_mag > 0 else float('inf')
-        print(f"   Token {i} ({tokens[i]}): Python={py_mag:.3f}, llama.cpp={cpp_mag:.3f}, ratio={ratio:.3f}")
+        print(f"   Pooled embedding: Python={py_mag:.3f}, llama.cpp={cpp_mag:.3f}, ratio={ratio:.3f}")
 
-    # 2. Cosine similarity between tokens within each model
-    # Here we check the direction of token embeddings to see if the have the
-    # same meaning (similarity). This is done by calculating cosine similarity
-    # of a pair of token embeddings within each model.
-    print(f"\n2. Within-Model Token Similarities:")
-    print("   Python model:")
-    for i in range(n_tokens):
-        for j in range(i+1, n_tokens):
-            sim = cosine_similarity([python_emb[i]], [python_emb[j]])[0][0]
-            print(f"     {tokens[i]} ↔ {tokens[j]}: {sim:.4f}")
+        # 2. Cross-model similarity for pooled embeddings
+        print(f"\n2. Cross-Model Pooled Embedding Similarity:")
+        sim = cosine_similarity([python_emb[0]], [cpp_emb[0]])[0][0]
+        print(f"   Cosine similarity: {sim:.6f}")
 
-    print("   llama.cpp model:")
-    for i in range(n_tokens):
-        for j in range(i+1, n_tokens):
-            sim = cosine_similarity([cpp_emb[i]], [cpp_emb[j]])[0][0]
-            print(f"     {tokens[i]} ↔ {tokens[j]}: {sim:.4f}")
+        return {
+            'cross_model_similarities': [sim],
+            'similarity_matrix_diff': np.array([[0.0]]),
+            'max_diff': 0.0,
+            'mean_diff': 0.0,
+            'rms_diff': 0.0
+        }
+    else:
+        # Original per-token comparison logic
+        # 1. Direct embedding comparison
+        print(f"\n1. Raw Embedding Magnitude Comparison:")
+        # Check if the distance of each token embedding from the origin and compare
+        # if the vectors are on the same "sphere". This does not tell us about
+        # direction (meaning of the token embedding), just magnitude.
+        for i in range(n_tokens):
+            py_mag = np.linalg.norm(python_emb[i]) # calculate standard euclidean norm for Python embeddings
+            cpp_mag = np.linalg.norm(cpp_emb[i])   # calculate standard euclidean norm for llama.cpp embeddings
+            ratio = py_mag / cpp_mag if cpp_mag > 0 else float('inf')
+            print(f"   Token {i} ({tokens[i]}): Python={py_mag:.3f}, llama.cpp={cpp_mag:.3f}, ratio={ratio:.3f}")
 
-    # 3. Cross-model similarity (same token position)
-    print(f"\n3. Cross-Model Same-Token Similarities:")
-    for i in range(n_tokens):
-        sim = cosine_similarity([python_emb[i]], [cpp_emb[i]])[0][0]
-        print(f"   Token {i} ({tokens[i]}): {sim:.4f}")
+        # 2. Cosine similarity between tokens within each model
+        # Here we check the direction of token embeddings to see if the have the
+        # same meaning (similarity). This is done by calculating cosine similarity
+        # of a pair of token embeddings within each model.
+        print(f"\n2. Within-Model Token Similarities:")
+        print("   Python model:")
+        for i in range(n_tokens):
+            for j in range(i+1, n_tokens):
+                sim = cosine_similarity([python_emb[i]], [python_emb[j]])[0][0]
+                print(f"     {tokens[i]} ↔ {tokens[j]}: {sim:.4f}")
 
-    # 4. Similarity matrix comparison
-    print(f"\n4. Similarity Matrix Differences:")
-    py_sim_matrix = cosine_similarity(python_emb)
-    cpp_sim_matrix = cosine_similarity(cpp_emb)
-    diff_matrix = np.abs(py_sim_matrix - cpp_sim_matrix)
+        print("   llama.cpp model:")
+        for i in range(n_tokens):
+            for j in range(i+1, n_tokens):
+                sim = cosine_similarity([cpp_emb[i]], [cpp_emb[j]])[0][0]
+                print(f"     {tokens[i]} ↔ {tokens[j]}: {sim:.4f}")
 
-    print(f"   Max difference: {np.max(diff_matrix):.4f}")
-    print(f"   Mean difference: {np.mean(diff_matrix):.4f}")
-    print(f"   RMS difference: {np.sqrt(np.mean(diff_matrix**2)):.4f}")
+        # 3. Cross-model similarity (same token position)
+        print(f"\n3. Cross-Model Same-Token Similarities:")
+        for i in range(n_tokens):
+            sim = cosine_similarity([python_emb[i]], [cpp_emb[i]])[0][0]
+            print(f"   Token {i} ({tokens[i]}): {sim:.4f}")
 
-    return {
-        'cross_model_similarities': [cosine_similarity([python_emb[i]], [cpp_emb[i]])[0][0] for i in range(n_tokens)],
-        'similarity_matrix_diff': diff_matrix,
-        'max_diff': np.max(diff_matrix),
-        'mean_diff': np.mean(diff_matrix),
-        'rms_diff': np.sqrt(np.mean(diff_matrix**2))
-    }
+        # 4. Similarity matrix comparison
+        print(f"\n4. Similarity Matrix Differences:")
+        py_sim_matrix = cosine_similarity(python_emb)
+        cpp_sim_matrix = cosine_similarity(cpp_emb)
+        diff_matrix = np.abs(py_sim_matrix - cpp_sim_matrix)
+
+        print(f"   Max difference: {np.max(diff_matrix):.4f}")
+        print(f"   Mean difference: {np.mean(diff_matrix):.4f}")
+        print(f"   RMS difference: {np.sqrt(np.mean(diff_matrix**2)):.4f}")
+
+        return {
+            'cross_model_similarities': [cosine_similarity([python_emb[i]], [cpp_emb[i]])[0][0] for i in range(n_tokens)],
+            'similarity_matrix_diff': diff_matrix,
+            'max_diff': np.max(diff_matrix),
+            'mean_diff': np.mean(diff_matrix),
+            'rms_diff': np.sqrt(np.mean(diff_matrix**2))
+        }
 
 def read_prompt_from_file(file_path):
     try:
