@@ -3632,7 +3632,7 @@ struct server_context {
                         slot.n_prompt_tokens_cache = 0;
                     }
 
-                    SLT_INF(slot, "n_past = %d\n", slot.n_past);
+                    SLT_INF(slot, "n_past = %d, memory_seq_rm [%d, end)\n", slot.n_past, slot.n_past);
 
                     // remove the non-common part from the cache
                     slot.cache_tokens.keep_first(slot.n_past);
