@@ -1142,10 +1142,10 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
         if (grammar.vocab->is_eog(id)) {
             if (!allow_eog) {
-                cur_p->data[i].logit = -INFINITY;
+                cur_p->data[i].score = cur_p->raw ? -INFINITY : 0.0f;
             }
         } else if (piece.empty() || piece[0] == 0) {
-            cur_p->data[i].logit = -INFINITY;
+            cur_p->data[i].score = cur_p->raw ? -INFINITY : 0.0f;
         } else {
             candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
             candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second });
@@ -1154,7 +1154,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
     const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
     for (const auto & reject : rejects) {
-        cur_p->data[reject.index].logit = -INFINITY;
+        cur_p->data[reject.index].score = cur_p->raw ? -INFINITY : 0.0f;
     }
 }
 

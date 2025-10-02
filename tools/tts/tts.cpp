@@ -918,7 +918,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
                 }
 
                 {
-                    const float p = cands->data[cands->selected].p;
+                    const float p = cands->data[cands->selected].score;
 
                     const int col = std::max(0, std::min((int) k_colors.size() - 1, (int) ((3*p)*float(k_colors.size()))));
 

@@ -193,17 +193,16 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
     };
 
-    // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
-        float logit;    // log-odds of the token
-        float p;        // probability of the token
+        float score;    // log-odds or probability (normalized scores) score of the token
     } llama_token_data;
 
     typedef struct llama_token_data_array {
         // TODO: consider SoA
         // NOTE: this pointer can be modified by the samplers
         llama_token_data * data;
+        bool raw;         // true if scores are raw (unnormalized) logits, false if they are probabilities
         size_t size;
         int64_t selected; // this is the index in the data array (i.e. not the token id)
         bool sorted;      // note: do not assume the data is sorted - always check this flag

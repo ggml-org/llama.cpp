@@ -321,7 +321,7 @@ llama_tokens common_speculative_gen_draft(
 
         for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
             LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                    k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    k, i, cur_p->data[k].id, cur_p->data[k].score, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
         }
 
         // add drafted token for each sequence
@@ -336,7 +336,7 @@ llama_tokens common_speculative_gen_draft(
         }
 
         // only collect very high-confidence draft tokens
-        if (cur_p->data[0].p < params.p_min) {
+        if (cur_p->data[0].score < params.p_min) {
             break;
         }
 

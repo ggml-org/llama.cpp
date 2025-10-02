@@ -123,10 +123,10 @@ struct common_sampler {
         cur.resize(n_vocab);
 
         for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-            cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+            cur[token_id] = llama_token_data{token_id, logits[token_id]};
         }
 
-        cur_p = { cur.data(), cur.size(), -1, false };
+        cur_p = { cur.data(), true, cur.size(), -1, false };
     }
 };
 
@@ -359,12 +359,12 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     // check if it the sampled token fits the grammar
     {
-        llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
-        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
+        llama_token_data       single_token_data       = { id, 1.0f };
+        llama_token_data_array single_token_data_array = { &single_token_data, true, 1, -1, false };
 
         llama_sampler_apply(grmr, &single_token_data_array);
 
-        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
+        const bool is_valid = single_token_data_array.data[0].score != -INFINITY;
         if (is_valid) {
             return id;
         }
@@ -435,7 +435,7 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * g
         const llama_token id = res->data[res->selected].id;
 
         std::sort(res->data, res->data + res->size, [](const llama_token_data & a, const llama_token_data & b) {
-            return a.p > b.p;
+            return a.score > b.score;
         });
 
         // restore the selected token after sorting

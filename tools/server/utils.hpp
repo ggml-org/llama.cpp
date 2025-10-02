@@ -964,24 +964,24 @@ static std::vector<llama_token_data> get_token_probabilities(llama_context * ctx
 
     cur.resize(n_vocab);
     for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+        cur[token_id] = llama_token_data{token_id, logits[token_id]};
     }
 
     // sort tokens by logits
     std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
+        return a.score > b.score;
     });
 
     // apply softmax
-    float max_l = cur[0].logit;
+    float max_l = cur[0].score;
     float cum_sum = 0.0f;
     for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
+        float p = expf(cur[i].score - max_l);
+        cur[i].score = p;
         cum_sum += p;
     }
     for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+        cur[i].score /= cum_sum;
     }
 
     return cur;
