@@ -18,7 +18,7 @@ pip install onnxruntime-training
 #build TSI kernels for the Tsavorite backend
 #First for FPGA
 
-echo 'creating fpga kernel'
+#echo 'creating fpga kernel'
 cd fpga-kernel
 cmake -B build-fpga
 ./create-all-kernels.sh
@@ -90,7 +90,7 @@ cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 # Set up library paths for GCC 13.3.0 compatibility
 export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
 
-tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm")
+tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16")
 
 for kernel in "\${tsi_kernels[@]}"; do
     mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel

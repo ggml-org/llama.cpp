@@ -152,6 +152,17 @@ typedef struct tensor_log_ {
   const ggml_tensor *tensor;
 } tensor_log;
 
+/*
+ * Data Types Enum
+ */
+typedef enum tsi_data_type_ {
+	DATA_TYPE_F32_INDEX = 0,
+	DATA_TYPE_F16_INDEX,
+	DATA_TYPE_MAX_INDEX
+} tsi_data_type;
+/*
+ * FP32
+ */
 extern void _mlir_ciface_txe_add_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_sub_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_mult_host(void *a, void *b, void *res);
@@ -164,6 +175,22 @@ extern void _mlir_ciface_txe_sin_host(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid_host(void *a, void *res);
 extern void _mlir_ciface_txe_silu_host(void *a, void *res);
 extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
+
+/* 
+ * FP16 Kernels 
+ */
+extern void _mlir_ciface_txe_add_16_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_sub_16_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_mult_16_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_div_16_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_sqrt_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_sqr_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_neg_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_abs_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_sin_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_sigmoid_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_silu_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_rms_norm_16_host(void *a, void *res, void *buf);
 
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
