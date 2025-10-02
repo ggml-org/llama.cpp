@@ -4459,7 +4459,7 @@ kernel void kernel_flash_attn_ext_blk(
 
         FOR_UNROLL (short j = 0; j < Q; ++j) {
             FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
-                m = max(m, *mask_src);
+                m = max(m, mask_src[ii*NW]);
             }
 
             mask_src += args.nb31/2;
