@@ -148,6 +148,7 @@ class TensorNameMap:
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.attention_layernorm"                # apertus
         ),
 
         # Attention norm 2
@@ -325,6 +326,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.feedforward_layernorm",                      # apertus
         ),
 
         # Post feed-forward norm
@@ -547,6 +549,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.q",                              # plamo2
             "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.query_layernorm",                   # apertus
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -560,6 +563,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.k",                              # plamo2
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
