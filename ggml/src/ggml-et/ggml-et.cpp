@@ -21,7 +21,12 @@
 static struct ggml_et_driver {
     std::shared_ptr<dev::IDeviceLayer> device_layer;
     std::shared_ptr<rt::IRuntime> runtime;
+    std::unique_ptr<std::ofstream> profile_stream;
+    bool profiling_enabled = false;
 } _drv;
+
+// Forward declaration
+static void ggml_et_driver_cleanup();
 
 static bool ggml_et_driver_init() {
     if (_drv.runtime != nullptr) {
@@ -31,6 +36,26 @@ static bool ggml_et_driver_init() {
 	    _drv.device_layer = dev::IDeviceLayer::createPcieDeviceLayer();
 	    _drv.runtime = rt::IRuntime::create(_drv.device_layer);
 	    GGML_LOG_INFO("ET: FOUND %d devices!\n", _drv.device_layer->getDevicesCount());
+
+	    // Initialize profiler if requested via environment variable
+	    const char* profile_path = getenv("GGML_ET_PROFILE");
+	    if (profile_path) {
+	        std::string output_path = std::string(profile_path) + "/et_runtime_trace.json";
+	        GGML_LOG_INFO("ET: Profiling enabled, output: %s\n", output_path.c_str());
+
+	        _drv.profile_stream = std::make_unique<std::ofstream>(output_path);
+	        if (!_drv.profile_stream->is_open()) {
+	            GGML_LOG_ERROR("ET: Failed to open profiling output file: %s\n", output_path.c_str());
+	        } else {
+	            auto profiler = _drv.runtime->getProfiler();
+	            profiler->start(*_drv.profile_stream, rt::IProfiler::OutputType::Json);
+	            _drv.profiling_enabled = true;
+	            GGML_LOG_INFO("ET: Runtime profiler started (JSON format)\n");
+
+	            // Register cleanup at program exit
+	            std::atexit(ggml_et_driver_cleanup);
+	        }
+	    }
 	} catch (const std::exception& e) {
 	    GGML_LOG_ERROR("ggml_et: %s", e.what());
 	    if (_drv.device_layer != nullptr)
@@ -49,6 +74,20 @@ static std::shared_ptr<dev::IDeviceLayer> ggml_et_devicelayer() {
 
 std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
     return _drv.runtime;
+}
+
+static void ggml_et_driver_cleanup() {
+    if (_drv.profiling_enabled && _drv.runtime) {
+        GGML_LOG_INFO("ET: Stopping runtime profiler\n");
+        auto profiler = _drv.runtime->getProfiler();
+        profiler->stop();
+        _drv.profiling_enabled = false;
+
+        if (_drv.profile_stream) {
+            _drv.profile_stream->close();
+            _drv.profile_stream.reset();
+        }
+    }
 }
 
 static ggml_backend_dev_t ggml_backend_et_reg_get_device(ggml_backend_reg_t reg, size_t devidx);
