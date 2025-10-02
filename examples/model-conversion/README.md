@@ -189,6 +189,23 @@ This command will save two files to the `data` directory, one is a binary
 file containing logits which will be used for comparison with the converted
 model, and the other is a text file which allows for manual visual inspection.
 
+#### Using SentenceTransformer with numbered layers
+For models that have numbered SentenceTransformer layers (01_Pooling, 02_Dense,
+03_Dense, 04_Normalize), use the `-st` targets to apply all these layers:
+
+```console
+# Run original model with SentenceTransformer (applies all numbered layers)
+(venv) $ make embedding-run-original-model-st
+
+# Run converted model with pooling enabled
+(venv) $ make embedding-run-converted-model-st
+```
+
+This will use the SentenceTransformer library to load and run the model, which
+automatically applies all the numbered layers in the correct order. This is
+particularly useful when comparing with models that should include these
+additional transformation layers beyond just the base model output.
+
 ### Model conversion
 After updates have been made to [gguf-py](../../gguf-py) to add support for the
 new model the model can be converted to GGUF format using the following command:
@@ -207,6 +224,13 @@ was done manually in the previous steps) and compare the logits:
 ```console
 (venv) $ make embedding-verify-logits
 ```
+
+For models with SentenceTransformer layers, use the `-st` verification target:
+```console
+(venv) $ make embedding-verify-logits-st
+```
+This convenience target automatically runs both the original model with SentenceTransformer
+and the converted model with pooling enabled, then compares the results.
 
 ### llama-server verification
 To verify that the converted model works with llama-server, the following
