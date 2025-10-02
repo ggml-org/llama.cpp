@@ -2154,24 +2154,34 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
             }
         } else {
             auto prelude = res->prelude;
-            bool prelude_wrappers_only = true;
-            auto trimmed_prelude = string_strip(prelude);
-            while (!trimmed_prelude.empty()) {
+            size_t suffix_to_remove = 0;
+            size_t cursor = prelude.size();
+            while (cursor > 0) {
+                size_t ws = cursor;
+                while (ws > 0 && std::isspace(static_cast<unsigned char>(prelude[ws - 1]))) {
+                    --ws;
+                }
+                size_t trimmed_end = ws;
                 bool matched_wrapper = false;
                 for (const auto & tag : wrapper_open_tags) {
-                    if (string_starts_with(trimmed_prelude, tag)) {
-                        trimmed_prelude = string_strip(trimmed_prelude.substr(tag.size()));
+                    const size_t tag_len = tag.size();
+                    if (trimmed_end >= tag_len && prelude.compare(trimmed_end - tag_len, tag_len, tag) == 0) {
                         matched_wrapper = true;
+                        suffix_to_remove += cursor - (trimmed_end - tag_len);
+                        cursor = trimmed_end - tag_len;
                         break;
                     }
                 }
                 if (!matched_wrapper) {
-                    prelude_wrappers_only = false;
                     break;
                 }
             }
-            if (!prelude.empty() && prelude_wrappers_only) {
-                builder.remove_content_suffix(prelude.size());
+            if (suffix_to_remove > 0) {
+                while (cursor > 0 && std::isspace(static_cast<unsigned char>(prelude[cursor - 1]))) {
+                    --cursor;
+                    ++suffix_to_remove;
+                }
+                builder.remove_content_suffix(suffix_to_remove);
             }
 
             auto function_name = builder.str(res->groups[4]);
@@ -2181,7 +2191,13 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
             GGML_ASSERT(!function_name.empty());
 
             close_tag = "</function>";
-            const bool had_block_start = res->prelude.find("```") != std::string::npos;
+            bool had_block_start = false;
+            {
+                const auto backtick_pos = res->prelude.rfind("```");
+                if (backtick_pos != std::string::npos) {
+                    had_block_start = true;
+                }
+            }
 
             if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
                 if (!builder.add_tool_call(function_name, "", arguments->value) || arguments->is_partial) {
