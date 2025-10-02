@@ -5101,7 +5101,7 @@ void kernel_flash_attn_ext_impl(
 
         device float4 * dst4 = (device float4 *) dst + ((uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1)*DV4;
 
-        const float scale = 1.0f/S[jj];
+        const float scale = S[jj] == 0.0 ? 0.0f : 1.0f/S[jj];
 
         if (DV4 % NW == 0) {
             FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
@@ -5721,7 +5721,7 @@ void kernel_flash_attn_ext_vec_impl(
         device float4 * dst4 = (device float4 *) dst;
         device float  * dst1 = (device float  *) dst + nrows*DV*NWG; // the S and M are stored after the results
 
-        const float S = NWG == 1 ? 1.0f/ss[0] : 1.0f;
+        const float S = NWG == 1 ? (ss[0] == 0.0f ? 0.0f : 1.0f/ss[0]) : 1.0f;
 
         // interleave the workgroup data
         for (short i = tiisg; i < DV4; i += NW) {
@@ -5899,7 +5899,8 @@ kernel void kernel_flash_attn_ext_vec_reduce(
     const float m  = simd_max(M);
     const float ms = exp(M - m);
 
-    S = 1.0f/simd_sum(S*ms);
+    S = simd_sum(S*ms);
+    S = S == 0.0f ? 0.0f : 1.0f/S;
 
     const short DV4 = DV/4;
 
