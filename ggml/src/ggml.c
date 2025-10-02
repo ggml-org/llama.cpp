@@ -2664,8 +2664,8 @@ struct ggml_tensor * ggml_xielu(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
-    ggml_set_op_params_f32(result, 1, beta + softplus(alpha_n));
-    ggml_set_op_params_f32(result, 2, softplus(alpha_p));
+    ggml_set_op_params_f32(result, 1, beta + ggml_softplus(alpha_n));
+    ggml_set_op_params_f32(result, 2, ggml_softplus(alpha_p));
     ggml_set_op_params_f32(result, 3, beta);
     ggml_set_op_params_f32(result, 4, eps);
 
