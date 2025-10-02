@@ -1144,9 +1144,8 @@ public:
         auto it = map_pos_to_media.find(pos);
         if (it != map_pos_to_media.end()) {
             return it->second;
-        } else {
-            throw std::runtime_error("Chunk not found");
         }
+        throw std::runtime_error("Chunk not found");
     }
 
     void push_back(llama_token tok) {
@@ -1170,7 +1169,7 @@ public:
             map_pos_to_media[start_pos] = std::move(new_chunk);
         } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
             size_t n_tokens;
-            auto text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+            const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
             for (size_t i = 0; i < n_tokens; ++i) {
                 push_back(text_tokens[i]);
             }
@@ -1190,7 +1189,7 @@ public:
             // We could also just check, but this will prevent silently dropping MTMD data.
             GGML_ASSERT(has_mtmd);
             for (auto it = tokens.map_pos_to_media.begin(); it != tokens.map_pos_to_media.end(); ) {
-                auto chunk = tokens.map_pos_to_media[it->first].get();
+                auto * chunk = tokens.map_pos_to_media[it->first].get();
                 mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
                 map_pos_to_media[start_pos+it->first] = std::move(new_chunk);
             }
@@ -1271,33 +1270,42 @@ public:
     }
 
     size_t get_common_prefix(const server_tokens & b) const {
-        size_t max_idx = std::min(tokens.size(), b.tokens.size());
+        const size_t max_idx = std::min(tokens.size(), b.tokens.size());
+
         for (size_t i = 0; i < max_idx; ++i) {
-            auto & ai =   tokens[i];
-            auto & bi = b.tokens[i];
+            const llama_token ai =   tokens[i];
+            const llama_token bi = b.tokens[i];
 
             if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
                 GGML_ASSERT(has_mtmd);
+
                 const auto & a_chunk =   find_chunk(i);
                 const auto & b_chunk = b.find_chunk(i);
+
                 GGML_ASSERT(a_chunk && b_chunk);
-                std::string ai_id  = mtmd_input_chunk_get_id(a_chunk.get());
-                std::string bi_id  = mtmd_input_chunk_get_id(b_chunk.get());
-                size_t a_pos       = mtmd_input_chunk_get_n_pos(a_chunk.get());
-                size_t b_pos       = mtmd_input_chunk_get_n_pos(b_chunk.get());
-                if (ai_id == bi_id && a_pos == b_pos) {
-                    GGML_ASSERT(a_pos > 0 && "Invalid media chunk"); // should never happen
-                    i += a_pos - 1; // will be +1 by the for loop
+
+                const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());
+                const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());
+
+                const size_t pos_a = mtmd_input_chunk_get_n_pos(a_chunk.get());
+                const size_t pos_b = mtmd_input_chunk_get_n_pos(b_chunk.get());
+
+                if (id_ai == id_bi && pos_a == pos_b) {
+                    GGML_ASSERT(pos_a > 0 && "Invalid media chunk"); // should never happen
+                    i += pos_a - 1; // will be +1 by the for loop
                     continue;
-                } else {
-                    return i;
                 }
-            } else if (ai == bi) {
-                continue;
-            } else {
+
                 return i;
             }
+
+            if (ai == bi) {
+                continue;
+            }
+
+            return i;
         }
+
         return max_idx; // all tokens are equal
     }
 
@@ -1308,7 +1316,7 @@ public:
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
 
         for (size_t i = 0; i < tokens.size(); ++i) {
-            auto & t = tokens[i];
+            const auto & t = tokens[i];
             if (t == LLAMA_TOKEN_NULL) {
                 try {
                     const auto & chunk = find_chunk(i);
@@ -1330,8 +1338,8 @@ public:
                 mtmd_context * mctx,
                 llama_pos n_past,
                 int32_t seq_id,
-                llama_pos & n_pos_out) {
-        auto & chunk = find_chunk(n_past);
+                llama_pos & n_pos_out) const {
+        const auto & chunk = find_chunk(n_past);
         const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
                             ? "image" : "audio";
         SRV_INF("processing %s...\n", name);

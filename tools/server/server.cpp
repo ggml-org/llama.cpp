@@ -1619,7 +1619,7 @@ struct server_slot {
             /* is_partial= */ stop != STOP_TYPE_EOS,
             params.oaicompat_chat_syntax);
         if (!new_msg.empty()) {
-            new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
+            new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
             chat_msg = new_msg;
             diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
         }
@@ -2749,7 +2749,7 @@ struct server_context {
     }
 
     // if multimodal is enabled, send an error and return false
-    bool ensure_no_mtmd(const int id_task) {
+    bool check_no_mtmd(const int id_task) {
         if (mctx) {
             send_error(id_task, "This feature is not supported by multimodal", ERROR_TYPE_NOT_SUPPORTED);
             return false;
@@ -3121,7 +3121,7 @@ struct server_context {
                 } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
                 {
-                    if (!ensure_no_mtmd(task.id)) {
+                    if (!check_no_mtmd(task.id)) {
                         break;
                     }
 
@@ -3162,7 +3162,7 @@ struct server_context {
                 } break;
             case SERVER_TASK_TYPE_SLOT_RESTORE:
                 {
-                    if (!ensure_no_mtmd(task.id)) break;
+                    if (!check_no_mtmd(task.id)) break;
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -3209,7 +3209,9 @@ struct server_context {
                 } break;
             case SERVER_TASK_TYPE_SLOT_ERASE:
                 {
-                    if (!ensure_no_mtmd(task.id)) break;
+                    if (!check_no_mtmd(task.id)) {
+                        break;
+                    }
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
