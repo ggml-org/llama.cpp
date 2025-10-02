@@ -353,7 +353,6 @@ class ChatStore {
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
 				this.activeConversation!.currNode = assistantMessage.id;
-
 				await this.refreshActiveMessages();
 
 				if (onComplete) {
@@ -479,6 +478,9 @@ class ChatStore {
 	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage | null> {
 		if (!this.activeConversation) return null;
 
+		// Capture the current model name when creating the assistant message
+		const currentModelName = serverStore.modelName;
+
 		return await DatabaseStore.createMessageBranch(
 			{
 				convId: this.activeConversation.id,
@@ -487,7 +489,8 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: []
+				children: [],
+				model: currentModelName || undefined
 			},
 			parentId || null
 		);
@@ -1138,7 +1141,8 @@ class ChatStore {
 						role: messageToEdit.role,
 						content: newContent,
 						thinking: messageToEdit.thinking || '',
-						children: []
+						children: [],
+						model: messageToEdit.model // Preserve original model info when branching
 					},
 					messageToEdit.parent!
 				);
@@ -1213,7 +1217,8 @@ class ChatStore {
 					content: newContent,
 					thinking: messageToEdit.thinking || '',
 					children: [],
-					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined
+					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined,
+					model: messageToEdit.model // Preserve original model info when branching
 				},
 				parentId
 			);
@@ -1274,6 +1279,9 @@ class ChatStore {
 			this.isLoading = true;
 			this.currentResponse = '';
 
+			// Capture the current model name when creating the assistant message
+			const currentModelName = serverStore.modelName;
+
 			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
@@ -1282,7 +1290,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: currentModelName || undefined
 				},
 				parentMessage.id
 			);
@@ -1329,6 +1338,9 @@ class ChatStore {
 				false
 			) as DatabaseMessage[];
 
+			// Capture the current model name when creating the assistant message
+			const currentModelName = serverStore.modelName;
+
 			// Create new assistant message branch
 			const assistantMessage = await DatabaseStore.createMessageBranch(
 				{
@@ -1338,7 +1350,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: currentModelName || undefined
 				},
 				userMessageId
 			);
