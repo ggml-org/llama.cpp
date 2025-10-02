@@ -87,6 +87,8 @@ bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
 }
 
 bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for element map operation\n");
         return false;
@@ -147,10 +149,13 @@ bool ggml_et_op_elmap(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END(op_name, "el_map_f32", node);
     return kernel_result;
 }
 
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     // Validate inputs
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for GLU operation\n");
@@ -230,10 +235,13 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END("GLU", "glu_f32", node);
     return kernel_result;
 }
 
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for MUL_MAT operation\n");
         return false;
@@ -320,10 +328,32 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    {
+        // Calculate actual FLOPs including batch/sequence dimensions
+        // dst shape: [M, N, ne2, ne3] where M=ne[1], N=ne[0]
+        int64_t m = node->ne[1];
+        int64_t n = node->ne[0];
+        int64_t k = node->src[0]->ne[0];
+        int64_t ne2 = node->ne[2];
+        int64_t ne3 = node->ne[3];
+
+        // Total FLOPs = (batch_size) * M * N * (2*K - 1)
+        // Each MxN matrix-matrix multiply does M*N*(2*K-1) FLOPs
+        // Broadcasting is handled by repeating computation, so count actual operations
+        int64_t batch_size = ne2 * ne3;
+        int64_t total_flops = batch_size * m * n * (2 * k - 1);
+
+        char kernel_variant[64];
+        snprintf(kernel_variant, sizeof(kernel_variant), "%s_%sx%s", kernel_name, src0_type_name, ggml_type_name(node->src[1]->type));
+        ET_PERF_END_EXT("MUL_MAT", kernel_variant, node, "flops=%" PRId64,
+                        total_flops);
+    }
     return kernel_result;
 }
 
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for ROPE operation\n");
         return false;
@@ -429,10 +459,15 @@ bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END_EXT("ROPE", kernel_name, node, "mode=0x%x|n_dims=%d|freq_base=%.2f|freq_scale=%.2f",
+                    params.rope_params.mode, params.rope_params.n_dims,
+                    (double)params.rope_params.freq_base, (double)params.rope_params.freq_scale);
     return kernel_result;
 }
 
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for RMS_NORM operation\n");
         return false;
@@ -496,10 +531,13 @@ bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END_EXT("RMS_NORM", kernel_name, node, "eps=%.6f", (double)eps);
     return kernel_result;
 }
 
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for SOFTMAX operation\n");
         return false;
@@ -610,10 +648,14 @@ bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END_EXT("SOFTMAX", kernel_name, node, "scale=%.6f|max_bias=%.6f|has_mask=%s",
+                    (double)scale, (double)max_bias, node->src[1] ? "yes" : "no");
     return kernel_result;
 }
 
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for GET_ROWS operation\n");
         return false;
@@ -701,10 +743,13 @@ bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END("GET_ROWS", kernel_name, node);
     return kernel_result;
 }
 
 bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     GGML_LOG_DEBUG("ET: CONT operation called\n");
 
     // Validate tensor types
@@ -766,10 +811,13 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END("CONT", "cont_f32", node);
     return kernel_result;
 }
 
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
     if (!dev_ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for SET_ROWS operation\n");
         return false;
@@ -868,5 +916,6 @@ bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
+    ET_PERF_END("SET_ROWS", kernel_name, node);
     return kernel_result;
 }
