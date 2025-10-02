@@ -2366,8 +2366,8 @@ struct server_context {
                 // length of the Longest Common Subsequence between the current slot's prompt and the input prompt
                 int cur_lcs_len = slot.cache_tokens.get_common_prefix(task.prompt_tokens);
 
-                // fraction of the common subsequence length compared to the current slot's prompt length
-                float cur_similarity = static_cast<float>(cur_lcs_len) / static_cast<int>(slot.cache_tokens.size());
+                // fraction of the common subsequence length
+                float cur_similarity = float(cur_lcs_len) / task.prompt_tokens.size();
 
                 // select the current slot if the criteria match
                 if (cur_lcs_len > lcs_len && cur_similarity > slot_prompt_similarity) {
