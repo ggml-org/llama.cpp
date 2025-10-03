@@ -1435,16 +1435,10 @@ vec4 bf16_to_fp32(uvec4 u)
 }
 
 float e8m0_to_fp32(uint8_t x) {
-    uint32_t bits;
-
-    if (x == 0) {
-        bits = 0x00400000;
-    } else {
-        bits = x;
-        bits = bits << 23;
-    }
-
-    return uintBitsToFloat(bits);
+// branchless implementation
+    uint is_zero = uint(x == 0);
+    uint result = (uint(x) << 23) | (is_zero << 22);
+    return uintBitsToFloat(result);
 }
 
 #if BDA
