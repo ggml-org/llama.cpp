@@ -3726,10 +3726,28 @@ class Qwen2MoeModel(TextModel):
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
+    # extra logic for rerank models
+    is_rerank: bool = False
+    is_tied_embeddings: bool = False
+    token_false_id: int | None = None
+    token_true_id: int | None = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # track for intern-s1-mini
         hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
+
+        # a bit hacky, but currently the only way to detect if this is a rerank model
+        # ref: https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
+        readme_path = self.dir_model / "README.md"
+        readme_text = ""
+        if readme_path.exists():
+            with readme_path.open("r", encoding="utf-8") as f:
+                readme_text = f.read()
+        if "# Qwen3-Reranker" in readme_text:
+            self._find_rerank_config()
 
     def set_vocab(self):
         # deal with intern-s1-mini
@@ -3738,6 +3756,53 @@ class Qwen3Model(Qwen2Model):
             return
 
         super().set_vocab()
+
+    def _find_rerank_config(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+
+        self.is_rerank = True
+        self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
+
+        assert self.token_false_id is not None and self.token_true_id is not None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.is_rerank:
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
+            self.gguf_writer.add_classifier_output_labels(["yes", "no"])
+            self.gguf_writer.add_chat_template([{
+                "name": "rerank",
+                "template": "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
+                            "<|im_start|>user\n<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: {query}\n<Document>: {document}<|im_end|>\n"
+                            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            }])
+
+    def _get_cls_out_tensor(self, data_torch: Tensor) -> Tensor:
+        # extract "yes" and "no" tokens from the output lm_head tensor
+        false_row = data_torch[self.token_false_id]
+        true_row = data_torch[self.token_true_id]
+        return torch.stack([true_row, false_row], dim=0)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.is_rerank:
+            is_tied_head = self.is_tied_embeddings and "embed_tokens" in name
+            is_real_head = not self.is_tied_embeddings and "lm_head" in name
+            if is_tied_head or is_real_head:
+                cls_out_head = (
+                    gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight",
+                    self._get_cls_out_tensor(data_torch),
+                )
+                if is_tied_head:
+                    embed = (self.map_tensor_name(name), data_torch)
+                    return [cls_out_head, embed]
+                if is_real_head:
+                    return [cls_out_head]
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3MoeForCausalLM")
@@ -4194,7 +4259,8 @@ class Plamo2Model(TextModel):
         # This logic matches modeling_plamo.py's is_mamba function
         mamba_step = hparams.get("mamba_step", 2)
         mamba_enabled = hparams.get("mamba_enabled", True)
-        mamba_layers = []
+        num_key_value_heads = []
+        num_attention_heads = []
 
         if mamba_enabled:
             for i in range(block_count):
@@ -4204,17 +4270,21 @@ class Plamo2Model(TextModel):
                 else:
                     is_mamba = (i % mamba_step) != (mamba_step // 2)
                 if is_mamba:
-                    mamba_layers.append(0)
+                    num_key_value_heads.append(0)
+                    num_attention_heads.append(0)
                 else:
-                    mamba_layers.append(hparams.get("num_key_value_heads", 4))
+                    num_key_value_heads.append(hparams.get("num_key_value_heads", 4))
+                    num_attention_heads.append(hparams.get("num_attention_heads", 32))
 
-        if mamba_layers:
-            self.gguf_writer.add_head_count_kv(mamba_layers)
+        if num_key_value_heads and num_attention_heads:
+            self.gguf_writer.add_head_count_kv(num_key_value_heads)
+            self.gguf_writer.add_head_count(num_attention_heads)
 
         self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 2048))
         self.gguf_writer.add_embedding_length(hparams.get("hidden_size", 4096))
+        self.gguf_writer.add_key_length(hparams.get("hidden_size_per_head", 128))
+        self.gguf_writer.add_value_length(hparams.get("hidden_size_per_head", 128))
         self.gguf_writer.add_block_count(block_count)
-        self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 32))
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-06))
         self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10000))
 
@@ -7939,6 +8009,121 @@ class BailingMoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
+class GroveMoeModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.GROVEMOE
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if (n_experts := self.hparams.get("num_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+            logger.info(f"gguf: expert feed forward length = {moe_intermediate_size}")
+        # FIXME?: Hardcoded https://huggingface.co/inclusionAI/GroveMoE-Inst/blob/c4c69e5970d18907b5e6ddccdfd55176fe292df1/modeling_grove_moe.py#L299
+        self.gguf_writer.add_expert_chunk_feed_forward_length(self.hparams.get("head_dim") or 128)
+        # FIXME?: Hardcoded https://huggingface.co/inclusionAI/GroveMoE-Inst/blob/c4c69e5970d18907b5e6ddccdfd55176fe292df1/modeling_grove_moe.py#L298
+        self.gguf_writer.add_experts_per_group(2)
+        # FIXME?: Hardcoded https://huggingface.co/inclusionAI/GroveMoE-Inst/blob/c4c69e5970d18907b5e6ddccdfd55176fe292df1/modeling_grove_moe.py#L376
+        self.gguf_writer.add_expert_group_scale(0.05)
+        # YaRN is not enabled by default
+        # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+    _experts: list[dict[str, Tensor]] | None = None
+    _chunk_experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith(".expert_bias"):
+            # FIXME?: Unused https://huggingface.co/inclusionAI/GroveMoE-Inst/blob/c4c69e5970d18907b5e6ddccdfd55176fe292df1/modeling_grove_moe.py#L303
+            return []
+
+        # process the experts separately
+        if name.find("chunk_experts") != -1:
+            n_experts = self.hparams["num_experts"] // 2 # see add_experts_per_group
+            assert bid is not None
+
+            if self._chunk_experts is None:
+                self._chunk_experts = [{} for _ in range(self.block_count)]
+
+            self._chunk_experts[bid][name] = data_torch
+
+            if len(self._chunk_experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.chunk_experts.{xid}.{w_name}.weight"
+                        datas.append(self._chunk_experts[bid][ename])
+                        del self._chunk_experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.chunk_experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+        elif name.find("experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._chunk_experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            chunk_experts = [k for d in self._chunk_experts for k in d.keys()]
+            if len(chunk_experts) > 0:
+                raise ValueError(f"Unprocessed adjugate experts: {chunk_experts}")
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
 @ModelBase.register("ChameleonForConditionalGeneration")
 @ModelBase.register("ChameleonForCausalLM")  # obsolete
 class ChameleonModel(TextModel):
@@ -8769,6 +8954,43 @@ class SmallThinkerModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("ApertusForCausalLM")
+class ApertusModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.APERTUS
+    undo_permute = False
+
+    _alpha_n = {}
+    _alpha_p = {}
+    _beta = {}
+    _eps = {}
+
+    def modify_tensors(self, data_torch, name, bid):
+        # Handle xIELU activation parameters
+        n_layers = self.hparams["num_hidden_layers"]
+        if name.endswith(".act_fn.alpha_n"):
+            self._alpha_n[bid] = data_torch.to("cpu").float().item()
+            if (len(self._alpha_n) == n_layers):
+                self.gguf_writer.add_xielu_alpha_n([self._alpha_n[k] for k in sorted(self._alpha_n)])
+            return []
+        if name.endswith(".act_fn.alpha_p"):
+            self._alpha_p[bid] = data_torch.to("cpu").float().item()
+            if (len(self._alpha_p) == n_layers):
+                self.gguf_writer.add_xielu_alpha_p([self._alpha_p[k] for k in sorted(self._alpha_p)])
+            return []
+        if name.endswith(".act_fn.beta"):
+            self._beta[bid] = data_torch.to("cpu").float().item()
+            if (len(self._beta) == n_layers):
+                self.gguf_writer.add_xielu_beta([self._beta[k] for k in sorted(self._beta)])
+            return []
+        if name.endswith(".act_fn.eps"):
+            self._eps[bid] = data_torch.to("cpu").float().item()
+            if (len(self._eps) == n_layers):
+                self.gguf_writer.add_xielu_eps([self._eps[k] for k in sorted(self._eps)])
+            return []
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
 class MistralModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     model_name = "Mistral"
@@ -8936,7 +9158,7 @@ class LazyTorchTensor(gguf.LazyBase):
     def from_safetensors_slice(cls, st_slice: Any) -> Tensor:
         dtype = cls._dtype_str_map[st_slice.get_dtype()]
         shape: tuple[int, ...] = tuple(st_slice.get_shape())
-        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(st_slice,), func=lambda s: s[:])
+        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(st_slice,), func=lambda s: s[...] if len(s.get_shape()) == 0 else s[:])
         return cast(torch.Tensor, lazy)
 
     @classmethod

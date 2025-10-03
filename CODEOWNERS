@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
@@ -50,6 +51,7 @@
 /ggml/src/ggml-blas/                    @slaren
 /ggml/src/ggml-common.h                 @ggerganov @slaren
 /ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
@@ -57,13 +59,18 @@
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
+/ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
+/ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
-/ggml/src/ggml-zdnn/                    @taronaeo
+/ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
@@ -89,18 +96,20 @@
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
+/tools/rpc/                             @rgerganov
 /tools/run/                             @ericcurtin
 /tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
 /tools/server/webui/                    @allozaur
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
-.clang-format                           @slaren
-.clang-tidy                             @slaren
-AUTHORS                                 @ggerganov
-CMakeLists.txt                          @ggerganov
-CONTRIBUTING.md                         @ggerganov
-LICENSE                                 @ggerganov
-README.md                               @ggerganov
-SECURITY.md                             @ggerganov
+/.clang-format                          @slaren
+/.clang-tidy                            @slaren
+/AUTHORS                                @ggerganov
+/CMakeLists.txt                         @ggerganov
+/CONTRIBUTING.md                        @ggerganov
+/LICENSE                                @ggerganov
+/README.md                              @ggerganov
+/SECURITY.md                            @ggerganov
+/build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC

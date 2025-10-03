@@ -102,6 +102,9 @@ static bool ggml_op_is_empty(enum ggml_op op) {
     }
 }
 
+static inline float ggml_softplus(float input) {
+    return (input > 20.0f) ? input : logf(1 + expf(input));
+}
 //
 // logging
 //
@@ -341,6 +344,10 @@ struct ggml_cgraph {
 // the slice does not have leafs or gradients
 // if you need the gradients, get them from the original graph
 struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
+
+// ggml-alloc.c: true if the operation can reuse memory from its sources
+GGML_API bool ggml_op_can_inplace(enum ggml_op op);
+
 
 // Memory allocation
 

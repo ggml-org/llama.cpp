@@ -97,7 +97,7 @@ jobs:
           ctest -L 'main|curl' --verbose --timeout 900
 
   macOS-latest-cmake-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
       - name: Clone
@@ -192,6 +192,10 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-22.04-arm
+          - build: 's390x'
+            os: ubuntu-24.04-s390x
+          - build: 'ppc64le'
+            os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -203,14 +207,31 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-cpu-cmake
+          key: ubuntu-cpu-cmake-${{ matrix.build }}
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
+      - name: Build Dependencies
+        id: build_depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev \
+            libjpeg-dev build-essential libcurl4-openssl-dev \
+            git-lfs
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ./gguf-py
+
+      - name: Swap Endianness
+        id: endianness
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          for f in models/*.gguf; do
+            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
+          done
 
       - name: Build
         id: cmake_build
@@ -228,6 +249,7 @@ jobs:
 
       - name: Test llama2c conversion
         id: llama2c_test
+        if: ${{ matrix.build != 's390x' }}
         run: |
           cd build
           echo "Fetch tokenizer"
@@ -236,6 +258,15 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+      - name: Test llama2c (s390x)
+        id: llama2c_test_s390x
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          cd build
+          echo "Fetch llama2c big-endian model"
+          wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
+          ./bin/llama-cli -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
@@ -331,11 +362,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-cmake-rpc
-          evict-old-files: 1d
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-latest-cmake-rpc
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -356,8 +387,8 @@ jobs:
           cd build
           ctest -L main --verbose
 
-  ubuntu-22-cmake-vulkan:
-    runs-on: ubuntu-22.04
+  ubuntu-24-cmake-vulkan:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clone
@@ -367,20 +398,40 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-vulkan
+          key: ubuntu-24-cmake-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
         id: depends
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+
+      - name: Get latest Vulkan SDK version
+        id: vulkan_sdk_version
+        run: |
+          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+
+      - name: Cache Vulkan SDK
+        id: cache_vulkan_sdk
+        uses: actions/cache@v4
+        with:
+          path: ./vulkan_sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Vulkan SDK
+        if: steps.cache_vulkan_sdk.outputs.cache-hit != 'true'
+        id: vulkan_sdk_install
+        run: |
+          mkdir -p vulkan_sdk
+          cd vulkan_sdk
+          curl --no-progress-meter https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz | tar -Jx --strip-components=1
 
       - name: Build
         id: cmake_build
         run: |
+          source ./vulkan_sdk/setup-env.sh
           cmake -B build \
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
@@ -390,6 +441,7 @@ jobs:
         run: |
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
+          export GGML_VK_DISABLE_F16=1
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
@@ -456,7 +508,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -475,7 +527,7 @@ jobs:
 
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
+    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -1028,7 +1080,7 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7cd9bba0-7aab-4e30-b3ae-2221006a4a05/intel-oneapi-base-toolkit-2025.1.1.34_offline.exe
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/24751ead-ddc5-4479-b9e6-f9fe2ff8b9f2/intel-deep-learning-essentials-2025.2.1.25_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
     steps:
@@ -1066,10 +1118,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: Clone rocWMMA repository
-        id: clone_rocwmma
+      - name: Grab rocWMMA package
+        id: grab_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          7z x rocwmma.deb
+          7z x data.tar
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -1130,8 +1184,9 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
             -DCMAKE_BUILD_TYPE=Release `
+            -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_RPC=ON `
@@ -1191,11 +1246,12 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: android-build
-          evict-old-files: 1d
+      # Disabled due to size (400MB) and always 0 cache hits
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: android-build
+      #     evict-old-files: 1d
 
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -1251,56 +1307,129 @@ jobs:
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
   ggml-ci-x64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, X64, CPU, low-perf]
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU, low-perf]
+    runs-on: ubuntu-22.04-arm
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, X64, CPU, high-perf]
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU, high-perf]
+    runs-on: ubuntu-22.04-arm
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
       - name: Test
         id: ggml-ci
         run: |
-          GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-high-perf-sve:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf-sve
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-nvidia-cuda:
     runs-on: [self-hosted, Linux, X64, NVIDIA]
@@ -1356,34 +1485,6 @@ jobs:
         id: ggml-ci
         run: |
           bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-
-#  ggml-ci-x64-amd-vulkan:
-#    runs-on: [self-hosted, Linux, X64, AMD]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          vulkaninfo --summary
-#          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
-#
-#  ggml-ci-x64-amd-rocm:
-#    runs-on: [self-hosted, Linux, X64, AMD]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          amd-smi static
-#          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
