@@ -307,8 +307,30 @@ class ChatStore {
 		onError?: (error: Error) => void
 	): Promise<void> {
 		let streamedContent = '';
-
 		let streamedReasoningContent = '';
+		let modelCaptured = false;
+
+		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
+			if (!modelCaptured) {
+				const currentModelName = serverStore.modelName;
+
+				if (currentModelName) {
+					if (updateDbImmediately) {
+						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
+							console.error
+						);
+					}
+
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
+					modelCaptured = true;
+
+					return currentModelName;
+				}
+			}
+			return undefined;
+		};
 
 		slotsService.startStreaming();
 
@@ -319,6 +341,8 @@ class ChatStore {
 				streamedContent += chunk;
 				this.currentResponse = streamedContent;
 
+				captureModelIfNeeded();
+
 				const partialThinking = extractPartialThinking(streamedContent);
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
@@ -328,7 +352,11 @@ class ChatStore {
 
 			onReasoningChunk: (reasoningChunk: string) => {
 				streamedReasoningContent += reasoningChunk;
+
+				captureModelIfNeeded();
+
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
+
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 			},
 
@@ -339,17 +367,36 @@ class ChatStore {
 			) => {
 				slotsService.stopStreaming();
 
-				await DatabaseStore.updateMessage(assistantMessage.id, {
+				const updateData: {
+					content: string;
+					thinking: string;
+					timings?: ChatMessageTimings;
+					model?: string;
+				} = {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent,
 					timings: timings
-				});
+				};
+
+				const capturedModel = captureModelIfNeeded(false);
+
+				if (capturedModel) {
+					updateData.model = capturedModel;
+				}
+
+				await DatabaseStore.updateMessage(assistantMessage.id, updateData);
 
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-				this.updateMessageAtIndex(messageIndex, {
+				const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
 					timings: timings
-				});
+				};
+
+				if (updateData.model) {
+					localUpdateData.model = updateData.model;
+				}
+
+				this.updateMessageAtIndex(messageIndex, localUpdateData);
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
 				this.activeConversation!.currNode = assistantMessage.id;
@@ -478,9 +525,6 @@ class ChatStore {
 	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage | null> {
 		if (!this.activeConversation) return null;
 
-		// Capture the current model name when creating the assistant message
-		const currentModelName = serverStore.modelName;
-
 		return await DatabaseStore.createMessageBranch(
 			{
 				convId: this.activeConversation.id,
@@ -489,8 +533,7 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: [],
-				model: currentModelName || undefined
+				children: []
 			},
 			parentId || null
 		);
@@ -550,7 +593,6 @@ class ChatStore {
 				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
-			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 
 			if (!assistantMessage) {
@@ -560,15 +602,23 @@ class ChatStore {
 			this.activeMessages.push(assistantMessage);
 			// Don't update currNode until after streaming completes to maintain proper conversation path
 
-			await this.streamChatCompletion(allMessages, assistantMessage, undefined, (error: Error) => {
-				if (error.name === 'ContextError' && userMessage) {
-					const userMessageIndex = this.findMessageIndex(userMessage.id);
-					if (userMessageIndex !== -1) {
-						this.activeMessages.splice(userMessageIndex, 1);
-						DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+			const conversationContext = this.activeMessages.slice(0, -1);
+
+			await this.streamChatCompletion(
+				conversationContext,
+				assistantMessage,
+				undefined,
+				(error: Error) => {
+					if (error.name === 'ContextError' && userMessage) {
+						const userMessageIndex = this.findMessageIndex(userMessage.id);
+
+						if (userMessageIndex !== -1) {
+							this.activeMessages.splice(userMessageIndex, 1);
+							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+						}
 					}
 				}
-			});
+			);
 		} catch (error) {
 			if (this.isAbortError(error)) {
 				this.isLoading = false;
@@ -810,18 +860,22 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
-				const assistantMessage = await this.createAssistantMessage();
+				const parentMessageId =
+					this.activeMessages.length > 0
+						? this.activeMessages[this.activeMessages.length - 1].id
+						: null;
+
+				const assistantMessage = await this.createAssistantMessage(parentMessageId);
 
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
 
 				this.activeMessages.push(assistantMessage);
-				await DatabaseStore.updateCurrentNode(this.activeConversation.id, assistantMessage.id);
-				this.activeConversation.currNode = assistantMessage.id;
 
-				await this.streamChatCompletion(allMessages, assistantMessage);
+				const conversationContext = this.activeMessages.slice(0, -1);
+
+				await this.streamChatCompletion(conversationContext, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
@@ -1073,8 +1127,10 @@ class ChatStore {
 			(m) => m.role === 'user' && m.parent === rootMessage?.id
 		);
 
-		await DatabaseStore.updateCurrentNode(this.activeConversation.id, siblingId);
-		this.activeConversation.currNode = siblingId;
+		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
+
+		await DatabaseStore.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
+		this.activeConversation.currNode = currentLeafNodeId;
 		await this.refreshActiveMessages();
 
 		// Only show title dialog if we're navigating between different first user message siblings
@@ -1279,9 +1335,6 @@ class ChatStore {
 			this.isLoading = true;
 			this.currentResponse = '';
 
-			// Capture the current model name when creating the assistant message
-			const currentModelName = serverStore.modelName;
-
 			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
@@ -1290,8 +1343,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: [],
-					model: currentModelName || undefined
+					children: []
 				},
 				parentMessage.id
 			);
@@ -1338,9 +1390,6 @@ class ChatStore {
 				false
 			) as DatabaseMessage[];
 
-			// Capture the current model name when creating the assistant message
-			const currentModelName = serverStore.modelName;
-
 			// Create new assistant message branch
 			const assistantMessage = await DatabaseStore.createMessageBranch(
 				{
@@ -1350,8 +1399,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: [],
-					model: currentModelName || undefined
+					children: []
 				},
 				userMessageId
 			);
