@@ -75,7 +75,7 @@ jobs:
           name: llama-bin-macos-arm64.zip
 
   macOS-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
       - name: Clone

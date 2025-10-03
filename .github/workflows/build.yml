@@ -97,7 +97,7 @@ jobs:
           ctest -L 'main|curl' --verbose --timeout 900
 
   macOS-latest-cmake-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
       - name: Clone
