@@ -3541,7 +3541,11 @@ struct server_context {
                                 slot.n_past = 0;
                             }
 
-                            const auto n_swa = llama_model_n_swa(model);
+                            // note: when n_swa == 0, the model does not use SWA, which is equivalent to a window of 1
+                            const auto n_swa = std::max(1, llama_model_n_swa(model));
+
+                            // the largest pos_min required for a checkpoint to be useful
+                            const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
 
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
@@ -3550,9 +3554,7 @@ struct server_context {
                                     GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
                                 }
 
-                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
-
-                                if (pos_min > pos_min_thold + 1) {
+                                if (pos_min > pos_min_thold) {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
@@ -3560,7 +3562,8 @@ struct server_context {
                                         slot.ctx_checkpoints.rbegin(),
                                         slot.ctx_checkpoints.rend(),
                                         [&](const auto & cur) {
-                                            return cur.pos_min <= pos_min_thold;
+                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                                            return cur.pos_min < pos_min_thold;
                                         }
                                     );
 
@@ -3577,7 +3580,7 @@ struct server_context {
                                             do_reset = true;
                                             //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                                         } else {
-                                            slot.n_past = std::min(slot.n_past, it->pos_max);
+                                            slot.n_past = std::min(slot.n_past, std::max(it->pos_min + 1, it->pos_max));
                                             SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
                                         }
                                     }
@@ -3586,25 +3589,23 @@ struct server_context {
                                         SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
                                         slot.n_past = 0;
-                                        slot.ctx_checkpoints.clear();
                                     }
                                 }
                             }
 
-                            if (n_swa > 0) {
-                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
-
+                            {
                                 // erase any checkpoints with pos_min > pos_min_thold
                                 for (int i = (int) slot.ctx_checkpoints.size() - 1; i >= 0; i--) {
                                     const auto & cur = slot.ctx_checkpoints[i];
                                     if (cur.pos_min > pos_min_thold) {
-                                        slot.ctx_checkpoints.erase(slot.ctx_checkpoints.begin() + i);
                                         SLT_WRN(slot, "erased invalidated context checkpoint for SWA (pos_min = %d, pos_max = %d, n_swa = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, n_swa, (float) cur.data.size() / 1024 / 1024);
+                                        slot.ctx_checkpoints.erase(slot.ctx_checkpoints.begin() + i);
                                     }
                                 }
                             }
                         }
 
+                        // [TAG_PROMPT_LOGITS]
                         if (slot.n_past == slot.n_prompt_tokens && slot.n_past > 0) {
                             SLT_WRN(slot, "need to evaluate at least 1 token for each active slot (n_past = %d, n_prompt_tokens = %d)\n", slot.n_past, slot.n_prompt_tokens);
                             slot.n_past--;
