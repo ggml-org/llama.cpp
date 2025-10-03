@@ -477,6 +477,14 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           kernel_pipeline->kernel_name = "TXE_RMS_NORM";
           flag = true;
           break;
+      case GGML_TSAVORITE_KERNEL_TYPE_SWIGLU:
+	  {
+          kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_swiglu_host;
+          kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_swiglu_16_host;
+          kernel_pipeline->kernel_name = "TXE_SWI_GLU";
+          flag = true;
+          break;
+	  }
       default:
           break;
   }
@@ -625,6 +633,7 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SIGMOID,            true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SILU,               true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM,           true);
+    GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SWIGLU,             true);
   }
 
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
@@ -704,7 +713,7 @@ static ggml_backend_tsavorite_buffer_s ggml_tsavorite_get_buffer(struct ggml_ten
     return tsi_nil;
 }
 #endif
-bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
+static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
   uint32_t tensor_data_type = op->type;
   for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
     if (op->src[i] != NULL) {
@@ -720,16 +729,13 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   if (!ctx_dev)
     return false;
-  for (size_t i = 0, n = 3; i < n; ++i) {
-    if (op->src[i] != NULL && op->src[i]->type != GGML_TYPE_F32) {
-      return false;
-    }
-  }
 
-  if (op->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F16)
+  if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16)
     return false;
+
   if (!is_op_dtype_consistent_with_src(op))
     return false;
+
   switch (op->op) {
   case GGML_OP_NONE:
   case GGML_OP_ADD:
@@ -739,9 +745,15 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_SQRT:
   case GGML_OP_SQR:
   case GGML_OP_SIN:
-    break;
   case GGML_OP_RMS_NORM:
     break;
+  case GGML_OP_GLU:
+    {
+        const ggml_glu_op op_ext = ggml_get_glu_op(op);
+        if (op_ext != GGML_GLU_OP_SWIGLU)
+            return false;
+        break;
+    }
   case GGML_OP_UNARY:
     switch (ggml_get_unary_op(op)) {
     case GGML_UNARY_OP_NEG:
@@ -813,6 +825,36 @@ static MemRefDescriptor<Rank>* create_mlir_buf(int K) {
         data[i] = 0;
     }
     return header;
+}
+
+static enum ggml_tsavorite_kernel_type tsi_glu_kernel_type(struct ggml_tensor *node) {
+    const ggml_glu_op op = ggml_get_glu_op(node);
+    enum ggml_tsavorite_kernel_type kernel_type;
+
+    switch (op) {
+        case GGML_GLU_OP_REGLU:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_REGLU;
+            break;
+        case GGML_GLU_OP_GEGLU:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_GEGLU;
+            break;
+        case GGML_GLU_OP_SWIGLU:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_SWIGLU;
+            break;
+        case GGML_GLU_OP_SWIGLU_OAI:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_SWIGLU_OAI;
+            break;
+        case GGML_GLU_OP_GEGLU_ERF:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_GEGLU_ERF;
+            break;
+        case GGML_GLU_OP_GEGLU_QUICK:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_GEGLU_QUICK;
+            break;
+        default:
+		kernel_type = GGML_TSAVORITE_KERNEL_TYPE_COUNT;
+	    break;
+    }
+    return kernel_type;
 }
 
 // nodes are intermediate which has multiple src tensors & operation
@@ -939,6 +981,16 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
     case GGML_OP_RMS_NORM:
       kernel_type = GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM;
       num_of_input_tensors = TSAVORITE_UNARY_INPUT_TENSORS;
+      break;
+    case GGML_OP_GLU:
+      kernel_type = tsi_glu_kernel_type(node);
+      if (!src1)
+          src1 = src0;
+      if (kernel_type == GGML_TSAVORITE_KERNEL_TYPE_COUNT) {
+        GGML_TSAVORITE_LOG_ERROR("\n GGML_OP_GLU sub type is not correct \n");
+        return GGML_STATUS_ABORTED;
+      }
+      num_of_input_tensors = TSAVORITE_TWO_INPUT_TENSORS;
       break;
     case GGML_OP_UNARY:
       switch (ggml_get_unary_op(node)) {
@@ -1916,10 +1968,12 @@ static bool ggml_backend_tsavorite_device_supports_buft(ggml_backend_dev_t dev,
 // ggml_backend_sched_backend_id_from_cur  -> ggml_backend_offload_op ->
 static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
                                                      const struct ggml_tensor *op) {
-  if (op->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F16)
+  if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16)
     return false;
+
   if (!is_op_dtype_consistent_with_src(op))
     return false;
+
   switch (op->op) {
   case GGML_OP_NONE:
   case GGML_OP_ADD:
@@ -1931,6 +1985,13 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_SIN:
   case GGML_OP_RMS_NORM:
     break;
+  case GGML_OP_GLU:
+    {
+        const ggml_glu_op op_ext = ggml_get_glu_op(op);
+        if (op_ext != GGML_GLU_OP_SWIGLU)
+            return false;
+        break;
+    }
   case GGML_OP_UNARY:
     switch (ggml_get_unary_op(op)) {
     case GGML_UNARY_OP_NEG:
