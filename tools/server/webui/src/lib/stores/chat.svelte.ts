@@ -1,6 +1,7 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
@@ -312,7 +313,7 @@ class ChatStore {
 
 		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
 			if (!modelCaptured) {
-				const currentModelName = serverStore.modelName;
+				const currentModelName = selectedModelName() ?? serverStore.modelName;
 
 				if (currentModelName) {
 					if (updateDbImmediately) {
