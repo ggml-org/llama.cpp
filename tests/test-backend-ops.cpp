@@ -6926,6 +6926,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_sum(GGML_TYPE_F32, it));
     }
 
+    for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f}) {
+        for (bool v : {false, true}) {
+            test_cases.emplace_back(new test_norm(GGML_TYPE_F32, {64, 5, 4, 3}, v, eps));
+        }
+    }
+
     return test_cases;
 }
 
