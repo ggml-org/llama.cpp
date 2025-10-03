@@ -1090,6 +1090,18 @@ int llama_context::decode(const llama_batch & batch_inp) {
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
+#ifdef GGML_PERF
+        ggml_perf_accumulate(perf_totals, res->get_gf());
+#endif /* GGML_PERF  */
+
+#ifdef GGML_PERF_DETAIL
+        if (perf_all_shape_fp) {
+            ggml_perf_write_detailed_csv(res->get_gf(), perf_all_shape_fp);
+        }
+        ggml_perf_accumulate(perf_totals, res->get_gf());
+#endif /* GGML_PERF_DETAI */
+
+
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
             llama_pos pos_min[LLAMA_MAX_SEQ];

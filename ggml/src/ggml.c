@@ -1020,12 +1020,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-#ifdef GGML_PERF
+#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
 static const char * GGML_BACKEND_TYPE[GGML_COMPUTE_BACKEND_COUNT] = {
     "CPU",
     "OPU"
 };
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAIL */
 
 static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
@@ -1262,11 +1262,11 @@ const char * ggml_op_name(enum ggml_op op) {
     return GGML_OP_NAME[op];
 }
 
-#ifdef GGML_PERF
+#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
 const char * ggml_backend_type(enum ggml_compute_backend_type backend) {
     return GGML_BACKEND_TYPE[backend];
 }
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAIL */
 
 const char * ggml_op_symbol(enum ggml_op op) {
     return GGML_OP_SYMBOL[op];
@@ -1692,11 +1692,11 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
-#ifdef GGML_PERF
+#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
         /*.perf_runs    =*/ 0,
         /*.perf_time_us =*/ 0,
         /*.ggml_compute_backend =*/ GGML_COMPUTE_BACKEND_CPU,
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAIL */
         /*.padding      =*/ { 0 },
     };
 
@@ -7231,7 +7231,7 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
 }
 
-#ifdef GGML_PERF
+#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
 void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         struct ggml_tensor * node = cgraph->nodes[i];
@@ -7258,7 +7258,9 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
         }
     }
 }
+#endif /* GGML_PERF  || GGML_PERF_DETAIL */
 
+#if defined(GGML_PERF_DETAIL)
 FILE * ggml_perf_log_open(const char *filename) {
     // Try to delete existing file, ignore error if it doesn't exist
     remove(filename);
@@ -7326,4 +7328,4 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
 
     fprintf(fp, "--------------------------------------------------------------------------------------------------------\n\n");
 }
-#endif /* GGML_PERF */
+#endif /* GGML_PERF_DETAIL */
