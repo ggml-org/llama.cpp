@@ -175,17 +175,17 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_hybrid::memory_breakdo
 }
 
 void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
-    GGML_UNUSED(flags);
-
-    mem_attn->state_write(io, seq_id);
-    mem_recr->state_write(io, seq_id);
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+        mem_attn->state_write(io, seq_id, flags);
+    }
+    mem_recr->state_write(io, seq_id, flags);
 }
 
 void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    GGML_UNUSED(flags);
-
-    mem_attn->state_read(io, seq_id);
-    mem_recr->state_read(io, seq_id);
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+        mem_attn->state_read(io, seq_id, flags);
+    }
+    mem_recr->state_read(io, seq_id, flags);
 }
 
 llama_kv_cache * llama_memory_hybrid::get_mem_attn() const {
