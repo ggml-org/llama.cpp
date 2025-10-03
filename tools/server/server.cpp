@@ -5061,13 +5061,13 @@ int main(int argc, char ** argv) {
         const json body = json::parse(req.body);
 
         // TODO: implement
-        //int top_n = 1;
-        //if (body.count("top_n") != 1) {
-        //    top_n = body.at("top_n");
-        //} else {
-        //    res_error(res, format_error_response("\"top_n\" must be provided", ERROR_TYPE_INVALID_REQUEST));
-        //    return;
-        //}
+        int top_n = 1;
+        if (body.count("top_n") == 1) {
+            top_n = body.at("top_n");
+        } else {
+            res_error(res, format_error_response("\"top_n\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
 
         // if true, use TEI API format, otherwise use Jina API format
         // Jina: https://jina.ai/reranker/
@@ -5133,7 +5133,8 @@ int main(int argc, char ** argv) {
             body,
             responses,
             is_tei_format,
-            documents);
+            documents,
+            top_n);
 
         res_ok(res, root);
     };
