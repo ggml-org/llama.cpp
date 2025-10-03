@@ -1134,7 +1134,7 @@ jobs:
 
       - name: Setup ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-spacemit
+        uses: ./.github/actions/windows-setup-rocm
         with:
           version: ${{ env.HIPSDK_INSTALLER_VERSION }}
 
