@@ -568,6 +568,7 @@ class ChatStore {
 				(error: Error) => {
 					if (error.name === 'ContextError' && userMessage) {
 						const userMessageIndex = this.findMessageIndex(userMessage.id);
+
 						if (userMessageIndex !== -1) {
 							this.activeMessages.splice(userMessageIndex, 1);
 							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
