@@ -411,6 +411,7 @@ const common_chat_msg message_assist_thoughts_unparsed_md         = simple_assis
 const common_chat_msg message_assist_thoughts_unparsed_md_partial = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n```json\n{}");
 
 const common_chat_msg message_assist_thoughts_unparsed_r7b       = simple_assist_msg("<|START_THINKING|>I'm\nthinking<|END_THINKING|>Hello, world!\nWhat's up?");
+const common_chat_msg message_assist_thoughts_unparsed_magistral = simple_assist_msg("[THINK]raisonnement[/THINK]Réponse");
 const common_chat_msg message_assist_thoughts                    = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking");
 const common_chat_msg message_assist_thoughts_unopened_unparsed  = simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_thoughts_no_content         = simple_assist_msg("", "I'm\nthinking");
@@ -744,6 +745,17 @@ static void test_template_output_parsers() {
         test_templates(
             tmpls.get(), end_tokens, message_assist_call_id, tools,
             "[TOOL_CALLS][{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]");
+    }
+    {
+        assert_msg_equals(
+            simple_assist_msg("Réponse", "raisonnement"),
+            common_chat_parse(
+                message_assist_thoughts_unparsed_magistral.content,
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_MAGISTRAL,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
+                }));
     }
     {
         auto tmpls = read_templates("models/templates/Qwen-QwQ-32B.jinja");

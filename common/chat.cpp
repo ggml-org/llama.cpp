@@ -625,6 +625,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_CONTENT_ONLY: return "Content-only";
         case COMMON_CHAT_FORMAT_GENERIC: return "Generic";
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO: return "Mistral Nemo";
+        case COMMON_CHAT_FORMAT_MAGISTRAL: return "Magistral";
         case COMMON_CHAT_FORMAT_LLAMA_3_X: return "Llama 3.x";
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS: return "Llama 3.x with builtin tools";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1: return "DeepSeek R1";
@@ -984,7 +985,78 @@ static common_chat_params common_chat_params_init_mistral_nemo(const common_chat
     data.format = COMMON_CHAT_FORMAT_MISTRAL_NEMO;
     return data;
 }
+
+static common_chat_params common_chat_params_init_magistral(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_MAGISTRAL;
+    data.preserved_tokens = {
+        "[THINK]",
+        "[/THINK]",
+    };
+
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            auto schemas = json::array();
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                schemas.push_back({
+                    {"type", "object"},
+                    {"properties", {
+                        {"name", {
+                            {"type", "string"},
+                            {"const", function.at("name")},
+                        }},
+                        {"arguments", function.at("parameters")},
+                        {"id", {
+                            {"type", "string"},
+                            {"pattern", "^[a-zA-Z0-9]{9}$"},
+                        }},
+                    }},
+                    {"required", json::array({"name", "arguments", "id"})},
+                });
+            });
+            auto schema = json {
+                {"type", "array"},
+                {"items", schemas.size() == 1 ? schemas[0] : json {{"anyOf", schemas}}},
+                {"minItems", 1},
+            };
+            if (!inputs.parallel_tool_calls) {
+                schema["maxItems"] = 1;
+            }
+            builder.add_rule("root", "\"[TOOL_CALLS]\" " + builder.add_schema("tool_calls", schema));
+        });
+        data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "[TOOL_CALLS]"});
+        data.preserved_tokens.push_back("[TOOL_CALLS]");
+    } else {
+        data.grammar_lazy = false;
+        if (!inputs.json_schema.is_null()) {
+            if (!inputs.grammar.empty()) {
+                throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+            }
+            data.grammar = json_schema_to_grammar(inputs.json_schema);
+        } else {
+            data.grammar = inputs.grammar;
+        }
+    }
+
+    return data;
+}
+
 static void common_chat_parse_mistral_nemo(common_chat_msg_parser & builder) {
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    static const common_regex prefix(regex_escape("[TOOL_CALLS]"));
+    parse_prefixed_json_tool_call_array(builder, prefix);
+}
+
+static void common_chat_parse_magistral(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("[THINK]", "[/THINK]");
+
     if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
@@ -2702,6 +2774,10 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_llama_3_x(tmpl, params, allow_python_tag_builtin_tools);
     }
 
+    if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
+        return common_chat_params_init_magistral(tmpl, params);
+    }
+
     // Plain handler (no tools)
     if (params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
         return common_chat_params_init_without_tools(tmpl, params);
@@ -2801,6 +2877,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO:
             common_chat_parse_mistral_nemo(builder);
+            break;
+        case COMMON_CHAT_FORMAT_MAGISTRAL:
+            common_chat_parse_magistral(builder);
             break;
         case COMMON_CHAT_FORMAT_LLAMA_3_X:
             common_chat_parse_llama_3_1(builder);
