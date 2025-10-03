@@ -3562,14 +3562,8 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         //      multiples of image_size (always rounding up)
         //
         // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
-        const float scale = std::min(
-            static_cast<float>(params.preproc_image_size) / original_size.width,
-            static_cast<float>(params.preproc_image_size) / original_size.height);
-        int refined_w = static_cast<int>(original_size.width * scale);
-        int refined_h = static_cast<int>(original_size.height * scale);
-        refined_w = static_cast<int>(params.image_size * std::ceil(static_cast<float>(refined_w) / params.image_size));
-        refined_h = static_cast<int>(params.image_size * std::ceil(static_cast<float>(refined_h) / params.image_size));
-        const clip_image_size refined_size{refined_w, refined_h};
+        const clip_image_size refined_size = image_manipulation::calc_size_preserved_ratio(
+            original_size, params.image_size, params.preproc_image_size);
 
         llava_uhd::slice_instructions instructions;
         instructions.overview_size = clip_image_size{params.image_size, params.image_size};
