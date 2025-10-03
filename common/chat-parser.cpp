@@ -169,6 +169,23 @@ void common_chat_msg_parser::consume_literal(const std::string & literal) {
 }
 
 bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think, const std::string & end_think) {
+    std::string pending_reasoning_prefix;
+
+    auto set_reasoning_prefix = [&](size_t prefix_pos) {
+        if (!syntax_.thinking_forced_open || syntax_.reasoning_in_content) {
+            return;
+        }
+        if (prefix_pos + start_think.size() > input_.size()) {
+            pending_reasoning_prefix.clear();
+            return;
+        }
+        // Capture the exact literal that opened the reasoning section so we can
+        // surface it back to callers. This ensures formats that force the
+        // reasoning tag open (e.g. DeepSeek R1) retain their original prefix
+        // instead of dropping it during parsing.
+        pending_reasoning_prefix = input_.substr(prefix_pos, start_think.size());
+    };
+
     auto handle_reasoning = [&](const std::string & reasoning, bool closed) {
         auto stripped_reasoning = string_strip(reasoning);
         if (stripped_reasoning.empty()) {
@@ -181,6 +198,10 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
                 add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "</think>" : end_think);
             }
         } else {
+            if (!pending_reasoning_prefix.empty()) {
+                add_reasoning_content(pending_reasoning_prefix);
+                pending_reasoning_prefix.clear();
+            }
             add_reasoning_content(stripped_reasoning);
         }
     };
@@ -233,6 +254,7 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
         if (whitespace_end > pos_) {
             add_content(input_.substr(pos_, whitespace_end - pos_));
         }
+        set_reasoning_prefix(cursor);
         cursor += start_think.size();
     } else if (syntax_.thinking_forced_open) {
         cursor = whitespace_end;
@@ -282,6 +304,7 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
                 move_to(input_.size());
                 return true;
             }
+            set_reasoning_prefix(cursor);
             cursor += start_think.size();
             continue;
         }
