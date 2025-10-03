@@ -550,7 +550,6 @@ class ChatStore {
 				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
-			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 
 			if (!assistantMessage) {
@@ -560,15 +559,23 @@ class ChatStore {
 			this.activeMessages.push(assistantMessage);
 			// Don't update currNode until after streaming completes to maintain proper conversation path
 
-			await this.streamChatCompletion(allMessages, assistantMessage, undefined, (error: Error) => {
-				if (error.name === 'ContextError' && userMessage) {
-					const userMessageIndex = this.findMessageIndex(userMessage.id);
-					if (userMessageIndex !== -1) {
-						this.activeMessages.splice(userMessageIndex, 1);
-						DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+			const conversationContext = this.activeMessages.slice(0, -1);
+
+			await this.streamChatCompletion(
+				conversationContext,
+				assistantMessage,
+				undefined,
+				(error: Error) => {
+					if (error.name === 'ContextError' && userMessage) {
+						const userMessageIndex = this.findMessageIndex(userMessage.id);
+
+						if (userMessageIndex !== -1) {
+							this.activeMessages.splice(userMessageIndex, 1);
+							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+						}
 					}
 				}
-			});
+			);
 		} catch (error) {
 			if (this.isAbortError(error)) {
 				this.isLoading = false;
@@ -810,7 +817,6 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 				const assistantMessage = await this.createAssistantMessage();
 
 				if (!assistantMessage) {
@@ -821,7 +827,9 @@ class ChatStore {
 				await DatabaseStore.updateCurrentNode(this.activeConversation.id, assistantMessage.id);
 				this.activeConversation.currNode = assistantMessage.id;
 
-				await this.streamChatCompletion(allMessages, assistantMessage);
+				const conversationContext = this.activeMessages.slice(0, -1);
+
+				await this.streamChatCompletion(conversationContext, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
