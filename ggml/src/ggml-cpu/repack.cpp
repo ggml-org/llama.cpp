@@ -1872,7 +1872,8 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
 static bool supports_tensor(const struct ggml_tensor * op) {
     if (op->op == GGML_OP_MUL_MAT &&
         op->src[0]->buffer &&
-        (ggml_n_dims(op->src[0]) == 2) && ggml_repack_get_optimal_repack_type(op->src[0])) {
+        (ggml_n_dims(op->src[0]) == 2) && (ggml_n_dims(op->src[1]) == 2) &&
+        ggml_repack_get_optimal_repack_type(op->src[0])) {
 
         if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
             return false;
@@ -1883,7 +1884,8 @@ static bool supports_tensor(const struct ggml_tensor * op) {
         }
 
     } else if (op->op == GGML_OP_MUL_MAT_ID && op->src[0]->buffer &&
-            (ggml_n_dims(op->src[0]) == 3) && ggml_repack_get_optimal_repack_type(op->src[0])) {
+            (ggml_n_dims(op->src[0]) == 3) && (ggml_n_dims(op->src[1]) == 2) &&
+            ggml_repack_get_optimal_repack_type(op->src[0])) {
 
         if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
             return false;
