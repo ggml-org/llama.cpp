@@ -25,6 +25,7 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
+	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
@@ -140,8 +141,6 @@
 	});
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
 <ModeWatcher />
 
 <Toaster richColors />
@@ -157,7 +156,7 @@
 />
 
 <Sidebar.Provider bind:open={sidebarOpen}>
-	<div class="flex h-screen w-full">
+	<div class="flex h-screen w-full" style:height="{innerHeight}px">
 		<Sidebar.Root class="h-full">
 			<ChatSidebar bind:this={chatSidebar} />
 		</Sidebar.Root>
@@ -174,3 +173,5 @@
 		</Sidebar.Inset>
 	</div>
 </Sidebar.Provider>
+
+<svelte:window onkeydown={handleKeydown} bind:innerHeight />
