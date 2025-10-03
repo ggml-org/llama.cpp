@@ -2614,8 +2614,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t D_lsb = D ^ (D & (D-1));
         uint32_t D_split = std::min(std::min(device->subgroup_size, 8u), D_lsb / 4);
 
-        // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
-        GGML_ASSERT((GGML_KQ_MASK_PAD % rows_cols[0]) == 0);
         return {wg_size, rows_cols[0], rows_cols[1], hsk, hsv, clamp, D_split};
     };
 
@@ -7457,8 +7455,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     if (((HSK | HSV) % 16) != 0 && path == FA_COOPMAT2) {
         aligned = false;
     }
-    // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
-    GGML_ASSERT((nem1 % GGML_KQ_MASK_PAD) == 0);
 
     bool f32acc = path == FA_SCALAR || dst->op_params[3] == GGML_PREC_F32;
 
