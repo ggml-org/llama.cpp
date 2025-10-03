@@ -129,6 +129,16 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM,
   GGML_TSAVORITE_KERNEL_TYPE_SIGMOID,
   GGML_TSAVORITE_KERNEL_TYPE_SILU,
+  //Below GELU Kernel
+  GGML_TSAVORITE_KERNEL_TYPE_REGLU,
+  GGML_TSAVORITE_KERNEL_TYPE_GEGLU,
+
+  // Currently Below kernel Implemented
+  GGML_TSAVORITE_KERNEL_TYPE_SWIGLU,
+
+  GGML_TSAVORITE_KERNEL_TYPE_SWIGLU_OAI,
+  GGML_TSAVORITE_KERNEL_TYPE_GEGLU_ERF,
+  GGML_TSAVORITE_KERNEL_TYPE_GEGLU_QUICK,
 
   GGML_TSAVORITE_KERNEL_TYPE_COUNT
 };
@@ -174,6 +184,7 @@ extern void _mlir_ciface_txe_abs_host(void *a, void *res);
 extern void _mlir_ciface_txe_sin_host(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid_host(void *a, void *res);
 extern void _mlir_ciface_txe_silu_host(void *a, void *res);
+extern void _mlir_ciface_txe_swiglu_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
 
 /* 
@@ -190,6 +201,7 @@ extern void _mlir_ciface_txe_abs_16_host(void *a, void *res);
 extern void _mlir_ciface_txe_sin_16_host(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid_16_host(void *a, void *res);
 extern void _mlir_ciface_txe_silu_16_host(void *a, void *res);
+extern void _mlir_ciface_txe_swiglu_16_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_rms_norm_16_host(void *a, void *res, void *buf);
 
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
