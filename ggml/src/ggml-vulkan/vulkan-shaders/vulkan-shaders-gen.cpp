@@ -305,7 +305,7 @@ void string_to_spv(const std::string& _name, const std::string& in_fname, const 
     {
         // wait until fewer than N compiles are in progress.
         // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
-        uint32_t N = 16;
+        uint32_t N = std::min(16u, std::thread::hardware_concurrency());
         std::unique_lock<std::mutex> guard(compile_count_mutex);
         while (compile_count >= N) {
             compile_count_cond.wait(guard);
