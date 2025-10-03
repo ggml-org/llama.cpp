@@ -794,7 +794,11 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
-#define LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY 1
+// for backwards-compat
+#define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
+
+// work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
+#define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
 
     typedef uint32_t llama_state_seq_flags;
 

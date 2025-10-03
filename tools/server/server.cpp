@@ -3573,7 +3573,7 @@ struct server_context {
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         const size_t ctx_checkpoint_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), ctx_checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY);
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), ctx_checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                                         if (n != ctx_checkpoint_size) {
                                             SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
@@ -3598,7 +3598,7 @@ struct server_context {
                                 for (int i = (int) slot.ctx_checkpoints.size() - 1; i >= 0; i--) {
                                     const auto & cur = slot.ctx_checkpoints[i];
                                     if (cur.pos_min > pos_min_thold) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint for SWA (pos_min = %d, pos_max = %d, n_swa = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, n_swa, (float) cur.data.size() / 1024 / 1024);
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_swa = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, n_swa, (float) cur.data.size() / 1024 / 1024);
                                         slot.ctx_checkpoints.erase(slot.ctx_checkpoints.begin() + i);
                                     }
                                 }
@@ -3854,24 +3854,27 @@ struct server_context {
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
 
-                    // make a checkpoint of the parts of memory that cannot be rolled back.
-                    // checkpoints are needed only if:
+                    // make a checkpoint of the parts of the memory that cannot be rolled back.
+                    // checkpoints are created only if:
                     // - the model uses SWA and we are not using `swa_full`
                     // - the model architecture is marked as recurrent or hybrid
-                    bool do_checkpoint = (llama_model_is_recurrent(model) || llama_model_is_hybrid(model)) ||
-                         (llama_model_n_swa(model) > 0 && !params_base.swa_full);
+                    //
+                    // TODO: try to make this conditional on the context or the memory module, instead of the model type
+                    const bool do_checkpoint =
+                        (llama_model_is_recurrent(model) || llama_model_is_hybrid(model)) ||
+                        (llama_model_n_swa(model) > 0 && !params_base.swa_full);
 
                     if (do_checkpoint && params_base.n_ctx_checkpoints > 0) {
-                        if (slot.ctx_checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
+                        while (slot.ctx_checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
                             // make room for the new checkpoint, if needed
-                            const auto & cur = slot.ctx_checkpoints.back();
+                            const auto & cur = slot.ctx_checkpoints.front();
                             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
                                     cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
 
                             slot.ctx_checkpoints.erase(slot.ctx_checkpoints.begin());
                         }
 
-                        const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY);
+                        const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                         auto & cur = slot.ctx_checkpoints.emplace_back(ctx_checkpoint{
                             /*.pos_min = */ llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id),
@@ -3879,7 +3882,7 @@ struct server_context {
                             /*.data    = */ std::vector<uint8_t>(checkpoint_size),
                         });
 
-                        llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY);
+                        llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                         SLT_WRN(slot, "saved context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
                                 (int) slot.ctx_checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);

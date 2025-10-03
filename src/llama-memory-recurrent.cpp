@@ -692,8 +692,6 @@ size_t llama_memory_recurrent::size_s_bytes() const {
 }
 
 void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
-    // the LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY flag is acknowledged but does not change
-    // behavior here, as there is no notion of a partial state for a recurrent context
     GGML_UNUSED(flags);
 
     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
@@ -734,8 +732,6 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
 }
 
 void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    // the LLAMA_STATE_SEQ_FLAGS_CHECKPOINT_ONLY flag is acknowledged but does not change
-    // behavior here, as there is no notion of a partial state for a recurrent context
     GGML_UNUSED(flags);
 
     uint32_t cell_count;
