@@ -340,6 +340,7 @@ class ChatStore {
 				streamedContent += chunk;
 				this.currentResponse = streamedContent;
 
+				captureModelIfNeeded();
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
 					content: streamedContent
@@ -690,14 +691,12 @@ class ChatStore {
 
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
-				const contentToSave = this.currentResponse;
-
 				const updateData: {
 					content: string;
 					thinking?: string;
 					timings?: ChatMessageTimings;
 				} = {
-					content: contentToSave
+					content: this.currentResponse
 				};
 
 				if (lastMessage.thinking?.trim()) {
@@ -721,7 +720,7 @@ class ChatStore {
 
 				await DatabaseStore.updateMessage(lastMessage.id, updateData);
 
-				lastMessage.content = contentToSave;
+				lastMessage.content = this.currentResponse;
 				if (updateData.thinking !== undefined) {
 					lastMessage.thinking = updateData.thinking;
 				}

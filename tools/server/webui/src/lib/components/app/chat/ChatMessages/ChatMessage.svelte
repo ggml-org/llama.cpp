@@ -52,8 +52,6 @@
 		return null;
 	});
 
-	let messageContent = $derived.by(() => message.content);
-
 	function handleCancelEdit() {
 		isEditing = false;
 		editedContent = message.content;
@@ -152,7 +150,7 @@
 		{editedContent}
 		{isEditing}
 		{message}
-		{messageContent}
+		messageContent={message.content}
 		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
