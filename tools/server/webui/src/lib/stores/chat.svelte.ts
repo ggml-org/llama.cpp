@@ -307,8 +307,30 @@ class ChatStore {
 		onError?: (error: Error) => void
 	): Promise<void> {
 		let streamedContent = '';
-
 		let streamedReasoningContent = '';
+		let modelCaptured = false;
+
+		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
+			if (!modelCaptured) {
+				const currentModelName = serverStore.modelName;
+
+				if (currentModelName) {
+					if (updateDbImmediately) {
+						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
+							console.error
+						);
+					}
+
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
+					modelCaptured = true;
+
+					return currentModelName;
+				}
+			}
+			return undefined;
+		};
 
 		slotsService.startStreaming();
 
@@ -319,6 +341,8 @@ class ChatStore {
 				streamedContent += chunk;
 				this.currentResponse = streamedContent;
 
+				captureModelIfNeeded();
+
 				const partialThinking = extractPartialThinking(streamedContent);
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
@@ -328,7 +352,11 @@ class ChatStore {
 
 			onReasoningChunk: (reasoningChunk: string) => {
 				streamedReasoningContent += reasoningChunk;
+
+				captureModelIfNeeded();
+
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
+
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 			},
 
@@ -339,17 +367,36 @@ class ChatStore {
 			) => {
 				slotsService.stopStreaming();
 
-				await DatabaseStore.updateMessage(assistantMessage.id, {
+				const updateData: {
+					content: string;
+					thinking: string;
+					timings?: ChatMessageTimings;
+					model?: string;
+				} = {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent,
 					timings: timings
-				});
+				};
+
+				const capturedModel = captureModelIfNeeded(false);
+
+				if (capturedModel) {
+					updateData.model = capturedModel;
+				}
+
+				await DatabaseStore.updateMessage(assistantMessage.id, updateData);
 
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-				this.updateMessageAtIndex(messageIndex, {
+				const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
 					timings: timings
-				});
+				};
+
+				if (updateData.model) {
+					localUpdateData.model = updateData.model;
+				}
+
+				this.updateMessageAtIndex(messageIndex, localUpdateData);
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
 				this.activeConversation!.currNode = assistantMessage.id;
@@ -478,9 +525,6 @@ class ChatStore {
 	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage | null> {
 		if (!this.activeConversation) return null;
 
-		// Capture the current model name when creating the assistant message
-		const currentModelName = serverStore.modelName;
-
 		return await DatabaseStore.createMessageBranch(
 			{
 				convId: this.activeConversation.id,
@@ -489,8 +533,7 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: [],
-				model: currentModelName || undefined
+				children: []
 			},
 			parentId || null
 		);
@@ -1287,9 +1330,6 @@ class ChatStore {
 			this.isLoading = true;
 			this.currentResponse = '';
 
-			// Capture the current model name when creating the assistant message
-			const currentModelName = serverStore.modelName;
-
 			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
 					convId: this.activeConversation.id,
@@ -1298,8 +1338,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: [],
-					model: currentModelName || undefined
+					children: []
 				},
 				parentMessage.id
 			);
@@ -1346,9 +1385,6 @@ class ChatStore {
 				false
 			) as DatabaseMessage[];
 
-			// Capture the current model name when creating the assistant message
-			const currentModelName = serverStore.modelName;
-
 			// Create new assistant message branch
 			const assistantMessage = await DatabaseStore.createMessageBranch(
 				{
@@ -1358,8 +1394,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: [],
-					model: currentModelName || undefined
+					children: []
 				},
 				userMessageId
 			);
