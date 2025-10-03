@@ -860,15 +860,18 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const assistantMessage = await this.createAssistantMessage();
+				const parentMessageId =
+					this.activeMessages.length > 0
+						? this.activeMessages[this.activeMessages.length - 1].id
+						: null;
+
+				const assistantMessage = await this.createAssistantMessage(parentMessageId);
 
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
 
 				this.activeMessages.push(assistantMessage);
-				await DatabaseStore.updateCurrentNode(this.activeConversation.id, assistantMessage.id);
-				this.activeConversation.currNode = assistantMessage.id;
 
 				const conversationContext = this.activeMessages.slice(0, -1);
 
@@ -1124,8 +1127,10 @@ class ChatStore {
 			(m) => m.role === 'user' && m.parent === rootMessage?.id
 		);
 
-		await DatabaseStore.updateCurrentNode(this.activeConversation.id, siblingId);
-		this.activeConversation.currNode = siblingId;
+		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
+
+		await DatabaseStore.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
+		this.activeConversation.currNode = currentLeafNodeId;
 		await this.refreshActiveMessages();
 
 		// Only show title dialog if we're navigating between different first user message siblings
