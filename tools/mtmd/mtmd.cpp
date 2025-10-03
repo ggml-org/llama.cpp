@@ -525,21 +525,15 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
-                    if (!ctx->tok_ov_img_start.empty()) {
-                        add_text(ctx->tok_ov_img_start);
-                    }
+                    add_text(ctx->tok_ov_img_start);
                     cur.entries.emplace_back(std::move(ov_chunk));
-                    if (!ctx->tok_ov_img_end.empty()) {
-                        add_text(ctx->tok_ov_img_end);
-                    }
+                    add_text(ctx->tok_ov_img_end);
                 }
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
                     GGML_ASSERT((int)chunks.size() == n_row * n_col);
-                    if (!ctx->tok_slices_start.empty()) {
-                        add_text(ctx->tok_slices_start);
-                    }
+                    add_text(ctx->tok_slices_start);
                     for (int y = 0; y < n_row; y++) {
                         for (int x = 0; x < n_col; x++) {
                             const bool is_last_in_row = (x == n_col - 1);
@@ -553,31 +547,23 @@ struct mtmd_tokenizer {
                                 add_text(std::string(buf.get(), buf.get() + sz - 1), true);
                             }
                             cur.entries.emplace_back(std::move(chunks[y * n_col + x]));
-                            if (!ctx->tok_sli_img_end.empty()) {
-                                add_text(ctx->tok_sli_img_end);
-                            }
-                            if (!is_last_in_row && !ctx->tok_sli_img_mid.empty()) {
+                            add_text(ctx->tok_sli_img_end);
+                            if (!is_last_in_row) {
                                 add_text(ctx->tok_sli_img_mid);
                             }
                         }
-                        if ((y != n_row - 1 || ctx->tok_row_end_trail) && !ctx->tok_row_end.empty()) {
+                        if ((y != n_row - 1 || ctx->tok_row_end_trail)) {
                             add_text(ctx->tok_row_end);
                         }
                     }
-                    if (!ctx->tok_slices_end.empty()) {
-                        add_text(ctx->tok_slices_end);
-                    }
+                    add_text(ctx->tok_slices_end);
                 }
 
                 // add overview image (last)
                 if (!ctx->ov_img_first) {
-                    if (!ctx->tok_ov_img_start.empty()) {
-                        add_text(ctx->tok_ov_img_start);
-                    }
+                    add_text(ctx->tok_ov_img_start);
                     cur.entries.emplace_back(std::move(ov_chunk));
-                    if (!ctx->tok_ov_img_end.empty()) {
-                        add_text(ctx->tok_ov_img_end);
-                    }
+                    add_text(ctx->tok_ov_img_end);
                 }
 
             } else {
