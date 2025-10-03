@@ -239,7 +239,7 @@ std::stringstream make_generic_stringstream() {
     return ss;
 }
 
-std::vector<unsigned char> read_binary_file(const std::string& path, bool may_not_exist = false) {
+std::string read_binary_file(const std::string& path, bool may_not_exist = false) {
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) {
         if (!may_not_exist) {
@@ -252,7 +252,7 @@ std::vector<unsigned char> read_binary_file(const std::string& path, bool may_no
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    std::vector<unsigned char> data(size);
+    std::string data(size, '\0');
     size_t read_size = fread(data.data(), 1, size, f);
     fclose(f);
     if (read_size != size) {
@@ -279,8 +279,8 @@ void write_binary_file(const std::string& path, const std::string& content) {
 }
 
 void write_file_if_changed(const std::string& path, const std::string& content) {
-    std::vector<unsigned char> existing = read_binary_file(path, true);
-    if (existing.size() != content.size() || memcmp(existing.data(), content.data(), content.size()) != 0) {
+    std::string existing = read_binary_file(path, true);
+    if (existing != content) {
         write_binary_file(path, content);
     }
 }
@@ -357,6 +357,18 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
         if (!stderr_str.empty()) {
             std::cerr << "cannot compile " << name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
             return;
+        }
+
+        if (dep_file) {
+            // replace .spv output path with the embed .cpp path which is used as output in CMakeLists.txt
+            std::string dep = read_binary_file(target_cpp + ".d", true);
+            if (!dep.empty()) {
+                size_t pos = dep.find(out_path);
+                if (pos != std::string::npos) {
+                    dep.replace(pos, out_path.length(), target_cpp);
+                }
+                write_binary_file(target_cpp + ".d", dep);
+            }
         }
 
         std::lock_guard<std::mutex> guard(lock);
@@ -934,15 +946,16 @@ void write_output_files() {
         hdr << "extern const unsigned char " << name << "_data[];\n\n";
 
         if (input_filepath != "") {
-            std::vector<unsigned char> data = read_binary_file(path);
+            std::string data = read_binary_file(path);
             if (data.empty()) {
                 continue;
             }
 
             src << "const uint64_t " << name << "_len = " << data.size() << ";\n";
             src << "const unsigned char " << name << "_data[" << data.size() << "] = {\n" << std::hex;
+            auto bytes = reinterpret_cast<const uint8_t*>(data.data());
             for (size_t i = 0; i < data.size(); ++i) {
-                src << "0x" << static_cast<int>(data[i]) << ",";
+                src << "0x" << static_cast<int>(bytes[i]) << ",";
                 if ((i + 1) % 12 == 0) src << "\n";
             }
             src << std::dec << "\n};\n\n";
