@@ -36,6 +36,20 @@
 		children: []
 	};
 
+	const assistantWithReasoning: DatabaseMessage = {
+		id: '3',
+		convId: 'conv-1',
+		type: 'message',
+		timestamp: Date.now() - 1000 * 60 * 2,
+		role: 'assistant',
+		content:
+			"Here's the concise answer, now that I've thought it through carefully for you.",
+		parent: '1',
+		thinking:
+			"Let's consider the user's question step by step:\\n\\n1. Identify the core problem\\n2. Evaluate relevant information\\n3. Formulate a clear answer\\n\\nFollowing this process ensures the final response stays focused and accurate.",
+		children: []
+	};
+
 	let processingMessage = $state({
 		id: '4',
 		convId: 'conv-1',
@@ -50,62 +64,6 @@
 
 	let streamingMessage = $state({
 		id: '5',
-		convId: 'conv-1',
-		type: 'message',
-		timestamp: 0, // No timestamp = streaming
-		role: 'assistant',
-		content: '',
-		parent: '1',
-		thinking: '',
-		children: []
-	});
-
-	// Message with dedicated thinking content
-	const thinkTagMessage: DatabaseMessage = {
-		id: '6',
-		convId: 'conv-1',
-		type: 'message',
-		timestamp: Date.now() - 1000 * 60 * 2,
-		role: 'assistant',
-		content:
-			"Here's my response after thinking through the problem. The reasoning should appear separately from this main response content.",
-		parent: '1',
-		thinking:
-			"Let me analyze this step by step:\n\n1. The user is asking about thinking formats\n2. I need to demonstrate the &lt;think&gt; tag format\n3. This content should be displayed in the thinking section\n4. The main response should be separate\n\nThis is a good example of reasoning content.",
-		children: []
-	};
-
-	// Message with separate DeepSeek-style thinking content
-	const thinkBracketMessage: DatabaseMessage = {
-		id: '7',
-		convId: 'conv-1',
-		type: 'message',
-		timestamp: Date.now() - 1000 * 60 * 1,
-		role: 'assistant',
-		content:
-			"Here's my response after using the [THINK] format to organize the answer. The reasoning content should be shown separately from this response.",
-		parent: '1',
-		thinking:
-			"This is the DeepSeek-style thinking format:\n\n- Using square brackets instead of angle brackets\n- Should work identically to the &lt;think&gt; format\n- Reasoning content should display in the thinking section\n- Main response should be separate\n\nBoth formats should be supported seamlessly.",
-		children: []
-	};
-
-	// Streaming message for dedicated thinking content
-	let streamingThinkMessage = $state({
-		id: '8',
-		convId: 'conv-1',
-		type: 'message',
-		timestamp: 0, // No timestamp = streaming
-		role: 'assistant',
-		content: '',
-		parent: '1',
-		thinking: '',
-		children: []
-	});
-
-		// Streaming message for DeepSeek-style thinking content
-	let streamingBracketMessage = $state({
-		id: '9',
 		convId: 'conv-1',
 		type: 'message',
 		timestamp: 0, // No timestamp = streaming
@@ -133,11 +91,19 @@
 />
 
 <Story
-	name="WithThinkingBlock"
+	name="AssistantWithReasoning"
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: assistantWithReasoning
+	}}
+/>
+
+<Story
+	name="WithReasoningContent"
 	args={{
 		message: streamingMessage
 	}}
-	asChild
+asChild
 	play={async () => {
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
@@ -183,6 +149,7 @@
 	</div>
 </Story>
 
+
 <Story
 	name="Processing"
 	args={{
@@ -191,120 +158,12 @@
 	play={async () => {
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');
-		
+
 		// Set loading state to true to trigger the processing UI
 		chatStore.isLoading = true;
-		
+
 		// Simulate the processing state hook behavior
 		// This will show the "Generating..." text and parameter details
-		await new Promise(resolve => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}}
 />
-
-<Story
-	name="ThinkTagFormat"
-	args={{
-		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
-		message: thinkTagMessage
-	}}
-/>
-
-<Story
-	name="ThinkBracketFormat"
-	args={{
-		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
-		message: thinkBracketMessage
-	}}
-/>
-
-<Story
-	name="StreamingThinkTag"
-	args={{
-		message: streamingThinkMessage
-	}}
-	parameters={{
-		test: {
-			timeout: 30000
-		}
-	}}
-	asChild
-	play={async () => {
-		// Phase 1: Stream reasoning content
-		const thinkingContent =
-			'Let me work through this problem systematically:\n\n1. First, I need to understand what the user is asking\n2. Then I should consider different approaches\n3. I need to evaluate the pros and cons\n4. Finally, I should provide a clear recommendation\n\nThis step-by-step approach will ensure accuracy.';
-
-		streamingThinkMessage.thinking = '';
-		streamingThinkMessage.content = '';
-
-		for (let i = 0; i < thinkingContent.length; i++) {
-			streamingThinkMessage.thinking += thinkingContent[i];
-			await new Promise((resolve) => setTimeout(resolve, 5));
-		}
-
-		await new Promise((resolve) => setTimeout(resolve, 200));
-
-		// Phase 2: Stream main response content
-		const responseContent =
-			"Based on my analysis above, here's the solution:\n\n**Key Points:**\n- The approach should be systematic\n- We need to consider all factors\n- Implementation should be step-by-step\n\nThis ensures the best possible outcome.";
-
-		let currentContent = '';
-
-		for (let i = 0; i < responseContent.length; i++) {
-			currentContent += responseContent[i];
-			streamingThinkMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-
-		streamingThinkMessage.timestamp = Date.now();
-	}}
->
-	<div class="w-[56rem]">
-		<ChatMessage message={streamingThinkMessage} />
-	</div>
-</Story>
-
-<Story
-	name="StreamingThinkBracket"
-	args={{
-		message: streamingBracketMessage
-	}}
-	parameters={{
-		test: {
-			timeout: 30000
-		}
-	}}
-	asChild
-	play={async () => {
-		// Phase 1: Stream DeepSeek-style reasoning content
-		const thinkingContent =
-			'Using the DeepSeek format now:\n\n- This demonstrates the &#91;THINK&#93; bracket format\n- Should behave identically to the &lt;think&gt; format\n- The UI should display this in the thinking section\n- Main content should be separate\n\nBoth formats provide the same functionality.';
-
-		streamingBracketMessage.thinking = '';
-		streamingBracketMessage.content = '';
-
-		for (let i = 0; i < thinkingContent.length; i++) {
-			streamingBracketMessage.thinking += thinkingContent[i];
-			await new Promise((resolve) => setTimeout(resolve, 5));
-		}
-
-		await new Promise((resolve) => setTimeout(resolve, 200));
-
-		// Phase 2: Stream main response content
-		const responseContent =
-			"Here's my response after using the &#91;THINK&#93; format:\n\n**Observations:**\n- Both &lt;think&gt; and &#91;THINK&#93; formats work seamlessly\n- The helper logic handles both cases\n- UI display is consistent across formats\n\nThis demonstrates the enhanced thinking content support.";
-
-		let currentContent = '';
-
-		for (let i = 0; i < responseContent.length; i++) {
-			currentContent += responseContent[i];
-			streamingBracketMessage.content = currentContent;
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-
-		streamingBracketMessage.timestamp = Date.now();
-	}}
->
-	<div class="w-[56rem]">
-		<ChatMessage message={streamingBracketMessage} />
-	</div>
-</Story>
