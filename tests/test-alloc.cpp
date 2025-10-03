@@ -548,6 +548,41 @@ static void test_buffer_size_zero() {
     GGML_ASSERT(backend_b.context->allocated_total() == 0);
 }
 
+// Test re-using gallocr for a different graph. The new graph has the same
+// total size, but one of the chunks is larger, so reallocation is required.
+static void test_reallocation() {
+    dummy_backend    backend = dummy_backend_init(32, /*align*/ 4);
+    ggml_gallocr_ptr galloc;
+    {
+        auto [ctx, graph, ctx_ptr] = make_context();
+        ggml_tensor * x[4];
+        x[0] = make_input_with_size(ctx, 24);
+        x[1] = make_input_with_size(ctx, 16);
+        x[2] = ggml_view_1d(ctx, x[0], 4, 0);
+        x[3] = ggml_add(ctx, x[2], x[1]);
+        assign_names(ctx);
+
+        galloc = allocate_graph(graph, x[3], &backend.buffer_type);
+        check_all_allocated(graph);
+        GGML_ASSERT(backend.context->allocated_total() == 40);
+    }
+    {
+        auto [ctx, graph, ctx_ptr] = make_context();
+        ggml_tensor * x[3];
+        x[0] = make_input_with_size(ctx, 20);
+        x[1] = make_input_with_size(ctx, 20);
+        x[2] = ggml_add(ctx, x[0], x[1]);
+        assign_names(ctx);
+        ggml_set_output(x[2]);
+        ggml_build_forward_expand(graph, x[2]);
+
+        bool result = ggml_gallocr_alloc_graph(galloc.get(), graph);
+        GGML_ASSERT(result);
+        check_all_allocated(graph);
+        GGML_ASSERT(backend.context->allocated_total() == 40);
+    }
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -568,5 +603,6 @@ int main() {
     run("test_prefer_already_allocated_memory", test_prefer_already_allocated_memory);
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
+    run("test_reallocation", test_reallocation);
     return 0;
 }
