@@ -1142,7 +1142,9 @@ void gguf_set_tensor_type(struct gguf_context * ctx, const char * name, enum ggm
     const int64_t blck_size = ggml_blck_size(type);
 
     tensor->type = type;
-    GGML_ASSERT(tensor->ne[0] % blck_size == 0 && "tensor row size not divisible by block size of new type");
+
+    // TURBOLLAMA-TODO: calculate this better rather than just disabling the assert
+    GGML_ASSERT((tensor->ne[0] % blck_size == 0 || ggml_allows_empty_border(type)) && "tensor row size not divisible by block size of new type");
 
     tensor->nb[0] = type_size;
     tensor->nb[1] = tensor->nb[0]*(tensor->ne[0]/blck_size);

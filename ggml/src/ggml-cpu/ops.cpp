@@ -5428,6 +5428,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
         case GGML_TYPE_F64:
+        case GGML_TYPE_BC6H_0:
         case GGML_TYPE_COUNT:
             {
                 GGML_ABORT("fatal error");

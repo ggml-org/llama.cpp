@@ -427,6 +427,13 @@ typedef struct {
 } block_iq4_xs;
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
 
+// Texture compression quants
+#define BC6H_BITS_PER_BLOCK (128)
+#define BC6H_WEIGHTS_PER_BLOCK (16*3)
+typedef struct {
+    uint8_t block[BC6H_BITS_PER_BLOCK/8];
+} block_bc6h_0;
+
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 

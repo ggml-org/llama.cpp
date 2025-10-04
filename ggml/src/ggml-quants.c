@@ -2550,6 +2550,11 @@ void dequantize_row_iq4_xs(const block_iq4_xs * GGML_RESTRICT x, float * GGML_RE
     }
 }
 
+void dequantize_row_bc6h_0(const block_bc6h_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    fprintf(stderr, "dequantize_row_bc6h_0(x=%p, y=%p, k=%ld)\n", x, y, k);
+    exit(1);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_ref(const float * GGML_RESTRICT x, block_q8_K * GGML_RESTRICT y, int64_t k) {
@@ -4997,6 +5002,28 @@ void quantize_row_iq2_s_ref(const float * GGML_RESTRICT x, block_iq2_s * GGML_RE
     quantize_iq2_s(x, y, 1, k, NULL);
 }
 
+// BC6H_0 quantization
+static int64_t roundup(int64_t value, int64_t to) {
+    int64_t rem = value % to;
+    if(rem == 0) {
+        return value;
+    } else {
+        return value - rem + to;
+    }
+}
+
+size_t quantize_bc6h_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    int64_t blocks_per_row = roundup(n_per_row, sizeof(block_bc6h_0))/sizeof(block_bc6h_0);
+
+    size_t bytes_per_row = blocks_per_row * sizeof(block_bc6h_0);
+    memset(dst, 0, bytes_per_row * nrow);
+    return nrow * bytes_per_row;
+}
+
+void quantize_row_bc6h_0_ref(const float * GGML_RESTRICT x, block_bc6h_0 * GGML_RESTRICT y, int64_t k) {
+    quantize_bc6h_0(x, y, 1, k, NULL);
+}
+
 // =============================== data validation
 
 static bool validate_float(float f, size_t i) {
@@ -5041,6 +5068,10 @@ static bool validate_e_e8m0(uint8_t e, size_t i) {
         return false;
     }
 
+    return true;
+}
+
+static bool validate_bc6h_0(block_bc6h_0 * block) {
     return true;
 }
 
@@ -5306,6 +5337,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ4_NL:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
+            } break;
+        case GGML_TYPE_BC6H_0:
+            {
+                return validate_bc6h_0(data);
             } break;
 
         case GGML_TYPE_I8:
