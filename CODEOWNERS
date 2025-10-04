@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
@@ -58,6 +59,9 @@
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
