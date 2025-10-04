@@ -10,4 +10,4 @@ layout (push_constant) uniform parameter
     uint nel;
 } p;
 
-#include "types.comp"
+#include "types.glsl"
