@@ -90,8 +90,7 @@ static_assert(sizeof(rpc_tensor) % 8 == 0, "rpc_tensor size must be multiple of 
 
 // RPC commands
 enum rpc_cmd {
-    RPC_CMD_DEVICE_COUNT = 0,
-    RPC_CMD_ALLOC_BUFFER,
+    RPC_CMD_ALLOC_BUFFER = 0,
     RPC_CMD_GET_ALIGNMENT,
     RPC_CMD_GET_MAX_SIZE,
     RPC_CMD_BUFFER_GET_BASE,
@@ -106,8 +105,11 @@ enum rpc_cmd {
     RPC_CMD_INIT_TENSOR,
     RPC_CMD_GET_ALLOC_SIZE,
     RPC_CMD_HELLO,
+    RPC_CMD_DEVICE_COUNT,
     RPC_CMD_COUNT,
 };
+
+static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
