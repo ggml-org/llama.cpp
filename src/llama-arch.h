@@ -264,6 +264,13 @@ enum llm_kv {
     LLM_KV_TOKENIZER_PREFIX_ID,
     LLM_KV_TOKENIZER_SUFFIX_ID,
     LLM_KV_TOKENIZER_MIDDLE_ID,
+
+    // sentence-transformers dense layers in and out features
+    LLM_KV_DENSE_2_FEAT_IN,
+    LLM_KV_DENSE_2_FEAT_OUT,
+    LLM_KV_DENSE_3_FEAT_IN,
+    LLM_KV_DENSE_3_FEAT_OUT,
+    LLM_KV_POOLING_TYPE_OPT,
 };
 
 enum llm_tensor {

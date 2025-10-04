@@ -2346,6 +2346,15 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    // if setting pooling_type is disabled, set it to model default
+    // for sentence-transformers models (e.g. EmbeddingGemma) mean-pooling is required
+    // when dense layers are enabled
+    if (!model->hparams.pooling_type_opt) {
+        params.pooling_type = model->hparams.pooling_type;
+        LLAMA_LOG_INFO("%s: setting pooling_type to models default: %d\n", __func__, params.pooling_type);
+
+    }
+
     try {
         auto * ctx = new llama_context(*model, params);
         return ctx;
