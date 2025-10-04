@@ -1,8 +1,8 @@
-#include "types.comp"
+#include "types.glsl"
 
 #extension GL_EXT_shader_16bit_storage : require
 
-#include "rte.comp"
+#include "rte.glsl"
 
 layout(local_size_x = 1, local_size_y = 256, local_size_z = 1) in;
 

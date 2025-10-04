@@ -1,8 +1,8 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_control_flow_attributes : require
 
-#include "rte.comp"
-#include "utils.comp"
+#include "rte.glsl"
+#include "utils.glsl"
 
 layout (push_constant) uniform parameter
 {

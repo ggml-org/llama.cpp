@@ -11,7 +11,7 @@
 #define EXPERT_COUNT 8
 #endif
 
-#include "types.comp"
+#include "types.glsl"
 
 #ifndef MMQ
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
@@ -32,7 +32,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 #endif
 
-#include "dequant_funcs.comp"
+#include "dequant_funcs.glsl"
 
 layout (push_constant) uniform parameter
 {

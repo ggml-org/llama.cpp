@@ -10,8 +10,8 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 
-#include "types.comp"
-#include "flash_attn_base.comp"
+#include "types.glsl"
+#include "flash_attn_base.glsl"
 
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
