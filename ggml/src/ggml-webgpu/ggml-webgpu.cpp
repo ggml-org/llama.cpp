@@ -1060,6 +1060,9 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
         case GGML_OP_SCALE:
             ggml_webgpu_scale(ctx, src0, node);
             break;
+        case GGML_OP_SOFT_MAX:
+            ggml_webgpu_soft_max(ctx, src0, src1, src2, node);
+            break;
         default:
             return false;
     }
@@ -1806,6 +1809,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_SCALE:
             supports_op = op->type == GGML_TYPE_F32;
             break;
+        case GGML_OP_SOFT_MAX:
+            supports_op = op->type == GGML_TYPE_F32;
+            break;
         default:
             break;
     }
@@ -1949,6 +1955,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     ggml_webgpu_init_rope_pipeline(ctx);
     ggml_webgpu_init_glu_pipeline(ctx);
     ggml_webgpu_init_scale_pipeline(ctx);
+    ggml_webgpu_init_soft_max_pipeline(ctx);
 
 #ifdef GGML_WEBGPU_DEBUG
     // Initialize debug buffers
