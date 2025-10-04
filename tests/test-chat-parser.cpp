@@ -106,6 +106,34 @@ static void test_reasoning() {
     assert_equals("<think>Cogito</think>", builder.result().content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
+  {
+    const std::string variant("content_only_inline_think");
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ false,
+    };
+    const std::string input = "<think>Pense</think>Bonjour";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("Pense"), msg.reasoning_content);
+    assert_equals(variant, std::string("Bonjour"), msg.content);
+  }
+  {
+    const std::string variant("llama_3_inline_think");
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ false,
+    };
+    const std::string input = "<think>Plan</think>Réponse";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("Plan"), msg.reasoning_content);
+    assert_equals(variant, std::string("Réponse"), msg.content);
+  }
   // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
   {
     common_chat_syntax syntax = {

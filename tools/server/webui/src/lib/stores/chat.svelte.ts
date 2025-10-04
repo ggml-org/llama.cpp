@@ -5,7 +5,6 @@ import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { extractPartialThinking } from '$lib/utils/thinking';
 
 /**
  * ChatStore - Central state management for chat conversations and AI interactions
@@ -342,11 +341,9 @@ class ChatStore {
 				this.currentResponse = streamedContent;
 
 				captureModelIfNeeded();
-
-				const partialThinking = extractPartialThinking(streamedContent);
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
-					content: partialThinking.remainingContent || streamedContent
+					content: streamedContent
 				});
 			},
 
@@ -694,18 +691,16 @@ class ChatStore {
 
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
-				const partialThinking = extractPartialThinking(this.currentResponse);
-
 				const updateData: {
 					content: string;
 					thinking?: string;
 					timings?: ChatMessageTimings;
 				} = {
-					content: partialThinking.remainingContent || this.currentResponse
+					content: this.currentResponse
 				};
 
-				if (partialThinking.thinking) {
-					updateData.thinking = partialThinking.thinking;
+				if (lastMessage.thinking?.trim()) {
+					updateData.thinking = lastMessage.thinking;
 				}
 
 				const lastKnownState = await slotsService.getCurrentState();
@@ -725,7 +720,10 @@ class ChatStore {
 
 				await DatabaseStore.updateMessage(lastMessage.id, updateData);
 
-				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
+				lastMessage.content = this.currentResponse;
+				if (updateData.thinking !== undefined) {
+					lastMessage.thinking = updateData.thinking;
+				}
 				if (updateData.timings) {
 					lastMessage.timings = updateData.timings;
 				}
