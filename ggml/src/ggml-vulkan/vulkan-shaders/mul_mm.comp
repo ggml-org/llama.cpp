@@ -368,7 +368,7 @@ void main() {
                 [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                     [[unroll]] for (uint cc = 0; cc < TN; cc++) {
                         [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
-                            const uint sums_idx = (cr * WNITER + wsic) * (WMITER * TN) + cc * TN + wsir;
+                            const uint sums_idx = (cr * WNITER + wsic) * (WMITER * TN) + cc * WMITER + wsir;
                             sums[sums_idx].x = fma(ACC_TYPE(cache_a[wsir * TM + 2 * cr    ].x), ACC_TYPE(cache_b[cc].x), fma(ACC_TYPE(cache_a[wsir * TM + 2 * cr    ].y), ACC_TYPE(cache_b[cc].y), sums[sums_idx].x));
                             sums[sums_idx].y = fma(ACC_TYPE(cache_a[wsir * TM + 2 * cr + 1].x), ACC_TYPE(cache_b[cc].x), fma(ACC_TYPE(cache_a[wsir * TM + 2 * cr + 1].y), ACC_TYPE(cache_b[cc].y), sums[sums_idx].y));
                         }
@@ -466,7 +466,7 @@ void main() {
                 const u16vec2 row_idx = row_ids[row_i - ic * BN];
 #endif // MUL_MAT_ID
                 [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
-                    const uint sums_idx = (cr * WNITER + wsic) * (WMITER * TN) + cc * TN + wsir;
+                    const uint sums_idx = (cr * WNITER + wsic) * (WMITER * TN) + cc * WMITER + wsir;
 #ifdef MUL_MAT_ID
                     if (dr_warp + 2 * cr < p.M) {
                         data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr_warp + 2 * cr] = D_TYPE(sums[sums_idx].x);
