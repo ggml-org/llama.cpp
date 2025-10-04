@@ -208,6 +208,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     const int cc = ggml_cuda_info().devices[device].cc;
 
+    // TODO: temporary until support is extended
+    //       https://github.com/ggml-org/llama.cpp/pull/16148#issuecomment-3343525206
+    if (K->ne[1] % FATTN_KQ_STRIDE != 0) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+
     switch (K->ne[0]) {
         case  64:
         case 128:
