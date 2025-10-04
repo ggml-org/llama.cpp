@@ -252,8 +252,9 @@ set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
 # extra artifacts
-option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
-option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
+option(GGML_BUILD_TESTS     "ggml: build tests"    ${GGML_STANDALONE})
+option(GGML_CPU_REF_BACKEND "ggml: build reference CPU backend for testing" OFF)
+option(GGML_BUILD_EXAMPLES  "ggml: build examples" ${GGML_STANDALONE})
 
 #
 # dependencies
