@@ -1037,6 +1037,9 @@ class GGUFWriter:
     def add_vision_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
 
+    def add_vision_preproc_image_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
+
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
