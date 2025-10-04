@@ -9,6 +9,7 @@
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
 
+#include <cctype>
 #include <cstdio>
 #include <exception>
 #include <iostream>
@@ -2597,6 +2598,21 @@ static common_chat_params common_chat_params_init_without_tools(const common_cha
         data.grammar = json_schema_to_grammar(inputs.json_schema);
     } else {
         data.grammar = inputs.grammar;
+    }
+
+    static constexpr size_t think_tag_len = 7; // strlen("<think>")
+    size_t prompt_trimmed_size = data.prompt.size();
+    while (prompt_trimmed_size > 0 &&
+           std::isspace(static_cast<unsigned char>(data.prompt[prompt_trimmed_size - 1]))) {
+        --prompt_trimmed_size;
+    }
+    if (prompt_trimmed_size >= think_tag_len &&
+        data.prompt.compare(prompt_trimmed_size - think_tag_len, think_tag_len, "<think>") == 0) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
     }
     return data;
 }
