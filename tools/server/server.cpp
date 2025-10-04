@@ -5060,15 +5060,6 @@ int main(int argc, char ** argv) {
 
         const json body = json::parse(req.body);
 
-        // TODO: implement
-        int top_n = 1;
-        if (body.count("top_n") == 1) {
-            top_n = body.at("top_n");
-        } else {
-            res_error(res, format_error_response("\"top_n\" must be provided", ERROR_TYPE_INVALID_REQUEST));
-            return;
-        }
-
         // if true, use TEI API format, otherwise use Jina API format
         // Jina: https://jina.ai/reranker/
         // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
@@ -5091,6 +5082,11 @@ int main(int argc, char ** argv) {
         if (documents.empty()) {
             res_error(res, format_error_response("\"documents\" must be a non-empty string array", ERROR_TYPE_INVALID_REQUEST));
             return;
+        }
+
+        int top_n = documents.size(); // no top_n will return all the documents
+        if (body.count("top_n") == 1) {
+            top_n = body.at("top_n");
         }
 
         // create and queue the task
