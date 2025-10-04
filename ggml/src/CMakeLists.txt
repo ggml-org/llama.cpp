@@ -388,6 +388,33 @@ ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 
+if (GGML_CPU_REF_BACKEND)
+    if (NOT GGML_BACKEND_DL)
+        message(FATAL_ERROR "GGML_CPU_REF_BACKEND requires GGML_BACKEND_DL")
+    endif()
+    set(GGML_SYSTEM_ARCH "cpu-ref")
+    set(GGML_LLAMAFILE OFF)
+    set(GGML_CPU_HBM OFF)
+    set(GGML_OPENMP OFF)
+    set(GGML_CPU_KLEIDIAI OFF)
+    set(GGML_CPU_REPACK OFF)
+    set(GGML_ACCELERATE OFF)
+
+    ggml_add_cpu_backend_variant(ref)
+
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64|ARM|AARCH64")
+        target_compile_options(ggml-cpu-ref PRIVATE
+              -U__ARM_NEON
+              -U__ARM_FEATURE_FMA
+              -U__ARM_FEATURE_FP16_VECTOR_ARITHMETIC
+              -U__ARM_FEATURE_DOTPROD
+              -U__ARM_FEATURE_MATMUL_INT8
+              -U__ARM_FEATURE_SVE
+          )
+    endif()
+    target_compile_definitions(ggml PRIVATE GGML_USE_CPU_REF)
+endif()
+
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)
     target_compile_features   (${target} PRIVATE c_std_11 cxx_std_17) # don't bump
