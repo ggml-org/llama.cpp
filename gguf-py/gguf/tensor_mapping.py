@@ -76,7 +76,12 @@ class TensorNameMap:
             "lm_head",                   # llama4
             "model.transformer.ff_out",  # llada
         ),
-
+        MODEL_TENSOR.DENSE_2_OUT: (
+            "dense_2_out",  # embeddinggemma
+        ),
+        MODEL_TENSOR.DENSE_3_OUT: (
+            "dense_3_out",  # embeddinggemma
+        ),
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
