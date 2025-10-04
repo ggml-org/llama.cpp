@@ -5,12 +5,17 @@ set -e
 # Parse command line arguments
 CONVERTED_MODEL=""
 PROMPTS_FILE=""
+USE_POOLING=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -p|--prompts-file)
             PROMPTS_FILE="$2"
             shift 2
+            ;;
+        --pooling)
+            USE_POOLING="1"
+            shift
             ;;
         *)
             if [ -z "$CONVERTED_MODEL" ]; then
@@ -47,4 +52,8 @@ echo $CONVERTED_MODEL
 
 cmake --build ../../build --target llama-logits -j8
 # TODO: update logits.cpp to accept a --file/-f option for the prompt
-../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode "$PROMPT"
+if [ -n "$USE_POOLING" ]; then
+    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode -pooling "$PROMPT"
+else
+    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode "$PROMPT"
+fi
