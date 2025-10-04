@@ -126,9 +126,9 @@ int main(int argc, char ** argv) {
         LOG_WRN("%s: warning: scaling RoPE frequency by %g.\n", __func__, params.rope_freq_scale);
     }
 
-#ifdef GGML_PERF
+#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
     llama_log_set(my_logger, nullptr);
-#endif /* GGML_PERF */
+#endif /* GGML_PERF  || GGML_PERF_DETAIL */
     LOG_INF("%s: llama backend init\n", __func__);
 
     llama_backend_init();
