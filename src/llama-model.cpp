@@ -811,8 +811,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
 
                 hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-
-                hparams.set_swa_pattern(3, 0);
+                hparams.set_swa_pattern(3);
 
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE,             hparams.rope_freq_base_train);
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa);
@@ -823,7 +822,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 12:
-                        type = LLM_TYPE_47M; break; // granite-embeddings-small
+                        type = LLM_TYPE_47M; break; // granite-embedding-small
                     default: type = LLM_TYPE_UNKNOWN; 
                 }
             } break;
@@ -7957,8 +7956,6 @@ struct llm_build_modern_bert : public llm_graph_context {
         const int64_t n_embd_head     = hparams.n_embd_head_v;
         const float rope_theta_global = hparams.rope_freq_base_train;
         const float rope_theta_local  = hparams.rope_freq_base_train_swa;
-        //const uint32_t n_swa_local    = hparams.n_swa;
-        //const uint32_t n_swa_global   = 4096;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -7974,9 +7971,8 @@ struct llm_build_modern_bert : public llm_graph_context {
         inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, -1);
         cb(inpL, "inp_norm", -1);
 
-        auto * inp_attn = build_attn_inp_kv_iswa();
+        auto * inp_attn = build_attn_inp_kv_iswa(); // TODO: support cacheless iSWA embeddings [TAG_NO_CACHE_ISWA]
 
-        // iterate layers
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
 
@@ -7999,9 +7995,11 @@ struct llm_build_modern_bert : public llm_graph_context {
             cur = build_lora_mm(model.layers[il].wqkv, cur);
             cb(cur, "wqkv", il);
 
-            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0*sizeof(float)*(n_embd)));
-            Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*ggml_type_size(cur->type)*(n_embd)));
-            Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 2*ggml_type_size(cur->type)*(n_embd)));
+            const size_t type_size = ggml_type_size(cur->type);
+
+            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0*type_size*(n_embd)));
+            Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*type_size*(n_embd)));
+            Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 2*type_size*(n_embd)));
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -8033,7 +8031,7 @@ struct llm_build_modern_bert : public llm_graph_context {
             cur = ggml_add(ctx0, cur, inpL);
 
             // attention layer norm
-            cur = build_norm(cur, model.layers[il].attn_out_norm, nullptr, LLM_NORM, il);
+            cur = build_norm(cur, model.layers[il].ffn_norm, nullptr, LLM_NORM, il);
 
             ggml_tensor * ffn_inp = cur;
             cb(ffn_inp, "ffn_inp", il);
@@ -8059,14 +8057,14 @@ struct llm_build_modern_bert : public llm_graph_context {
                 LLM_NORM, -1);
         cb(cur, "final_norm_out", -1);
 
-        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
-            ggml_tensor * inp_out_ids = build_inp_out_ids();
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        if (hparams.pooling_type == LLAMA_POOLING_TYPE_CLS) {
+            // extracting cls token
+            cur = ggml_view_1d(ctx0, cur, hparams.n_embd, 0);
+            cb(cur, "cls_pooled_embd", -1);
         }
 
-        cb(cur, "result_embd", -1);
+        cb(cur, "res_embd", -1);
         res->t_embd = cur;
-
         ggml_build_forward_expand(gf, cur);
     }
 };
@@ -19277,6 +19275,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
+        //case LLM_ARCH_MODERN_BERT: // TODO: disabled until cachless SWA logic is fixed [TAG_NO_CACHE_ISWA]
         //case LLM_ARCH_GEMMA_EMBEDDING: // TODO: disabled until the cacheless SWA logic is fixed [TAG_NO_CACHE_ISWA]
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
