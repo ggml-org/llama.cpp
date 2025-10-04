@@ -64,3 +64,33 @@ cmake --build build -j --target llama-server && ./tools/server/tests/tests.sh
 ```
 
 To see all available arguments, please refer to [pytest documentation](https://docs.pytest.org/en/stable/how-to/usage.html)
+
+### Debugging external llama-server
+It can sometimes be useful to run the server in a debugger when invesigating test
+failures. To do this, the environment variable `DEBUG_EXTERNAL=1` can be set
+which will cause the test to skip starting a llama-server itself. Instead, the
+server can be started in a debugger.
+
+Example using `gdb`:
+```console
+$ gdb --args ../../../build/bin/llama-server \
+    --host 127.0.0.1 --port 8080 \
+    --temp 0.8 --seed 42 \
+    --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf \
+    --batch-size 32 --no-slots --alias tinyllama-2 --ctx-size 512 \
+    --parallel 2 --n-predict 64
+```
+And a break point can be set in before running:
+```console
+(gdb) br server.cpp:4604
+(gdb) r
+main: server is listening on http://127.0.0.1:8080 - starting the main loop
+srv  update_slots: all slots are idle
+```
+
+And then the test in question can be run in another terminal:
+```console
+(venv) $ env DEBUG_EXTERNAL=1 ./tests.sh unit/test_chat_completion.py -v -x
+```
+And this should trigger the breakpoint and allow inspection of the server state
+in the debugger terminal.

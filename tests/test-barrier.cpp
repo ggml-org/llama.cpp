@@ -1,6 +1,5 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
-#include "ggml-backend.h"
 
 #include <chrono>
 #include <iostream>
@@ -8,12 +7,13 @@
 #include <cstdlib>
 #include <cassert>
 #include <vector>
+#include <thread>
 
 #define MAX_NARGS 2
 
 int main(int argc, char *argv[]) {
 
-    int n_threads = 4;
+    int n_threads = std::max(1, std::min(4, (int) std::thread::hardware_concurrency()));
     int n_rounds  = 100;
 
     if (argc > 1) {

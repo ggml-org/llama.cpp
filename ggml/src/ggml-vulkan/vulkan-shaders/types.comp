@@ -245,6 +245,7 @@ struct block_q2_K_packed32
 
 #if defined(DATA_A_Q2_K)
 #define QUANT_K QUANT_K_Q2_K
+#define QUANT_R 1
 #define A_TYPE block_q2_K
 #define A_TYPE_PACKED16 block_q2_K_packed16
 #define A_TYPE_PACKED32 block_q2_K_packed32
@@ -270,6 +271,7 @@ struct block_q3_K_packed16
 
 #if defined(DATA_A_Q3_K)
 #define QUANT_K QUANT_K_Q3_K
+#define QUANT_R 1
 #define A_TYPE block_q3_K
 #define A_TYPE_PACKED16 block_q3_K_packed16
 #endif
@@ -304,6 +306,7 @@ struct block_q4_K_packed128
 
 #if defined(DATA_A_Q4_K)
 #define QUANT_K QUANT_K_Q4_K
+#define QUANT_R 1
 #define A_TYPE block_q4_K
 #define A_TYPE_PACKED16 block_q4_K_packed16
 #define A_TYPE_PACKED32 block_q4_K_packed32
@@ -334,6 +337,7 @@ struct block_q5_K_packed128
 
 #if defined(DATA_A_Q5_K)
 #define QUANT_K QUANT_K_Q5_K
+#define QUANT_R 1
 #define A_TYPE block_q5_K
 #define A_TYPE_PACKED16 block_q5_K_packed16
 #endif
@@ -358,6 +362,7 @@ struct block_q6_K_packed16
 
 #if defined(DATA_A_Q6_K)
 #define QUANT_K QUANT_K_Q6_K
+#define QUANT_R 1
 #define A_TYPE block_q6_K
 #define A_TYPE_PACKED16 block_q6_K_packed16
 #endif
@@ -1441,5 +1446,20 @@ float e8m0_to_fp32(uint8_t x) {
 
     return uintBitsToFloat(bits);
 }
+
+#if BDA
+
+#extension GL_EXT_buffer_reference : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
+
+#define BDA_STORAGE_T uint64_t
+#define BDA_OFFSET_T uint64_t
+
+#else
+
+#define BDA_STORAGE_T uvec2
+#define BDA_OFFSET_T uint
+
+#endif
 
 #endif // !defined(GGML_TYPES_COMP)

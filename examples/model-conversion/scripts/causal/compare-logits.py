@@ -48,7 +48,7 @@ def main():
         print(f"Error: Model file not found: {model_path}")
         sys.exit(1)
 
-    model_name = os.path.splitext(os.path.basename(model_path))[0]
+    model_name = os.path.basename(model_path)
     data_dir = Path("data")
 
     pytorch_file = data_dir / f"pytorch-{model_name}.bin"

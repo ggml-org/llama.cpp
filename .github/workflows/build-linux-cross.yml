@@ -141,97 +141,6 @@ jobs:
 
   #         cmake --build build --config Release -j $(nproc)
 
-  ubuntu-24-ppc64el-cpu-cross:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup PowerPC64le
-        run: |
-          sudo dpkg --add-architecture ppc64el
-
-          # Add arch-specific repositories for non-amd64 architectures
-          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-          EOF
-
-          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
-
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  gcc-14-powerpc64le-linux-gnu \
-                  g++-14-powerpc64le-linux-gnu
-
-      - name: Build
-        run: |
-          cmake -B build -DLLAMA_CURL=OFF \
-                         -DCMAKE_BUILD_TYPE=Release \
-                         -DGGML_OPENMP=OFF \
-                         -DLLAMA_BUILD_EXAMPLES=ON \
-                         -DLLAMA_BUILD_TOOLS=ON \
-                         -DLLAMA_BUILD_TESTS=OFF \
-                         -DCMAKE_SYSTEM_NAME=Linux \
-                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
-                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
-                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
-                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
-
-          cmake --build build --config Release -j $(nproc)
-
-  # ubuntu-24-ppc64el-vulkan-cross:
-  #   runs-on: ubuntu-24.04
-
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Setup PowerPC64le
-  #       run: |
-  #         sudo dpkg --add-architecture ppc64el
-
-  #         # Add arch-specific repositories for non-amd64 architectures
-  #         cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-  #         deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-  #         EOF
-
-  #         sudo apt-get update || true    ;# Prevent failure due to missing URLs.
-
-  #         sudo apt-get install -y --no-install-recommends \
-  #                 build-essential \
-  #                 glslc \
-  #                 gcc-14-powerpc64le-linux-gnu \
-  #                 g++-14-powerpc64le-linux-gnu \
-  #                 libvulkan-dev:ppc64el
-
-  #     - name: Build
-  #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
-  #                        -DCMAKE_BUILD_TYPE=Release \
-  #                        -DGGML_VULKAN=ON \
-  #                        -DGGML_OPENMP=OFF \
-  #                        -DLLAMA_BUILD_EXAMPLES=ON \
-  #                        -DLLAMA_BUILD_TOOLS=ON \
-  #                        -DLLAMA_BUILD_TESTS=OFF \
-  #                        -DCMAKE_SYSTEM_NAME=Linux \
-  #                        -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
-  #                        -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
-  #                        -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
-  #                        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-  #                        -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-  #                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
-
-  #         cmake --build build --config Release -j $(nproc)
-
   debian-13-loongarch64-cpu-cross:
     runs-on: ubuntu-24.04
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
@@ -342,5 +251,49 @@ jobs:
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
                          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-riscv64-cpu-spacemit-ime-cross:
+    runs-on: ubuntu-24.04
+
+    env:
+      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+      SPACEMIT_IME_TOOLCHAIN_PATH: "spacemit-toolchain-linux-glibc-x86_64"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Toolchain
+        uses: actions/cache@v4
+        id: cache-spacemit-ime-cross-toolchain
+        with:
+          path: ./${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          key: ${{ runner.os }}-spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+
+      - name: Setup Toolchain
+        if: steps.cache-spacemit-ime-cross-toolchain.outputs.cache-hit != 'true'
+        run: |
+          wget --quiet --no-check-certificate https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}.tar.xz -O ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          mkdir -p ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          tar xf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz -C ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }} --strip-components=1
+          rm -rf ${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}.tar.xz
+
+      - name: Build
+        run: |
+          export RISCV_ROOT_PATH=${PWD}/${{ env.SPACEMIT_IME_TOOLCHAIN_PATH }}
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DGGML_CPU_RISCV64_SPACEMIT=ON \
+                         -DGGML_RVV=ON \
+                         -DGGML_RV_ZFH=ON \
+                         -DGGML_RV_ZICBOP=ON \
+                         -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
+                         -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake
 
           cmake --build build --config Release -j $(nproc)

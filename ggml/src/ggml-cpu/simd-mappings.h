@@ -998,9 +998,9 @@ static inline void __lasx_f32cx8_store(ggml_fp16_t * x, __m256 y) {
 #define GGML_F32_EPR  4
 
 #define GGML_F32x4         __m128
-#define GGML_F32x4_ZERO    __lsx_vldi(0)
-#define GGML_F32x4_SET1(x) __lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
-#define GGML_F32x4_LOAD(x) __lsx_vld((x), 0)
+#define GGML_F32x4_ZERO    (__m128)__lsx_vldi(0)
+#define GGML_F32x4_SET1(x) (__m128)__lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
+#define GGML_F32x4_LOAD(x) (__m128)__lsx_vld((x), 0)
 #define GGML_F32x4_STORE(x, y)   __lsx_vst(y, x, 0)
 #define GGML_F32x4_FMA(a, b, c) __lsx_vfmadd_s(b, c, a)
 #define GGML_F32x4_ADD     __lsx_vfadd_s
@@ -1022,7 +1022,7 @@ static inline void __lasx_f32cx8_store(ggml_fp16_t * x, __m256 y) {
     __m128i tmp     = __lsx_vsrli_d((__m128i) x[0], 32);                              \
     tmp             = (__m128i) __lsx_vfadd_s((__m128) tmp, x[0]);                    \
     tmp             = __lsx_vpickev_w(__lsx_vldi(0), tmp);                            \
-    const __m128 t0 = __lsx_vshuf4i_w(tmp, 0x88);                                     \
+    const __m128 t0 = (__m128)__lsx_vshuf4i_w(tmp, 0x88);                                     \
     tmp             = __lsx_vsrli_d((__m128i) t0, 32);                                \
     tmp             = (__m128i) __lsx_vfadd_s((__m128) tmp, t0);                      \
     tmp             = __lsx_vpickev_w(__lsx_vldi(0), tmp);                            \
@@ -1052,7 +1052,7 @@ static inline __m128 __lsx_f16x4_load(const ggml_fp16_t * x) {
     tmp[2] = GGML_CPU_FP16_TO_FP32(x[2]);
     tmp[3] = GGML_CPU_FP16_TO_FP32(x[3]);
 
-    return __lsx_vld(tmp, 0);
+    return (__m128)__lsx_vld(tmp, 0);
 }
 
 static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
@@ -1067,9 +1067,9 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 }
 
 #define GGML_F32Cx4             __m128
-#define GGML_F32Cx4_ZERO        __lsx_vldi(0)
-#define GGML_F32Cx4_SET1(x)     __lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
-#define GGML_F32Cx4_LOAD(x)     __lsx_f16x4_load(x)
+#define GGML_F32Cx4_ZERO        (__m128)__lsx_vldi(0)
+#define GGML_F32Cx4_SET1(x)     (__m128)__lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
+#define GGML_F32Cx4_LOAD(x)     (__m128)__lsx_f16x4_load(x)
 #define GGML_F32Cx4_STORE(x, y) __lsx_f16x4_store(x, y)
 #define GGML_F32Cx4_FMA         GGML_F32x4_FMA
 #define GGML_F32Cx4_ADD         __lsx_vfadd_s

@@ -1931,11 +1931,13 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     LOG("Maximum KLD: %10.6f\n", kld_values.back());
     LOG("99.9%%   KLD: %10.6f\n", percentile(kld_values, 0.999f));
     LOG("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
+    LOG("95.0%%   KLD: %10.6f\n", percentile(kld_values, 0.950f));
     LOG("90.0%%   KLD: %10.6f\n", percentile(kld_values, 0.900f));
     LOG("Median  KLD: %10.6f\n", kld_median);
     LOG("10.0%%   KLD: %10.6f\n", percentile(kld_values, 0.100f));
     LOG(" 5.0%%   KLD: %10.6f\n", percentile(kld_values, 0.050f));
     LOG(" 1.0%%   KLD: %10.6f\n", percentile(kld_values, 0.010f));
+    LOG(" 0.1%%   KLD: %10.6f\n", percentile(kld_values, 0.001f));
     LOG("Minimum KLD: %10.6f\n", kld_values.front());
 
     LOG("\n");
@@ -2060,6 +2062,7 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
+    llama_memory_breakdown_print(ctx);
 
     llama_backend_free();
 

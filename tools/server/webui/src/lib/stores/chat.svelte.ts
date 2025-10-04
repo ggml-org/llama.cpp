@@ -100,7 +100,7 @@ class ChatStore {
 
 		this.maxContextError = null;
 
-		await goto(`/chat/${conversation.id}`);
+		await goto(`#/chat/${conversation.id}`);
 
 		return conversation.id;
 	}
@@ -221,69 +221,66 @@ class ChatStore {
 	 */
 	private getApiOptions(): Record<string, unknown> {
 		const currentConfig = config();
+		const hasValue = (value: unknown): boolean =>
+			value !== undefined && value !== null && value !== '';
+
 		const apiOptions: Record<string, unknown> = {
 			stream: true,
 			timings_per_token: true
 		};
 
-		if (currentConfig.temperature !== undefined && currentConfig.temperature !== null) {
+		if (hasValue(currentConfig.temperature)) {
 			apiOptions.temperature = Number(currentConfig.temperature);
 		}
-		if (currentConfig.max_tokens !== undefined && currentConfig.max_tokens !== null) {
+		if (hasValue(currentConfig.max_tokens)) {
 			apiOptions.max_tokens = Number(currentConfig.max_tokens);
 		}
-		if (currentConfig.dynatemp_range !== undefined && currentConfig.dynatemp_range !== null) {
+		if (hasValue(currentConfig.dynatemp_range)) {
 			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
 		}
-		if (currentConfig.dynatemp_exponent !== undefined && currentConfig.dynatemp_exponent !== null) {
+		if (hasValue(currentConfig.dynatemp_exponent)) {
 			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
 		}
-		if (currentConfig.top_k !== undefined && currentConfig.top_k !== null) {
+		if (hasValue(currentConfig.top_k)) {
 			apiOptions.top_k = Number(currentConfig.top_k);
 		}
-		if (currentConfig.top_p !== undefined && currentConfig.top_p !== null) {
+		if (hasValue(currentConfig.top_p)) {
 			apiOptions.top_p = Number(currentConfig.top_p);
 		}
-		if (currentConfig.min_p !== undefined && currentConfig.min_p !== null) {
+		if (hasValue(currentConfig.min_p)) {
 			apiOptions.min_p = Number(currentConfig.min_p);
 		}
-		if (currentConfig.xtc_probability !== undefined && currentConfig.xtc_probability !== null) {
+		if (hasValue(currentConfig.xtc_probability)) {
 			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
 		}
-		if (currentConfig.xtc_threshold !== undefined && currentConfig.xtc_threshold !== null) {
+		if (hasValue(currentConfig.xtc_threshold)) {
 			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
 		}
-		if (currentConfig.typ_p !== undefined && currentConfig.typ_p !== null) {
+		if (hasValue(currentConfig.typ_p)) {
 			apiOptions.typ_p = Number(currentConfig.typ_p);
 		}
-		if (currentConfig.repeat_last_n !== undefined && currentConfig.repeat_last_n !== null) {
+		if (hasValue(currentConfig.repeat_last_n)) {
 			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
 		}
-		if (currentConfig.repeat_penalty !== undefined && currentConfig.repeat_penalty !== null) {
+		if (hasValue(currentConfig.repeat_penalty)) {
 			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
 		}
-		if (currentConfig.presence_penalty !== undefined && currentConfig.presence_penalty !== null) {
+		if (hasValue(currentConfig.presence_penalty)) {
 			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
 		}
-		if (currentConfig.frequency_penalty !== undefined && currentConfig.frequency_penalty !== null) {
+		if (hasValue(currentConfig.frequency_penalty)) {
 			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
 		}
-		if (currentConfig.dry_multiplier !== undefined && currentConfig.dry_multiplier !== null) {
+		if (hasValue(currentConfig.dry_multiplier)) {
 			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
 		}
-		if (currentConfig.dry_base !== undefined && currentConfig.dry_base !== null) {
+		if (hasValue(currentConfig.dry_base)) {
 			apiOptions.dry_base = Number(currentConfig.dry_base);
 		}
-		if (
-			currentConfig.dry_allowed_length !== undefined &&
-			currentConfig.dry_allowed_length !== null
-		) {
+		if (hasValue(currentConfig.dry_allowed_length)) {
 			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
 		}
-		if (
-			currentConfig.dry_penalty_last_n !== undefined &&
-			currentConfig.dry_penalty_last_n !== null
-		) {
+		if (hasValue(currentConfig.dry_penalty_last_n)) {
 			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
 		}
 		if (currentConfig.samplers) {
@@ -310,8 +307,30 @@ class ChatStore {
 		onError?: (error: Error) => void
 	): Promise<void> {
 		let streamedContent = '';
-
 		let streamedReasoningContent = '';
+		let modelCaptured = false;
+
+		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
+			if (!modelCaptured) {
+				const currentModelName = serverStore.modelName;
+
+				if (currentModelName) {
+					if (updateDbImmediately) {
+						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
+							console.error
+						);
+					}
+
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
+					modelCaptured = true;
+
+					return currentModelName;
+				}
+			}
+			return undefined;
+		};
 
 		slotsService.startStreaming();
 
@@ -322,6 +341,8 @@ class ChatStore {
 				streamedContent += chunk;
 				this.currentResponse = streamedContent;
 
+				captureModelIfNeeded();
+
 				const partialThinking = extractPartialThinking(streamedContent);
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
@@ -331,7 +352,11 @@ class ChatStore {
 
 			onReasoningChunk: (reasoningChunk: string) => {
 				streamedReasoningContent += reasoningChunk;
+
+				captureModelIfNeeded();
+
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
+
 				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 			},
 
@@ -342,21 +367,39 @@ class ChatStore {
 			) => {
 				slotsService.stopStreaming();
 
-				await DatabaseStore.updateMessage(assistantMessage.id, {
+				const updateData: {
+					content: string;
+					thinking: string;
+					timings?: ChatMessageTimings;
+					model?: string;
+				} = {
 					content: finalContent || streamedContent,
 					thinking: reasoningContent || streamedReasoningContent,
 					timings: timings
-				});
+				};
+
+				const capturedModel = captureModelIfNeeded(false);
+
+				if (capturedModel) {
+					updateData.model = capturedModel;
+				}
+
+				await DatabaseStore.updateMessage(assistantMessage.id, updateData);
 
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-				this.updateMessageAtIndex(messageIndex, {
+				const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
 					timings: timings
-				});
+				};
+
+				if (updateData.model) {
+					localUpdateData.model = updateData.model;
+				}
+
+				this.updateMessageAtIndex(messageIndex, localUpdateData);
 
 				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
 				this.activeConversation!.currNode = assistantMessage.id;
-
 				await this.refreshActiveMessages();
 
 				if (onComplete) {
@@ -550,7 +593,6 @@ class ChatStore {
 				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
-			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 
 			if (!assistantMessage) {
@@ -560,15 +602,23 @@ class ChatStore {
 			this.activeMessages.push(assistantMessage);
 			// Don't update currNode until after streaming completes to maintain proper conversation path
 
-			await this.streamChatCompletion(allMessages, assistantMessage, undefined, (error: Error) => {
-				if (error.name === 'ContextError' && userMessage) {
-					const userMessageIndex = this.findMessageIndex(userMessage.id);
-					if (userMessageIndex !== -1) {
-						this.activeMessages.splice(userMessageIndex, 1);
-						DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+			const conversationContext = this.activeMessages.slice(0, -1);
+
+			await this.streamChatCompletion(
+				conversationContext,
+				assistantMessage,
+				undefined,
+				(error: Error) => {
+					if (error.name === 'ContextError' && userMessage) {
+						const userMessageIndex = this.findMessageIndex(userMessage.id);
+
+						if (userMessageIndex !== -1) {
+							this.activeMessages.splice(userMessageIndex, 1);
+							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
+						}
 					}
 				}
-			});
+			);
 		} catch (error) {
 			if (this.isAbortError(error)) {
 				this.isLoading = false;
@@ -810,18 +860,22 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
-				const assistantMessage = await this.createAssistantMessage();
+				const parentMessageId =
+					this.activeMessages.length > 0
+						? this.activeMessages[this.activeMessages.length - 1].id
+						: null;
+
+				const assistantMessage = await this.createAssistantMessage(parentMessageId);
 
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
 
 				this.activeMessages.push(assistantMessage);
-				await DatabaseStore.updateCurrentNode(this.activeConversation.id, assistantMessage.id);
-				this.activeConversation.currNode = assistantMessage.id;
 
-				await this.streamChatCompletion(allMessages, assistantMessage);
+				const conversationContext = this.activeMessages.slice(0, -1);
+
+				await this.streamChatCompletion(conversationContext, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
@@ -910,7 +964,7 @@ class ChatStore {
 			if (this.activeConversation?.id === convId) {
 				this.activeConversation = null;
 				this.activeMessages = [];
-				await goto('/?new_chat=true');
+				await goto(`?new_chat=true#/`);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
@@ -1073,8 +1127,10 @@ class ChatStore {
 			(m) => m.role === 'user' && m.parent === rootMessage?.id
 		);
 
-		await DatabaseStore.updateCurrentNode(this.activeConversation.id, siblingId);
-		this.activeConversation.currNode = siblingId;
+		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
+
+		await DatabaseStore.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
+		this.activeConversation.currNode = currentLeafNodeId;
 		await this.refreshActiveMessages();
 
 		// Only show title dialog if we're navigating between different first user message siblings
@@ -1141,7 +1197,8 @@ class ChatStore {
 						role: messageToEdit.role,
 						content: newContent,
 						thinking: messageToEdit.thinking || '',
-						children: []
+						children: [],
+						model: messageToEdit.model // Preserve original model info when branching
 					},
 					messageToEdit.parent!
 				);
@@ -1216,7 +1273,8 @@ class ChatStore {
 					content: newContent,
 					thinking: messageToEdit.thinking || '',
 					children: [],
-					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined
+					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined,
+					model: messageToEdit.model // Preserve original model info when branching
 				},
 				parentId
 			);

@@ -8,8 +8,12 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
-	import 'highlight.js/styles/github-dark.css';
+	import { browser } from '$app/environment';
 	import 'katex/dist/katex.min.css';
+
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import { mode } from 'mode-watcher';
 
 	interface Props {
 		content: string;
@@ -20,6 +24,26 @@
 
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
+
+	function loadHighlightTheme(isDark: boolean) {
+		if (!browser) return;
+
+		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
+		existingThemes.forEach((style) => style.remove());
+
+		const style = document.createElement('style');
+		style.setAttribute('data-highlight-theme', 'true');
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
+
+		document.head.appendChild(style);
+	}
+
+	$effect(() => {
+		const currentMode = mode.current;
+		const isDark = currentMode === 'dark';
+
+		loadHighlightTheme(isDark);
+	});
 
 	let processor = $derived(() => {
 		return remark()
@@ -196,7 +220,7 @@
 
 <style>
 	/* Base typography styles */
-	div :global(p) {
+	div :global(p:not(:last-child)) {
 		margin-bottom: 1rem;
 		line-height: 1.75;
 	}

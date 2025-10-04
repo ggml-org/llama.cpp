@@ -8,9 +8,6 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
-#define N_R0_F 2
-#define N_SG_F 4
-
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 
@@ -76,6 +73,7 @@
 #define FC_FLASH_ATTN_EXT_VEC          200
 #define FC_FLASH_ATTN_EXT_VEC_REDUCE   300
 #define FC_MUL_MV                      400
+#define FC_MUL_MM                      500
 
 // kernel argument structs
 //
@@ -351,6 +349,7 @@ typedef struct {
     uint64_t nb13;
     int32_t  ne0;
     int32_t  ne1;
+    int32_t  nr0;
     int16_t  r2;
     int16_t  r3;
 } ggml_metal_kargs_mul_mv;
@@ -426,18 +425,14 @@ typedef struct {
     int32_t  ne0;
     int32_t  ne1;
     uint64_t nb1;
+    int32_t  nr0;
 } ggml_metal_kargs_mul_mv_id;
 
+// NORM
+// RMS_NORM
 typedef struct {
     int32_t  ne00;
-    int32_t  ne00_4;
-    uint64_t nb01;
-    float    eps;
-} ggml_metal_kargs_norm;
-
-typedef struct {
-    int32_t  ne00;
-    int32_t  ne00_4;
+    int32_t  ne00_t;
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
@@ -448,7 +443,7 @@ typedef struct {
     uint64_t nbf1[3];
     uint64_t nbf2[3];
     uint64_t nbf3[3];
-} ggml_metal_kargs_rms_norm;
+} ggml_metal_kargs_norm;
 
 typedef struct {
     int32_t  ne00;

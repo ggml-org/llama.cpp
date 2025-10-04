@@ -148,6 +148,7 @@ class TensorNameMap:
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.attention_layernorm"                # apertus
         ),
 
         # Attention norm 2
@@ -325,6 +326,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.feedforward_layernorm",                      # apertus
         ),
 
         # Post feed-forward norm
@@ -427,6 +429,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
         ),
 
+        MODEL_TENSOR.FFN_UP_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.up_proj",           # grovemoe
+        ),
+
         # AWQ-activation gate
         MODEL_TENSOR.FFN_ACT: (
             "transformer.blocks.{bid}.ffn.act",  # mpt
@@ -466,6 +472,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_experts.gate_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_GATE_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
         # Feed-forward down
@@ -524,6 +534,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
         ),
 
+        MODEL_TENSOR.FFN_DOWN_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.down_proj",           # grovemoe
+        ),
+
         MODEL_TENSOR.ATTN_Q_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.q_layernorm",
             "model.layers.{bid}.self_attn.q_layernorm",                       # persimmon
@@ -535,6 +549,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.q",                              # plamo2
             "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.query_layernorm",                   # apertus
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -548,6 +563,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.k",                              # plamo2
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (

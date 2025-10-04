@@ -8,6 +8,10 @@ const config = {
 	// for more information about preprocessors
 	preprocess: [vitePreprocess(), mdsvex()],
 	kit: {
+		paths: {
+			relative: true
+		},
+		router: { type: 'hash' },
 		adapter: adapter({
 			pages: '../public',
 			assets: '../public',

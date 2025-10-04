@@ -96,6 +96,7 @@ class Keys:
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
         EXPERT_FEED_FORWARD_LENGTH        = "{arch}.expert_feed_forward_length"
         EXPERT_SHARED_FEED_FORWARD_LENGTH = "{arch}.expert_shared_feed_forward_length"
+        EXPERT_CHUNK_FEED_FORWARD_LENGTH  = "{arch}.expert_chunk_feed_forward_length"
         USE_PARALLEL_RESIDUAL             = "{arch}.use_parallel_residual"
         TENSOR_DATA_LAYOUT                = "{arch}.tensor_data_layout"
         EXPERT_COUNT                      = "{arch}.expert_count"
@@ -104,6 +105,8 @@ class Keys:
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
+        EXPERT_GROUP_SCALE                = "{arch}.expert_group_scale"
+        EXPERTS_PER_GROUP                 = "{arch}.experts_per_group"
         MOE_EVERY_N_LAYERS                = "{arch}.moe_every_n_layers"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
@@ -294,6 +297,13 @@ class Keys:
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
 
+    class xIELU:
+        ALPHA_P             = "xielu.alpha_p"
+        ALPHA_N             = "xielu.alpha_n"
+        BETA                = "xielu.beta"
+        EPS                 = "xielu.eps"
+
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -401,6 +411,8 @@ class MODEL_ARCH(IntEnum):
     LLADA            = auto()
     LLADA_MOE        = auto()
     SEED_OSS         = auto()
+    GROVEMOE         = auto()
+    APERTUS          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -450,6 +462,9 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
     FFN_UP_SHEXP         = auto()
+    FFN_GATE_CHEXP       = auto()
+    FFN_DOWN_CHEXP       = auto()
+    FFN_UP_CHEXP         = auto()
     FFN_EXP_PROBS_B      = auto()
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
@@ -738,6 +753,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLADA:            "llada",
     MODEL_ARCH.LLADA_MOE:        "llada-moe",
     MODEL_ARCH.SEED_OSS:         "seed_oss",
+    MODEL_ARCH.GROVEMOE:         "grovemoe",
+    MODEL_ARCH.APERTUS:          "apertus",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -784,6 +801,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_SHEXP:            "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:            "blk.{bid}.ffn_down_shexp",
     MODEL_TENSOR.FFN_UP_SHEXP:              "blk.{bid}.ffn_up_shexp",
+    MODEL_TENSOR.FFN_GATE_CHEXP:            "blk.{bid}.ffn_gate_chexps",
+    MODEL_TENSOR.FFN_DOWN_CHEXP:            "blk.{bid}.ffn_down_chexps",
+    MODEL_TENSOR.FFN_UP_CHEXP:              "blk.{bid}.ffn_up_chexps",
     MODEL_TENSOR.FFN_ACT:                   "blk.{bid}.ffn",
     MODEL_TENSOR.FFN_NORM_EXP:              "blk.{bid}.ffn_norm_exps",
     MODEL_TENSOR.FFN_GATE_EXP:              "blk.{bid}.ffn_gate_exps",
@@ -2695,6 +2715,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
     ],
+    MODEL_ARCH.APERTUS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.LLADA_MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -2711,6 +2749,26 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
+    ],
+    MODEL_ARCH.GROVEMOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_CHEXP,
+        MODEL_TENSOR.FFN_DOWN_CHEXP,
+        MODEL_TENSOR.FFN_UP_CHEXP,
     ],
     # TODO
 }

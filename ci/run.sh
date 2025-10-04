@@ -34,9 +34,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -f $OUT/*.log
+rm -f $OUT/*.exit
+rm -f $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -109,6 +109,12 @@ if [ ! -z ${GG_BUILD_MUSA} ]; then
     MUSA_ARCH=${MUSA_ARCH:-21}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
+
+if [ ! -z ${GG_BUILD_NO_SVE} ]; then
+    # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
+fi
+
 ## helpers
 
 # download a file if it does not exist or if it is outdated
@@ -345,16 +351,16 @@ function gg_run_qwen3_0_6b {
 
     wiki_test="${path_wiki}/wiki.test.raw"
 
-    ./bin/llama-quantize ${model_bf16} ${model_q8_0} q8_0
-    ./bin/llama-quantize ${model_bf16} ${model_q4_0} q4_0
-    ./bin/llama-quantize ${model_bf16} ${model_q4_1} q4_1
-    ./bin/llama-quantize ${model_bf16} ${model_q5_0} q5_0
-    ./bin/llama-quantize ${model_bf16} ${model_q5_1} q5_1
-    ./bin/llama-quantize ${model_bf16} ${model_q2_k} q2_k
-    ./bin/llama-quantize ${model_bf16} ${model_q3_k} q3_k
-    ./bin/llama-quantize ${model_bf16} ${model_q4_k} q4_k
-    ./bin/llama-quantize ${model_bf16} ${model_q5_k} q5_k
-    ./bin/llama-quantize ${model_bf16} ${model_q6_k} q6_k
+    ./bin/llama-quantize ${model_bf16} ${model_q8_0} q8_0 $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q4_0} q4_0 $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q4_1} q4_1 $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q5_0} q5_0 $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q5_1} q5_1 $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q2_k} q2_k $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q3_k} q3_k $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q4_k} q4_k $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q5_k} q5_k $(nproc)
+    ./bin/llama-quantize ${model_bf16} ${model_q6_k} q6_k $(nproc)
 
     (time ./bin/llama-cli -no-cnv --model ${model_f16}  -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log
     (time ./bin/llama-cli -no-cnv --model ${model_bf16} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
@@ -427,7 +433,7 @@ function gg_run_qwen3_0_6b {
 function gg_sum_qwen3_0_6b {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Pythia 2.8B:\n'
+    gg_printf 'Qwen3 0.6B:\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '- perplexity:\n%s\n' "$(cat $OUT/${ci}-ppl.log)"
     gg_printf '- imatrix:\n```\n%s\n```\n' "$(cat $OUT/${ci}-imatrix-sum.log)"
@@ -601,6 +607,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
+
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
@@ -617,5 +624,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
 fi
+
+cat $OUT/README.md
 
 exit $ret

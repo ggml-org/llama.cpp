@@ -52,11 +52,38 @@
 		onShowDeleteDialogChange,
 		textareaElement = $bindable()
 	}: Props = $props();
+
+	let isMultiline = $state(false);
+	let messageElement: HTMLElement | undefined = $state();
+
+	$effect(() => {
+		if (!messageElement || !message.content.trim()) return;
+
+		if (message.content.includes('\n')) {
+			isMultiline = true;
+			return;
+		}
+
+		const resizeObserver = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const element = entry.target as HTMLElement;
+				const estimatedSingleLineHeight = 24; // Typical line height for text-md
+
+				isMultiline = element.offsetHeight > estimatedSingleLineHeight * 1.5;
+			}
+		});
+
+		resizeObserver.observe(messageElement);
+
+		return () => {
+			resizeObserver.disconnect();
+		};
+	});
 </script>
 
 <div
 	aria-label="User message with actions"
-	class="group flex flex-col items-end gap-2 {className}"
+	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
 	{#if isEditing}
@@ -92,10 +119,13 @@
 		{/if}
 
 		{#if message.content.trim()}
-			<Card class="max-w-[80%] rounded-2xl bg-primary px-2.5 py-1.5 text-primary-foreground">
-				<div class="text-md whitespace-pre-wrap">
+			<Card
+				class="max-w-[80%] rounded-[1.125rem] bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
+				data-multiline={isMultiline ? '' : undefined}
+			>
+				<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
 					{message.content}
-				</div>
+				</span>
 			</Card>
 		{/if}
 
@@ -105,7 +135,6 @@
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"
-					{message}
 					{onConfirmDelete}
 					{onCopy}
 					{onDelete}

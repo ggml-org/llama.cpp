@@ -1143,10 +1143,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSIGMOID",
     "EXP",
     "GELU_ERF",
+    "XIELU",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
-
+static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2652,6 +2652,29 @@ struct ggml_tensor * ggml_silu_inplace(
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SILU);
 }
 
+// ggml_xielu
+
+struct ggml_tensor * ggml_xielu(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float alpha_n,
+        float alpha_p,
+        float beta,
+        float eps) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
+    ggml_set_op_params_f32(result, 1, beta + ggml_softplus(alpha_n));
+    ggml_set_op_params_f32(result, 2, ggml_softplus(alpha_p));
+    ggml_set_op_params_f32(result, 3, beta);
+    ggml_set_op_params_f32(result, 4, eps);
+
+    result->op     = GGML_OP_UNARY;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_silu_back
 
 struct ggml_tensor * ggml_silu_back(
@@ -3687,6 +3710,7 @@ struct ggml_tensor * ggml_set_rows(
     result->op     = GGML_OP_SET_ROWS;
     result->src[0] = b;
     result->src[1] = c;
+    result->src[2] = a; // note: order is weird due to legacy reasons (https://github.com/ggml-org/llama.cpp/pull/16063#discussion_r2385795931)
 
     return result;
 }
@@ -3828,6 +3852,15 @@ struct ggml_tensor * ggml_soft_max_ext(
     return ggml_soft_max_impl(ctx, a, mask, scale, max_bias, false);
 }
 
+struct ggml_tensor * ggml_soft_max_ext_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * mask,
+        float                 scale,
+        float                 max_bias) {
+    return ggml_soft_max_impl(ctx, a, mask, scale, max_bias, true);
+}
+
 void ggml_soft_max_add_sinks(
         struct ggml_tensor * a,
         struct ggml_tensor * sinks) {
@@ -3927,7 +3960,7 @@ static struct ggml_tensor * ggml_rope_impl(
     memcpy(params +  8, &attn_factor,  sizeof(float));
     memcpy(params +  9, &beta_fast,    sizeof(float));
     memcpy(params + 10, &beta_slow,    sizeof(float));
-    if (mrope_used) {
+    if (mrope_used && sections) {
         memcpy(params + 11, sections,  sizeof(int32_t) * GGML_MROPE_SECTIONS);
     } else {
         memset(params + 11, 0,         sizeof(int32_t) * GGML_MROPE_SECTIONS);

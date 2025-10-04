@@ -271,7 +271,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 - Using `CMake`:
 
   ```bash
-  cmake -B build -DLLAMA_SERVER_SSL=ON
+  cmake -B build -DLLAMA_OPENSSL=ON
   cmake --build build --config Release -t llama-server
   ```
 
@@ -391,7 +391,7 @@ node index.js
 
 ## API Endpoints
 
-### GET `/health`: Returns heath check result
+### GET `/health`: Returns health check result
 
 This endpoint is public (no API key check).
 
@@ -846,7 +846,7 @@ To use this endpoint with POST method, you need to start server with `--props`
 
 ### POST `/embeddings`: non-OpenAI-compatible embeddings API
 
-This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidian norm.
+This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidean norm.
 
 Note that the response format of this endpoint is different from `/v1/embeddings`.
 
