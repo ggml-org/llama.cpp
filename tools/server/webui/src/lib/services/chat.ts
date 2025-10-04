@@ -78,6 +78,8 @@ export class ChatService {
 			timings_per_token
 		} = options;
 
+		const currentConfig = config();
+
 		// Cancel any ongoing request and create a new abort controller
 		this.abort();
 		this.abortController = new AbortController();
@@ -117,7 +119,7 @@ export class ChatService {
 			stream
 		};
 
-		requestBody.reasoning_format = 'auto';
+		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		// Set max_tokens to -1 (infinite) if not provided or empty
@@ -161,7 +163,6 @@ export class ChatService {
 		}
 
 		try {
-			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
 			const response = await fetch(`./v1/chat/completions`, {
