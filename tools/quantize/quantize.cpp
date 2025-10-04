@@ -700,17 +700,11 @@ int main(int argc, char ** argv) {
         // select quantization type if target_bpw is set unless user specifies type and threads
         if (argc - arg_idx <= 1 && params.target_bpw != -1.0f) {
             auto * ftype = const_cast<char *>(get_ftype(params.target_bpw));
-            if (argc == arg_idx) {
-                tmp_argv.push_back(ftype);
-                tmp_argv.push_back(nullptr);
-                argv = const_cast<char **>(tmp_argv.data());
-                argc++;
-            } else {
-                tmp_argv.insert(tmp_argv.end() - 1, ftype);
-                tmp_argv.push_back(nullptr);
-                argv = const_cast<char **>(tmp_argv.data());
-                argc++;
-            }
+            if (argc == arg_idx) { tmp_argv.push_back(ftype); }
+            else { tmp_argv.insert(tmp_argv.end() - 1, ftype); }
+            tmp_argv.push_back(nullptr);
+            argv = const_cast<char **>(tmp_argv.data());
+            argc++;
         } else if (argc <= arg_idx) {
             fprintf(stderr, "%s: missing ftype\n", __func__);
             return 1;
