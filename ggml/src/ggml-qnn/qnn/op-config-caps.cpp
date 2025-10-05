@@ -24,24 +24,13 @@ void append_tensor_shape_and_type_impl(const ggml_tensor * tensor, ggml_type ove
             len = snprintf(buffer, sizeof(buffer), "%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1], type_name);
             break;
         case 3:
-            len = snprintf(buffer,
-                           sizeof(buffer),
-                           "%ldx%ldx%ld%s",
-                           (long) tensor->ne[0],
-                           (long) tensor->ne[1],
-                           (long) tensor->ne[2],
-                           type_name);
+            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
+                           (long) tensor->ne[2], type_name);
             break;
         case 4:
         default:
-            len = snprintf(buffer,
-                           sizeof(buffer),
-                           "%ldx%ldx%ldx%ld%s",
-                           (long) tensor->ne[0],
-                           (long) tensor->ne[1],
-                           (long) tensor->ne[2],
-                           (long) tensor->ne[3],
-                           type_name);
+            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
+                           (long) tensor->ne[2], (long) tensor->ne[3], type_name);
             break;
     }
     GGML_ASSERT(len > 0 && len < (int) sizeof(buffer));
@@ -238,6 +227,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_UNARY_OP_HARDSIGMOID
     {}, // GGML_UNARY_OP_EXP
     {}, // GGML_UNARY_OP_GELU_ERF
+    {}, // GGML_UNARY_OP_XIELU
 };
 
 static_assert(kOpCaps[GGML_OP_NONE].get_desc == nullptr, "GGML_OP_NONE should not have get_desc function");
@@ -255,8 +245,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> mat_mul_op_constructor(const ggml_tenso
                                                                 qnn::qnn_instance_ptr qnn_instance) {
     if (qnn_instance->has_custom_op_package() && ggml_n_dims(op) == 2) {
         QNN_LOG_DEBUG("create GgmlMulMat, name %s, use GgmlOpPackage\n", instance_name.c_str());
-        return std::make_shared<qnn::ggml_qnn_single_op_config>(
-            instance_name, "GgmlOpPackage", "GgmlMulMat", qnn_instance);
+        return std::make_shared<qnn::ggml_qnn_single_op_config>(instance_name, "GgmlOpPackage", "GgmlMulMat",
+                                                                qnn_instance);
     }
 
     QNN_LOG_DEBUG("create QNN_OP_MAT_MUL, name %s\n", instance_name.c_str());
@@ -270,8 +260,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> generic_op_constructor(const ggml_tenso
     GGML_UNUSED(op);
     static_assert(_op < std::size(kOpCaps));
     static_assert(kOpCaps[_op].qnn_op_name != nullptr);
-    return std::make_shared<qnn::ggml_qnn_single_op_config>(
-        instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, kOpCaps[_op].qnn_op_name, qnn_instance);
+    return std::make_shared<qnn::ggml_qnn_single_op_config>(instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW,
+                                                            kOpCaps[_op].qnn_op_name, qnn_instance);
 }
 
 void add_type_parameters(std::shared_ptr<qnn::ggml_qnn_op_config_base> op, const char * name, float value) {
@@ -293,8 +283,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> op_constructor_with_type_param(const gg
 
     _ggml_op_param_type op_param;
     memcpy(&op_param, op->op_params, sizeof(op_param));
-    auto qnn_op = std::make_shared<_qnn_op_type_name>(
-        instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, op_caps.qnn_op_name, qnn_instance);
+    auto qnn_op = std::make_shared<_qnn_op_type_name>(instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, op_caps.qnn_op_name,
+                                                      qnn_instance);
     if (op_caps.qnn_param_name) {
         add_type_parameters(qnn_op, op_caps.qnn_param_name, op_param);
     }
@@ -416,6 +406,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_UNARY_OP_HARDSIGMOID
     nullptr,  // GGML_UNARY_OP_EXP
     nullptr,  // GGML_UNARY_OP_GELU_ERF
+    nullptr,  // GGML_UNARY_OP_XIELU
 };
 
 static_assert(kOpConstructors[GGML_OP_NONE] == nullptr, "GGML_OP_NONE does not match the nullptr function");
