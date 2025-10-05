@@ -848,6 +848,19 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return out;
     };
 
+    auto delete_bpw_state = [&] {
+        LLAMA_LOG_INFO("%s: deleting %s\n", func, checkpoint_file.c_str());
+        std::remove(checkpoint_file.c_str());
+    };
+
+    auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
+        if (bpw_stop.load(std::memory_order_relaxed)) {
+            LLAMA_LOG_INFO("\n%s: saving bpw progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+            save_bpw_state(all_vec);
+            throw std::runtime_error("user interrupted the process");
+        }
+    };
+
     // Estimate error for a given type using a sampled subset of rows
     auto estimate_error = [&](const ggml_tensor * t,
         const ggml_type quant_type,
