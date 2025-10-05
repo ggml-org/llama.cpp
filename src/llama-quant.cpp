@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <cinttypes>
+#include <csignal>
 #include <fstream>
 #include <mutex>
 #include <random>
@@ -613,6 +614,12 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
+static std::atomic<bool> bpw_stop{ false };
+
+static void signal_handler(int) {
+    bpw_stop.store(true, std::memory_order_relaxed);
+}
+
 // Returns tensor type overrides to meet a global bpw target
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
@@ -709,6 +716,22 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
         if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
         return is_quantizable(ggml_get_name(t), model.arch, params);
+    };
+
+    auto install_signal_handlers = [] {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::signal(SIGINT, signal_handler);
+            std::signal(SIGTERM, signal_handler);
+        });
+    };
+
+    auto uninstall_signal_handlers = [] {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::signal(SIGINT, SIG_DFL);
+            std::signal(SIGTERM, SIG_DFL);
+        });
     };
 
     // Estimate error for a given type using a sampled subset of rows
