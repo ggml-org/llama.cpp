@@ -424,7 +424,7 @@ struct common_params {
     int32_t timeout_write     = timeout_read; // http write timeout in seconds
     int32_t n_threads_http    = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse     = 0;            // min chunk size to reuse from the cache via KV shifting
-    int32_t n_swa_checkpoints = 3;            // max number of SWA checkpoints per slot
+    int32_t n_ctx_checkpoints = 3;            // max number of context checkpoints per slot
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT

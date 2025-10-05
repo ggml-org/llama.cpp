@@ -97,7 +97,7 @@ jobs:
           ctest -L 'main|curl' --verbose --timeout 900
 
   macOS-latest-cmake-x64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
 
     steps:
       - name: Clone
@@ -362,11 +362,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-cmake-rpc
-          evict-old-files: 1d
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-latest-cmake-rpc
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -387,8 +387,8 @@ jobs:
           cd build
           ctest -L main --verbose
 
-  ubuntu-22-cmake-vulkan:
-    runs-on: ubuntu-22.04
+  ubuntu-24-cmake-vulkan:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clone
@@ -398,20 +398,40 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-vulkan
+          key: ubuntu-24-cmake-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
         id: depends
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+
+      - name: Get latest Vulkan SDK version
+        id: vulkan_sdk_version
+        run: |
+          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+
+      - name: Cache Vulkan SDK
+        id: cache_vulkan_sdk
+        uses: actions/cache@v4
+        with:
+          path: ./vulkan_sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Vulkan SDK
+        if: steps.cache_vulkan_sdk.outputs.cache-hit != 'true'
+        id: vulkan_sdk_install
+        run: |
+          mkdir -p vulkan_sdk
+          cd vulkan_sdk
+          curl --no-progress-meter https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz | tar -Jx --strip-components=1
 
       - name: Build
         id: cmake_build
         run: |
+          source ./vulkan_sdk/setup-env.sh
           cmake -B build \
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
@@ -421,6 +441,7 @@ jobs:
         run: |
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
+          export GGML_VK_DISABLE_F16=1
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
@@ -487,7 +508,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1059,7 +1080,7 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7cd9bba0-7aab-4e30-b3ae-2221006a4a05/intel-oneapi-base-toolkit-2025.1.1.34_offline.exe
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/24751ead-ddc5-4479-b9e6-f9fe2ff8b9f2/intel-deep-learning-essentials-2025.2.1.25_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
     steps:
@@ -1097,10 +1118,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: Clone rocWMMA repository
-        id: clone_rocwmma
+      - name: Grab rocWMMA package
+        id: grab_rocwmma
         run: |
-          git clone https://github.com/rocm/rocwmma --branch rocm-${{ env.ROCM_VERSION }} --depth 1
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/pool/main/r/rocwmma-dev/rocwmma-dev_1.7.0.60402-120~24.04_amd64.deb"
+          7z x rocwmma.deb
+          7z x data.tar
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -1161,8 +1184,9 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
             -DCMAKE_BUILD_TYPE=Release `
+            -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_RPC=ON `
