@@ -1625,6 +1625,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     }
 
+    delete_bpw_state(); // we're done, clear any checkpoint
+    uninstall_signal_handlers();
+
     return emit_overrides();
 }
 
