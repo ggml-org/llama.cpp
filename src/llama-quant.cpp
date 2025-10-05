@@ -1100,12 +1100,28 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return lambdas;
     };
 
+    install_signal_handlers();
+    auto bpw_data = load_bpw_state();
     std::vector<tensor_info> all;
     all.reserve(tensors.size());
     for (const auto * tw : tensors) {
         ggml_tensor * tensor = tw->tensor;
         const std::string name = ggml_get_name(tensor);
         if (!can_quantize(tensor)) { continue; }
+        check_signal_handler(all);
+
+        // If we already have fully evaluatedd this tensor then reuse it
+        if (auto it_saved = bpw_data.find(name); it_saved != bpw_data.end()) {
+            tensor_info info;
+            info.w = tw;
+            info.candidate = it_saved->second.candidate;
+            info.choice = it_saved->second.choice;
+            info.min_bpw = it_saved->second.min_bpw;
+            info.max_bpw = it_saved->second.max_bpw;
+            info.n_elements = it_saved->second.n_elements ? it_saved->second.n_elements : (size_t)ggml_nelements(tensor);
+            all.push_back(std::move(info));
+            continue;
+        }
 
         LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", __func__, name.c_str(), ggml_nelements(tensor));
         if (!ml.use_mmap) {
@@ -1296,6 +1312,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 std::vector<uint8_t> tl_quantized_buffer(quantized_buffer.size());
                 std::vector<float> tl_dequantized_buffer(dequantized_buffer.size());
                 for (;;) {
+                    if (bpw_stop.load(std::memory_order_relaxed)) { break; } // stop if a signal arrived
                     const size_t i = cidx.fetch_add(1, std::memory_order_acq_rel);
                     if (i >= compatible_candidates.size()) { break; }
 
@@ -1310,6 +1327,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         for (auto &th : eval_workers) { th.join(); }
+
+        // If interruption happened mid-evaluation, exit without adding a half-baked tensor entry
+        if (bpw_stop.load(std::memory_order_relaxed) && cidx.load(std::memory_order_relaxed) < compatible_candidates.size()) {
+            check_signal_handler(all);
+        }
 
         for (auto &c : eval_candidates) {
             if (c.bytes > 0) { info.candidate.push_back(c); }
@@ -1384,6 +1406,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         info.min_bpw = info.candidate.front().bpw;
         info.max_bpw = info.candidate.back().bpw;
         all.push_back(std::move(info));
+        check_signal_handler(all); // save after each tensor
     }
 
     if (all.empty()) { return {}; }
@@ -1441,7 +1464,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return emit_overrides();
     }
     if (budget_bytes >= max_bytes) {
-        for (auto & ti : all) { ti.choice = (int) ti.candidate.size() - 1; }
+        for (auto & ti : all) { ti.choice = (int)ti.candidate.size() - 1; }
         return emit_overrides();
     }
 
