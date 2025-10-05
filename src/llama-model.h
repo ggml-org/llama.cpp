@@ -7,6 +7,7 @@
 #include "llama-memory.h"
 #include "llama-vocab.h"
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -28,6 +29,7 @@ enum llm_type {
     LLM_TYPE_80M,
     LLM_TYPE_109M,
     LLM_TYPE_137M,
+    LLM_TYPE_140M,
     LLM_TYPE_160M,
     LLM_TYPE_190M,
     LLM_TYPE_220M,
@@ -36,6 +38,7 @@ enum llm_type {
     LLM_TYPE_270M,
     LLM_TYPE_335M,
     LLM_TYPE_350M,
+    LLM_TYPE_360M,
     LLM_TYPE_410M,
     LLM_TYPE_450M,
     LLM_TYPE_475M,
@@ -43,6 +46,7 @@ enum llm_type {
     LLM_TYPE_700M,
     LLM_TYPE_770M,
     LLM_TYPE_780M,
+    LLM_TYPE_950M,
     LLM_TYPE_0_3B,
     LLM_TYPE_0_5B,
     LLM_TYPE_0_6B,
@@ -55,6 +59,7 @@ enum llm_type {
     LLM_TYPE_1_7B,
     LLM_TYPE_1_8B,
     LLM_TYPE_2B,
+    LLM_TYPE_2_6B,
     LLM_TYPE_2_8B,
     LLM_TYPE_2_9B,
     LLM_TYPE_3B,
@@ -270,6 +275,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_shexp     = nullptr;
     struct ggml_tensor * ffn_up_shexp       = nullptr;
 
+    // ff adjugate experts (chexps)
+    struct ggml_tensor * ffn_gate_chexps     = nullptr;
+    struct ggml_tensor * ffn_down_chexps     = nullptr;
+    struct ggml_tensor * ffn_up_chexps       = nullptr;
+
     // ff bias
     struct ggml_tensor * ffn_gate_b = nullptr;
     struct ggml_tensor * ffn_down_b = nullptr; // b2
@@ -370,6 +380,12 @@ struct llama_layer {
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 
+    // xIELU activation parameters for Apertus
+    struct ggml_tensor * ffn_act_alpha_n = nullptr;
+    struct ggml_tensor * ffn_act_alpha_p = nullptr;
+    struct ggml_tensor * ffn_act_beta    = nullptr;
+    struct ggml_tensor * ffn_act_eps     = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -449,9 +465,11 @@ struct llama_model {
 
     std::string desc() const;
 
-    size_t size() const;
+    size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;
+
+    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
     uint64_t n_elements() const;

@@ -8,8 +8,8 @@
 
 #extension GL_KHR_shader_subgroup_shuffle : enable
 
-#include "types.comp"
-#include "flash_attn_base.comp"
+#include "types.glsl"
+#include "flash_attn_base.glsl"
 
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
@@ -117,6 +117,9 @@ void main() {
 
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                continue;
+            }
             [[unroll]] for (uint32_t d = 0; d < HSK_per_thread / 4; ++d) {
 #if BLOCK_SIZE > 1
                 uint coord = (j * Bc + c * cols_per_iter + col_tid) * k_stride * BLOCK_SIZE + 4 * (d * D_split + d_tid);
@@ -150,12 +153,17 @@ void main() {
         }
 
         if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
+            bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) % Bc;
                 uint32_t r = (idx + tid) / Bc;
                 if (idx + tid < Bc * Br) {
-                    masksh[c][r] = float(data_m[m_offset + (i * Br + r) * m_stride + (j * Bc + c)]);
+                    if ((!KV_bounds_check || j * Bc + c < KV) && (!nem1_bounds_check || i * Br + r < p.nem1)) {
+                        masksh[c][r] = float(data_m[m_offset + (i * Br + r) * m_stride + (j * Bc + c)]);
+                    } else {
+                        masksh[c][r] = float(0);
+                    }
                 }
             }
             barrier();
@@ -172,8 +180,11 @@ void main() {
 
         float rowmaxf[Br], Pf[Br][cols_per_thread], rowsumf[Br], eMf[Br], Moldf[Br];
         [[unroll]] for (uint32_t r = 0; r < Br; ++r) {
-            rowmaxf[r] = Sf[r][0];
+            rowmaxf[r] = NEG_FLT_MAX_OVER_2;
             [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+                if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                    continue;
+                }
                 rowmaxf[r] = max(rowmaxf[r], Sf[r][c]);
             }
             Moldf[r] = Mf[r];
@@ -190,6 +201,9 @@ void main() {
             // Compute sum across row of P
             rowsumf[r] = 0.0;
             [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+                if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                    continue;
+                }
                 rowsumf[r] += Pf[r][c];
             }
 
@@ -203,6 +217,9 @@ void main() {
         }
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                continue;
+            }
             [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
 #if BLOCK_SIZE > 1
                 uint coord = (j * Bc + c * cols_per_iter + col_tid) * v_stride * BLOCK_SIZE + 4 * (d * D_split + d_tid);

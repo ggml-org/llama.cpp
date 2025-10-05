@@ -14,6 +14,7 @@
 #include <climits>
 #include <cmath>
 #include <codecvt>
+#include <chrono>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -48,6 +49,11 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+
+#if defined(__linux__)
+#include <sys/types.h>
+#include <pwd.h>
 #endif
 
 #if defined(_MSC_VER)
@@ -864,8 +870,20 @@ std::string fs_get_cache_directory() {
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || defined(__OpenBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else {
+        } else if (std::getenv("HOME")) {
             cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        } else {
+#if defined(__linux__)
+            /* no $HOME is defined, fallback to getpwuid */
+            struct passwd *pw = getpwuid(getuid());
+            if ((!pw) || (!pw->pw_dir)) {
+                throw std::runtime_error("Failed to find $HOME directory");
+            }
+
+            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
+#else /* defined(__linux__) */
+            throw std::runtime_error("Failed to find $HOME directory");
+#endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
@@ -960,15 +978,13 @@ struct common_init_result common_init_from_params(common_params & params) {
 
         bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
         bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
 
-        if (!has_eos && !has_sep) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
+        if (!has_eos && !has_sep && !has_rerank_prompt) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n", __func__);
             ok = false;
         } else if (!has_eos) {
             LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
-        } else if (!has_sep) {
-            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
-            ok = false;
         }
 
         if (!ok) {
