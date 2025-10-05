@@ -424,6 +424,7 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
         ctx->staged_param_bufs.push_back(params_bufs);
         if (ctx->staged_command_bufs.size() == WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
             ggml_backend_webgpu_submit_queue(ctx);
+            ggml_backend_webgpu_wait_on_submission(ctx);
         }
     }
 }
