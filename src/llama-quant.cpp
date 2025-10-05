@@ -701,7 +701,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     auto make_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> ggml_type {
-        if (is_compatible(t, typ)) return typ;
+        if (is_compatible(t, typ)) { return typ; }
         ggml_type fb = fallback_type(typ);
         return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
     };
@@ -941,7 +941,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (s1 > 0.0) {
                 const auto n = (double)n_per_row;
                 const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
-                l = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 12.0);
+                l = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 16.0);
             }
 
             lambdas[(size_t)s] = l;
@@ -1035,7 +1035,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 for (int64_t r = offset; r < nrows_total && current < rows_sample_max; r += stride) {
                     const uint8_t * src_row = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
                     if (src_type == GGML_TYPE_F32) {
-                        auto src_f32 = (const float *)src_row;
+                        const auto *src_f32 = (const float *)src_row;
                         f32_sample.insert(f32_sample.end(), src_f32, src_f32 + n_per_row);
                     } else {
                         row_to_fp32(src_row, row_buffer.data());
@@ -1173,7 +1173,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
         auto pareto_convex = [](std::vector<candidate_types> & candidates) {
-            if (candidates.empty()) return;
+            if (candidates.empty()) { return; }
 
             std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
                 if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
