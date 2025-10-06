@@ -577,6 +577,7 @@ int ggml_metal_op_acc(ggml_metal_op_t ctx, int idx) {
         ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_cpy(lib, op->src[0]->type, op->type);
 
         ggml_metal_kargs_cpy args = {
+            /*.nk0  =*/ ne00,
             /*.ne00 =*/ ne00,
             /*.ne01 =*/ ne01,
             /*.ne02 =*/ ne02,
@@ -1281,26 +1282,23 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
 
     GGML_ASSERT(ne00 % ggml_blck_size(op->src[0]->type) == 0);
 
-    // TODO: support
-    //const int32_t nk00 = ne00/ggml_blck_size(op->type);
-    const int32_t nk00 = ne00;
-
-    int nth = 32; // SIMD width
-
-    while (nth < nk00 && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
-        nth *= 2;
+    int64_t nk0 = ne00;
+    if (ggml_is_quantized(op->src[0]->type)) {
+        nk0 = ne00/16;
+    } else if (ggml_is_quantized(op->type)) {
+        nk0 = ne00/ggml_blck_size(op->type);
     }
 
-    nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    int nth = std::min<int>(nk0, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
     // when rows are small, we can batch them together in a single threadgroup
     int nrptg = 1;
 
     // TODO: relax this constraint in the future
     if (ggml_blck_size(op->src[0]->type) == 1 && ggml_blck_size(op->type) == 1) {
-        if (nth > nk00) {
-            nrptg = (nth + nk00 - 1)/nk00;
-            nth   = nk00;
+        if (nth > nk0) {
+            nrptg = (nth + nk0 - 1)/nk0;
+            nth   = nk0;
 
             if (nrptg*nth > ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
                 nrptg--;
@@ -1308,10 +1306,11 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         }
     }
 
-    nth = std::min(nth, nk00);
+    nth = std::min<int>(nth, nk0);
 
     ggml_metal_kargs_cpy args = {
-        /*.ne00 =*/ nk00,
+        /*.nk0  =*/ nk0,
+        /*.ne00 =*/ ne00,
         /*.ne01 =*/ ne01,
         /*.ne02 =*/ ne02,
         /*.ne03 =*/ ne03,
@@ -1329,12 +1328,14 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         /*.nb3  =*/ nb3,
     };
 
+    const int nw0 = nrptg == 1 ? (nk0 + nth - 1)/nth : 1;
+
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, nrptg, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nw0*(ne01 + nrptg - 1)/nrptg, ne02, ne03, nth, nrptg, 1);
 
     return 1;
 }
