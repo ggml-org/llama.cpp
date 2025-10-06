@@ -1,0 +1,196 @@
+//******************************************************************************
+// Bare Metal GET_ROWS F32 Kernel
+// Extracts specific rows from a source tensor based on row indices
+//
+// Algorithm:
+// 1. Read row indices from src1 (int32 tensor)
+// 2. For each index, extract the corresponding row from src0
+// 3. Copy the row data to the output tensor dst
+// 4. Handle different input types: F32 and Q8_0 (quantized)
+//
+// Operation: dst[i] = src0[indices[i]] for i = 0..num_indices
+//
+// Features supported:
+// - F32 input data (direct copy)
+// - Q8_0 quantized input data (dequantized to F32)
+// - Int32 row indices
+// - Multi-dimensional tensor support
+// - Memory-efficient row extraction
+//******************************************************************************
+
+#include <stdint.h>
+#include <string.h>
+#include <stdbool.h>
+#include <assert.h>
+#include "ggml_tensor.h"
+#include "platform.h"
+#include "math_fp.h"
+#include "quants.h"
+
+// Get rows kernel parameters structure (from ggml-et-ops.h)
+struct ggml_et_get_rows_params {
+    struct ggml_tensor src0;     // Data tensor (F32 or Q8_0)
+    struct ggml_tensor src1;     // Row indices tensor (I32)
+    struct ggml_tensor dst;      // Output tensor (F32)
+};
+
+KERNEL_TRAMPOLINE();
+
+// Copy a row of F32 data from source to destination
+static void copy_f32_row(float* dst, const float* src, int64_t num_elements) {
+    // Simple memcpy for F32 data - no conversion needed
+    for (int64_t i = 0; i < num_elements; i++) {
+        dst[i] = src[i];
+    }
+}
+
+// Copy a row of Q8_0 data to F32 destination (with dequantization)
+static void copy_q8_0_row(float* dst, const block_q8_0* src_blocks, int64_t num_elements) {
+    // Number of Q8_0 blocks needed for this row
+    const int64_t num_blocks = (num_elements + QK8_0 - 1) / QK8_0;  // Round up to handle partial blocks
+
+    for (int64_t block_idx = 0; block_idx < num_blocks; block_idx++) {
+        const int64_t elements_in_block = (block_idx == num_blocks - 1) ?
+            (num_elements - block_idx * QK8_0) : QK8_0;  // Handle last partial block
+
+        // Dequantize the block
+        float temp_buffer[QK8_0];
+        dequantize_q8_0_block(&src_blocks[block_idx], temp_buffer);
+
+        // Copy dequantized values to destination
+        for (int64_t i = 0; i < elements_in_block; i++) {
+            dst[block_idx * QK8_0 + i] = temp_buffer[i];
+        }
+    }
+}
+
+// Main entry point for GET_ROWS kernel
+int entry_point(struct ggml_et_get_rows_params* params, void* env) {
+    // Cast env to proper type
+    kernel_environment_t* kernel_env = (kernel_environment_t*)env;
+
+    // Validate environment pointer
+    if (!kernel_env) {
+        return -1;
+    }
+
+    // Get thread info using shire mask from environment
+    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    int num_threads = get_num_threads(kernel_env->shire_mask);
+
+    // Return early if this hart is not active
+    if (thread_id < 0) {
+        return 0;
+    }
+
+    // Single-threaded implementation: only thread 0 does the work
+    // All other threads return early
+    if (thread_id != 0) {
+        return 0;
+    }
+
+    // Basic safety check on params
+    if (params == 0 || ((uint64_t)params & 0x7) != 0) {
+        return -1; // Invalid pointer
+    }
+
+    // Extract tensor references
+    struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32 or Q8_0)
+    struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
+    struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
+
+    // Validate tensor types
+    if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_I32) {
+        return -1; // Invalid output or index type
+    }
+
+    // Check supported input types
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_Q8_0) {
+        return -1; // Unsupported input type
+    }
+
+    // Get data pointers
+    void* src0_data = src0->data;
+    int32_t* src1_data = (int32_t*)src1->data;
+    float* dst_data = (float*)dst->data;
+
+    // Validate data pointers
+    if (!src0_data || !src1_data || !dst_data) {
+        return -1; // Null data pointer
+    }
+
+    // Get tensor dimensions
+    const int64_t ne00 = src0->ne[0];  // Source columns (row width)
+    const int64_t ne01 = src0->ne[1];  // Source rows (total available rows)
+    const int64_t ne02 = src0->ne[2];  // Source batch dimension
+    const int64_t ne03 = src0->ne[3];  // Source outer batch dimension
+
+    // Indices tensor dimensions
+    const int64_t ne10 = src1->ne[0];  // Number of indices in dimension 0
+    const int64_t ne11 = src1->ne[1];  // Number of indices in dimension 1
+    const int64_t ne12 = src1->ne[2];  // Batch dimension for indices
+    const int64_t ne13 = src1->ne[3];  // Outer batch dimension for indices
+
+    // Calculate total number of rows to extract
+    const int64_t total_rows_to_extract = ne10 * ne11 * ne12 * ne13;
+
+    // Calculate row size in bytes for different data types
+    int64_t src_row_size_bytes;
+    if (src0->type == GGML_TYPE_F32) {
+        src_row_size_bytes = ne00 * sizeof(float);
+    } else if (src0->type == GGML_TYPE_Q8_0) {
+        // Q8_0: each block contains QK8_0 values, each block is sizeof(block_q8_0)
+        const int64_t blocks_per_row = (ne00 + QK8_0 - 1) / QK8_0;
+        src_row_size_bytes = blocks_per_row * sizeof(block_q8_0);
+    } else {
+        return -1; // Unsupported type
+    }
+
+    // Naive single-threaded implementation - process all rows sequentially
+    // In the future, this can be parallelized across multiple threads
+    for (int64_t i = 0; i < total_rows_to_extract; i++) {
+        // Calculate multi-dimensional index for the current output position
+        const int64_t i13_idx = i / (ne12 * ne11 * ne10);
+        const int64_t i12_idx = (i - i13_idx * ne12 * ne11 * ne10) / (ne11 * ne10);
+        const int64_t i11_idx = (i - i13_idx * ne12 * ne11 * ne10 - i12_idx * ne11 * ne10) / ne10;
+        const int64_t i10_idx = i - i13_idx * ne12 * ne11 * ne10 - i12_idx * ne11 * ne10 - i11_idx * ne10;
+
+        // Get the row index from src1
+        const int64_t index_offset = i13_idx * ne12 * ne11 * ne10 +
+                                    i12_idx * ne11 * ne10 +
+                                    i11_idx * ne10 +
+                                    i10_idx;
+        const int32_t row_index = src1_data[index_offset];
+
+        // Validate row index bounds
+        if (row_index < 0 || row_index >= ne01) {
+            return -1; // Index out of bounds
+        }
+
+        // Calculate source row offset
+        // For multi-dimensional tensors: row_offset = row_index * ne00 + batch_offset
+        const int64_t batch_offset = i12_idx * ne01 * ne00 + i13_idx * ne02 * ne01 * ne00;
+
+        // Calculate destination offset
+        const int64_t dst_offset = i;
+
+        // Copy the row based on source data type
+        if (src0->type == GGML_TYPE_F32) {
+            // F32 source: direct copy
+            const float* src_row = (const float*)src0_data + row_index * ne00 + batch_offset;
+            float* dst_row = dst_data + dst_offset * ne00;
+            copy_f32_row(dst_row, src_row, ne00);
+
+        } else if (src0->type == GGML_TYPE_Q8_0) {
+            // Q8_0 source: dequantize while copying
+            const int64_t blocks_per_row = (ne00 + QK8_0 - 1) / QK8_0;
+            const int64_t src_block_offset = (row_index * blocks_per_row) +
+                                           (batch_offset / ne00) * blocks_per_row;
+            const block_q8_0* src_blocks = (const block_q8_0*)src0_data + src_block_offset;
+            float* dst_row = dst_data + dst_offset * ne00;
+            copy_q8_0_row(dst_row, src_blocks, ne00);
+        }
+    }
+
+    return 0; // Success
+}
