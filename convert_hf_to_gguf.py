@@ -5269,7 +5269,7 @@ class EmbeddingGemma(Gemma3Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.sentence_transformers_dense_modules:
-            # read molues.json to determine if model has Dense layers
+            # read modules.json to determine if model has Dense layers
             modules_file = self.dir_model / "modules.json"
             if modules_file.is_file():
                 with open(modules_file, encoding="utf-8") as modules_json_file:
