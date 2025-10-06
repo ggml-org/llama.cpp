@@ -102,9 +102,17 @@ struct ggml_et_set_rows_params {
     ggml_tensor dst;      // F32/F16 destination tensor
 };
 
+struct ggml_et_mul_mat_id_params {
+    ggml_tensor src0;     // Expert weight matrices (Q8_0/F16/F32) [K, M, n_expert]
+    ggml_tensor src1;     // Activations (F32) [K, n_expert_used, batch]
+    ggml_tensor src2;     // Expert indices (I32) [n_expert_used, batch]
+    ggml_tensor dst;      // Output (F32) [M, n_expert_used, batch, 1]
+};
+
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
