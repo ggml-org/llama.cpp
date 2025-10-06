@@ -150,7 +150,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
 
     // block size
     const int blck0 = 128;
-    const int blck1 = 16;
+    const int blck1 = 64;
 
     // number of INF blocks
     const int n_inf_blocks = 0.1*(ne0*ne1*ne2*ne3)/(blck0*blck1);
