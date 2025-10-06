@@ -310,7 +310,7 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
 }
 
 // CPU: ACCEL -> GPU host -> CPU extra -> CPU
-static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices, bool use_extra_bufts) {
+static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices, bool use_extra_bufts, bool no_host) {
     buft_list_t buft_list;
 
     // add ACCEL buffer types
@@ -331,11 +331,13 @@ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & de
     // generally, this will be done using the first device in the list
     // a better approach would be to handle this on a weight-by-weight basis using the offload_op
     // function of the device to determine if it would benefit from being stored in a host buffer
-    for (auto * dev : devices) {
-        ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(dev);
-        if (buft) {
-            buft_list.emplace_back(dev, buft);
-            break;
+    if (!no_host) {
+        for (auto * dev : devices) {
+            ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(dev);
+            if (buft) {
+                buft_list.emplace_back(dev, buft);
+                break;
+            }
         }
     }
 
@@ -2083,7 +2085,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
 
     // build a list of buffer types for the CPU and GPU devices
-    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts);
+    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
     for (auto * dev : devices) {
         buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
         // add CPU buffer types as a fallback
@@ -19865,6 +19867,7 @@ llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
+        /*.no_host                     =*/ false,
     };
 
     return result;

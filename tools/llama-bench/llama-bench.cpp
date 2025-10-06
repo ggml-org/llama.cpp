@@ -336,6 +336,7 @@ struct cmd_params {
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                no_host;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -373,6 +374,7 @@ static const cmd_params cmd_params_defaults = {
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* no_host              */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -453,6 +455,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
+    printf("  --no-host <0|1>                           (default: %s)\n",
+           join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -782,6 +786,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "--no-host") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.no_host.insert(params.no_host.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1003,6 +1014,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
+    if (params.no_host.empty()) {
+        params.no_host = cmd_params_defaults.no_host;
+    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -1044,6 +1058,7 @@ struct cmd_params_instance {
     bool               use_mmap;
     bool               embeddings;
     bool               no_op_offload;
+    bool               no_host;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1056,6 +1071,7 @@ struct cmd_params_instance {
         mparams.main_gpu     = main_gpu;
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap     = use_mmap;
+        mparams.no_host      = no_host;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -1101,6 +1117,7 @@ struct cmd_params_instance {
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
                devices == other.devices &&
+               no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1136,6 +1153,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ts : params.tensor_split)
     for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & mmp : params.use_mmap)
+    for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1178,6 +1196,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1211,6 +1230,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1244,6 +1264,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1282,6 +1303,7 @@ struct test {
     bool                     use_mmap;
     bool                     embeddings;
     bool                     no_op_offload;
+    bool                     no_host;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1318,6 +1340,7 @@ struct test {
         use_mmap       = inst.use_mmap;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        no_host        = inst.no_host;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1375,8 +1398,8 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "embeddings",     "no_op_offload",
-            "n_prompt",       "n_gen",          "n_depth",       "test_time",      "avg_ns",
-            "stddev_ns",      "avg_ts",         "stddev_ts"
+            "no_host",        "n_prompt",       "n_gen",          "n_depth",       "test_time",
+            "avg_ns",         "stddev_ns",      "avg_ts",         "stddev_ts"
         };
         return fields;
     }
@@ -1391,7 +1414,7 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "embeddings") {
+            field == "use_mmap" || field == "embeddings" || field == "no_host") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1466,6 +1489,7 @@ struct test {
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(no_host),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1654,6 +1678,9 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
+        if (field == "no_host") {
+            return 4;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1687,6 +1714,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
+        }
+        if (field == "no_host") {
+            return "noh";
         }
         if (field == "devices") {
             return "dev";
@@ -1767,6 +1797,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
+            fields.emplace_back("no_host");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
