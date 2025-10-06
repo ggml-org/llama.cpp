@@ -35,6 +35,7 @@ set(KERNELS
     softmax_f32
     get_rows_f32
     cont_f32
+    set_rows_f32
     memops
 )
 
