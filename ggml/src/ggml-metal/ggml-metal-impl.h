@@ -590,14 +590,18 @@ typedef struct {
 } ggml_metal_kargs_ssm_scan;
 
 typedef struct {
-    int64_t  ne00;
+    int32_t  ne00t;
+    int32_t  ne00;
     uint64_t nb01;
     uint64_t nb02;
-    int64_t  ne10;
+    uint64_t nb03;
+    int32_t  ne10;
     uint64_t nb10;
     uint64_t nb11;
+    uint64_t nb12;
     uint64_t nb1;
     uint64_t nb2;
+    uint64_t nb3;
 } ggml_metal_kargs_get_rows;
 
 typedef struct {
