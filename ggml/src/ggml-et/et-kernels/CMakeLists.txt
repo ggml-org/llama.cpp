@@ -28,6 +28,7 @@ endif()
 # Define kernel list
 set(KERNELS
     el_map_f32
+    memops
 )
 
 # Function to create bare metal kernel
