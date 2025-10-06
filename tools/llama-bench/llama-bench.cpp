@@ -1138,6 +1138,7 @@ struct cmd_params_instance {
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
                devices == other.devices &&
+               no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
