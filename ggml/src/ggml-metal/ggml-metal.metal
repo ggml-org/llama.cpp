@@ -2050,7 +2050,6 @@ kernel void kernel_ssm_scan_f32(
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgptg[[simdgroups_per_threadgroup]],
         uint3   tgpg[[threadgroups_per_grid]]) {
-
     const int64_t i0 = tpitg.x;
     const int64_t i1 = 0;
     const int64_t ir = tgpig.x; // current head
@@ -2075,14 +2074,14 @@ kernel void kernel_ssm_scan_f32(
     const int64_t i = i0 + i1*nc;
     const int64_t g = ir / (nh / ng); // repeat_interleave
     float s0 = s0_buff[i];
-    float s  = s_buff[i];
+    float s  = 0.0f;
 
-        device const float * A        = (device const float *) ((device const char *) src3 + ir*args.nb31);
-        device const float * x_block  = (device const float *) ((device const char *) src1 + i1*nb10 + ir*args.nb11 + i3*args.nb13);
-        device const float * dt_block = (device const float *) ((device const char *) src2 + ir*nb20 + i3*args.nb22);
-        device const float * B_block  = (device const float *) ((device const char *) src4 + g*args.nb41 + i3*args.nb43);
-        device const float * C_block  = (device const float *) ((device const char *) src5 + g*args.nb51 + i3*args.nb53);
-        device       float * y_block  = (device       float *) ((device       char *) dst  + (i1 + ir*(nr) + i3*(n_t*nh*nr))*nb00);
+    device const float * A        = (device const float *) ((device const char *) src3 + ir*args.nb31);
+    device const float * x_block  = (device const float *) ((device const char *) src1 + i1*nb10 + ir*args.nb11 + i3*args.nb13);
+    device const float * dt_block = (device const float *) ((device const char *) src2 + ir*nb20 + i3*args.nb22);
+    device const float * B_block  = (device const float *) ((device const char *) src4 + g*args.nb41 + i3*args.nb43);
+    device const float * C_block  = (device const float *) ((device const char *) src5 + g*args.nb51 + i3*args.nb53);
+    device       float * y_block  = (device       float *) ((device       char *) dst  + (i1 + ir*(nr) + i3*(n_t*nh*nr))*nb00);
 
     for (int64_t i2 = 0; i2 < n_t; ++i2) {
         device const float * x  = (device const float *) ((device const char *) x_block + i2*args.nb12);    // {dim, nh, nt, ns}
@@ -2094,8 +2093,7 @@ kernel void kernel_ssm_scan_f32(
         const float dt_soft_plus = dt[0] <= 20.0f ? log(1.0f + exp(dt[0])) : dt[0];
         const float x_dt = x[0] * dt_soft_plus;
 
-        const float state = (s0 * exp(dt_soft_plus * A[i0])) + (B[i0] * x_dt);
-        s = state;
+        s = (s0 * exp(dt_soft_plus * A[i0])) + (B[i0] * x_dt);
 
         // Parallel sum: This relies on the fact that this kernel will be
         // dispatched with each threadgroup having (d_state, 1, 1) threads which
@@ -2107,7 +2105,7 @@ kernel void kernel_ssm_scan_f32(
         // over the individual group sums to compute the final sum.
 
         // Computed for each thread
-        float sumf = state * C[i0];
+        float sumf = s * C[i0];
 
         // Sum the threads in the simd group => simd sum
         sumf = simd_sum(sumf);
@@ -2191,7 +2189,7 @@ kernel void kernel_ssm_scan_group_f32(
     const int64_t i = i0 + i1*nc;
     const int64_t g = ir / (nh / ng); // repeat_interleave
     float s0 = s0_buff[i];
-    float s  = s_buff[i];
+    float s  = 0.0f;
 
     device const float * A        = (device const float *) ((device const char *) src3 + ir*args.nb31); // {1, nh}
     device const float * x_block  = (device const float *) ((device const char *) src1 + i1*nb10 + ir*args.nb11 + i3*args.nb13);
@@ -2211,8 +2209,7 @@ kernel void kernel_ssm_scan_group_f32(
         const float x_dt = x[0] * dt_soft_plus;
         const float dA = exp(dt_soft_plus * A[0]);
 
-        const float state = (s0 * dA) + (B[i0] * x_dt);
-        s = state;
+        s = (s0 * dA) + (B[i0] * x_dt);
 
         // Parallel sum: This relies on the fact that this kernel will be
         // dispatched with each threadgroup having (d_state, 1, 1) threads which
@@ -2224,7 +2221,7 @@ kernel void kernel_ssm_scan_group_f32(
         // over the individual group sums to compute the final sum.
 
         // Computed for each thread
-        float sumf = state * C[i0];
+        float sumf = s * C[i0];
 
         // Sum the threads in the simd group => simd sum
         sumf = simd_sum(sumf);
