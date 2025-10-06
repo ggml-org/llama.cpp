@@ -29,7 +29,7 @@ flowchart TD
     ggml[llama-cli]<-->rpcb[RPC backend]
     end
     style hostn stroke:#66,stroke-width:2px,stroke-dasharray: 5 5
-    classDef devcls fill:cyan
+    classDef devcls fill:#5B9BD5
     class local,dev,dev2,dev3,dev4,dev5 devcls
 ```
 
