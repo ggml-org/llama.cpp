@@ -1,5 +1,27 @@
 message(STATUS "Using ET backend")
 
+# Configure ET platform path
+if(DEFINED ENV{ET_PLATFORM})
+    set(ET_PLATFORM_ROOT $ENV{ET_PLATFORM})
+else()
+    set(ET_PLATFORM_ROOT /opt/et)
+endif()
+
+# Add ET platform CMake modules and config files to search paths
+list(APPEND CMAKE_MODULE_PATH "${ET_PLATFORM_ROOT}/share/cmake/Modules" "${ET_PLATFORM_ROOT}/lib/cmake")
+list(APPEND CMAKE_PREFIX_PATH "${ET_PLATFORM_ROOT}")
+
+message(STATUS "ET platform root: ${ET_PLATFORM_ROOT}")
+
+# Find all dependencies with custom Find modules before runtime
+# (runtime's find_dependency doesn't inherit CMAKE_MODULE_PATH)
+find_package(linuxDriver REQUIRED)
+find_package(libcap REQUIRED)
+find_package(easy_profiler REQUIRED)
+
+# Set libcap_FOUND so find_dependency can find it
+set(libcap_FOUND TRUE)
+
 find_package(runtime REQUIRED)
 
 # Build ET kernels
