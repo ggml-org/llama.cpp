@@ -573,22 +573,30 @@ typedef struct {
     int64_t  n_seq_tokens;
     int64_t  n_seqs;
     uint64_t s_off;
+    uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;
+    uint64_t nb10;
     uint64_t nb11;
     uint64_t nb12;
+    uint64_t ns12;
     uint64_t nb13;
+    uint64_t nb20;
     uint64_t nb21;
+    uint64_t ns21;
     uint64_t nb22;
     int64_t  ne30;
     uint64_t nb31;
     uint64_t nb41;
     uint64_t nb42;
+    uint64_t ns42;
     uint64_t nb43;
     uint64_t nb51;
     uint64_t nb52;
+    uint64_t ns52;
     uint64_t nb53;
+    uint64_t nb0;
 } ggml_metal_kargs_ssm_scan;
 
 typedef struct {
