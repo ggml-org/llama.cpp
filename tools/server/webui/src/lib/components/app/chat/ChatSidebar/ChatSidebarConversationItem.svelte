@@ -104,7 +104,7 @@
 					},
 					{
 						icon: Download,
-						label: 'Download',
+						label: 'Export',
 						onclick: (e) => {
 							e.stopPropagation();
 							downloadConversation(conversation.id);
