@@ -930,12 +930,12 @@ typedef struct {
 
 
 typedef struct {
-    int IW;
-    int OW;
-    int np;
-    int k0;
-    int s0;
-    int p0;
+    int32_t  k0;
+    int32_t  s0;
+    int32_t  p0;
+    int64_t  IW;
+    int64_t  OW;
+    int64_t  np;
 } ggml_metal_kargs_pool_1d;
 
 typedef struct {
