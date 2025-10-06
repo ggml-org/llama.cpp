@@ -47,6 +47,7 @@
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
 			const trimmedThinking = message.thinking?.trim();
+
 			return trimmedThinking ? trimmedThinking : null;
 		}
 		return null;
