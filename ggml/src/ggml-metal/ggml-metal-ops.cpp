@@ -1654,12 +1654,12 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     const int64_t np = N * OC * OW;
 
     ggml_metal_kargs_pool_1d args_pool_1d = {
-        /* .k0 = */ k0,
-        /* .s0 = */ s0,
-        /* .p0 = */ p0,
-        /* .IW = */ (int) IW,
-        /* .OW = */ (int) OW,
-        /* .np = */ (int) np
+        /* .k0 = */  k0,
+        /* .s0 = */  s0,
+        /* .p0 = */  p0,
+        /* .IW = */  IW,
+        /* .OW = */  OW,
+        /* .np = */  np
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_pool_1d(lib, op, op_pool);
