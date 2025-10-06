@@ -1,12 +1,32 @@
 #include "ggml-et-kernels.h"
 #include "ggml-impl.h"
+#include "ggml-et-kernels-embed.hpp"
 #include <fstream>
 #include <cstdlib>
+#include <cstring>
 
-std::vector<std::byte> ggml_et_read_kernel_file(const std::string& kernel_path) {
+// Get embedded kernel data by name
+static std::vector<std::byte> ggml_et_get_embedded_kernel(const std::string& kernel_name) {
+    auto it = ggml_et_embedded_kernels.find(kernel_name);
+    if (it == ggml_et_embedded_kernels.end()) {
+        GGML_LOG_ERROR("ET: Unknown embedded kernel: %s\n", kernel_name.c_str());
+        return {};
+    }
+
+    const unsigned char* data = it->second.first;
+    uint64_t size = it->second.second;
+
+    std::vector<std::byte> buffer(size);
+    std::memcpy(buffer.data(), data, size);
+
+    GGML_LOG_DEBUG("ET: Retrieved embedded kernel %s (%zu bytes)\n", kernel_name.c_str(), buffer.size());
+    return buffer;
+}
+
+// Read kernel from file (for development/override)
+static std::vector<std::byte> ggml_et_read_kernel_file(const std::string& kernel_path) {
     std::ifstream file(kernel_path, std::ios::binary | std::ios::ate);
     if (!file) {
-        GGML_LOG_ERROR("ET: Cannot open kernel file: %s\n", kernel_path.c_str());
         return {};
     }
 
@@ -20,7 +40,8 @@ std::vector<std::byte> ggml_et_read_kernel_file(const std::string& kernel_path) 
     return buffer;
 }
 
-bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::string& kernel_name, const std::string& kernel_path) {
+// Load kernel from file or embedded data
+bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::string& kernel_name) {
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         GGML_LOG_ERROR("ET: Runtime not available for kernel loading\n");
@@ -33,10 +54,29 @@ bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::str
         return true;
     }
 
-    // Read kernel file
-    auto kernel_data = ggml_et_read_kernel_file(kernel_path);
+    std::vector<std::byte> kernel_data;
+    const char* kernels_path = getenv("GGML_ET_KERNELS_PATH");
+
+    // If GGML_ET_KERNELS_PATH is set, try to load from file first
+    if (kernels_path) {
+        std::string kernel_file = std::string(kernels_path) + "/" + kernel_name + ".elf";
+        kernel_data = ggml_et_read_kernel_file(kernel_file);
+
+        if (!kernel_data.empty()) {
+            GGML_LOG_INFO("ET: Loading kernel %s from file: %s\n", kernel_name.c_str(), kernel_file.c_str());
+        } else {
+            GGML_LOG_INFO("ET: Kernel file not found: %s, falling back to embedded\n", kernel_file.c_str());
+        }
+    }
+
+    // If no file data, use embedded kernel
     if (kernel_data.empty()) {
-        return false;
+        kernel_data = ggml_et_get_embedded_kernel(kernel_name);
+        if (kernel_data.empty()) {
+            GGML_LOG_ERROR("ET: Failed to get kernel data for %s\n", kernel_name.c_str());
+            return false;
+        }
+        GGML_LOG_INFO("ET: Loading embedded kernel %s\n", kernel_name.c_str());
     }
 
     try {
@@ -70,18 +110,9 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx, const std::s
     // Lazy loading: check if kernel is loaded, load if needed
     auto kernel_it = dev_ctx->loaded_kernels.find(kernel_name);
     if (kernel_it == dev_ctx->loaded_kernels.end()) {
-        // Kernel not loaded - attempt to load it
-        const char* kernels_base_path = getenv("GGML_ET_KERNELS_PATH");
-        if (!kernels_base_path) {
-            kernels_base_path = "/opt/et/ggml/kernels";
-        }
-
-        std::string kernel_path = std::string(kernels_base_path) + "/" + kernel_name + ".elf";
-
-        GGML_LOG_INFO("ET: Lazy loading kernel %s from %s\n", kernel_name.c_str(), kernel_path.c_str());
-
-        if (!ggml_et_load_kernel(dev_ctx, kernel_name, kernel_path)) {
-            GGML_LOG_ERROR("ET: Failed to load kernel %s from %s\n", kernel_name.c_str(), kernel_path.c_str());
+        // Kernel not loaded - load it
+        if (!ggml_et_load_kernel(dev_ctx, kernel_name)) {
+            GGML_LOG_ERROR("ET: Failed to lazy-load kernel %s\n", kernel_name.c_str());
             return false;
         }
 

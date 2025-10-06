@@ -4,16 +4,17 @@
 #include <string>
 #include <vector>
 
-// Read kernel ELF file into memory buffer
-// Returns empty vector on failure
-std::vector<std::byte> ggml_et_read_kernel_file(const std::string& kernel_path);
-
-// Load kernel from ELF file and store handle in device context
+// Load kernel from file or embedded data and store handle in device context
 // Returns true on success, false on failure
+//
+// Loading strategy:
+// - If GGML_ET_KERNELS_PATH env var is set: tries to load from ${GGML_ET_KERNELS_PATH}/${kernel_name}.elf
+// - If file not found or env var not set: falls back to embedded kernel data
+// - Returns false if kernel cannot be loaded from either source
+//
 // Kernel is loaded using the device's default stream
 bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx,
-                         const std::string& kernel_name,
-                         const std::string& kernel_path);
+                         const std::string& kernel_name);
 
 // Launch kernel with parameters on device's default stream
 // Performs lazy loading: automatically loads kernel if not already loaded
