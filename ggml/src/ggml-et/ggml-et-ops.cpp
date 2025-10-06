@@ -42,7 +42,7 @@ static ggml_et_cpu_compare_config mul_mat_cpu_compare_config = {
     /* .log_differences = */ true,
     /* .tolerance = */ 0.01,
     /* .max_log_elements = */ 4096
-};
+ };
 
 static ggml_et_cpu_compare_config softmax_cpu_compare_config = {
     /* .enabled = */ false,
@@ -279,6 +279,18 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
                        (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
                        (long long)node->ne[0], (long long)node->ne[1], (long long)node->ne[2], (long long)node->ne[3]);
 
+    } else if (node->type == GGML_TYPE_F32 &&
+               node->src[0]->type == GGML_TYPE_F32 &&
+               node->src[1]->type == GGML_TYPE_F32) {
+
+        kernel_name = "mul_mat_f32";
+        src0_type_name = "F32";
+
+        GGML_LOG_DEBUG("ET: MUL_MAT F32xF32->F32 kernel selected for shapes src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld]\n",
+                       (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1], (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                       (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                       (long long)node->ne[0], (long long)node->ne[1], (long long)node->ne[2], (long long)node->ne[3]);
+
     } else {
         GGML_LOG_ERROR("ET: MUL_MAT operation with unsupported types: dst=%s src0=%s src1=%s\n",
                        ggml_type_name(node->type),
@@ -287,13 +299,11 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         return false;
     }
 
-    // Log tensor strides (nb arrays) for debugging memory layout
     GGML_LOG_DEBUG("ET: MUL_MAT tensor strides - src0.nb=[%zu,%zu,%zu,%zu] src1.nb=[%zu,%zu,%zu,%zu] dst.nb=[%zu,%zu,%zu,%zu]\n",
                    node->src[0]->nb[0], node->src[0]->nb[1], node->src[0]->nb[2], node->src[0]->nb[3],
                    node->src[1]->nb[0], node->src[1]->nb[1], node->src[1]->nb[2], node->src[1]->nb[3],
                    node->nb[0], node->nb[1], node->nb[2], node->nb[3]);
 
-    // Pack parameters - copy full tensor structures
     ggml_et_binary_params params;
     params.src0 = *node->src[0];  // weight matrix
     params.src1 = *node->src[1];  // activation matrix
@@ -316,7 +326,6 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         }
     }
 
-    // Launch ET kernel
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
 
     // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)

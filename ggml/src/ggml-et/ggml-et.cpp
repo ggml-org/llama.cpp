@@ -473,10 +473,10 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        ggml_is_contiguous(op->src[1]);
             break;
         case GGML_OP_MUL_MAT:
-            // Support Q8_0 x F32 -> F32 and F16 x F32 -> F32 matrix multiplication
+            // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, and F32 x F32 -> F32 matrix multiplication
             // Stride requirements: first dimension must be contiguous for all tensors
             if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16) &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
 
                 // Check first dimension contiguity requirements
@@ -646,7 +646,7 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                    ggml_is_contiguous(op->src[1]);
         case GGML_OP_MUL_MAT:
             if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16) &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
 
                 // Check first dimension contiguity requirements
