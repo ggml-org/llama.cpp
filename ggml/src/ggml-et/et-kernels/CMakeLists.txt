@@ -33,6 +33,7 @@ set(KERNELS
     rope_f32
     rms_norm_f32
     softmax_f32
+    get_rows_f32
     memops
 )
 
