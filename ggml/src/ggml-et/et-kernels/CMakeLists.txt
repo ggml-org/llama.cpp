@@ -71,11 +71,8 @@ function(create_bare_metal_kernel KERNEL_NAME)
         VERBATIM
     )
 
-    # Install the kernel
-    install(FILES
-        ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL_NAME}.elf
-        DESTINATION kernels
-    )
+    # Note: Kernels are build-time artifacts only (embedded in binary)
+    # They are not installed
 endfunction()
 
 # Create all kernels
@@ -89,9 +86,45 @@ foreach(KERNEL ${KERNELS})
     add_dependencies(et-kernels-all ${KERNEL}.elf)
 endforeach()
 
+# Find Python3 for embedding kernels
+find_package(Python3 REQUIRED)
+
+# Generate embedded kernel source files
+set(EMBED_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_kernels.py)
+set(EMBED_HPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.hpp)
+set(EMBED_CPP ${CMAKE_CURRENT_BINARY_DIR}/ggml-et-kernels-embed.cpp)
+
+# Build list of kernel ELF file dependencies
+set(KERNEL_ELF_FILES)
+foreach(KERNEL ${KERNELS})
+    list(APPEND KERNEL_ELF_FILES ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL}.elf)
+endforeach()
+
+add_custom_command(
+    OUTPUT ${EMBED_HPP} ${EMBED_CPP}
+    COMMAND ${Python3_EXECUTABLE} ${EMBED_SCRIPT}
+        --input-dir ${CMAKE_CURRENT_BINARY_DIR}
+        --output-hpp ${EMBED_HPP}
+        --output-cpp ${EMBED_CPP}
+        --kernels ${KERNELS}
+    DEPENDS ${KERNEL_ELF_FILES} ${EMBED_SCRIPT}
+    COMMENT "Embedding ET kernels into source code"
+    VERBATIM
+)
+
+# Create target for embedded sources
+add_custom_target(et-kernels-embed ALL
+    DEPENDS ${EMBED_HPP} ${EMBED_CPP}
+)
+add_dependencies(et-kernels-embed et-kernels-all)
+
+# Note: Embedded sources are build-time artifacts only
+# They are included in ggml-et backend compilation but not installed separately
+
 # Print summary
 message(STATUS "GGML Bare Metal Kernels configured:")
 foreach(KERNEL ${KERNELS})
     message(STATUS "  - ${KERNEL}")
 endforeach()
 message(STATUS "Base address: ${ADDRESS}")
+message(STATUS "Embedded sources: ${EMBED_HPP}, ${EMBED_CPP}")
