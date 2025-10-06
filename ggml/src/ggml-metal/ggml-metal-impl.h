@@ -581,6 +581,7 @@ typedef struct {
     uint64_t nb13;
     uint64_t nb21;
     uint64_t nb22;
+    int64_t  ne30;
     uint64_t nb31;
     uint64_t nb41;
     uint64_t nb42;
