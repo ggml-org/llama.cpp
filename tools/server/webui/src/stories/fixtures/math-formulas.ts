@@ -150,6 +150,16 @@ $$\lim_{x \to 0} \frac{\sin x}{x} = 1$$
 
 $$\lim_{n \to \infty} \left(1 + \frac{x}{n}\right)^n = e^x$$
 
+## Further Bracket Styles
+
+-  \( \mathrm{GL}_2(\mathbb{F}_7) \): Group of invertible matrices with entries in \(\mathbb{F}_7\).
+- Some kernel of \(\mathrm{SL}_2(\mathbb{F}_7)\):
+  \[
+  \left\{ \begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}, \begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix} \right\} = \{\pm I\}
+  \]
+- $100 and $12.99 are amounts, not LaTeX.
+- I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.
+
 ---
 
 *This document showcases various mathematical notation and formulas that can be rendered in markdown using LaTeX syntax.*

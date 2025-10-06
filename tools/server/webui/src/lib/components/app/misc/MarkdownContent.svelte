@@ -186,10 +186,148 @@
 			});
 	}
 
+	// See also:
+	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
+
+	// Protect code blocks: ```...``` and `...`
+	const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
+
+	export function preprocessLaTeX(content: string): string {
+		// Step 1: Protect code blocks
+		const codeBlocks: string[] = [];
+		content = content.replace(codeBlockRegex, (match) => {
+			codeBlocks.push(match);
+			return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
+		});
+
+		// Step 2: Protect existing LaTeX expressions
+		const latexExpressions: string[] = [];
+
+		// Match \(...\), \[...\], $$...$$ and protect them
+		content = content.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
+			latexExpressions.push(match);
+			return `<<LATEX_${latexExpressions.length - 1}>>`;
+		});
+
+		// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
+		content = protectLaTeXButNotMoney(content, latexExpressions);
+
+		// Step 3: Escape standalone $ before digits (currency like $5 → \$5)
+		// (Now that inline math is protected, this will only escape dollars not already protected)
+		content = content.replace(/\$(?=\d)/g, '\\$');
+
+		// Step 4: Restore protected LaTeX expressions (they are valid)
+		content = content.replace(/<<LATEX_(\d+)>>/g, (_, index) => {
+			return latexExpressions[parseInt(index)];
+		});
+
+		// Step 5: Restore code blocks
+		content = content.replace(/<<CODE_BLOCK_(\d+)>>/g, (_, index) => {
+			return codeBlocks[parseInt(index)];
+		});
+
+		// Step 6: Apply additional escaping functions (brackets and mhchem)
+		content = escapeBrackets(content);
+		if (content.includes('\\ce{') || content.includes('\\pu{')) {
+			content = escapeMhchem(content);
+		}
+
+		// Final pass: Convert \(...\) → $...$, \[...\] → $$...$$
+		content = content
+			.replace(/\\\((.+?)\\\)/g, '$$$1$') // inline
+			.replace(/\\\[(.+?)\\\]/g, '$$$$1$$'); // display
+
+		return content;
+	}
+
+	function protectLaTeXButNotMoney(content: string, latexExpressions: string[]): string {
+		if (content.indexOf('$') == -1) {
+			return content;
+		}
+		return content
+			.split('\n')
+			.map((line) => {
+				if (line.indexOf('$') == -1) {
+					return line;
+				}
+				let result = '';
+				let index = 0;
+				while (index + 2 < line.length) {
+					const openIndex = line.indexOf('$', index);
+					if (openIndex == -1) {
+						result += line.slice(index);
+						break;
+					}
+
+					// Is there a next $-sign?
+					const nextIndex = line.indexOf('$', openIndex + 1);
+					if (nextIndex == -1) {
+						result += line.slice(index);
+						break;
+					}
+
+					const beforeOpenChar = openIndex > 0 ? line[openIndex - 1] : '';
+					const afterOpenChar = line[openIndex + 1];
+					const afterCloseChar = nextIndex + 1 < line.length ? line[nextIndex + 1] : '';
+					if (/[A-Za-z0-9_$-]/.test(beforeOpenChar)) {
+						// character, digit, $, _ or - before first '$', no TeX.
+						result += line.slice(index, openIndex + 1);
+						index = openIndex + 1;
+						continue;
+					}
+					if (/[0-9]/.test(afterOpenChar) && /[A-Za-z0-9_$-]/.test(afterCloseChar)) {
+						// First $ seems to belong to an amount.
+						result += line.slice(index, openIndex + 1);
+						index = openIndex + 1;
+						continue;
+					}
+
+					// Treat as LaTeX
+					result += line.slice(index, openIndex);
+					const latexContent = line.slice(openIndex, nextIndex + 1);
+					latexExpressions.push(latexContent);
+					result += `<<LATEX_${latexExpressions.length - 1}>>`;
+					index = nextIndex + 1;
+				}
+				return result;
+			})
+			.join('\n');
+	}
+
+	function escapeBrackets(text: string): string {
+		const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
+		return text.replace(
+			pattern,
+			(
+				match: string,
+				codeBlock: string | undefined,
+				squareBracket: string | undefined,
+				roundBracket: string | undefined
+			): string => {
+				if (codeBlock != null) {
+					return codeBlock;
+				} else if (squareBracket != null) {
+					return `$$${squareBracket}$$`;
+				} else if (roundBracket != null) {
+					return `$${roundBracket}$`;
+				}
+				return match;
+			}
+		);
+	}
+
+	// Escape $\\ce{...} → $\\ce{...} but with proper handling
+	function escapeMhchem(text: string): string {
+		return text.replaceAll('$\\ce{', '$\\\\ce{').replaceAll('$\\pu{', '$\\\\pu{');
+	}
+
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const normalized = normalizeMathDelimiters(text);
-			const result = await processor().process(normalized);
+			// const normalized = normalizeMathDelimiters(text);
+			// const result = await processor().process(normalized);
+			const processedText = preprocessLaTeX(text);
+
+			const result = await processor().process(processedText);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
 
