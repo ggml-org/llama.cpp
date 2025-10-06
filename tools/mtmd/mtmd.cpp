@@ -252,7 +252,6 @@ struct mtmd_context {
             tok_ov_img_start   = {lookup_token("\n"), lookup_token("<fake_token_around_image>"), lookup_token("<global-img>")};
             tok_ov_img_end     = {lookup_token("<fake_token_around_image>")};
             tok_row_end        = {lookup_token("\n")};
-            img_beg            = "<fake_token_around_image>";
             sli_img_start_tmpl = "<fake_token_around_image><row_%d_col_%d>";
 
         } else if (proj == PROJECTOR_TYPE_PIXTRAL) {
