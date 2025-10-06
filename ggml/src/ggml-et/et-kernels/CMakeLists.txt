@@ -30,6 +30,7 @@ set(KERNELS
     el_map_f32
     mul_mat_f32
     rope_f32
+    rms_norm_f32
     memops
 )
 
