@@ -151,7 +151,8 @@
 				},
 				{
 					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
+					label:
+						'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 					type: 'checkbox'
 				}
 			]

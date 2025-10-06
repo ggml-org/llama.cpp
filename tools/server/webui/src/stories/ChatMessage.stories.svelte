@@ -42,8 +42,7 @@
 		type: 'message',
 		timestamp: Date.now() - 1000 * 60 * 2,
 		role: 'assistant',
-		content:
-			"Here's the concise answer, now that I've thought it through carefully for you.",
+		content: "Here's the concise answer, now that I've thought it through carefully for you.",
 		parent: '1',
 		thinking:
 			"Let's consider the user's question step by step:\\n\\n1. Identify the core problem\\n2. Evaluate relevant information\\n3. Formulate a clear answer\\n\\nFollowing this process ensures the final response stays focused and accurate.",
@@ -61,7 +60,6 @@
 		thinking: '',
 		children: []
 	};
-
 
 	let processingMessage = $state({
 		id: '4',
@@ -140,7 +138,7 @@
 	args={{
 		message: streamingMessage
 	}}
-asChild
+	asChild
 	play={async () => {
 		const { updateConfig } = await import('$lib/stores/settings.svelte');
 		updateConfig('disableReasoningFormat', false);
@@ -187,7 +185,6 @@ asChild
 		<ChatMessage message={streamingMessage} />
 	</div>
 </Story>
-
 
 <Story
 	name="Processing"

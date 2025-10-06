@@ -307,17 +307,17 @@ export class ChatService {
 								}
 							}
 
-                                                        if (content) {
-                                                                hasReceivedData = true;
-                                                                aggregatedContent += content;
-                                                                onChunk?.(content);
-                                                        }
+							if (content) {
+								hasReceivedData = true;
+								aggregatedContent += content;
+								onChunk?.(content);
+							}
 
-                                                        if (reasoningContent) {
-                                                                hasReceivedData = true;
-                                                                fullReasoningContent += reasoningContent;
-                                                                onReasoningChunk?.(reasoningContent);
-                                                        }
+							if (reasoningContent) {
+								hasReceivedData = true;
+								fullReasoningContent += reasoningContent;
+								onReasoningChunk?.(reasoningContent);
+							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
 						}
