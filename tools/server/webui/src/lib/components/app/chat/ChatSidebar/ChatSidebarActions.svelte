@@ -79,21 +79,6 @@
 			<KeyboardShortcutInfo keys={['cmd', 'k']} />
 		</Button>
 
-		<!-- Export All Conversations -->
-		<Button
-			class="w-full justify-start text-sm"
-			onclick={() => {
-				exportAllConversations();
-			}}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<Download class="h-4 w-4" />
-				Export all
-			</div>
-		</Button>
-
-		<!-- Import Conversations -->
 		<Button
 			class="w-full justify-start text-sm"
 			onclick={() => {
@@ -107,7 +92,20 @@
 
 			<div class="flex items-center gap-2">
 				<Upload class="h-4 w-4" />
-				Import all
+				Import conversations
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-start text-sm"
+			onclick={() => {
+				exportAllConversations();
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Download class="h-4 w-4" />
+				Export all conversations
 			</div>
 		</Button>
 	{/if}
