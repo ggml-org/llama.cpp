@@ -144,6 +144,7 @@ struct common_chat_params {
     std::string                         grammar;
     bool                                grammar_lazy = false;
     bool                                thinking_forced_open = false;
+    bool                                supports_enable_thinking = false;
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;

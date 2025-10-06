@@ -149,6 +149,7 @@ struct templates_params {
     bool add_bos;
     bool add_eos;
     bool is_inference = true;
+    bool supports_enable_thinking = false;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -171,10 +172,8 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     msg.content = "test";
     dummy_inputs.messages = {msg};
     dummy_inputs.enable_thinking = false;
-    const auto rendered_no_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
-    dummy_inputs.enable_thinking = true;
-    const auto rendered_with_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
-    return rendered_no_thinking.prompt != rendered_with_thinking.prompt;
+    const auto rendered = common_chat_templates_apply(chat_templates, dummy_inputs);
+    return rendered.supports_enable_thinking;
 }
 
 template <>
@@ -827,6 +826,7 @@ static std::string apply(
 
 static common_chat_params common_chat_params_init_generic(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     auto tool_call_schemas = json::array();
     foreach_function(inputs.tools, [&](const json & tool) {
@@ -944,6 +944,7 @@ static void common_chat_parse_generic(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_mistral_nemo(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     data.grammar = build_grammar([&](const common_grammar_builder & builder) {
         auto schemas = json::array();
@@ -989,6 +990,7 @@ static common_chat_params common_chat_params_init_mistral_nemo(const common_chat
 
 static common_chat_params common_chat_params_init_magistral(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_MAGISTRAL;
     data.preserved_tokens = {
@@ -1069,6 +1071,7 @@ static void common_chat_parse_magistral(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_command_r7b(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     auto adjusted_messages = json::array();
     for (const auto & msg : inputs.messages) {
@@ -1202,6 +1205,7 @@ static void expect_tool_parameters(const std::string & name, const json & parame
 static common_chat_params common_chat_params_init_llama_3_x(const common_chat_template & tmpl, const struct templates_params & inputs, bool allow_python_tag_builtin_tools) {
     auto builtin_tools = json::array();
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     if (!inputs.tools.is_null()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -1281,6 +1285,7 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
 
 static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     // Generate the prompt using the apply() function with the template
     data.prompt = apply(tmpl, inputs);
@@ -1342,6 +1347,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
 
 static common_chat_params common_chat_params_init_apertus(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     // Generate the prompt using the apply() function with the template
     data.prompt = apply(tmpl, inputs);
@@ -1466,6 +1472,7 @@ static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool w
 
 static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     auto prompt = apply(tmpl, inputs);
 
     // Hacks to fix the official (broken) prompt.
@@ -1540,6 +1547,7 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
 
 static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     // Pass thinking context for DeepSeek V3.1 template
     json additional_context = {
@@ -1685,6 +1693,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     auto prompt = apply(tmpl, inputs);
 
     // Check if we need to replace the return token with end token during
@@ -1904,6 +1913,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     const std::optional<json> tools_override = json();
     const std::optional<json> additional_context = json {
         {"datetime", format_time(inputs.now, "%b %d %Y %H:%M:%S GMT")},
@@ -1962,6 +1972,7 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
     // Using ">>>f1\n", ">>>f2\n"... as trigger words for the grammar
     // If the function is python, we also allow raw python code (if the line after `python\n` doesn't start w/ opening `{`), which the model seems to prefer for multiline code.
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2;
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
@@ -2038,6 +2049,7 @@ static void common_chat_parse_functionary_v3_2(common_chat_msg_parser & builder)
 static common_chat_params common_chat_params_init_functionary_v3_1_llama_3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
     // https://github.com/MeetKai/functionary/blob/main/tests/prompt_test_v3-llama3.1.txt
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     if (!inputs.tools.is_null()) {
         std::string python_code_argument_name;
@@ -2121,6 +2133,7 @@ static void common_chat_parse_functionary_v3_1_llama_3_1(common_chat_msg_parser 
 
 static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     json extra_context = json {
         {"enable_thinking", inputs.enable_thinking},
@@ -2314,6 +2327,7 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_granite(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
 
     // Pass thinking context for Granite template
     json additional_context = {
@@ -2588,6 +2602,7 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.supports_enable_thinking = inputs.supports_enable_thinking;
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     data.grammar_lazy = false;
@@ -2600,18 +2615,20 @@ static common_chat_params common_chat_params_init_without_tools(const common_cha
         data.grammar = inputs.grammar;
     }
 
-    static constexpr size_t think_tag_len = 7; // strlen("<think>")
-    size_t prompt_trimmed_size = data.prompt.size();
-    while (prompt_trimmed_size > 0 &&
-           std::isspace(static_cast<unsigned char>(data.prompt[prompt_trimmed_size - 1]))) {
-        --prompt_trimmed_size;
-    }
-    if (prompt_trimmed_size >= think_tag_len &&
-        data.prompt.compare(prompt_trimmed_size - think_tag_len, think_tag_len, "<think>") == 0) {
-        if (!inputs.enable_thinking) {
-            data.prompt += "</think>";
-        } else {
-            data.thinking_forced_open = true;
+    if (inputs.supports_enable_thinking) {
+        static constexpr size_t think_tag_len = 7; // strlen("<think>")
+        size_t prompt_trimmed_size = data.prompt.size();
+        while (prompt_trimmed_size > 0 &&
+               std::isspace(static_cast<unsigned char>(data.prompt[prompt_trimmed_size - 1]))) {
+            --prompt_trimmed_size;
+        }
+        if (prompt_trimmed_size >= think_tag_len &&
+            data.prompt.compare(prompt_trimmed_size - think_tag_len, think_tag_len, "<think>") == 0) {
+            if (!inputs.enable_thinking) {
+                data.prompt += "</think>";
+            } else {
+                data.thinking_forced_open = true;
+            }
         }
     }
     return data;
@@ -2623,6 +2640,7 @@ static common_chat_params common_chat_params_init_seed_oss(
     const common_chat_templates_inputs & inputs)
 {
     common_chat_params data;
+    data.supports_enable_thinking = params.supports_enable_thinking;
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_SEED_OSS;
     if (string_ends_with(data.prompt, "<seed:think>")) {
@@ -2694,6 +2712,15 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.extra_context = json::object();
     for (auto el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
+    }
+
+    {
+        auto params_with_thinking = params;
+        params_with_thinking.enable_thinking = true;
+        auto params_without_thinking = params;
+        params_without_thinking.enable_thinking = false;
+        params.supports_enable_thinking =
+            apply(tmpl, params_with_thinking) != apply(tmpl, params_without_thinking);
     }
 
     if (!inputs.json_schema.empty()) {

@@ -1353,13 +1353,51 @@ static void test_template_output_parsers() {
         auto params_no_thinking = common_chat_templates_apply(tmpls.get(), inputs_no_thinking);
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, params_no_thinking.format);
         assert_equals(false, params_no_thinking.thinking_forced_open);
-        assert_equals(true, string_ends_with(params_no_thinking.prompt, "</think>"));
+        assert_equals(false, params_no_thinking.supports_enable_thinking);
+        assert_equals(true, string_ends_with(string_strip(params_no_thinking.prompt), "<think>"));
+
+        auto inputs_with_thinking = inputs_base;
+        inputs_with_thinking.enable_thinking = true;
+        auto params_with_thinking = common_chat_templates_apply(tmpls.get(), inputs_with_thinking);
+        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, params_with_thinking.format);
+        assert_equals(false, params_with_thinking.thinking_forced_open);
+        assert_equals(false, params_with_thinking.supports_enable_thinking);
+        assert_equals(true, string_ends_with(string_strip(params_with_thinking.prompt), "<think>"));
+
+        assert_equals(false, common_chat_templates_support_enable_thinking(tmpls.get()));
+    }
+    {
+        // Template that conditionally appends <think> when enable_thinking is true.
+        static const char * tmpl_str = R"(
+{% for message in messages %}
+<|{{ message.role }}|>
+{{ message.content }}
+{% endfor %}
+{% if add_generation_prompt %}<|assistant|>
+{% if enable_thinking %}<think>{% endif %}
+{% endif %}
+)";
+
+        auto tmpls = common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, tmpl_str));
+
+        common_chat_templates_inputs inputs_base;
+        inputs_base.messages = { message_user };
+        inputs_base.add_generation_prompt = true;
+
+        auto inputs_no_thinking = inputs_base;
+        inputs_no_thinking.enable_thinking = false;
+        auto params_no_thinking = common_chat_templates_apply(tmpls.get(), inputs_no_thinking);
+        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, params_no_thinking.format);
+        assert_equals(false, params_no_thinking.thinking_forced_open);
+        assert_equals(true, params_no_thinking.supports_enable_thinking);
+        assert_equals(false, string_ends_with(string_strip(params_no_thinking.prompt), "<think>"));
 
         auto inputs_with_thinking = inputs_base;
         inputs_with_thinking.enable_thinking = true;
         auto params_with_thinking = common_chat_templates_apply(tmpls.get(), inputs_with_thinking);
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, params_with_thinking.format);
         assert_equals(true, params_with_thinking.thinking_forced_open);
+        assert_equals(true, params_with_thinking.supports_enable_thinking);
         assert_equals(true, string_ends_with(string_strip(params_with_thinking.prompt), "<think>"));
 
         assert_equals(true, common_chat_templates_support_enable_thinking(tmpls.get()));
