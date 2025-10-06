@@ -170,10 +170,10 @@ struct llama_hparams {
     uint32_t n_embd_altup = 256;
 
     // needed for sentence-transformers dense layers
-    uint32_t dense_2_feat_in = 0; // in_features of the 2_Dense
-    uint32_t dense_2_feat_out = 0; // out_features of the 2_Dense
-    uint32_t dense_3_feat_in = 0; // in_features of the 3_Dense
-    uint32_t dense_3_feat_out = 0; // out_features of the 3_Dense
+    uint32_t dense_2_feat_in  = 0;  // in_features of the 2_Dense
+    uint32_t dense_2_feat_out = 0;  // out_features of the 2_Dense
+    uint32_t dense_3_feat_in  = 0;  // in_features of the 3_Dense
+    uint32_t dense_3_feat_out = 0;  // out_features of the 3_Dense
 
     // whether pooling_type can be overridden by user
     bool pooling_type_opt = true;

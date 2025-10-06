@@ -1229,14 +1229,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_DENSE_3_FEAT_OUT, hparams.dense_3_feat_out, false);
                 ml.get_key(LLM_KV_POOLING_TYPE_OPT, hparams.pooling_type_opt, false);
 
-
                 switch (hparams.n_layer) {
-                    case 24: type = LLM_TYPE_0_3B;                    break;
-                default: type = LLM_TYPE_UNKNOWN;
-            }
-            hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
-        }
-        break;
+                    case 24: type = LLM_TYPE_0_3B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+                hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
+
+            } break;
         case LLM_ARCH_STARCODER2:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
