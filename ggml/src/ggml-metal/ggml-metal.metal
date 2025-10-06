@@ -2032,6 +2032,37 @@ kernel void kernel_ssm_conv_f32_f32(
     x[0] = sumf;
 }
 
+kernel void kernel_ssm_conv_f32_f32_4(
+        constant ggml_metal_kargs_ssm_conv & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    const int64_t ir = tgpig.x;
+    const int64_t i2 = tgpig.y;
+    const int64_t i3 = tgpig.z;
+
+    const int64_t nc  = args.ne10;
+  //const int64_t ncs = args.ne00;
+  //const int64_t nr  = args.ne01;
+  //const int64_t n_t = args.ne1;
+  //const int64_t n_s = args.ne2;
+
+    device const float4 * s = (device const float4 *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device const float4 * c = (device const float4 *) ((device const char *) src1 + ir*args.nb11);
+    device       float  * x = (device       float  *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+
+    float sumf = 0.0f;
+
+    for (int64_t i0 = 0; i0 < nc/4; ++i0) {
+        sumf += dot(s[i0], c[i0]);
+    }
+
+    x[0] = sumf;
+}
+
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-1 part
 kernel void kernel_ssm_scan_f32(
         constant ggml_metal_kargs_ssm_scan & args,
