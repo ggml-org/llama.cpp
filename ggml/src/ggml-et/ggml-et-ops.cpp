@@ -44,6 +44,14 @@ static ggml_et_cpu_compare_config mul_mat_cpu_compare_config = {
     /* .max_log_elements = */ 4096
  };
 
+static ggml_et_cpu_compare_config mul_mat_id_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 0.01,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config softmax_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -357,6 +365,129 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         ET_PERF_END_EXT("MUL_MAT", kernel_variant, node, "flops=%" PRId64,
                         total_flops);
     }
+    return kernel_result;
+}
+
+bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for MUL_MAT_ID operation\n");
+        return false;
+    }
+
+    if (!node->src[0] || !node->src[1] || !node->src[2]) {
+        GGML_LOG_ERROR("ET: MUL_MAT_ID operation missing required inputs\n");
+        return false;
+    }
+
+    const char* kernel_name;
+    const char* src0_type_name;
+
+    // Support Q8_0/F16/F32 x F32 -> F32 matrix multiplication with expert selection
+    if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_Q8_0 &&
+        node->src[1]->type == GGML_TYPE_F32 &&
+        node->src[2]->type == GGML_TYPE_I32) {
+
+        kernel_name = "mul_mat_id_f32";
+        src0_type_name = "Q8_0";
+
+        GGML_LOG_DEBUG("ET: MUL_MAT_ID Q8_0xF32->F32 kernel selected\n");
+
+    } else if (node->type == GGML_TYPE_F32 &&
+               node->src[0]->type == GGML_TYPE_F16 &&
+               node->src[1]->type == GGML_TYPE_F32 &&
+               node->src[2]->type == GGML_TYPE_I32) {
+
+        kernel_name = "mul_mat_id_f32";
+        src0_type_name = "F16";
+
+        GGML_LOG_DEBUG("ET: MUL_MAT_ID F16xF32->F32 kernel selected\n");
+
+    } else if (node->type == GGML_TYPE_F32 &&
+               node->src[0]->type == GGML_TYPE_F32 &&
+               node->src[1]->type == GGML_TYPE_F32 &&
+               node->src[2]->type == GGML_TYPE_I32) {
+
+        kernel_name = "mul_mat_id_f32";
+        src0_type_name = "F32";
+
+        GGML_LOG_DEBUG("ET: MUL_MAT_ID F32xF32->F32 kernel selected\n");
+
+    } else {
+        GGML_LOG_ERROR("ET: MUL_MAT_ID operation with unsupported types: dst=%s src0=%s src1=%s src2=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->src[1]->type),
+                       ggml_type_name(node->src[2]->type));
+        return false;
+    }
+
+    // Log tensor dimensions for debugging
+    GGML_LOG_DEBUG("ET: MUL_MAT_ID shapes - src0(experts)=[%lld,%lld,%lld,%lld] src1(acts)=[%lld,%lld,%lld,%lld] src2(ids)=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld]\n",
+                   (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1], (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   (long long)node->src[1]->ne[0], (long long)node->src[1]->ne[1], (long long)node->src[1]->ne[2], (long long)node->src[1]->ne[3],
+                   (long long)node->src[2]->ne[0], (long long)node->src[2]->ne[1], (long long)node->src[2]->ne[2], (long long)node->src[2]->ne[3],
+                   (long long)node->ne[0], (long long)node->ne[1], (long long)node->ne[2], (long long)node->ne[3]);
+
+    // Log tensor strides for debugging memory layout
+    GGML_LOG_DEBUG("ET: MUL_MAT_ID tensor strides - src0.nb=[%zu,%zu,%zu,%zu] src1.nb=[%zu,%zu,%zu,%zu] src2.nb=[%zu,%zu,%zu,%zu] dst.nb=[%zu,%zu,%zu,%zu]\n",
+                   node->src[0]->nb[0], node->src[0]->nb[1], node->src[0]->nb[2], node->src[0]->nb[3],
+                   node->src[1]->nb[0], node->src[1]->nb[1], node->src[1]->nb[2], node->src[1]->nb[3],
+                   node->src[2]->nb[0], node->src[2]->nb[1], node->src[2]->nb[2], node->src[2]->nb[3],
+                   node->nb[0], node->nb[1], node->nb[2], node->nb[3]);
+
+    // Pack parameters - copy full tensor structures
+    ggml_et_mul_mat_id_params params;
+    params.src0 = *node->src[0];  // Expert weight matrices (Q8_0/F16/F32)
+    params.src1 = *node->src[1];  // Activation matrix (F32)
+    params.src2 = *node->src[2];  // Expert indices (I32)
+    params.dst = *node;           // Output matrix (F32)
+
+    GGML_LOG_DEBUG("ET: Launching MUL_MAT_ID kernel %s (%s experts, n_expert=%lld, n_expert_used=%lld, batch=%lld)\n",
+                   kernel_name, src0_type_name,
+                   (long long)node->src[0]->ne[2],  // n_expert
+                   (long long)node->src[2]->ne[0],  // n_expert_used
+                   (long long)node->src[2]->ne[1]); // batch
+
+    // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (mul_mat_id_cpu_compare_config.enabled) {
+        GGML_LOG_DEBUG("ET: Initializing CPU comparison for MUL_MAT_ID operation\n");
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_MUL_MAT_ID)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for MUL_MAT_ID operation\n");
+        }
+    }
+
+    // Launch ET kernel
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+
+    // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
+    if (cpu_comparison_active) {
+        GGML_LOG_DEBUG("ET: Performing CPU computation and comparison for MUL_MAT_ID operation\n");
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &mul_mat_id_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for MUL_MAT_ID operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    // Calculate FLOPs (approximate - similar to MUL_MAT but with expert routing overhead)
+    // Each expert computation is similar to a MUL_MAT, but we only compute for selected experts
+    int64_t K = node->src[0]->ne[0];
+    int64_t M = node->src[0]->ne[1];
+    int64_t n_expert_used = node->src[2]->ne[0];
+    int64_t batch = node->src[2]->ne[1];
+
+    int64_t total_flops = batch * n_expert_used * M * (2 * K - 1);
+
+    char kernel_variant[64];
+    snprintf(kernel_variant, sizeof(kernel_variant), "%s_%sx%s", kernel_name, src0_type_name, ggml_type_name(node->src[1]->type));
+    ET_PERF_END_EXT("MUL_MAT_ID", kernel_variant, node, "flops=%" PRId64 "|n_expert=%lld|n_expert_used=%lld",
+                    total_flops, (long long)node->src[0]->ne[2], (long long)n_expert_used);
+
     return kernel_result;
 }
 

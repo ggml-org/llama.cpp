@@ -199,6 +199,13 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_MUL_MAT:
             ctx->cpu_dst = ggml_mul_mat(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1);
             break;
+        case GGML_OP_MUL_MAT_ID:
+            // MUL_MAT_ID: Mixture of Experts matrix multiplication
+            // src0 (as): expert weight matrices [K, M, n_expert]
+            // src1 (b):  activations [K, n_expert_used, batch]
+            // src2 (ids): expert selection indices [n_expert_used, batch]
+            ctx->cpu_dst = ggml_mul_mat_id(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, ctx->cpu_src2);
+            break;
         case GGML_OP_ROPE:
             // Copy op_params to destination tensor for ROPE operation
             ctx->cpu_dst = ggml_rope_ext(

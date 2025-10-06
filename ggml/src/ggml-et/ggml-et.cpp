@@ -374,6 +374,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_mul_mat(dev_ctx, node);
                 break;
 
+            case GGML_OP_MUL_MAT_ID:
+                ggml_et_op_mul_mat_id(dev_ctx, node);
+                break;
+
             case GGML_OP_ROPE:
                 ggml_et_op_rope(dev_ctx, node);
                 break;
@@ -493,6 +497,46 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                            src1_first_dim_contiguous &&
                            dst_first_dim_contiguous &&
                            dst_properly_ordered;
+            } else {
+                supported = false;
+            }
+            break;
+        case GGML_OP_MUL_MAT_ID:
+            // Support MUL_MAT_ID for Mixture of Experts: (Q8_0/F16/F32) x F32 -> F32 with I32 expert indices
+            // src0 (as): [K, M, n_expert] - expert weight matrices (can be quantized)
+            // src1 (b):  [K, n_expert_used, batch] - activations (F32)
+            // src2 (ids): [n_expert_used, batch] - expert selection indices (I32)
+            // dst: [M, n_expert_used, batch, 1] - output (F32)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_I32) {
+
+                // Check first dimension contiguity requirements (matching CPU backend)
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool src2_first_dim_contiguous = (op->src[2]->nb[0] == ggml_type_size(op->src[2]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                // Check destination stride ordering (matching CPU backend)
+                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
+                                            op->nb[1] <= op->nb[2] &&
+                                            op->nb[2] <= op->nb[3]);
+
+                // Validate tensor dimension constraints from GGML definition
+                bool dims_valid = (op->src[0]->ne[3] == 1) &&  // as is 3d (one matrix per expert)
+                                 (op->src[1]->ne[3] == 1) &&  // b is 3d
+                                 (op->src[2]->ne[2] == 1 && op->src[2]->ne[3] == 1) &&  // ids is 2d
+                                 (op->src[2]->ne[1] == op->src[1]->ne[2]) &&  // must have expert list per b row
+                                 (op->src[0]->ne[0] == op->src[1]->ne[0]) &&  // K dimension must match
+                                 (op->src[2]->ne[0] % op->src[1]->ne[1] == 0);  // can broadcast
+
+                supported = src0_first_dim_contiguous &&
+                           src1_first_dim_contiguous &&
+                           src2_first_dim_contiguous &&
+                           dst_first_dim_contiguous &&
+                           dst_properly_ordered &&
+                           dims_valid;
             } else {
                 supported = false;
             }
@@ -663,6 +707,43 @@ static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml
                        src1_first_dim_contiguous &&
                        dst_first_dim_contiguous &&
                        dst_properly_ordered;
+            }
+            return false;
+        case GGML_OP_MUL_MAT_ID:
+            // Offload MUL_MAT_ID for Mixture of Experts - high-compute operation worth offloading
+            // src0 (as): [K, M, n_expert] - expert weight matrices (Q8_0/F16/F32)
+            // src1 (b):  [K, n_expert_used, batch] - activations (F32)
+            // src2 (ids): [n_expert_used, batch] - expert selection indices (I32)
+            if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2] && op->src[2]->type == GGML_TYPE_I32) {
+
+                // Check first dimension contiguity requirements
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool src2_first_dim_contiguous = (op->src[2]->nb[0] == ggml_type_size(op->src[2]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                // Check destination stride ordering
+                bool dst_properly_ordered = (op->nb[0] <= op->nb[1] &&
+                                            op->nb[1] <= op->nb[2] &&
+                                            op->nb[2] <= op->nb[3]);
+
+                // Validate tensor dimension constraints
+                bool dims_valid = (op->src[0]->ne[3] == 1) &&
+                                 (op->src[1]->ne[3] == 1) &&
+                                 (op->src[2]->ne[2] == 1 && op->src[2]->ne[3] == 1) &&
+                                 (op->src[2]->ne[1] == op->src[1]->ne[2]) &&
+                                 (op->src[0]->ne[0] == op->src[1]->ne[0]) &&
+                                 (op->src[2]->ne[0] % op->src[1]->ne[1] == 0);
+
+                return src0_first_dim_contiguous &&
+                       src1_first_dim_contiguous &&
+                       src2_first_dim_contiguous &&
+                       dst_first_dim_contiguous &&
+                       dst_properly_ordered &&
+                       dims_valid;
             }
             return false;
         case GGML_OP_ROPE:
