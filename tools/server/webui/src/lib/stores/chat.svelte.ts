@@ -958,27 +958,27 @@ class ChatStore {
 	 * @param convId - The conversation ID to download
 	 */
 	async downloadConversation(convId: string): Promise<void> {
-	    if (!this.activeConversation || this.activeConversation.id !== convId) {
-		// Load the conversation if not currently active
-		const conversation = await DatabaseStore.getConversation(convId);
-		if (!conversation) return;
+		if (!this.activeConversation || this.activeConversation.id !== convId) {
+			// Load the conversation if not currently active
+			const conversation = await DatabaseStore.getConversation(convId);
+			if (!conversation) return;
 
-		const messages = await DatabaseStore.getConversationMessages(convId);
-		const conversationData = {
-		    conv: conversation,
-		    messages
-		};
+			const messages = await DatabaseStore.getConversationMessages(convId);
+			const conversationData = {
+				conv: conversation,
+				messages
+			};
 
-		this.triggerDownload(conversationData);
-	    } else {
-		// Use current active conversation data
-		const conversationData: ExportedConversations = {
-		    conv: this.activeConversation!,
-		    messages: this.activeMessages
-		};
+			this.triggerDownload(conversationData);
+		} else {
+			// Use current active conversation data
+			const conversationData: ExportedConversations = {
+				conv: this.activeConversation!,
+				messages: this.activeMessages
+			};
 
-		this.triggerDownload(conversationData);
-	    }
+			this.triggerDownload(conversationData);
+		}
 	}
 
 	/**
@@ -987,20 +987,24 @@ class ChatStore {
 	 * @param filename - Optional filename
 	 */
 	private triggerDownload(data: ExportedConversations, filename?: string): void {
-		const conversation = 'conv' in data ? data.conv : (Array.isArray(data) ? data[0]?.conv : undefined);
+		const conversation =
+			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
 			return;
 		}
 		const conversationName = conversation.name ? conversation.name.trim() : '';
 		const convId = conversation.id || 'unknown';
-		const truncatedSuffix = conversationName.toLowerCase()
-			.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').substring(0, 20);
+		const truncatedSuffix = conversationName
+			.toLowerCase()
+			.replace(/[^a-z0-9]/gi, '_')
+			.replace(/_+/g, '_')
+			.substring(0, 20);
 		const downloadFilename = filename || `conversation_${convId}_${truncatedSuffix}.json`;
 
 		const conversationJson = JSON.stringify(data, null, 2);
 		const blob = new Blob([conversationJson], {
-			type: 'application/json',
+			type: 'application/json'
 		});
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
@@ -1073,11 +1077,18 @@ class ChatStore {
 
 					if (Array.isArray(parsedData)) {
 						importedData = parsedData;
-					} else if (parsedData && typeof parsedData === 'object' && 'conv' in parsedData && 'messages' in parsedData) {
+					} else if (
+						parsedData &&
+						typeof parsedData === 'object' &&
+						'conv' in parsedData &&
+						'messages' in parsedData
+					) {
 						// Single conversation object
 						importedData = [parsedData];
 					} else {
-						throw new Error('Invalid file format: expected array of conversations or single conversation object');
+						throw new Error(
+							'Invalid file format: expected array of conversations or single conversation object'
+						);
 					}
 
 					const result = await DatabaseStore.importConversations(importedData);

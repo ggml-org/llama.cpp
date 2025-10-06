@@ -381,5 +381,4 @@ export class DatabaseStore {
 			return { imported: importedCount, skipped: skippedCount };
 		});
 	}
-
 }

@@ -82,14 +82,13 @@
 		<Button
 			class="w-full justify-start text-sm"
 			onclick={() => {
-				importConversations().catch(err => {
+				importConversations().catch((err) => {
 					console.error('Import failed:', err);
 					// Optional: show toast or dialog
 				});
 			}}
 			variant="ghost"
 		>
-
 			<div class="flex items-center gap-2">
 				<Upload class="h-4 w-4" />
 				Import conversations
