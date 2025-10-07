@@ -223,7 +223,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out"  },
     { LLM_KV_DENSE_3_FEAT_IN,        "%s.dense_3_feat_in"   },
     { LLM_KV_DENSE_3_FEAT_OUT,       "%s.dense_3_feat_out"  },
-    { LLM_KV_POOLING_TYPE_OPT,       "%s.pooling_type_opt"  },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },

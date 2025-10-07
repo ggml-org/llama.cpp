@@ -734,9 +734,6 @@ class GGUFWriter:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
 
-    def add_pooling_type_opt(self, enable: bool) -> None:
-        self.add_bool(Keys.LLM.POOLING_TYPE_OPT.format(arch=self.arch), enable)
-
     def add_logit_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.LOGIT_SCALE.format(arch=self.arch), value)
 

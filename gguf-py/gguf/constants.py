@@ -130,7 +130,6 @@ class Keys:
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
-        POOLING_TYPE_OPT                  = "{arch}.pooling_type_opt"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"

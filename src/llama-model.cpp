@@ -1227,7 +1227,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_DENSE_2_FEAT_OUT, hparams.dense_2_feat_out, false);
                 ml.get_key(LLM_KV_DENSE_3_FEAT_IN, hparams.dense_3_feat_in, false);
                 ml.get_key(LLM_KV_DENSE_3_FEAT_OUT, hparams.dense_3_feat_out, false);
-                ml.get_key(LLM_KV_POOLING_TYPE_OPT, hparams.pooling_type_opt, false);
 
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_0_3B; break;
@@ -3677,7 +3676,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // Dense linear weights
                     dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.dense_2_feat_out}, TENSOR_NOT_REQUIRED);
+                    GGML_ASSERT(dense_2_out_layers == nullptr || hparams.dense_2_feat_in == n_embd && "dense_2_feat_in must be equal to n_embd");
                     dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {hparams.dense_3_feat_in, n_embd}, TENSOR_NOT_REQUIRED);
+                    GGML_ASSERT(dense_3_out_layers == nullptr || hparams.dense_3_feat_out == n_embd && "dense_3_feat_out must be equal to n_embd");
 
 
                     for (int i = 0; i < n_layer; ++i) {
@@ -19856,9 +19857,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // if the gguf model was converted with --sentence-transformers-dense-modules
     // there will be two additional dense projection layers
     // dense linear projections are applied after pooling
-    if (dense_2_out_layers != nullptr || dense_3_out_layers != nullptr) {
-        llm->build_dense_out(dense_2_out_layers, dense_3_out_layers);
-    }
+    llm->build_dense_out(dense_2_out_layers, dense_3_out_layers);
 
     return llm->res->get_gf();
 }

@@ -5331,7 +5331,6 @@ class EmbeddingGemma(Gemma3Model):
             for dense, dims in self.dense_features_dims.items():
                     logger.info(f"Setting dense layer {dense} in/out features to {dims}")
                     self.gguf_writer.add_dense_features_dims(dense, dims[0], dims[1])
-            self.gguf_writer.add_pooling_type_opt(False)
 
         self._try_set_pooling_type()
 

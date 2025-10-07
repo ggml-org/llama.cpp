@@ -175,8 +175,6 @@ struct llama_hparams {
     uint32_t dense_3_feat_in  = 0;  // in_features of the 3_Dense
     uint32_t dense_3_feat_out = 0;  // out_features of the 3_Dense
 
-    // whether pooling_type can be overridden by user
-    bool pooling_type_opt = true;
     // xIELU
     std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;
     std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
