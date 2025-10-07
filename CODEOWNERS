@@ -2,7 +2,7 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
-/.github/actions/                       @slaren
+/.github/actions/                       @slaren @CISC
 /.github/workflows/                     @CISC
 /.github/workflows/release.yml          @slaren
 /.github/workflows/winget.yml           @slaren

@@ -413,20 +413,19 @@ jobs:
         run: |
           echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
 
-      - name: Cache Vulkan SDK
-        id: cache_vulkan_sdk
+      - name: Use Vulkan SDK Cache
         uses: actions/cache@v4
+        id: cache-sdk
         with:
           path: ./vulkan_sdk
           key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
 
-      - name: Install Vulkan SDK
-        if: steps.cache_vulkan_sdk.outputs.cache-hit != 'true'
-        id: vulkan_sdk_install
-        run: |
-          mkdir -p vulkan_sdk
-          cd vulkan_sdk
-          curl --no-progress-meter https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz | tar -Jx --strip-components=1
+      - name: Setup Vulkan SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-vulkan
+        with:
+          path: ./vulkan_sdk
+          version: ${{ env.VULKAN_SDK_VERSION }}
 
       - name: Build
         id: cmake_build
@@ -1111,6 +1110,7 @@ jobs:
     env:
       # The ROCm version must correspond to the version used in the HIP SDK.
       ROCM_VERSION: "6.4.2"
+      # Make sure this is in sync with build-cache.yml
       HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     steps:
@@ -1125,33 +1125,18 @@ jobs:
           7z x rocwmma.deb
           7z x data.tar
 
-      - name: Cache ROCm Installation
-        id: cache-rocm
+      - name: Use ROCm Installation Cache
         uses: actions/cache@v4
+        id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
-      - name: Install ROCm
+      - name: Setup ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
-        id: depends
-        run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
-          write-host "Installing AMD HIP SDK"
-          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(600000)
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
-              $proc.Kill()
-              exit 1
-          }
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          write-host "Completed AMD HIP SDK installation"
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
 
       - name: Verify ROCm
         id: verify
