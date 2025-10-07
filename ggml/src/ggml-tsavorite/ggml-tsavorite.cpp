@@ -929,9 +929,9 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
      int32_t kernel_sub_type=-1;
-#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
     int64_t t_start = ggml_time_us();
-#endif /* GGML_PERF  || GGML_PERF_DETAIL */
+#endif /* GGML_PERF-related flags */
     node = cgraph->nodes[i];
     src0 = node->src[0];
     src1 = node->src[1];
@@ -1279,7 +1279,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           device->stats.op_run_count[kernel_type].max_num_of_elem < max_num_of_elem)
         device->stats.op_run_count[kernel_type].max_num_of_elem = max_num_of_elem;
     }
-#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
     int64_t t_end = ggml_time_us();
     node->perf_runs++;
     node->ggml_compute_backend = GGML_COMPUTE_BACKEND_TSAVORITE;
@@ -1289,7 +1289,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         // Handle wraparound by assuming timer rolls over at max int64_t value
         node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
     }
-#endif /* GGML_PERF  || GGML_PERF_DETAIL */
+#endif /* GGML_PERF-related flags */
   }
 
   // This this need to implement correctly when we have mixture of CPU and accelerator operation

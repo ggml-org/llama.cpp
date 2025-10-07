@@ -1090,12 +1090,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
-#if defined(GGML_PERF)
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE)
         ggml_perf_accumulate(perf_totals, res->get_gf());
 #elif defined(GGML_PERF_DETAIL)
         ggml_perf_accumulate(perf_totals, res->get_gf());
         ggml_perf_write_detailed_csv(res->get_gf(), perf_all_shape_fp);
-#endif /* GGML_PERF || GGML_PERF_DETAIL */
+#endif /* GML_PERF-related flags */
 
 
         if (!res) {
@@ -2759,7 +2759,7 @@ llama_perf_context_data llama_perf_context(const llama_context * ctx) {
 }
 
 
-#if defined(GGML_PERF)
+#if defined(GGML_PERF_RELEASE)
 void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
     LLAMA_LOG_TSAVORITE("  %-16s  %7s  %14s  %16s\n", "Op", "Runs", "Total us", "Avg us");
@@ -2788,7 +2788,7 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     }
 }
 
-#elif defined(GGML_PERF_DETAIL)
+#elif defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
 void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
     LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
     LLAMA_LOG_TSAVORITE("  %-16s %-8s %7s  %14s  %16s\n", "Op", "Target", "Runs", "Total us", "Avg us");
@@ -2838,7 +2838,7 @@ void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
         }
     }
 }
-#endif /* GGML_PERF  || GGML_PERF_DETAI */
+#endif /* GGML_PERF-related flags */
 
 
 void llama_perf_context_print(const llama_context * ctx) {
@@ -2852,7 +2852,7 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
 
-#if defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
     LLAMA_LOG_TSAVORITE("\n%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
     LLAMA_LOG_TSAVORITE("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
@@ -2861,7 +2861,7 @@ void llama_perf_context_print(const llama_context * ctx) {
     LLAMA_LOG_TSAVORITE("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
 
     ggml_perf_print_totals(const_cast<ggml_perf_totals *>(ctx->perf_totals));
-#endif /* GGML_PERF  || GGML_PERF_DETAIL */
+#endif /* GGML_PERF-related flags */
 }
 
 void llama_perf_context_reset(llama_context * ctx) {
