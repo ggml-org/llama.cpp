@@ -62,17 +62,17 @@
 // WebGPU implementation has bugs in handling concurrent operations. Serializing command submission
 // is a workaround, but we should also investigate better solutions.
 #ifdef GGML_WEBGPU_SERIALIZE_SUBMIT
-#    define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 1
+#    define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 1u
 #    define WEBGPU_WAIT_ANY_TIMEOUT_MS       UINT64_MAX
 #else
-#    define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 8
+#    define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 8u
 #    define WEBGPU_WAIT_ANY_TIMEOUT_MS       0
 #endif
 
 /* Constants */
 
 #define WEBGPU_MUL_MAT_WG_SIZE               256
-#define WEBGPU_NUM_PARAM_BUFS                32
+#define WEBGPU_NUM_PARAM_BUFS                32u
 // Maximum number of in-flight submissions per-thread, to avoid exhausting the parameter buffer pool
 #define WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD  WEBGPU_NUM_PARAM_BUFS / WEBGPU_COMMAND_SUBMIT_BATCH_SIZE
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES         128  // enough for 32 parameters
@@ -251,7 +251,7 @@ struct webgpu_context_struct {
     uint32_t max_wg_size_x;
 
     std::recursive_mutex mutex;
-    std::atomic_int      inflight_threads = 0;
+    std::atomic_uint     inflight_threads = 0;
 
     webgpu_buf_pool param_buf_pool;
     webgpu_buf_pool set_rows_error_buf_pool;
@@ -379,7 +379,8 @@ static void ggml_backend_webgpu_wait(webgpu_context &                         ct
                                      uint64_t                                 timeout_ms = UINT64_MAX) {
     // If we have too many in-flight submissions, wait on the oldest one first. If there are many threads,
     // inflight_max may be 0, meaning that we must wait on all futures.
-    int inflight_max = WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD / std::min(ctx->inflight_threads, 1);
+    uint inflight_threads = ctx->inflight_threads;
+    uint inflight_max     = WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD / std::max(inflight_threads, 1u);
     while (futures.size() >= inflight_max && futures.size() > 0) {
         ctx->instance.WaitAny(futures[0].futures.size(), futures[0].futures.data(), UINT64_MAX);
         futures.erase(futures.begin());
@@ -1279,8 +1280,9 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             commands.push_back(*cmd);
         }
         // compute the batch size based on the number of inflight threads
-        int batch_size = std::min(std::max(1, WEBGPU_NUM_PARAM_BUFS / ctx->inflight_threads),
-                                  WEBGPU_COMMAND_SUBMIT_BATCH_SIZE);
+        uint inflight_threads = ctx->inflight_threads;
+        uint batch_size       = std::min(std::max(1u, WEBGPU_NUM_PARAM_BUFS / std::max(inflight_threads, 1u)),
+                                         WEBGPU_COMMAND_SUBMIT_BATCH_SIZE);
         if (commands.size() >= batch_size) {
             futures.push_back(ggml_backend_webgpu_submit(ctx, commands));
             // Process events and check for completed submissions
