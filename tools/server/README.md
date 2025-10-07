@@ -393,7 +393,7 @@ node index.js
 
 ### GET `/health`: Returns health check result
 
-This endpoint is public (no API key check).
+This endpoint is public (no API key check). `/v1/health` also works.
 
 **Response format**
 
