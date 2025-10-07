@@ -80,7 +80,7 @@ Finally, when running `llama-cli` or `llama-server`, use the `--rpc` option to s
 $ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF -ngl 99 --rpc 192.168.88.10:50052,192.168.88.11:50052
 ```
 
-By default, the ggml scheduler distributes model weights across all available devices -- both local and remote -- in proportion to each device's available memory.
+By default, llama.cpp distributes model weights and the KV cache across all available devices -- both local and remote -- in proportion to each device's available memory.
 You can override this behavior with the `--tensor-split` option and set custom proportions when splitting tensor data across devices.
 
 ### Local cache
