@@ -5288,8 +5288,7 @@ class EmbeddingGemma(Gemma3Model):
                                     mod_conf = json.load(mod_conf_json_file)
                                     # hparams dense_2_feat_out and dense_3_feat_in are required when loading model's dense weights
                                     prefix = self._get_dense_prefix(mod_path)
-                                    if (mod_conf["in_features"] is not None
-                                        and mod_conf["out_features"] is not None):
+                                    if mod_conf["in_features"] is not None and mod_conf["out_features"] is not None:
                                         self.dense_features_dims[prefix] = (mod_conf["in_features"], mod_conf["out_features"])
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
@@ -5329,8 +5328,8 @@ class EmbeddingGemma(Gemma3Model):
             self.gguf_writer.add_sliding_window(orig_sliding_window)
         if self.sentence_transformers_dense_modules:
             for dense, dims in self.dense_features_dims.items():
-                    logger.info(f"Setting dense layer {dense} in/out features to {dims}")
-                    self.gguf_writer.add_dense_features_dims(dense, dims[0], dims[1])
+                logger.info(f"Setting dense layer {dense} in/out features to {dims}")
+                self.gguf_writer.add_dense_features_dims(dense, dims[0], dims[1])
 
         self._try_set_pooling_type()
 
