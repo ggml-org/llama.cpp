@@ -8837,7 +8837,7 @@ class LFM2Model(TextModel):
 
 
 @ModelBase.register("Lfm2MoeForCausalLM")
-class LFM2MOEModel(TextModel):
+class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE
 
     def set_gguf_parameters(self):
@@ -8865,18 +8865,20 @@ class LFM2MOEModel(TextModel):
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
         # merge expert weights
         if 'experts' in name:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
 
-            if bid not in self._experts_cache:
-                self._experts_cache[bid] = {}
-            self._experts_cache[bid][name] = data_torch
+            expert_cache = self._experts_cache.setdefault(bid, {})
+            expert_cache[name] = data_torch
             expert_weights = ["w1", "w2", "w3"]
 
             # not enough expert weights to merge
-            if len(self._experts_cache[bid]) < n_experts * len(expert_weights):
+            if len(expert_cache) < n_experts * len(expert_weights):
                 return []
 
             tensors: list[tuple[str, Tensor]] = []
@@ -8885,8 +8887,8 @@ class LFM2MOEModel(TextModel):
 
                 for xid in range(n_experts):
                     ename = f"model.layers.{bid}.feed_forward.experts.{xid}.{w_name}.weight"
-                    datas.append(self._experts_cache[bid][ename])
-                    del self._experts_cache[bid][ename]
+                    datas.append(expert_cache[ename])
+                    del expert_cache[ename]
 
                 data_torch = torch.stack(datas, dim=0)
                 merged_name = f"layers.{bid}.feed_forward.experts.{w_name}.weight"
