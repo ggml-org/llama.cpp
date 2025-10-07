@@ -1436,7 +1436,8 @@ struct server_slot_prompt {
 struct server_prompt_cache {
     std::list<server_slot_prompt> states;
 
-    size_t limit_size = 0; // 0 = no limit
+    // in bytes, 0 = no limit
+    size_t limit_size = 2ull*1024*1024*1024;
 
     size_t size() const {
         size_t res = 0;
@@ -1532,7 +1533,7 @@ struct server_slot {
     std::vector<std::string> generated_tool_call_ids;
 
     // stats
-    size_t n_sent_text        = 0; // number of sent text character
+    size_t n_sent_text = 0; // number of sent text character
 
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
@@ -1792,7 +1793,7 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
         const int cur_lcs_len = cached_prompt.get_common_prefix(prompt.tokens);
 
         if (cur_lcs_len == (int) prompt.tokens.size()) {
-            SRV_INF("%s", " - prompt is already cached, skipping\n");
+            SRV_WRN("%s", " - prompt is already cached, skipping\n");
             return;
         }
     }
@@ -1804,7 +1805,7 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
         const int len = cached_prompt.get_common_prefix(prompt.tokens);
 
         if (len == (int) cached_prompt.size()) {
-            SRV_INF(" - removing cached prompt with length %d\n", len);
+            SRV_WRN(" - removing cached prompt with length %d\n", len);
 
             it = states.erase(it);
         } else {
@@ -1814,7 +1815,7 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
 
     const size_t cur_size = llama_state_seq_get_size_ext(ctx, id, 0);
 
-    SRV_INF(" - saving prompt with length %d, total cache size = %.3f MiB\n",
+    SRV_WRN(" - saving prompt with length %d, total cache size = %.3f MiB\n",
             (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
 
     // if there is a limit, remove the oldest entries to make room
@@ -1824,6 +1825,8 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
                 break;
             }
 
+            SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
             states.pop_front();
         }
     } else {
@@ -1832,6 +1835,8 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
             if (states.empty()) {
                 break;
             }
+
+            SRV_WRN(" - cache token limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
 
             states.pop_front();
         }
@@ -1847,7 +1852,11 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
 
     llama_state_seq_get_data_ext(ctx, cur.data.data(), cur_size, id, 0);
 
-    SRV_INF(" - cache state: %zu prompts, %.3f MiB\n", states.size(), prompt_cache.size() / (1024.0 * 1024.0));
+    SRV_WRN(" - cache state: %zu prompts, %.3f MiB\n", states.size(), prompt_cache.size() / (1024.0 * 1024.0));
+
+    for (const auto & state : states) {
+        SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %.3f MiB\n", (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
+    }
 }
 
 void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
@@ -1855,7 +1864,7 @@ void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_t
 
     int lcs_len = prompt.tokens.get_common_prefix(tokens);
 
-    SRV_INF(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
+    SRV_WRN(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
 
     auto it_best = states.end();
 
@@ -1872,7 +1881,7 @@ void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_t
     }
 
     if (it_best != states.end()) {
-        SRV_INF(" - found better prompt with lcs_len = %d\n", lcs_len);
+        SRV_WRN(" - found better prompt with lcs_len = %d\n", lcs_len);
 
         const size_t size = it_best->data.size();
         const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id, 0);
@@ -2454,7 +2463,7 @@ struct server_context {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
                 }
-                for (auto &pair : params_base.speculative.replacements) {
+                for (auto & pair : params_base.speculative.replacements) {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             }
@@ -2483,7 +2492,7 @@ struct server_context {
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
         const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
-        SRV_INF("Enable thinking? %d\n", enable_thinking);
+        SRV_INF("thinking = %d\n", enable_thinking);
 
         oai_parser_opt = {
             /* use_jinja             */ params_base.use_jinja,
@@ -2585,6 +2594,9 @@ struct server_context {
         if (ret) {
             const auto & tokens = ret->prompt.tokens;
 
+            // cache prompts only for completion tasks
+            update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
+
             // don't update the cache if the slot's context is empty
             update_cache = update_cache && tokens.size() > 0;
 
@@ -2592,14 +2604,14 @@ struct server_context {
             update_cache = update_cache && (ret->mctx == nullptr);
 
             if (update_cache) {
-                SRV_INF("%s", "updating prompt cache\n");
+                SRV_WRN("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
                 ret->prompt_save(prompt_cache);
                 ret->prompt_load(prompt_cache, task.tokens);
 
-                SRV_INF("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+                SRV_WRN("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
         }
 
@@ -3734,16 +3746,16 @@ struct server_context {
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        const size_t ctx_checkpoint_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), ctx_checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        const size_t checkpoint_size = it->data.size();
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                                        if (n != ctx_checkpoint_size) {
-                                            SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
+                                        if (n != checkpoint_size) {
+                                            SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) checkpoint_size / 1024 / 1024);
                                             do_reset = true;
                                             //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                                         } else {
                                             slot.n_past = std::min(slot.n_past, std::max(it->pos_min + 1, it->pos_max));
-                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) ctx_checkpoint_size / 1024 / 1024);
+                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, (float) checkpoint_size / 1024 / 1024);
                                         }
                                     }
 
@@ -3841,6 +3853,9 @@ struct server_context {
                     }
 
                     bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+
+                    // make checkpoints only for completion tasks
+                    do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
 
                     // make a checkpoint of the parts of the memory that cannot be rolled back.
                     // checkpoints are created only if:
@@ -3941,7 +3956,7 @@ struct server_context {
 
                             llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                            SLT_WRN(slot, "saved context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                            SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
                                     (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
                         }
                     }
