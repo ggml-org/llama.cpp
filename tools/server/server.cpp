@@ -2522,8 +2522,8 @@ struct server_context {
 
         // find the slot that has at least n% prompt similarity
         if (ret == nullptr && slot_prompt_similarity != 0.0f) {
-            int lcs_len = 0;
-            float similarity = 0;
+            int lcs_len_best = 0;
+            float sim_best = 0;
 
             for (server_slot & slot : slots) {
                 // skip the slot if it is not available
@@ -2531,31 +2531,33 @@ struct server_context {
                     continue;
                 }
 
+                const auto & tokens = slot.prompt_state.tokens;
+
                 // skip the slot if it does not contains cached tokens
-                if (slot.prompt_state.tokens.empty()) {
+                if (tokens.empty()) {
                     continue;
                 }
 
                 // length of the Longest Common Subsequence between the current slot's prompt and the input prompt
-                const int cur_lcs_len = slot.prompt_state.tokens.get_common_prefix(task.prompt_tokens);
+                const int lcs_len_cur = tokens.get_common_prefix(task.prompt_tokens);
 
                 // fraction of the common subsequence length
-                const float cur_similarity = float(cur_lcs_len) / task.prompt_tokens.size();
+                const float sim_cur = float(lcs_len_cur) / task.prompt_tokens.size();
 
                 // select the current slot if the criteria match
-                if (cur_lcs_len > lcs_len && cur_similarity > slot_prompt_similarity) {
-                    lcs_len    = cur_lcs_len;
-                    similarity = cur_similarity;
+                if (lcs_len_cur > lcs_len_best && sim_cur > slot_prompt_similarity) {
+                    lcs_len_best = lcs_len_cur;
+                    sim_best     = sim_cur;
 
                     ret = &slot;
                 }
             }
 
             if (ret != nullptr) {
-                SLT_INF(*ret, "selected slot by lcs similarity, lcs_len = %d, similarity = %.3f (> %.3f thold)\n", lcs_len, similarity, slot_prompt_similarity);
+                SLT_INF(*ret, "selected slot by lcs similarity, lcs_len_best = %d, sim_best = %.3f (> %.3f thold)\n", lcs_len_best, sim_best, slot_prompt_similarity);
 
-                // if we are going to lose a large portion of the existing context - save it in the prompt cache
-                const float f_keep = float(lcs_len) / ret->prompt_state.tokens.size();
+                // if we are about to lose a large portion of the existing context - save it in the prompt cache
+                const float f_keep = float(lcs_len_best) / ret->prompt_state.tokens.size();
                 if (f_keep < 0.5f) {
                     update_cache = true;
                 }
@@ -2586,12 +2588,25 @@ struct server_context {
             }
         }
 
-        // TODO: mtmd does not support prompt cache
-        if (update_cache && ret->prompt_state.tokens.size() > 0 && !ret->prompt_state.tokens.has_mtmd) {
-            SRV_INF("%s", "updating prompt cache\n");
+        if (ret) {
+            const auto & tokens = ret->prompt_state.tokens;
 
-            prompt_cache.save(*ret);
-            prompt_cache.load(*ret, task.prompt_tokens);
+            // don't update the cache if the slot's context is empty
+            update_cache = update_cache && tokens.size() > 0;
+
+            // TODO: mtmd does not support prompt cache
+            update_cache = update_cache && !ret->prompt_state.tokens.has_mtmd;
+
+            if (update_cache) {
+                SRV_INF("%s", "updating prompt cache\n");
+
+                const int64_t t_start = ggml_time_us();
+
+                prompt_cache.save(*ret);
+                prompt_cache.load(*ret, task.prompt_tokens);
+
+                SRV_INF("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+            }
         }
 
         return ret;
