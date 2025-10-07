@@ -269,7 +269,7 @@ int main(int argc, char ** argv) {
 
                         LOG_DBG("verifying sequence #%d at pos #%d from %d active sequence(s)\n", s, i_dft, (int) active_seqs.size());
                         float r = u_dist(rng);
-                        llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data() , drafts[s].dists[i_dft].size(), LLAMA_TOKEN_NULL, true };
+                        llama_token_data_array dist_dft = { drafts[s].dists[i_dft].data() , drafts[s].dists[i_dft].size(), false, LLAMA_TOKEN_NULL, true };
 
                         //GGML_ASSERT(dist_tgt.size <= dist_dft.size);
 

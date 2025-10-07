@@ -260,6 +260,7 @@ static void llama_log_softmax(float * array, size_t size) {
 */
 
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
+    cur_p->normalized = false;
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
         size_t max_i = 0;
@@ -309,6 +310,7 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
     for (size_t i = 0; i < cur_p->size; ++i) {
         cur_p->data[i].p /= cum_sum;
     }
+    cur_p->normalized = true;
 }
 
 static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) {
@@ -328,6 +330,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
     }
 
     cur_p->size = k;
+    cur_p->normalized = false;
 }
 
 static uint32_t get_rng_seed(uint32_t seed) {
@@ -422,6 +425,7 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     llama_token_data_array cur_p = {
         /* .data       = */ cur.data(),
         /* .size       = */ cur.size(),
+        /* .normalized = */ false,
         /* .selected   = */ -1,
         /* .sorted     = */ false,
     };
@@ -614,6 +618,23 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 
     if (cur_p->size == 1) {
         cur_p->data[0].p = 1.0f;
+        cur_p->normalized = true;
+        return;
+    }
+
+    if (cur_p->normalized) {
+        std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+        const double rnd = dist(ctx->rng);
+        double sum_run = 0.0f;
+
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            sum_run += cur_p->data[i].p;
+            if (sum_run >= rnd) {
+                cur_p->selected = i;
+                return;
+            }
+        }
+        cur_p->selected = cur_p->size - 1;
         return;
     }
 
@@ -663,6 +684,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     if (!found) {
         cur_p->selected = cur_p->size - 1;
     }
+    cur_p->normalized = true;
 #else
     // for clarity, this is the same as above but does one pass for normalization and one extra pass for sampling
     for (size_t i = 0; i < cur_p->size; ++i) {
@@ -670,6 +692,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
+    cur_p->normalized = true;
 #endif
 }
 
@@ -780,7 +803,9 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, false);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, false);
+    }
 
     size_t k = cur_p->size;
     auto * pdata = cur_p->data;
@@ -826,6 +851,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
     }
 
     cur_p->size = last_idx;
+    cur_p->normalized = false;
 }
 
 static struct llama_sampler * llama_sampler_top_p_clone(const struct llama_sampler * smpl) {
@@ -897,6 +923,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
         if (!filtered_tokens.empty() && filtered_tokens.size() >= ctx->min_keep) {
             std::copy(filtered_tokens.begin(), filtered_tokens.end(), cur_p->data);
             cur_p->size = filtered_tokens.size();
+            cur_p->normalized = false;
             min_p_applied = true;
         }
     }
@@ -919,6 +946,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
         // Resize the output vector to keep only the matching tokens
         cur_p->size = i;
+        cur_p->normalized = false;
     }
 }
 
@@ -971,7 +999,9 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     }
 
     // Compute the softmax of logits and calculate entropy
-    llama_sampler_softmax_impl(cur_p, true);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     float entropy = 0.0f;
     for (size_t i = 0; i < cur_p->size; ++i) {
@@ -1019,6 +1049,7 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     std::copy(cur_p_new.begin(), cur_p_new.end(), cur_p->data);
     cur_p->size = cur_p_new.size();
     cur_p->sorted = false;
+    cur_p->normalized = false;
 }
 
 static struct llama_sampler * llama_sampler_typical_clone(const struct llama_sampler * smpl) {
@@ -1120,7 +1151,9 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
         // Calculate maximum possible entropy
         float max_entropy = -logf(1.0f / cur_p->size);
 
-        llama_sampler_softmax_impl(cur_p, true);
+        if (!cur_p->normalized) {
+            llama_sampler_softmax_impl(cur_p, true);
+        }
 
         // Calculate entropy of the softmax probabilities
         float entropy = 0.0f;
@@ -1162,6 +1195,7 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
         for (size_t i = 0; i < cur_p->size; ++i) {
             cur_p->data[i].p /= cum_sum_double; // Re-normalize the probabilities
         }
+        cur_p->normalized = true;
 
     #ifdef DEBUG
         // Print the updated top 25 probabilities after temperature scaling
@@ -1236,7 +1270,9 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
         return;
     }
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     int pos_last = 0;
 
@@ -1251,6 +1287,7 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
     if (cur_p->size - pos_last >= ctx->min_keep && pos_last > 0) {
         cur_p->data += pos_last;
         cur_p->size -= pos_last;
+        cur_p->normalized = false;
     }
 }
 
@@ -1327,7 +1364,9 @@ static const char * llama_sampler_mirostat_name(const struct llama_sampler * /*s
 static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     // Estimate s_hat using the most probable m tokens
     float s_hat = 0.0;
@@ -1433,7 +1472,9 @@ static const char * llama_sampler_mirostat_v2_name(const struct llama_sampler * 
 static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_mirostat_v2 *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
     // Truncate the words with surprise values greater than mu
     cur_p->size = std::distance(cur_p->data, std::find_if(cur_p->data, cur_p->data + cur_p->size, [&](const llama_token_data & candidate) {
@@ -1775,6 +1816,7 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
     }
 
     cur_p->sorted = false;
+    cur_p->normalized = false;
 }
 
 static void llama_sampler_penalties_reset(struct llama_sampler * smpl) {
@@ -2193,6 +2235,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
     }
 
     cur_p->sorted = false;
+    cur_p->normalized = false;
 }
 
 static void llama_sampler_dry_reset(struct llama_sampler * smpl) {
@@ -2344,6 +2387,7 @@ static void llama_sampler_logit_bias_apply(struct llama_sampler * smpl, llama_to
     }
 
     if (ctx->to_search.empty()) {
+        cur_p->normalized = false;
         return;
     }
 
@@ -2356,6 +2400,7 @@ static void llama_sampler_logit_bias_apply(struct llama_sampler * smpl, llama_to
             }
         }
     }
+    cur_p->normalized = false;
 }
 
 static struct llama_sampler * llama_sampler_logit_bias_clone(const struct llama_sampler * smpl) {
@@ -2408,7 +2453,9 @@ static const char * llama_sampler_infill_name(const struct llama_sampler * /*smp
 static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_infill *) smpl->ctx;
 
-    llama_sampler_softmax_impl(cur_p, true);
+    if (!cur_p->normalized) {
+        llama_sampler_softmax_impl(cur_p, true);
+    }
 
 #if defined(GGML_DEBUG_SAMPLER_INFILL)
 #define LOG_DBG_CUR LLAMA_LOG_DEBUG
@@ -2457,6 +2504,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
         for (size_t i = 0; i < cur_p->size; ++i) {
             cur_p->data[i].p /= p_sum;
         }
+        cur_p->normalized = true;
 
         return;
     }
@@ -2542,6 +2590,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
         cur_p->size = 1;
         cur_p->data[0].id = ctx->vocab->token_eot();
         cur_p->data[0].logit = 1.0f;
+        cur_p->normalized = true;
 
         return;
     }
@@ -2579,6 +2628,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
 
         LOG_DBG_CUR("%s: cur_p[%3zu] = { id: %6d, p: %.6f, logit: %6.3f }\n", __func__, i, cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
     }
+    cur_p->normalized = true;
 
 #undef LOG_DBG_CUR
 }
