@@ -56,6 +56,10 @@
 #    define WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES 16  // e.g. enough for two timestamps
 #endif
 
+// TODO: The WebGPU backend can deadlock in multi-threaded scenarios if the parameter buffer pool
+// is exhausted and the command submit batch size is too high, or in cases where the underlying
+// WebGPU implementation has bugs in handling concurrent operations. Serializing command submission
+// is a workaround, but we should also investigate better solutions.
 #ifdef GGML_WEBGPU_SERIALIZE_SUBMIT
 #    define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 1
 #    define WEBGPU_WAIT_ANY_TIMEOUT_MS       UINT64_MAX
