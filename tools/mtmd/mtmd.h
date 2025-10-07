@@ -101,6 +101,14 @@ MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 MTMD_API void mtmd_free(mtmd_context * ctx);
 
+// Set up logging to use llama's logging callback
+// This redirects all mtmd/clip logging through llama's logging system
+// Call this after llama_log_set to ensure mtmd uses the same logging callback
+// Example:
+//   llama_log_set(my_log_callback, my_user_data);
+//   mtmd_log_set_llama_callback(my_log_callback, my_user_data);
+MTMD_API void mtmd_log_set_llama_callback(ggml_log_callback llama_cb, void * llama_user_data);
+
 // whether we need to set non-causal mask before llama_decode
 MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
 

@@ -231,6 +231,13 @@ struct clip_logger_state {
 
 extern struct clip_logger_state g_logger_state;
 
+// Function to set logging callback (can be used to redirect to llama's logging)
+// If not called, will use the default callback (logs to stderr)
+static inline void clip_log_set_callback(ggml_log_callback callback, void * user_data) {
+    g_logger_state.log_callback = callback;
+    g_logger_state.log_callback_user_data = user_data;
+}
+
 static void clip_log_internal_v(enum ggml_log_level level, const char * format, va_list args) {
     if (format == NULL) {
         return;

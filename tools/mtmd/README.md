@@ -37,6 +37,37 @@ Built upon `clip.cpp` (similar to `llava.cpp`), `libmtmd` offers several advanta
 - **Improved UX/DX:** Features a more intuitive API, inspired by the `Processor` class in the Hugging Face `transformers` library.
 - **Flexibility:** Designed to support multiple input types (text, audio, images) while respecting the wide variety of chat templates used by different models.
 
+## Logging Configuration
+
+By default, `libmtmd` logs messages directly to stderr. To integrate `libmtmd` logging with your application's logging system, you can use the `mtmd_log_set_llama_callback()` function to redirect all mtmd/clip logs through llama's logging callback.
+
+**Example usage:**
+
+```c
+#include "llama.h"
+#include "mtmd.h"
+
+// Your custom logging callback
+void my_log_callback(ggml_log_level level, const char * text, void * user_data) {
+    // Your logging logic here
+    printf("[%d] %s", level, text);
+}
+
+int main() {
+    // Set up llama's logging
+    llama_log_set(my_log_callback, NULL);
+    
+    // Redirect mtmd/clip logging to use the same callback
+    mtmd_log_set_llama_callback(my_log_callback, NULL);
+    
+    // Now all mtmd and clip logs will use your custom callback
+    mtmd_context * ctx = mtmd_init_from_file(...);
+    // ...
+}
+```
+
+This ensures that all logging from `libmtmd`, including the underlying `clip.cpp` vision encoder, is routed through your application's logging system consistently.
+
 ## How to obtain `mmproj`
 
 Multimodal projector (`mmproj`) files are specific to each model architecture.
