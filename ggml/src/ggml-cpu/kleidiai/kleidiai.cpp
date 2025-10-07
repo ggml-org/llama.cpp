@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <stdint.h>
 #include <string.h>
+#include <string>
 #if defined(__linux__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
@@ -87,40 +88,6 @@ static inline int64_t ggml_ne(const ggml_tensor * tensor, int dim) {
     return tensor->ne[dim];
 }
 
-template <typename Variant, typename Ret, typename... Args, std::size_t... Is>
-constexpr bool variant_any_invocable_impl(std::index_sequence<Is...>) {
-    using V = std::remove_reference_t<Variant>;
-    return (std::is_invocable_r_v<
-                Ret,
-                std::variant_alternative_t<Is, V>,
-                Args...> || ...);
-}
-
-template <typename Variant, typename Ret, typename... Args>
-constexpr bool variant_any_invocable_v =
-    variant_any_invocable_impl<Variant, Ret, Args...>(
-        std::make_index_sequence<
-            std::variant_size_v<std::remove_reference_t<Variant>>>{});
-
-template<typename Ret, typename Variant, typename... Args>
-static inline Ret variant_call(Variant && var, Args&&... args) {
-    static_assert(variant_any_invocable_v<std::remove_reference_t<Variant>, Ret, Args...>,
-                  "No alternative in Variant is invocable with the provided arguments and return type.");
-
-    return std::visit(
-        [&](auto && f) -> Ret {
-            using F = std::decay_t<decltype(f)>;
-            if constexpr (std::is_invocable_r_v<Ret, F, Args...>) {
-                return std::invoke(std::forward<decltype(f)>(f), std::forward<Args>(args)...);
-            } else {
-                GGML_ABORT("Invalid function type in variant_call");
-                GGML_UNREACHABLE();
-            }
-        },
-        std::forward<Variant>(var)
-    );
-}
-
 namespace ggml::cpu::kleidiai {
 
 static size_t round_down(size_t x, size_t y) {
@@ -145,7 +112,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             return false;
         }
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, op);
-        GGML_ASSERT(kernels);
+        if (!kernels) {
+            return false;
+        }
         bool is_gemv = op->src[1]->ne[1] == 1;
         kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
         lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
@@ -159,16 +128,18 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         size_t sr = kernel->get_sr();
 
         if (kernels->rhs_type == GGML_TYPE_Q4_0) {
-            size = variant_call<size_t>(lhs_info->packed_size, m, k, QK4_0, mr, kr, sr);
+            if (!lhs_info->packed_size_ex) return false;
+            size = lhs_info->packed_size_ex(m, k, QK4_0, mr, kr, sr);
         } else if (kernels->rhs_type == GGML_TYPE_F16) {
+            if (!lhs_info->packed_size_ex || !kernels->rhs_info.packed_size_ex) return false;
             const int64_t lhs_batch_size0 = op->src[1]->ne[2];
             const int64_t rhs_batch_size0 = op->src[0]->ne[2];
             const int64_t r = lhs_batch_size0 / rhs_batch_size0;
-            size = variant_call<size_t>(lhs_info->packed_size, m * r, k, mr, kr, sr) +
-                   variant_call<size_t>(kernels->rhs_info.packed_size, n, k) +
+            size = lhs_info->packed_size_ex(m * r, k, 0, mr, kr, sr) +
+                   kernels->rhs_info.packed_size_ex(n, k, kernel->get_nr(), kernel->get_kr(), 0) +
                    k * n * sizeof(float) + n * sizeof(float);
         } else {
-            GGML_ASSERT(false);
+            return false;
         }
 
         return true;
@@ -196,12 +167,18 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         GGML_TENSOR_BINARY_OP_LOCALS
 
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
-        GGML_ASSERT(kernels);
+        if (!kernels) {
+            return false;
+        }
 
         const bool is_gemv = src1->ne[1] == 1;
         kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
         lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
         GGML_ASSERT(kernel);
+        if (!kernels->rhs_info.pack_func_ex ||
+            !kernel->get_lhs_offset_ex || !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_ex) {
+            return false;
+        }
 
         const int nth = params->nth;
         const int ith = params->ith;
@@ -228,10 +205,10 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int64_t kr = (int64_t) kernel->get_kr();
         const int64_t sr = (int64_t) kernel->get_sr();
 
-        const size_t lhs_packed_size = variant_call<size_t>(lhs_info->packed_size, (size_t)m, (size_t)k, (size_t)mr, (size_t)kr, (size_t)sr);
-        const size_t rhs_packed_size = variant_call<size_t>(kernels->rhs_info.packed_size, (size_t)n, (size_t)k);
-        const size_t kxn_size        = (size_t)k * (size_t)n * sizeof(float);
-        const size_t bias_size       = (size_t)n * sizeof(float);
+        const size_t lhs_packed_size = lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
+        const size_t rhs_packed_size = kernels->rhs_info.packed_size_ex(n, k, nr, kr, 0);
+        const size_t kxn_size        = k * n * sizeof(float);
+        const size_t bias_size       = n * sizeof(float);
 
         const size_t wsize_required = lhs_packed_size + rhs_packed_size + kxn_size + bias_size;
         GGML_ASSERT(wsize_required <= params->wsize);
@@ -259,10 +236,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                     const int64_t m_count = (ith == num_threads - 1) ? num_m_per_threadN_1 : num_m_per_thread0;
 
                     // Base packed offset (aligned) and per-row stride in bytes
-                    const size_t base_packed_off = variant_call<size_t>(
-                        lhs_info->get_packed_offset, (size_t)m_start, (size_t)k, (size_t)mr, (size_t)kr, (size_t)sr);
-                    const size_t next_block_off = variant_call<size_t>(
-                        lhs_info->get_packed_offset, (size_t)(m_start + mr), (size_t)k, (size_t)mr, (size_t)kr, (size_t)sr);
+                    const size_t base_packed_off  = lhs_info->get_packed_offset_ex(m_start, k, 0, mr, kr, sr);
+                    const size_t next_block_off   = lhs_info->get_packed_offset_ex(m_start + mr, k, 0, mr, kr, sr);
                     const size_t row_stride_bytes = (next_block_off - base_packed_off) / (size_t)mr;
 
                     int64_t remaining = m_count;
@@ -278,9 +253,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                         const size_t dst_off = base_packed_off + (size_t)(cur - m_start) * row_stride_bytes;
                         void * dst_ptr       = lhs_packed + dst_off;
 
-                        variant_call<void>(lhs_info->pack_func,
-                                        (size_t)take, (size_t)k, (size_t)mr, (size_t)kr, (size_t)sr,
-                                        /*m_idx_start*/ 0, src_ptr, lhs_stride, dst_ptr);
+                        lhs_info->pack_func_ex(take, k, 0, mr, kr, sr, 0, src_ptr, lhs_stride, dst_ptr);
 
                         cur       += take;
                         remaining -= take;
@@ -296,10 +269,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                                         reinterpret_cast<const uint16_t *>(rhs_batch_base),
                                         rhs_stride);
 
-                variant_call<void>(kernels->rhs_info.pack_func,
-                                   /*num_groups*/ 1, (size_t)n, (size_t)k, (size_t)nr, (size_t)kr, (size_t)sr,
-                                   /*rhs_stride (bytes)*/ (size_t)(n * sizeof(float)),
-                                   rhs_kxn, bias, nullptr, rhs_packed, /*extra_bytes*/ 0, /*params*/ nullptr);
+                kernels->rhs_info.pack_func_ex(1, n, k, nr, kr, sr, 0, n * sizeof(float),
+                             rhs_kxn, bias, nullptr, rhs_packed, 0, nullptr);
             }
 
             ggml_barrier(params->threadpool);
@@ -320,20 +291,15 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                     const int64_t n_to_process = (ith == num_threads_n - 1) ? num_n_per_threadN_1 : num_n_per_thread0;
 
                     // LHS packed base at row 0 (consistent with packing above)
-                    const size_t lhs_packed_offset0 = variant_call<size_t>(
-                        lhs_info->get_packed_offset, (size_t)0, (size_t)k, (size_t)mr, (size_t)kr, (size_t)sr);
-                    const size_t rhs_packed_offset = variant_call<size_t>(kernel->get_rhs_packed_offset, (size_t)n_start, (size_t)k);
-                    const size_t dst_offset        = kernel->get_dst_offset((size_t)0, (size_t)n_start, dst_stride);
+                    const size_t lhs_packed_offset0 = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+                    const size_t rhs_packed_offset  = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
+                    const size_t dst_offset         = kernel->get_dst_offset((size_t)0, (size_t)n_start, dst_stride);
 
                     const void * lhs_ptr = lhs_packed + lhs_packed_offset0;
                     const void * rhs_ptr = rhs_packed + rhs_packed_offset;
                     float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
 
-                    variant_call<void>(kernel->run_kernel,
-                                       (size_t)m, (size_t)n_to_process, (size_t)k,
-                                       lhs_ptr, rhs_ptr,
-                                       dst_ptr, dst_stride, sizeof(float),
-                                       -FLT_MAX, FLT_MAX);
+                    kernel->run_kernel_ex(m, n_to_process, k, 0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride, sizeof(float), -FLT_MAX, FLT_MAX);
                 }
             }
 
@@ -354,13 +320,19 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         GGML_TENSOR_BINARY_OP_LOCALS
 
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
-        GGML_ASSERT(kernels);
+        if (!kernels) {
+            return false;
+        }
 
         bool is_gemv = src1->ne[1] == 1;
         kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
         lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
 
         GGML_ASSERT(kernel);
+        if (!lhs_info->get_packed_offset_ex || !lhs_info->pack_func_ex ||
+            !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_ex || !kernel->get_dst_offset) {
+            return false;
+        }
 
         const int ith = params->ith;
         const int nth_raw = params->nth;
@@ -402,25 +374,26 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             // Transform LHS
             const size_t src_stride        = src1->nb[1];
             const float * src_ptr          = reinterpret_cast<const float *>(lhs + lhs_info->get_offset(m_start, dst->src[1]->nb[1]));
-            const size_t lhs_packed_offset = variant_call<size_t>(lhs_info->get_packed_offset, m_start, k, QK4_0, mr, kr, sr);
+            const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(m_start, k, QK4_0, mr, kr, sr);
             void * lhs_packed_ptr          = static_cast<void *>(lhs_packed + lhs_packed_offset);
 
-            variant_call<void>(lhs_info->pack_func, m_to_process, k, QK4_0, mr, kr, sr, 0, src_ptr, src_stride, lhs_packed_ptr);
+            // Pack this thread's chunk with m_idx_start = 0 and per-thread output pointer
+            lhs_info->pack_func_ex(m_to_process, k, QK4_0, mr, kr, sr, 0, src_ptr, src_stride, lhs_packed_ptr);
         }
 
         ggml_barrier(params->threadpool);
 
         // Perform the operation
         const size_t dst_stride        = dst->nb[1];
-        const size_t lhs_packed_offset = variant_call<size_t>(lhs_info->get_packed_offset, 0, k, QK4_0, mr, kr, sr);
-        const size_t rhs_packed_offset = variant_call<size_t>(kernel->get_rhs_packed_offset, n_start, k, QK4_0);
+        const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, QK4_0, mr, kr, sr);
+        const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, QK4_0);
         const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
         const void * rhs_ptr           = static_cast<const void *>(rhs_packed + rhs_packed_offset);
         const void* lhs_ptr            = (const void*)((const char *)lhs_packed + lhs_packed_offset);
         float *dst_ptr                 = reinterpret_cast<float *>(static_cast<uint8_t *>(dst->data) + dst_offset);
 
         if (n_to_process > 0) {
-            variant_call<void>(kernel->run_kernel, m, n_to_process, k, QK4_0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
+            kernel->run_kernel_ex(m, n_to_process, k, QK4_0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
                                sizeof(float), -FLT_MAX, FLT_MAX);
         }
 
@@ -429,7 +402,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
     bool compute_forward_get_rows(struct ggml_compute_params * params, struct ggml_tensor * dst) {
         GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q4_0);
-        GGML_ASSERT(ctx.kernels);
+        if (!ctx.kernels) {
+            return false;
+        }
 
         const ggml_tensor * src0 = dst->src[0];
         const ggml_tensor * src1 = dst->src[1];
@@ -438,6 +413,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         rhs_packing_info * rhs_info = &ctx.kernels->rhs_info;
         kernel_info * kernel        = &ctx.kernels->gemm;
+        if (!rhs_info->to_float || !kernel->get_nr) {
+            return false;
+        }
 
         const int64_t nc     = ne00;
         const int64_t nr     = ggml_nelements(src1);
@@ -480,7 +458,7 @@ public:
         struct kai_rhs_pack_qs4cxs1s0_param params;
         params.lhs_zero_point = 1;
         params.rhs_zero_point = 8;
-        variant_call<void>(ctx.kernels->rhs_info.pack_func, 1, n, k, nr, kr, sr, QK4_0, (const uint8_t*)data, nullptr, tensor->data, 0, &params);
+        ctx.kernels->rhs_info.pack_func_ex(1, n, k, nr, kr, sr, QK4_0, 0, (const uint8_t*)data, nullptr, nullptr, tensor->data, 0, &params);
 
         return 0;
         GGML_UNUSED(data_size);
@@ -548,7 +526,7 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_
     const size_t nr = ctx.kernels->gemm.get_nr();
     const size_t kr = ctx.kernels->gemm.get_kr();
 
-    return variant_call<size_t>(ctx.kernels->rhs_info.packed_size, n, k, nr, kr, QK4_0);
+    return ctx.kernels->rhs_info.packed_size_ex(n, k, nr, kr, QK4_0);
 
     GGML_UNUSED(buft);
 }
