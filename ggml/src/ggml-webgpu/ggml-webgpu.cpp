@@ -379,7 +379,7 @@ static void ggml_backend_webgpu_wait(webgpu_context &                         ct
                                      uint64_t                                 timeout_ms = UINT64_MAX) {
     // If we have too many in-flight submissions, wait on the oldest one first. If there are many threads,
     // inflight_max may be 0, meaning that we must wait on all futures.
-    int inflight_max = WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD / ctx->inflight_threads;
+    int inflight_max = WEBGPU_MAX_INFLIGHT_SUBS_PER_THREAD / std::min(ctx->inflight_threads, 1);
     while (futures.size() >= inflight_max && futures.size() > 0) {
         ctx->instance.WaitAny(futures[0].futures.size(), futures[0].futures.data(), UINT64_MAX);
         futures.erase(futures.begin());
