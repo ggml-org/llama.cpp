@@ -4184,6 +4184,7 @@ int main(int argc, char ** argv) {
     auto middleware_validate_api_key = [&params, &res_error](const httplib::Request & req, httplib::Response & res) {
         static const std::unordered_set<std::string> public_endpoints = {
             "/health",
+            "/v1/health",
             "/models",
             "/v1/models",
             "/api/tags"
@@ -5232,6 +5233,7 @@ int main(int argc, char ** argv) {
 
     // register API routes
     svr->Get (params.api_prefix + "/health",              handle_health); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/v1/health",           handle_health); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/metrics",             handle_metrics);
     svr->Get (params.api_prefix + "/props",               handle_props);
     svr->Post(params.api_prefix + "/props",               handle_props_change);
