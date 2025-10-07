@@ -1854,9 +1854,9 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
 }
 
 void llm_graph_context::build_dense_out(
-    ggml_tensor *dense_2,
-    ggml_tensor *dense_3) const {
-    ggml_tensor *cur = res->get_embd_pooled();
+    ggml_tensor * dense_2,
+    ggml_tensor * dense_3) const {
+    ggml_tensor * cur = res->get_embd_pooled();
     if (dense_2 != nullptr) {
         cur = ggml_mul_mat(ctx0, dense_2, cur);
         cb(cur, "result_embd_pooled", -1);
