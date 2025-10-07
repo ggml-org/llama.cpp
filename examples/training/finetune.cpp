@@ -54,8 +54,6 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    constexpr float val_split = 0.05f;
-
     std::vector<llama_token> tokens = common_tokenize(ctx.get(), params.prompt, true);
     ggml_opt_dataset_t dataset = common_opt_dataset_init(ctx.get(), tokens, llama_n_ctx(ctx.get())/2);
 
