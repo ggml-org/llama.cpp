@@ -74,6 +74,7 @@
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
+/ggml/src/ggml-webgpu/                  @reeselevine
 /gguf-py/                               @CISC
 /media/                                 @ggerganov
 /scripts/gen*                           @ggerganov
