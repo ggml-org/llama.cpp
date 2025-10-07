@@ -3676,9 +3676,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // Dense linear weights
                     dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.dense_2_feat_out}, TENSOR_NOT_REQUIRED);
-                    GGML_ASSERT(dense_2_out_layers == nullptr || hparams.dense_2_feat_in == n_embd && "dense_2_feat_in must be equal to n_embd");
+                    GGML_ASSERT((dense_2_out_layers == nullptr || hparams.dense_2_feat_in == n_embd) && "dense_2_feat_in must be equal to n_embd");
                     dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {hparams.dense_3_feat_in, n_embd}, TENSOR_NOT_REQUIRED);
-                    GGML_ASSERT(dense_3_out_layers == nullptr || hparams.dense_3_feat_out == n_embd && "dense_3_feat_out must be equal to n_embd");
+                    GGML_ASSERT((dense_3_out_layers == nullptr || hparams.dense_3_feat_out == n_embd) && "dense_3_feat_out must be equal to n_embd");
 
 
                     for (int i = 0; i < n_layer; ++i) {
