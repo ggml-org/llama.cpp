@@ -444,8 +444,8 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
-  ubuntu-22-cmake-webgpu:
-    runs-on: ubuntu-22.04
+  ubuntu-24-cmake-webgpu:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clone
@@ -455,16 +455,34 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-webgpu
+          key: ubuntu-24-cmake-webgpu
           evict-old-files: 1d
 
-      - name: Vulkan SDK Dependencies
-        id: vulkan-depends
+      - name: Dependencies
+        id: depends
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+
+      - name: Get latest Vulkan SDK version
+        id: vulkan_sdk_version
+        run: |
+          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+
+      - name: Use Vulkan SDK Cache
+        uses: actions/cache@v4
+        id: cache-sdk
+        with:
+          path: ./vulkan_sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Setup Vulkan SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-vulkan
+        with:
+          path: ./vulkan_sdk
+          version: ${{ env.VULKAN_SDK_VERSION }}
 
       - name: Dawn Dependency
         id: dawn-depends
