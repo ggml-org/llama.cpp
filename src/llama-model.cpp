@@ -114,6 +114,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
         case LLM_TYPE_A13B:          return "A13B";
+        case LLM_TYPE_8B_A1B:        return "8B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
@@ -1995,13 +1996,28 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
+                hparams.n_layer_dense_lead = hparams.n_layer;
                 switch (hparams.n_ff()) {
                     case  4608: type = LLM_TYPE_350M; break;
                     case  6912: type = LLM_TYPE_700M; break;
                     case  8192: type = LLM_TYPE_1_2B; break;
                     case 10752: type = LLM_TYPE_2_6B; break;
-                    default:   type = LLM_TYPE_UNKNOWN;
+                    default:    type = LLM_TYPE_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_LFM2MOE:
+            {
+                ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
+
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+                }
+
+                type = LLM_TYPE_8B_A1B;
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
@@ -5814,6 +5830,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 } break;
             case LLM_ARCH_LFM2:
+            case LLM_ARCH_LFM2MOE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab}, 0);
                     tok_norm = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
@@ -5825,11 +5842,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
-                        // ffn is same for transformer and conv layers
+
+                        const bool is_moe_layer = i >= static_cast<int>(hparams.n_layer_dense_lead);
+
+                        // ffn/moe is same for transformer and conv layers
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        if (is_moe_layer) {
+                            GGML_ASSERT(n_expert && n_expert_used);
+                            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),  {n_embd, n_expert}, 0);
+                            layer.ffn_gate_exps   = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff_exp,   n_embd, n_expert}, 0);
+                            layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),   {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
+                        } else {  // dense
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        }
 
                         // for operator_norm
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
@@ -6310,7 +6339,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: expert_weights_norm  = %d\n",     __func__, hparams.expert_weights_norm);
     }
 
-    if (arch == LLM_ARCH_SMALLTHINKER) {
+    if (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
@@ -18602,6 +18631,8 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
+            const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
+
             auto * prev_cur = cur;
             cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "model.layers.{}.operator_norm", il);
@@ -18616,7 +18647,16 @@ struct llm_build_lfm2 : public llm_graph_context {
             }
 
             cur = ggml_add(ctx0, prev_cur, cur);
-            cur = ggml_add(ctx0, cur, build_feed_forward(cur, il));
+
+            auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
+
+            ggml_tensor * ffn_out = is_moe_layer ?
+                build_moe_feed_forward(ffn_norm_out, il) :
+                build_dense_feed_forward(ffn_norm_out, il);
+            cb(ffn_norm_out, "model.layers.{}.ffn_out", il);
+
+            cur = ggml_add(ctx0, cur, ffn_out);
         }
 
         cur = build_norm(cur, model.tok_norm, NULL, LLM_NORM_RMS, -1);
@@ -18631,23 +18671,32 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 
-    ggml_tensor * build_feed_forward(ggml_tensor * cur,
-                                     int           il) const {
-        cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "model.layers.{}.ffn_norm", il);
+    ggml_tensor * build_moe_feed_forward(ggml_tensor * cur,
+                                         int           il) const {
+        return build_moe_ffn(cur,
+                    model.layers[il].ffn_gate_inp,
+                    model.layers[il].ffn_up_exps,
+                    model.layers[il].ffn_gate_exps,
+                    model.layers[il].ffn_down_exps,
+                    model.layers[il].ffn_exp_probs_b,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true,
+                    false, 0.0,
+                    static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
+                    il);
+    }
 
+    ggml_tensor * build_dense_feed_forward(ggml_tensor * cur,
+                                           int           il) const {
         GGML_ASSERT(!model.layers[il].ffn_up_b);
         GGML_ASSERT(!model.layers[il].ffn_gate_b);
         GGML_ASSERT(!model.layers[il].ffn_down_b);
-        cur = build_ffn(cur,
+        return build_ffn(cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
-        cb(cur, "model.layers.{}.feed_forward.w2", il);
-
-        return cur;
     }
 
     ggml_tensor * build_attn_block(ggml_tensor             * cur,
@@ -19817,6 +19866,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                 llm = std::make_unique<llm_build_falcon_h1>(*this, params);
             } break;
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
             {
                 llm = std::make_unique<llm_build_lfm2>(*this, params);
             } break;
@@ -20039,6 +20089,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_SEED_OSS:
