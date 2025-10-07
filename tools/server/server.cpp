@@ -1464,6 +1464,7 @@ struct server_slot {
 
     llama_batch batch_spec = {};
 
+    // TODO: change to unique_ptrs for consistency:
     llama_context * ctx = nullptr;
     llama_context * ctx_dft = nullptr;
 
@@ -1471,6 +1472,8 @@ struct server_slot {
     mtmd_context * mctx = nullptr;
 
     common_speculative * spec = nullptr;
+
+    std::unique_ptr<const server_task> task;
 
     // used to determine the slot that has been used the longest
     int64_t t_last_used = -1;
@@ -1509,8 +1512,6 @@ struct server_slot {
 
     // state
     slot_state state = SLOT_STATE_IDLE;
-
-    std::unique_ptr<const server_task> task;
 
     server_slot_prompt prompt;
 
