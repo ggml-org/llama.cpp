@@ -3859,7 +3859,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
             params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
@@ -3873,7 +3872,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
             params.model.hf_file = "e5-small-v2-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
@@ -3887,7 +3885,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
             params.model.hf_file = "gte-small-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
