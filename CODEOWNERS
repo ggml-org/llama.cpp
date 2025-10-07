@@ -70,6 +70,7 @@
 /ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
+/ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren
