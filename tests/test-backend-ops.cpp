@@ -1222,8 +1222,18 @@ struct test_case {
             if (node->op != GGML_OP_NONE && node->src[0]) {
                 for (const auto& [buft, buf] : extra_buf_map) {
                     size_t id = ggml_hash_find(&hash_set, node);
-                    ggml_status status = ggml_backend_buffer_init_tensor(buf, node_copies[id]);
-                    if (status != GGML_STATUS_SUCCESS) {
+                    ggml_status status = ggml_backend_buffer_init_tensor(buf, node_copies[id]->src[0]);
+                    if (status == GGML_STATUS_SUCCESS) {
+                        if (node_copies[id]->src[0]->extra != nullptr) {
+                            if (strcmp(ggml_backend_buft_name(buft),"CPU_REPACK") == 0) {
+                                if (node_copies[id]->op == GGML_OP_MUL_MAT || node_copies[id]->op == GGML_OP_MUL_MAT_ID) {
+                                    if (ggml_n_dims(node_copies[id]->src[1]) == 2) {
+                                        node_copies[id]->src[0]->buffer = buf;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
                         GGML_LOG_ERROR("%s: failed to initialize tensor in extra buffer type '%s' for graph copy\n", __func__, ggml_backend_buft_name(buft));
                     }
                 }
