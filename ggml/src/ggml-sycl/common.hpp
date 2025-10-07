@@ -197,6 +197,7 @@ struct sycl_device_info {
     int     cc;                 // compute capability
     // int     nsm;                // number of streaming multiprocessors
     // size_t  smpb;               // max. shared memory per block
+    size_t  smpbo;              // max. shared memory per block (with opt-in)
     bool    vmm;                // virtual memory support
     size_t  total_vram;
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
@@ -440,6 +441,104 @@ warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
     return a;
 }
 
+template <int width = WARP_SIZE>
+static __dpct_inline__ int warp_reduce_sum(int x) {
+  return sycl::reduce_over_group(
+      sycl::ext::oneapi::this_work_item::get_sub_group(), x, sycl::plus<>());
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ float warp_reduce_sum(float x) {
+#pragma unroll
+  for (int offset = width / 2; offset > 0; offset >>= 1) {
+    x += dpct::permute_sub_group_by_xor(
+        sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset, width);
+  }
+  return x;
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ sycl::float2 warp_reduce_sum(sycl::float2 a) {
+#pragma unroll
+  for (int offset = width / 2; offset > 0; offset >>= 1) {
+    a.x() += dpct::permute_sub_group_by_xor(
+        sycl::ext::oneapi::this_work_item::get_sub_group(), a.x(), offset,
+        width);
+    a.y() += dpct::permute_sub_group_by_xor(
+        sycl::ext::oneapi::this_work_item::get_sub_group(), a.y(), offset,
+        width);
+  }
+  return a;
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ sycl::half2 warp_reduce_sum(sycl::half2 a) {
+#pragma unroll
+  for (int offset = width / 2; offset > 0; offset >>= 1) {
+    a = a + dpct::permute_sub_group_by_xor(
+                sycl::ext::oneapi::this_work_item::get_sub_group(), a, offset,
+                width);
+  }
+  return a;
+}
+
+static constexpr int ggml_sycl_get_physical_warp_size() {
+  // todo: for old iGPU + dGPU case, need to be changed.
+  return WARP_SIZE;
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ int warp_reduce_all(int x) {
+  if (width == ggml_sycl_get_physical_warp_size()) {
+    return sycl::all_of_group(
+        sycl::ext::oneapi::this_work_item::get_sub_group(),
+        (~0xffffffff &
+         (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
+                     .get_local_linear_id())) ||
+            x);
+  } else {
+#pragma unroll
+    for (int offset = width / 2; offset > 0; offset >>= 1) {
+      x = dpct::permute_sub_group_by_xor(
+              sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset,
+              width) &&
+          x;
+    }
+    return x;
+  }
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ int warp_reduce_any(int x) {
+  if (width == ggml_sycl_get_physical_warp_size()) {
+    return sycl::any_of_group(
+        sycl::ext::oneapi::this_work_item::get_sub_group(),
+        (0xffffffff & (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
+                                  .get_local_linear_id())) &&
+            x);
+  } else {
+#pragma unroll
+    for (int offset = width / 2; offset > 0; offset >>= 1) {
+      x = dpct::permute_sub_group_by_xor(
+              sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset,
+              width) ||
+          x;
+    }
+    return x;
+  }
+}
+
+template <int width = WARP_SIZE>
+static __dpct_inline__ float warp_reduce_max(float x) {
+#pragma unroll
+  for (int offset = width / 2; offset > 0; offset >>= 1) {
+    x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
+                          sycl::ext::oneapi::this_work_item::get_sub_group(), x,
+                          offset, width));
+  }
+  return x;
+}
+
 static __dpct_inline__ float warp_reduce_max(float x,
     const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
@@ -557,5 +656,19 @@ struct scope_op_debug_print {
     std::string_view func;
     std::string_view func_suffix;
 };
+
+static __dpct_inline__ float get_alibi_slope(const float    max_bias,
+                                             const uint32_t h,
+                                             const uint32_t n_head_log2,
+                                             const float    m0,
+                                             const float    m1) {
+    if (max_bias <= 0.0f) {
+        return 1.0f;
+    }
+    const float base = h < n_head_log2 ? m0 : m1;
+    const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+
+    return dpct::pow(base, exph);
+}
 
 #endif // GGML_SYCL_COMMON_HPP
