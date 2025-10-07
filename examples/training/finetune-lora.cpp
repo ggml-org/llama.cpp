@@ -19,10 +19,10 @@ static uint32_t parse_lora_modules(const std::string& modules_str) {
     if (modules_str.empty()) {
         return LLAMA_LORA_TARGET_ATTN_Q | LLAMA_LORA_TARGET_ATTN_K | LLAMA_LORA_TARGET_ATTN_V | LLAMA_LORA_TARGET_ATTN_O;
     }
-    
+
     static const std::map<std::string, uint32_t> module_map = {
         {"attn_q",    LLAMA_LORA_TARGET_ATTN_Q},
-        {"attn_k",    LLAMA_LORA_TARGET_ATTN_K},  
+        {"attn_k",    LLAMA_LORA_TARGET_ATTN_K},
         {"attn_v",    LLAMA_LORA_TARGET_ATTN_V},
         {"attn_o",    LLAMA_LORA_TARGET_ATTN_O},
         {"ffn_gate",  LLAMA_LORA_TARGET_FFN_GATE},
@@ -31,15 +31,15 @@ static uint32_t parse_lora_modules(const std::string& modules_str) {
         {"output",    LLAMA_LORA_TARGET_OUTPUT},
         {"all",       LLAMA_LORA_TARGET_ALL}
     };
-    
+
     uint32_t target_modules = 0;
     std::stringstream ss(modules_str);
     std::string module;
-    
+
     while (std::getline(ss, module, ',')) {
         module.erase(0, module.find_first_not_of(" \t"));
         module.erase(module.find_last_not_of(" \t") + 1);
-        
+
         auto it = module_map.find(module);
         if (it != module_map.end()) {
             target_modules |= it->second;
@@ -50,7 +50,7 @@ static uint32_t parse_lora_modules(const std::string& modules_str) {
             return 0;
         }
     }
-    
+
     return target_modules;
 }
 
@@ -73,7 +73,7 @@ static void print_lora_usage() {
 int main(int argc, char ** argv) {
     common_params params;
 
-    int32_t lora_rank = 8;     
+    int32_t lora_rank = 8;
     float lora_alpha = 16.0f;
     std::string lora_modules_str;
     std::string output_adapter_path;
@@ -166,7 +166,7 @@ int main(int argc, char ** argv) {
 
     bool has_existing_lora = !params.lora_adapters.empty();
     struct llama_adapter_lora * trained_adapter = nullptr;
-    
+
     if (has_existing_lora) {
         LOG_INF("Finetuning existing LoRA adapters\n");
         LOG_INF("Found %zu existing LoRA adapters to train\n", params.lora_adapters.size());\
@@ -185,8 +185,8 @@ int main(int argc, char ** argv) {
             (lora_params.target_modules & LLAMA_LORA_TARGET_FFN_UP) ? "yes" : "no",
             (lora_params.target_modules & LLAMA_LORA_TARGET_FFN_DOWN) ? "yes" : "no",
             (lora_params.target_modules & LLAMA_LORA_TARGET_OUTPUT) ? "yes" : "no");
-        
-        LOG_INF("LoRA configuration: rank=%d, alpha=%.1f (scaling=%.3f)\n", 
+
+        LOG_INF("LoRA configuration: rank=%d, alpha=%.1f (scaling=%.3f)\n",
             lora_params.rank, lora_params.alpha, lora_params.alpha / lora_params.rank);
 
         trained_adapter = llama_lora_training_init(ctx.get(), model.get(), &lora_params);
@@ -210,6 +210,7 @@ int main(int argc, char ** argv) {
         /*param_filter_ud =*/ nullptr,
         /*get_opt_pars    =*/ ggml_opt_get_constant_optimizer_params,
         /*get_opt_pars_ud =*/ &optimizer_params,
+        /*optimizer_type  =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
     llama_opt_init(ctx.get(), model.get(), lopt_params);
 
@@ -245,7 +246,7 @@ int main(int argc, char ** argv) {
             std::ifstream adapter_file(adapter_filename, std::ios::binary | std::ios::ate);
             if (adapter_file.is_open()) {
                 std::streamsize adapter_size = adapter_file.tellg();
-                LOG_INF("LoRA adapter saved: %s (%.2f MB)\n", 
+                LOG_INF("LoRA adapter saved: %s (%.2f MB)\n",
                         adapter_filename.c_str(), adapter_size / (1024.0 * 1024.0));
                 adapter_file.close();
             }
