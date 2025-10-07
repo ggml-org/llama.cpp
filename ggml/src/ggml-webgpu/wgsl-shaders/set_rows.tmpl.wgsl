@@ -1,13 +1,58 @@
+
+#define(VARIANTS)
+
+[
+  {
+    "SHADER_SUFFIX": "f32_vec",
+    "REPLS": {
+      "TYPE" : "vec4<f32>",
+      "DST_TYPE": "vec4<f16>",
+      "BLOCK_SIZE": 4
+    },
+    "DECLS": ["F32_VEC"]
+  },
+  {
+    "REPLS": {
+      "TYPE" : "f32",
+      "DST_TYPE": "f16",
+      "BLOCK_SIZE": 1
+    },
+    "DECLS": ["F32"]
+  }
+]
+
+#end(VARIANTS)
+
+#define(DECLS)
+
+#decl(F32_VEC)
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[(dst_base / 4) + offset] = vec4<f16>(src[(src_base / 4) + offset]);
+}
+#enddecl(F32_VEC)
+
+#decl(F32)
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    dst[dst_base + offset] = f16(src[src_base + offset]);
+}
+#enddecl(F32)
+
+#end(DECLS)
+
+#define(SHADER)
+
 enable f16;
 
+DECLS
+
 @group(0) @binding(0)
-var<storage, read_write> src: array<f32>;
+var<storage, read_write> src: array<{{TYPE}}>;
 
 @group(0) @binding(1)
 var<storage, read_write> idx: array<u32>;
 
 @group(0) @binding(2)
-var<storage, read_write> dst: array<f16>;
+var<storage, read_write> dst: array<{{DST_TYPE}}>;
 
 @group(0) @binding(3)
 var<storage, read_write> error: atomic<u32>;
@@ -75,7 +120,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_dst_row = params.offset_dst + idx_high_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
     let i_src_row = params.offset_src + i_src1 * params.stride_src1 + i_src2 * params.stride_src2 + i_src3 * params.stride_src3;
 
-    for (var i: u32 = 0; i < params.ne0; i++) {
-      dst[i_dst_row + i] = f16(src[i_src_row + i]);
+    for (var i: u32 = 0; i < params.ne0/{{BLOCK_SIZE}}; i++) {
+      copy_elements(i_src_row, i_dst_row, i);
     }
 }
+
+#end(SHADER)
+
