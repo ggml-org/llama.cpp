@@ -9,7 +9,6 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "mtmd.h"
-#include "mtmd-helper.h"
 
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
@@ -1439,6 +1438,9 @@ struct server_prompt_cache {
     // in bytes, 0 = no limit
     size_t limit_size = 2ull*1024*1024*1024;
 
+    // in tokens, 0 = no limit
+    size_t limit_tokens = 0;
+
     size_t size() const {
         size_t res = 0;
 
@@ -1449,14 +1451,50 @@ struct server_prompt_cache {
         return res;
     }
 
-    int n_tokens() const {
-        int res = 0;
+    size_t n_tokens() const {
+        size_t res = 0;
 
         for (const auto & state : states) {
             res += state.n_tokens();
         }
 
         return res;
+    }
+
+    void update() {
+        // always keep at least one state, regardless of the limits
+        if (states.size() > 1) {
+            if (limit_size > 0) {
+                while (size() > limit_size) {
+                    if (states.empty()) {
+                        break;
+                    }
+
+                    SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
+                    states.pop_front();
+                }
+            }
+
+            if (limit_tokens > 0) {
+                while (n_tokens() > limit_tokens) {
+                    if (states.empty()) {
+                        break;
+                    }
+
+                    SRV_WRN(" - cache token limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
+                    states.pop_front();
+                }
+            }
+        }
+
+        SRV_WRN(" - cache state: %zu prompts, %.3f MiB, limits: %.3f MiB, %zu tokens\n",
+                states.size(), size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0), limit_tokens);
+
+        for (const auto & state : states) {
+            SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %.3f MiB\n", (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
+        }
     }
 };
 
@@ -1805,7 +1843,7 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
         const int len = cached_prompt.get_common_prefix(prompt.tokens);
 
         if (len == (int) cached_prompt.size()) {
-            SRV_WRN(" - removing cached prompt with length %d\n", len);
+            SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
 
             it = states.erase(it);
         } else {
@@ -1815,32 +1853,8 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
 
     const size_t cur_size = llama_state_seq_get_size_ext(ctx, id, 0);
 
-    SRV_WRN(" - saving prompt with length %d, total cache size = %.3f MiB\n",
+    SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB\n",
             (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
-
-    // if there is a limit, remove the oldest entries to make room
-    if (prompt_cache.limit_size > 0) {
-        while (prompt_cache.size() + cur_size > prompt_cache.limit_size) {
-            if (states.empty()) {
-                break;
-            }
-
-            SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
-            states.pop_front();
-        }
-    } else {
-        // else, make sure the number of cached tokens doesn't exceed the context size of the slot
-        while (prompt_cache.n_tokens() + (int) prompt.tokens.size() > n_ctx) {
-            if (states.empty()) {
-                break;
-            }
-
-            SRV_WRN(" - cache token limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
-            states.pop_front();
-        }
-    }
 
     // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
     auto & cur = states.emplace_back();
@@ -1851,12 +1865,6 @@ void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
     };
 
     llama_state_seq_get_data_ext(ctx, cur.data.data(), cur_size, id, 0);
-
-    SRV_WRN(" - cache state: %zu prompts, %.3f MiB\n", states.size(), prompt_cache.size() / (1024.0 * 1024.0));
-
-    for (const auto & state : states) {
-        SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %.3f MiB\n", (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
-    }
 }
 
 void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
@@ -2610,6 +2618,8 @@ struct server_context {
 
                 ret->prompt_save(prompt_cache);
                 ret->prompt_load(prompt_cache, task.tokens);
+
+                prompt_cache.update();
 
                 SRV_WRN("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
