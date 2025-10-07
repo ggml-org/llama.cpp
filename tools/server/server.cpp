@@ -1462,30 +1462,28 @@ struct server_prompt_cache {
     }
 
     void update() {
-        // always keep at least one state, regardless of the limits
-        if (states.size() > 1) {
-            if (limit_size > 0) {
-                while (size() > limit_size) {
-                    if (states.empty()) {
-                        break;
-                    }
-
-                    SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
-                    states.pop_front();
+        if (limit_size > 0) {
+            // always keep at least one state, regardless of the limits
+            while (states.size() > 1 && size() > limit_size) {
+                if (states.empty()) {
+                    break;
                 }
+
+                SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
+                states.pop_front();
             }
+        }
 
-            if (limit_tokens > 0) {
-                while (n_tokens() > limit_tokens) {
-                    if (states.empty()) {
-                        break;
-                    }
-
-                    SRV_WRN(" - cache token limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
-                    states.pop_front();
+        if (limit_tokens > 0) {
+            while (states.size() > 1 && n_tokens() > limit_tokens) {
+                if (states.empty()) {
+                    break;
                 }
+
+                SRV_WRN(" - cache token limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
+                states.pop_front();
             }
         }
 
