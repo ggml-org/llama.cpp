@@ -6,6 +6,8 @@ import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/u
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { extractPartialThinking } from '$lib/utils/thinking';
+import { toast } from 'svelte-sonner';
+import type { ExportedConversations } from '$lib/types/database';
 
 /**
  * ChatStore - Central state management for chat conversations and AI interactions
@@ -952,6 +954,166 @@ class ChatStore {
 	}
 
 	/**
+	 * Downloads a conversation as JSON file
+	 * @param convId - The conversation ID to download
+	 */
+	async downloadConversation(convId: string): Promise<void> {
+		if (!this.activeConversation || this.activeConversation.id !== convId) {
+			// Load the conversation if not currently active
+			const conversation = await DatabaseStore.getConversation(convId);
+			if (!conversation) return;
+
+			const messages = await DatabaseStore.getConversationMessages(convId);
+			const conversationData = {
+				conv: conversation,
+				messages
+			};
+
+			this.triggerDownload(conversationData);
+		} else {
+			// Use current active conversation data
+			const conversationData: ExportedConversations = {
+				conv: this.activeConversation!,
+				messages: this.activeMessages
+			};
+
+			this.triggerDownload(conversationData);
+		}
+	}
+
+	/**
+	 * Triggers file download in browser
+	 * @param data - Data to download (expected: { conv: DatabaseConversation, messages: DatabaseMessage[] })
+	 * @param filename - Optional filename
+	 */
+	private triggerDownload(data: ExportedConversations, filename?: string): void {
+		const conversation =
+			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
+		if (!conversation) {
+			console.error('Invalid data: missing conversation');
+			return;
+		}
+		const conversationName = conversation.name ? conversation.name.trim() : '';
+		const convId = conversation.id || 'unknown';
+		const truncatedSuffix = conversationName
+			.toLowerCase()
+			.replace(/[^a-z0-9]/gi, '_')
+			.replace(/_+/g, '_')
+			.substring(0, 20);
+		const downloadFilename = filename || `conversation_${convId}_${truncatedSuffix}.json`;
+
+		const conversationJson = JSON.stringify(data, null, 2);
+		const blob = new Blob([conversationJson], {
+			type: 'application/json'
+		});
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = downloadFilename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	/**
+	 * Exports all conversations with their messages as a JSON file
+	 */
+	async exportAllConversations(): Promise<void> {
+		try {
+			const allConversations = await DatabaseStore.getAllConversations();
+			if (allConversations.length === 0) {
+				throw new Error('No conversations to export');
+			}
+
+			const allData: ExportedConversations = await Promise.all(
+				allConversations.map(async (conv) => {
+					const messages = await DatabaseStore.getConversationMessages(conv.id);
+					return { conv, messages };
+				})
+			);
+
+			const blob = new Blob([JSON.stringify(allData, null, 2)], {
+				type: 'application/json'
+			});
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `all_conversations_${new Date().toISOString().split('T')[0]}.json`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+
+			toast.success(`All conversations (${allConversations.length}) prepared for download`);
+		} catch (err) {
+			console.error('Failed to export conversations:', err);
+			throw err;
+		}
+	}
+
+	/**
+	 * Imports conversations from a JSON file.
+	 * Supports both single conversation (object) and multiple conversations (array).
+	 * Uses DatabaseStore for safe, encapsulated data access
+	 */
+	async importConversations(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const input = document.createElement('input');
+			input.type = 'file';
+			input.accept = '.json';
+
+			input.onchange = async (e) => {
+				const file = (e.target as HTMLInputElement)?.files?.[0];
+				if (!file) {
+					reject(new Error('No file selected'));
+					return;
+				}
+
+				try {
+					const text = await file.text();
+					const parsedData = JSON.parse(text);
+					let importedData: ExportedConversations;
+
+					if (Array.isArray(parsedData)) {
+						importedData = parsedData;
+					} else if (
+						parsedData &&
+						typeof parsedData === 'object' &&
+						'conv' in parsedData &&
+						'messages' in parsedData
+					) {
+						// Single conversation object
+						importedData = [parsedData];
+					} else {
+						throw new Error(
+							'Invalid file format: expected array of conversations or single conversation object'
+						);
+					}
+
+					const result = await DatabaseStore.importConversations(importedData);
+
+					// Refresh UI
+					await this.loadConversations();
+
+					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
+
+					resolve(undefined);
+				} catch (err: unknown) {
+					const message = err instanceof Error ? err.message : 'Unknown error';
+					console.error('Failed to import conversations:', err);
+					toast.error('Import failed', {
+						description: message
+					});
+					reject(new Error(`Import failed: ${message}`));
+				}
+			};
+
+			input.click();
+		});
+	}
+
+	/**
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
@@ -1427,6 +1589,9 @@ export const isInitialized = () => chatStore.isInitialized;
 export const maxContextError = () => chatStore.maxContextError;
 
 export const createConversation = chatStore.createConversation.bind(chatStore);
+export const downloadConversation = chatStore.downloadConversation.bind(chatStore);
+export const exportAllConversations = chatStore.exportAllConversations.bind(chatStore);
+export const importConversations = chatStore.importConversations.bind(chatStore);
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
