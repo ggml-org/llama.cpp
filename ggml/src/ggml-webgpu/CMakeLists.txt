@@ -46,10 +46,6 @@ else()
     set(DawnWebGPU_TARGET dawn::webgpu_dawn)
 endif()
 
-if (GGML_WEBGPU_SERIALIZE_SUBMIT)
-    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_SERIALIZE_SUBMIT=1)
-endif()
-
 if (GGML_WEBGPU_DEBUG)
     target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_DEBUG=1)
 endif()
