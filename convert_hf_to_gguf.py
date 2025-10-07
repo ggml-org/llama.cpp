@@ -11,7 +11,6 @@ import json
 import os
 import re
 import sys
-from collections import defaultdict
 from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
@@ -8859,7 +8858,7 @@ class LFM2MOEModel(TextModel):
         self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
 
     # cache for experts weights for merging
-    _experts_cache: dict[int, dict[str, Tensor]] | None = defaultdict(lambda: defaultdict(dict))
+    _experts_cache: dict[int, dict[str, Tensor]] = {}
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # conv op requires 2d tensor
@@ -8871,6 +8870,8 @@ class LFM2MOEModel(TextModel):
             n_experts = self.hparams["num_experts"]
             assert bid is not None
 
+            if bid not in self._experts_cache:
+                self._experts_cache[bid] = {}
             self._experts_cache[bid][name] = data_torch
             expert_weights = ["w1", "w2", "w3"]
 
