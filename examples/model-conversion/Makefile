@@ -116,6 +116,12 @@ embedding-convert-model:
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/embedding/convert-model.sh
 
+embedding-convert-model-st:
+	$(call validate_embedding_model_path,embedding-convert-model-st)
+	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
+	./scripts/embedding/convert-model.sh -st
+
 embedding-run-original-model:
 	$(call validate_embedding_model_path,embedding-run-original-model)
 	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
