@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { Search, SquarePen, X, Download, Upload } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { exportAllConversations, importConversations } from '$lib/stores/chat.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -76,6 +77,35 @@
 			</div>
 
 			<KeyboardShortcutInfo keys={['cmd', 'k']} />
+		</Button>
+
+		<Button
+			class="w-full justify-start text-sm"
+			onclick={() => {
+				importConversations().catch((err) => {
+					console.error('Import failed:', err);
+					// Optional: show toast or dialog
+				});
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Upload class="h-4 w-4" />
+				Import conversations
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-start text-sm"
+			onclick={() => {
+				exportAllConversations();
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<Download class="h-4 w-4" />
+				Export all conversations
+			</div>
 		</Button>
 	{/if}
 </div>
