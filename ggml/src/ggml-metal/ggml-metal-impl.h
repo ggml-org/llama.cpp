@@ -69,11 +69,12 @@
 #define N_SG_IQ4_XS 2
 
 // function constants offsets
-#define FC_FLASH_ATTN_EXT              100
-#define FC_FLASH_ATTN_EXT_VEC          200
-#define FC_FLASH_ATTN_EXT_VEC_REDUCE   300
-#define FC_MUL_MV                      400
-#define FC_MUL_MM                      500
+#define FC_FLASH_ATTN_EXT_PAD          100
+#define FC_FLASH_ATTN_EXT              200
+#define FC_FLASH_ATTN_EXT_VEC          300
+#define FC_FLASH_ATTN_EXT_VEC_REDUCE   400
+#define FC_MUL_MV                      500
+#define FC_MUL_MM                      600
 
 // kernel argument structs
 //
@@ -245,6 +246,24 @@ typedef struct {
 } ggml_metal_kargs_rope;
 
 typedef struct {
+    int32_t  ne11;
+    int32_t  ne_12_2; // assume K and V are same shape
+    int32_t  ne_12_3;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb21;
+    uint64_t nb22;
+    uint64_t nb23;
+    int32_t  ne31;
+    int32_t  ne32;
+    int32_t  ne33;
+    uint64_t nb31;
+    uint64_t nb32;
+    uint64_t nb33;
+} ggml_metal_kargs_flash_attn_ext_pad;
+
+typedef struct {
     int32_t  ne01;
     int32_t  ne02;
     int32_t  ne03;
@@ -262,6 +281,7 @@ typedef struct {
     uint64_t nb21;
     uint64_t nb22;
     uint64_t nb23;
+    int32_t  ne31;
     int32_t  ne32;
     int32_t  ne33;
     uint64_t nb31;
@@ -296,6 +316,7 @@ typedef struct {
     uint64_t nb21;
     uint64_t nb22;
     uint64_t nb23;
+    int32_t  ne31;
     int32_t  ne32;
     int32_t  ne33;
     uint64_t nb31;

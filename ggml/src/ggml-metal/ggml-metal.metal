@@ -4349,10 +4349,83 @@ kernel void kernel_leaky_relu_f32_4(
     dst[tpig] = float4(x > 0.0f)*x + float4(x <= 0.0f)*(x * args.slope);
 }
 
+constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
+
+constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 24)]];
+
+// pad the last chunk of C elements of k and v into a an extra pad buffer
+kernel void kernel_flash_attn_ext_pad(
+        constant ggml_metal_kargs_flash_attn_ext_pad & args,
+        device const char * k,
+        device const char * v,
+        device const char * mask,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int32_t C = FC_flash_attn_ext_pad_ncpsg;
+
+    device char * k_pad    = dst;
+    device char * v_pad    = k_pad + args.nb11*C*args.ne_12_2*args.ne_12_3;
+    device char * mask_pad = v_pad + args.nb21*C*args.ne_12_2*args.ne_12_3;
+
+    const int32_t icp = args.ne11 % C;
+    const int32_t ic0 = args.ne11 - icp;
+
+    const int32_t i1 = tgpig[0];
+    const int32_t i2 = tgpig[1];
+    const int32_t i3 = tgpig[2];
+
+    if (i2 < args.ne_12_2 && i3 < args.ne_12_3) {
+        device const char * k_src = k + args.nb11*(ic0 + i1) + args.nb12*i2 + args.nb13*i3;
+        device const char * v_src = v + args.nb21*(ic0 + i1) + args.nb22*i2 + args.nb23*i3;
+
+        device char * k_dst = k_pad + args.nb11*i1 + args.nb11*C*i2 + args.nb11*C*args.ne_12_2*i3;
+        device char * v_dst = v_pad + args.nb21*i1 + args.nb21*C*i2 + args.nb21*C*args.ne_12_2*i3;
+
+        if (i1 >= icp) {
+            // here it is not important the exact value that will be used as we rely on masking out the scores in the attention
+            for (uint64_t i = tiitg; i < args.nb11; i += ntg.x) {
+                k_dst[i] = 0;
+            }
+            for (uint64_t i = tiitg; i < args.nb21; i += ntg.x) {
+                v_dst[i] = 0;
+            }
+        } else {
+            for (uint64_t i = tiitg; i < args.nb11; i += ntg.x) {
+                k_dst[i] = k_src[i];
+            }
+            for (uint64_t i = tiitg; i < args.nb21; i += ntg.x) {
+                v_dst[i] = v_src[i];
+            }
+        }
+    }
+
+    if (FC_flash_attn_ext_pad_has_mask) {
+        if (i2 < args.ne32 && i3 < args.ne33) {
+            for (int ib = i1; ib < args.ne31; ib += C) {
+                device const half * mask_src = (device const half *)(mask      + args.nb31*ib + args.nb32*i2 + args.nb33*i3) + ic0;
+                device       half * mask_dst = (device       half *)(mask_pad) + C*ib + C*args.ne31*i2 + C*args.ne31*args.ne32*i3;
+
+                for (int i = tiitg; i < C; i += ntg.x) {
+                    if (i >= icp) {
+                        mask_dst[i] = -MAXHALF;
+                    } else {
+                        mask_dst[i] = mask_src[i];
+                    }
+                }
+            }
+        }
+    }
+}
+
 constant bool FC_flash_attn_ext_has_mask  [[function_constant(FC_FLASH_ATTN_EXT + 0)]];
 constant bool FC_flash_attn_ext_has_sinks [[function_constant(FC_FLASH_ATTN_EXT + 1)]];
 constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT + 2)]];
 constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
+constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
+
+constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
 //constant float FC_flash_attn_ext_scale         [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 //constant float FC_flash_attn_ext_max_bias      [[function_constant(FC_FLASH_ATTN_EXT + 11)]];
@@ -4399,6 +4472,7 @@ void kernel_flash_attn_ext_impl(
         device const char * v,
         device const char * mask,
         device const char * sinks,
+        device const char * pad,
         device       char * dst,
         threadgroup  half * shmem_f16,
         uint3   tgpig,
@@ -4523,13 +4597,58 @@ void kernel_flash_attn_ext_impl(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        for (int ic = 0; ic < args.ne11; ic += C) {
+        for (int ic0 = 0; ic0 < args.ne11; ic0 += C) {
+            int ic = ic0;
+
+            // the last partial chunk uses the pad buffer as source
+            if (FC_flash_attn_ext_has_kvpad && ic0 + C > args.ne11) {
+                k    = pad;
+                v    = k + args.nb11*C*args.ne_12_2*args.ne_12_3;
+                mask = v + args.nb21*C*args.ne_12_2*args.ne_12_3;
+
+                const short ikv2 = iq2/(args.ne02/args.ne_12_2);
+                const short ikv3 = iq3/(args.ne03/args.ne_12_3);
+
+                k += (ikv2 + ikv3*args.ne_12_2)*args.nb11*C;
+                v += (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
+
+                if (!FC_flash_attn_ext_has_mask) {
+                    threadgroup half * sm = (threadgroup half *) (sm2);
+
+                    FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
+                        const short j = jj*NSG + sgitg;
+
+                        for (short i = tiisg; i < C; i += NW) {
+                            if (ic + i >= args.ne11) {
+                                sm[2*j*SH + i] = -MAXHALF;
+                            }
+                        }
+                    }
+                } else {
+                    FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
+                        const short j = jj*NSG + sgitg;
+
+                        pm2[jj] = (device const half2 *) ((device const half *) mask +
+                                (iq1 + j)*C +
+                                (iq2%args.ne32)*(C*args.ne31) +
+                                (iq3%args.ne33)*(C*args.ne31*args.ne32));
+                    }
+                }
+
+                ic = 0;
+            }
+
             // read the mask into shared mem
             if (FC_flash_attn_ext_has_mask) {
                 FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                     const short j = jj*NSG + sgitg;
 
-                    sm2[j*SH + tiisg] = pm2[jj][tiisg];
+                    if (FC_flash_attn_ext_bc_mask) {
+                        sm2[j*SH + tiisg] = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
+                    } else {
+                        sm2[j*SH + tiisg] = pm2[jj][tiisg];
+                    }
+
                     pm2[jj] += NW;
                 }
 
@@ -4557,7 +4676,7 @@ void kernel_flash_attn_ext_impl(
             // this is compile-time check, so it does not have runtime overhead
             if (is_same<kd4x4_t, k4x4_t>::value) {
                 // we can read directly from global memory
-                device      const k_t * pk = (device const k_t *) ((device const char *) k + ic*args.nb11);
+                device      const k_t * pk = (device const k_t *) (k + ic*args.nb11);
                 threadgroup const q_t * pq = sq;
                 threadgroup       s_t * ps = ss;
 
@@ -4629,7 +4748,7 @@ void kernel_flash_attn_ext_impl(
                     qk8x8_t mqk = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
 
                     for (short ii = 0; ii < DK16; ii += 4) {
-                        device const kd4x4_t * pk4x4 = (device const kd4x4_t *) ((device const char *) k + ((ic + 8*cc + ty)*args.nb11));
+                        device const kd4x4_t * pk4x4 = (device const kd4x4_t *) (k + ((ic + 8*cc + ty)*args.nb11));
 
                         if (DK16%4 == 0) {
                             // the head is evenly divisible by 4*16 = 64, so no need for bound checks
@@ -4751,7 +4870,7 @@ void kernel_flash_attn_ext_impl(
                     {
                         auto sst = ss;
 
-                        device const v_t * pv = (device const v_t *) ((device const char *) v + ic*args.nb21);
+                        device const v_t * pv = (device const v_t *) (v + ic*args.nb21);
 
                         pv += 8*sgitg;
 
@@ -4793,7 +4912,7 @@ void kernel_flash_attn_ext_impl(
                         simdgroup_load(vs, ss + 8*cc, SH, 0, false);
 
                         for (short ii = 4*sgitg; ii < DV16; ii += 4*NSG) {
-                            device const vd4x4_t * pv4x4 = (device const vd4x4_t *) ((device const char *) v + ((ic + 8*cc + ty)*args.nb21));
+                            device const vd4x4_t * pv4x4 = (device const vd4x4_t *) (v + ((ic + 8*cc + ty)*args.nb21));
 
                             if (DV16%4 == 0) {
                                 // no need for bound checks
@@ -4937,13 +5056,14 @@ kernel void kernel_flash_attn_ext(
         device const char * v,
         device const char * mask,
         device const char * sinks,
+        device const char * pad,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, dst, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
@@ -5063,6 +5183,7 @@ constant bool FC_flash_attn_ext_vec_has_mask  [[function_constant(FC_FLASH_ATTN_
 constant bool FC_flash_attn_ext_vec_has_sinks [[function_constant(FC_FLASH_ATTN_EXT_VEC + 1)]];
 constant bool FC_flash_attn_ext_vec_has_bias  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 2)]];
 constant bool FC_flash_attn_ext_vec_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 3)]];
+constant bool FC_flash_attn_ext_vec_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT_VEC + 4)]];
 
 //constant float FC_flash_attn_ext_vec_scale         [[function_constant(FC_FLASH_ATTN_EXT_VEC + 10)]];
 //constant float FC_flash_attn_ext_vec_max_bias      [[function_constant(FC_FLASH_ATTN_EXT_VEC + 11)]];
@@ -5100,6 +5221,7 @@ void kernel_flash_attn_ext_vec_impl(
         device const char * v,
         device const char * mask,
         device const char * sinks,
+        device const char * pad,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
@@ -5206,9 +5328,35 @@ void kernel_flash_attn_ext_vec_impl(
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
         for (int ic0 = (int) iwg*C*NSG; ic0 < args.ne11; ic0 += (int) NWG*C*NSG) {
-            const int ic = ic0 + C*sgitg;
+            int ic = ic0 + C*sgitg;
             if (ic >= args.ne11) {
                 break;
+            }
+
+            // the last partial chunk uses the pad buffer as source
+            if (FC_flash_attn_ext_vec_has_kvpad && ic + C > args.ne11) {
+                k    = pad;
+                v    = k + args.nb11*C*args.ne_12_2*args.ne_12_3;
+                mask = v + args.nb21*C*args.ne_12_2*args.ne_12_3;
+
+                const short ikv2 = iq2/(args.ne02/args.ne_12_2);
+                const short ikv3 = iq3/(args.ne03/args.ne_12_3);
+
+                k += (ikv2 + ikv3*args.ne_12_2)*args.nb11*C;
+                v += (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
+
+                if (!FC_flash_attn_ext_vec_has_mask) {
+                    if (ic + tiisg >= args.ne11) {
+                        sm[tiisg] = -MAXHALF;
+                    }
+                } else {
+                    pm = (device const half *) (mask) +
+                        iq1*C +
+                        (iq2%args.ne32)*(C*args.ne31) +
+                        (iq3%args.ne33)*(C*args.ne31*args.ne32);
+                }
+
+                ic = 0;
             }
 
             if (FC_flash_attn_ext_vec_has_mask) {
@@ -5222,7 +5370,7 @@ void kernel_flash_attn_ext_vec_impl(
 
             // Q*K^T
             {
-                device      const k4_t * pk4 = (device const k4_t *) ((device const char *) k + ic*args.nb11);
+                device      const k4_t * pk4 = (device const k4_t *) (k + ic*args.nb11);
                 threadgroup const q4_t * pq4 = sq4;
 
                 pk4 += ty*NS10/4 + tx;
@@ -5237,7 +5385,7 @@ void kernel_flash_attn_ext_vec_impl(
                             mqk[cc] += dot((float4) pk4[cc*NE*NS10/4 +  ii*NL], (float4) pq4[ii*NL]);
                         }
                     } else {
-                        device const kd4_t * pk = (device const kd4_t *) ((device const char *) k + ((ic + NE*cc + ty)*args.nb11));
+                        device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
 
                         k4_t mk;
 
@@ -5335,7 +5483,7 @@ void kernel_flash_attn_ext_vec_impl(
                 }
 
                 if (is_same<vd4_t, v4_t>::value) {
-                    device const v4_t * pv4 = (device const v4_t *) ((device const char *) v + ic*args.nb21);
+                    device const v4_t * pv4 = (device const v4_t *) (v + ic*args.nb21);
 
                     pv4 += ty*NS20/4 + tx;
 
@@ -5348,7 +5496,7 @@ void kernel_flash_attn_ext_vec_impl(
                     }
                 } else {
                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
-                        device const vd4_t * pv4 = (device const vd4_t *) ((device const char *) v + ((ic + NE*cc + ty)*args.nb21));
+                        device const vd4_t * pv4 = (device const vd4_t *) (v + ((ic + NE*cc + ty)*args.nb21));
 
                         FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
                             const short i = ii*NL + tx;
@@ -5520,13 +5668,14 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * v,
         device const char * mask,
         device const char * sinks,
+        device const char * pad,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q4_t, k4_t, v4_t, qk_t, s_t, s4_t, o4_t, kd4_t, nl_k, deq_k_t4, vd4_t, nl_v, deq_v_t4, DK, DV, NE, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, dst, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_vec_nsg) {
       // note: disabled cases to reduce library load time
         case 1:  kernel_flash_attn_ext_vec_impl<FWD_TMPL,  1>(FWD_ARGS); break;
