@@ -1470,9 +1470,9 @@ struct server_prompt_cache {
     server_prompt * alloc(const server_prompt & prompt, size_t state_size) {
         // first check if the current state is contained fully in the cache
         for (auto it = states.begin(); it != states.end(); ++it) {
-            const int cur_lcs_len = it->tokens.get_common_prefix(prompt.tokens);
+            const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
 
-            if (cur_lcs_len == (int) prompt.tokens.size()) {
+            if (cur_lcp_len == (int) prompt.tokens.size()) {
                 SRV_WRN("%s", " - prompt is already cached, skipping\n");
                 return nullptr;
             }
@@ -1520,24 +1520,37 @@ struct server_prompt_cache {
     }
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
-        int lcs_len = prompt.tokens.get_common_prefix(tokens_new);
+        const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
-        SRV_WRN(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
+        float f_keep_best = float(lcp_best) / prompt.tokens.size();
+        float sim_best    = float(lcp_best) / tokens_new.size();
+
+        SRV_WRN(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
         auto it_best = states.end();
 
-        // find the most similar cached prompt
+        // find the most similar cached prompt, that would also preserve the most context
         for (auto it = states.begin(); it != states.end(); ++it) {
-            const int cur_lcs_len = it->tokens.get_common_prefix(tokens_new);
+            const int lcp_cur = it->tokens.get_common_prefix(tokens_new);
 
-            if (lcs_len < cur_lcs_len) {
-                lcs_len = cur_lcs_len;
+            const float f_keep_cur = float(lcp_cur) / it->tokens.size();
+            const float sim_cur    = float(lcp_cur) / tokens_new.size();
+
+            // don't trash large prompts
+            if (f_keep_cur < 0.25f) {
+                continue;
+            }
+
+            if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
+                f_keep_best = f_keep_cur;
+                sim_best    = sim_cur;
+
                 it_best = it;
             }
         }
 
         if (it_best != states.end()) {
-            SRV_WRN(" - found better prompt with lcs_len = %d\n", lcs_len);
+            SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
             const size_t size = it_best->data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id_slot, 0);
@@ -2560,7 +2573,6 @@ struct server_context {
 
         // find the slot that has at least n% prompt similarity
         if (ret == nullptr && slot_prompt_similarity != 0.0f) {
-            int lcs_len_best = 0;
             float sim_best = 0;
 
             for (server_slot & slot : slots) {
@@ -2576,26 +2588,22 @@ struct server_context {
                     continue;
                 }
 
-                // length of the Longest Common Subsequence between the current slot's prompt and the input prompt
-                const int lcs_len_cur = tokens.get_common_prefix(task.tokens);
-
-                // fraction of the common subsequence length
-                const float sim_cur = float(lcs_len_cur) / task.tokens.size();
+                // fraction of the Longest Common Prefix length with respect to the input prompt length
+                const float sim_cur = float(tokens.get_common_prefix(task.tokens)) / task.tokens.size();
 
                 // select the current slot if the criteria match
-                if (lcs_len_cur > lcs_len_best && sim_cur > slot_prompt_similarity) {
-                    lcs_len_best = lcs_len_cur;
-                    sim_best     = sim_cur;
+                if (sim_cur > sim_best && sim_cur > slot_prompt_similarity) {
+                    sim_best = sim_cur;
 
                     ret = &slot;
                 }
             }
 
             if (ret != nullptr) {
-                const float f_keep = float(lcs_len_best) / ret->prompt.tokens.size();
+                const float f_keep = (sim_best*task.tokens.size()) / ret->prompt.tokens.size();
 
-                SLT_INF(*ret, "selected slot by lcs similarity, lcs_len_best = %d, sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
-                        lcs_len_best, sim_best, slot_prompt_similarity, f_keep);
+                SLT_INF(*ret, "selected slot by LCP similarity, sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
+                        sim_best, slot_prompt_similarity, f_keep);
 
                 // if we are about to lose a large portion of the existing context - save it in the prompt cache
                 if (f_keep < 0.5f) {

@@ -1273,13 +1273,23 @@ public:
     size_t get_common_prefix(const server_tokens & b) const {
         const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
+        if (!has_mtmd) {
+            for (size_t i = 0; i < max_idx; ++i) {
+                if (tokens[i] == b.tokens[i]) {
+                    continue;
+                }
+
+                return i;
+            }
+
+            return max_idx;
+        }
+
         for (size_t i = 0; i < max_idx; ++i) {
             const llama_token ai =   tokens[i];
             const llama_token bi = b.tokens[i];
 
             if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
-                GGML_ASSERT(has_mtmd);
-
                 const auto & a_chunk =   find_chunk(i);
                 const auto & b_chunk = b.find_chunk(i);
 
