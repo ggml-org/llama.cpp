@@ -1937,7 +1937,7 @@ private:
     void cleanup_pending_task(int id_target) {
         // no need lock because this is called exclusively by post()
         auto rm_func = [id_target](const server_task & task) {
-            return task.id_target == id_target;
+            return task.id == id_target;
         };
         queue_tasks.erase(
             std::remove_if(queue_tasks.begin(),          queue_tasks.end(),          rm_func),
