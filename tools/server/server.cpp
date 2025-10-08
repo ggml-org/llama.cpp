@@ -3772,6 +3772,49 @@ struct server_context {
                                     GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
                                 }
 
+                                // when the prompt prefix does not match, print the tokens around the mismatch
+                                // this is useful for debugging prompt caching
+                                {
+                                    const int np0 = std::max<int>(slot.n_past - 4, 0);
+                                    const int np1 = std::min<int>(slot.n_past + 6, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
+
+                                    std::stringstream ss0;
+                                    std::stringstream ss1;
+
+                                    std::stringstream st0;
+                                    std::stringstream st1;
+
+                                    ss0 << "old: ... ";
+                                    ss1 << "new: ... ";
+
+                                    for (int i = np0; i < np1; i++) {
+                                        if (i == slot.n_past) {
+                                            ss0 << " | ";
+                                            ss1 << " | ";
+                                        }
+
+                                        {
+                                            const auto token = slot.prompt.tokens[i];
+                                            const auto piece = common_token_to_piece(ctx, token);
+                                            ss0 << piece;
+                                            st0 << std::setw(8) << token;
+                                        }
+
+                                        {
+                                            const auto token = slot.task->tokens[i];
+                                            const auto piece = common_token_to_piece(ctx, token);
+                                            ss1 << piece;
+                                            st1 << std::setw(8) << token;
+                                        }
+                                    }
+
+                                    SLT_WRN(slot, "%s\n", ss0.str().c_str());
+                                    SLT_WRN(slot, "%s\n", ss1.str().c_str());
+
+                                    SLT_WRN(slot, "%s\n", st0.str().c_str());
+                                    SLT_WRN(slot, "%s\n", st1.str().c_str());
+                                }
+
                                 if (pos_min > pos_min_thold) {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
