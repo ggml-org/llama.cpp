@@ -31,6 +31,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+#    include <systemd/sd-daemon.h>
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
@@ -4094,6 +4098,56 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+// Subclass of httplib::Server that adds systemd socket activation support on systems
+// where that's available.
+class SystemdServer : public httplib::Server {
+  public:
+    bool setup_sd_socket() {
+        int n = sd_listen_fds(0);
+        if (n != 1) {
+            LOG_ERR("%s: sd_listen_fds() returned %d\n", __func__, n);
+            return false;
+        }
+
+        int fd = SD_LISTEN_FDS_START;
+        if (!sd_is_socket(fd, AF_UNSPEC, SOCK_STREAM, -1)) {
+            LOG_ERR("%s: fd is not a socket\n", __func__);
+            return false;
+        }
+
+        LOG_INF("%s: using systemd socket fd %d\n", __func__, fd);
+        svr_sock_     = fd;
+        socket_is_sd_ = true;
+        // Add a timeout to internal processing loop to enable graceful shutdown by
+        // just closing the socket.
+        set_idle_interval(1, 0);
+        return true;
+    }
+
+    bool close_sd_socket() {
+        if (!socket_is_sd_.exchange(false)) {
+            return false;
+        }
+        // If we're using a systemd socket, we don't own it, so we just close it without
+        // shutdown.
+        SRV_INF("%s: closing systemd socket...\n", __func__);
+        std::atomic<socket_t> sock(svr_sock_.exchange(INVALID_SOCKET));
+        httplib::detail::close_socket(sock);
+        return true;
+    }
+
+  private:
+    std::atomic<bool> socket_is_sd_{ false };
+};
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+#    define NEW_SERVER (new SystemdServer())
+#else
+#    define NEW_SERVER (new httplib::Server())
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
 int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
@@ -4124,14 +4178,14 @@ int main(int argc, char ** argv) {
         );
     } else {
         LOG_INF("Running without SSL\n");
-        svr.reset(new httplib::Server());
+        svr.reset(NEW_SERVER);
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
         LOG_ERR("Server is built without SSL support\n");
         return 1;
     }
-    svr.reset(new httplib::Server());
+    svr.reset(NEW_SERVER);
 #endif
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
@@ -5217,6 +5271,35 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
+    const auto & do_load_model = [&ctx_server, &params, &state]() -> bool {
+        // load the model
+        LOG_INF("%s: loading model\n", __func__);
+
+        if (!ctx_server.load_model(params)) {
+            return false;
+        }
+
+        ctx_server.init();
+        state.store(SERVER_STATE_READY);
+
+        LOG_INF("%s: model loaded\n", __func__);
+        return true;
+    };
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (params.use_systemd) {
+        // When using systemd, load the model before starting to accept on the socket.
+        // This prevents a race condition where the client whose connection triggered
+        // this service's start will get 503 errors while the model loads.
+        if (!do_load_model()) {
+            LOG_ERR("%s: exiting due to model loading error\n", __func__);
+            ctx_server.queue_results.terminate();
+            llama_backend_free();
+            return 1;
+        }
+    }
+#endif
+
     //
     // Router
     //
@@ -5293,35 +5376,62 @@ int main(int argc, char ** argv) {
     log_data["n_threads_http"] =  std::to_string(params.n_threads_http);
     svr->new_task_queue = [&params] { return new httplib::ThreadPool(params.n_threads_http); };
 
+    bool was_bound = false;
+    bool is_sock   = false;
+
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    bool using_sd_socket = false;
+    if (params.use_systemd) {
+        was_bound       = static_cast<SystemdServer *>(svr.get())->setup_sd_socket();
+        using_sd_socket = was_bound;
+        if (!was_bound) {
+            LOG_INF("%s: couldn't set up systemd socket; falling back to opening host:port socket\n", __func__);
+        }
+    }
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+
+    if (!was_bound) {
+        if (string_ends_with(std::string(params.hostname), ".sock")) {
+            is_sock = true;
+            LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
+            svr->set_address_family(AF_UNIX);
+            // bind_to_port requires a second arg, any value other than 0 should
+            // simply get ignored
+            was_bound = svr->bind_to_port(params.hostname, 8080);
+        } else {
+            LOG_INF("%s: binding port with default address family\n", __func__);
+            // bind HTTP listen port
+            if (params.port == 0) {
+                int bound_port = svr->bind_to_any_port(params.hostname);
+                if ((was_bound = (bound_port >= 0))) {
+                    params.port = bound_port;
+                }
+            } else {
+                was_bound = svr->bind_to_port(params.hostname, params.port);
+            }
+        }
+    }
+
     // clean up function, to be called before exit
-    auto clean_up = [&svr, &ctx_server]() {
+    auto clean_up = [&svr, &ctx_server
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+                     , &using_sd_socket
+#endif
+    ]() {
         SRV_INF("%s: cleaning up before exit...\n", __func__);
-        svr->stop();
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+        if (!using_sd_socket) {
+#endif
+            svr->stop();
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+        } else {
+            sd_notify(0, "STOPPING=1");
+            static_cast<SystemdServer *>(svr.get())->close_sd_socket();
+        }
+#endif
         ctx_server.queue_results.terminate();
         llama_backend_free();
     };
-
-    bool was_bound = false;
-    bool is_sock = false;
-    if (string_ends_with(std::string(params.hostname), ".sock")) {
-        is_sock = true;
-        LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
-        svr->set_address_family(AF_UNIX);
-        // bind_to_port requires a second arg, any value other than 0 should
-        // simply get ignored
-        was_bound = svr->bind_to_port(params.hostname, 8080);
-    } else {
-        LOG_INF("%s: binding port with default address family\n", __func__);
-        // bind HTTP listen port
-        if (params.port == 0) {
-            int bound_port = svr->bind_to_any_port(params.hostname);
-            if ((was_bound = (bound_port >= 0))) {
-                params.port = bound_port;
-            }
-        } else {
-            was_bound = svr->bind_to_port(params.hostname, params.port);
-        }
-    }
 
     if (!was_bound) {
         LOG_ERR("%s: couldn't bind HTTP server socket, hostname: %s, port: %d\n", __func__, params.hostname.c_str(), params.port);
@@ -5333,22 +5443,27 @@ int main(int argc, char ** argv) {
     std::thread t([&]() { svr->listen_after_bind(); });
     svr->wait_until_ready();
 
-    LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__, params.hostname.c_str(), params.port, params.n_threads_http);
-
-    // load the model
-    LOG_INF("%s: loading model\n", __func__);
-
-    if (!ctx_server.load_model(params)) {
-        clean_up();
-        t.join();
-        LOG_ERR("%s: exiting due to model loading error\n", __func__);
-        return 1;
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (!using_sd_socket) {
+#endif
+        LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__,
+                params.hostname.c_str(), params.port, params.n_threads_http);
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    } else {
+        LOG_INF("%s: HTTP server is listening on systemd socket, http threads: %d\n", __func__, params.n_threads_http);
     }
+    if (params.use_systemd) {
+        sd_notify(0, "READY=1");
+    }
+#endif
 
-    ctx_server.init();
-    state.store(SERVER_STATE_READY);
-
-    LOG_INF("%s: model loaded\n", __func__);
+    if (state.load() != SERVER_STATE_READY) {
+        if (!do_load_model()) {
+            clean_up();
+            t.join();
+            return 1;
+        }
+    }
 
     // print sample chat example to make it clear which template is used
     LOG_INF("%s: chat template, chat_template: %s, example_format: '%s'\n", __func__,
@@ -5382,9 +5497,17 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
-            is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
-                      string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    if (using_sd_socket) {
+        LOG_INF("%s: server is listening on systemd socket - starting the main loop\n", __func__);
+    } else {
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
+        LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
+                is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
+                          string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
+#ifdef LLAMA_CPP_SYSTEMD_SUPPORT
+    }
+#endif  // LLAMA_CPP_SYSTEMD_SUPPORT
 
     // this call blocks the main thread until queue_tasks.terminate() is called
     ctx_server.queue_tasks.start_loop();
