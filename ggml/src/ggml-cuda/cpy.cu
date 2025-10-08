@@ -12,13 +12,13 @@ static __global__ void cpy_contiguous(const T * cx, T * cdst_direct, const int n
                                                  T ** cdst_indirect, int graph_cpynode_index) {
     const int64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
     const int64_t stride = blockDim.x * gridDim.x;
-    
+
     T * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index] : cdst_direct;
-    
+
     const int elements_per_thread = 4;
     for (int64_t base_idx = tid * elements_per_thread; base_idx < ne_elements; base_idx += stride * elements_per_thread) {
         const int64_t remaining = ne_elements - base_idx;
-        
+
         if (remaining >= elements_per_thread) {
             if (base_idx % 4 == 0) {
                 *((float4*)(cdst + base_idx)) = *((const float4*)(cx + base_idx));
@@ -178,7 +178,7 @@ static void ggml_cpy_contiguous_cuda(
     const int elements_per_thread = 4;
     const int threads_needed = (ne_elements + elements_per_thread - 1) / elements_per_thread;
     const int num_blocks = max(1, min(65535, (threads_needed + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE));
-    
+
     cpy_contiguous<T><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
         (cx, cdst, ne_elements, cdst_indirect, graph_cpynode_index++);
 }
