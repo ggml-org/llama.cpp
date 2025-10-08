@@ -325,32 +325,32 @@ struct server_task {
         params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
       //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
         params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
-        params.response_fields  = json_value(data,       "response_fields",   std::vector<std::string>());
+        params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
 
-        params.sampling.top_k              = json_value(data, "top_k",              defaults.sampling.top_k);
-        params.sampling.top_p              = json_value(data, "top_p",              defaults.sampling.top_p);
-        params.sampling.min_p              = json_value(data, "min_p",              defaults.sampling.min_p);
-        params.sampling.top_n_sigma        = json_value(data, "top_n_sigma",        defaults.sampling.top_n_sigma);
-        params.sampling.xtc_probability    = json_value(data, "xtc_probability",    defaults.sampling.xtc_probability);
-        params.sampling.xtc_threshold      = json_value(data, "xtc_threshold",      defaults.sampling.xtc_threshold);
-        params.sampling.typ_p              = json_value(data, "typical_p",          defaults.sampling.typ_p);
-        params.sampling.temp               = json_value(data, "temperature",        defaults.sampling.temp);
-        params.sampling.dynatemp_range     = json_value(data, "dynatemp_range",     defaults.sampling.dynatemp_range);
-        params.sampling.dynatemp_exponent  = json_value(data, "dynatemp_exponent",  defaults.sampling.dynatemp_exponent);
-        params.sampling.penalty_last_n     = json_value(data, "repeat_last_n",      defaults.sampling.penalty_last_n);
-        params.sampling.penalty_repeat     = json_value(data, "repeat_penalty",     defaults.sampling.penalty_repeat);
-        params.sampling.penalty_freq       = json_value(data, "frequency_penalty",  defaults.sampling.penalty_freq);
-        params.sampling.penalty_present    = json_value(data, "presence_penalty",   defaults.sampling.penalty_present);
-        params.sampling.dry_multiplier     = json_value(data, "dry_multiplier",     defaults.sampling.dry_multiplier);
-        params.sampling.dry_base           = json_value(data, "dry_base",           defaults.sampling.dry_base);
-        params.sampling.dry_allowed_length = json_value(data, "dry_allowed_length", defaults.sampling.dry_allowed_length);
-        params.sampling.dry_penalty_last_n = json_value(data, "dry_penalty_last_n", defaults.sampling.dry_penalty_last_n);
-        params.sampling.mirostat           = json_value(data, "mirostat",           defaults.sampling.mirostat);
-        params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",       defaults.sampling.mirostat_tau);
-        params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",       defaults.sampling.mirostat_eta);
-        params.sampling.seed               = json_value(data, "seed",               defaults.sampling.seed);
-        params.sampling.n_probs            = json_value(data, "n_probs",            defaults.sampling.n_probs);
-        params.sampling.min_keep           = json_value(data, "min_keep",           defaults.sampling.min_keep);
+        params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
+        params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
+        params.sampling.min_p              = json_value(data, "min_p",               defaults.sampling.min_p);
+        params.sampling.top_n_sigma        = json_value(data, "top_n_sigma",         defaults.sampling.top_n_sigma);
+        params.sampling.xtc_probability    = json_value(data, "xtc_probability",     defaults.sampling.xtc_probability);
+        params.sampling.xtc_threshold      = json_value(data, "xtc_threshold",       defaults.sampling.xtc_threshold);
+        params.sampling.typ_p              = json_value(data, "typical_p",           defaults.sampling.typ_p);
+        params.sampling.temp               = json_value(data, "temperature",         defaults.sampling.temp);
+        params.sampling.dynatemp_range     = json_value(data, "dynatemp_range",      defaults.sampling.dynatemp_range);
+        params.sampling.dynatemp_exponent  = json_value(data, "dynatemp_exponent",   defaults.sampling.dynatemp_exponent);
+        params.sampling.penalty_last_n     = json_value(data, "repeat_last_n",       defaults.sampling.penalty_last_n);
+        params.sampling.penalty_repeat     = json_value(data, "repeat_penalty",      defaults.sampling.penalty_repeat);
+        params.sampling.penalty_freq       = json_value(data, "frequency_penalty",   defaults.sampling.penalty_freq);
+        params.sampling.penalty_present    = json_value(data, "presence_penalty",    defaults.sampling.penalty_present);
+        params.sampling.dry_multiplier     = json_value(data, "dry_multiplier",      defaults.sampling.dry_multiplier);
+        params.sampling.dry_base           = json_value(data, "dry_base",            defaults.sampling.dry_base);
+        params.sampling.dry_allowed_length = json_value(data, "dry_allowed_length",  defaults.sampling.dry_allowed_length);
+        params.sampling.dry_penalty_last_n = json_value(data, "dry_penalty_last_n",  defaults.sampling.dry_penalty_last_n);
+        params.sampling.mirostat           = json_value(data, "mirostat",            defaults.sampling.mirostat);
+        params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",        defaults.sampling.mirostat_tau);
+        params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
+        params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
+        params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
+        params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
         params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
         params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
@@ -792,11 +792,12 @@ struct server_task_result_cmpl_final : server_task_result {
     slot_params generation_params;
 
     // OAI-compat fields
-    bool               verbose                  = false;
-    oaicompat_type     oaicompat                = OAICOMPAT_TYPE_NONE;
-    std::string        oaicompat_model;
-    std::string        oaicompat_cmpl_id;
-    common_chat_msg    oaicompat_msg;
+    bool            verbose   = false;
+    oaicompat_type  oaicompat = OAICOMPAT_TYPE_NONE;
+    std::string     oaicompat_model;
+    std::string     oaicompat_cmpl_id;
+    common_chat_msg oaicompat_msg;
+
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
 
     virtual int get_index() override {
@@ -1399,7 +1400,7 @@ struct server_task_result_apply_lora : server_task_result {
     }
 };
 
-struct server_slot_prompt_checkpoint {
+struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
 
@@ -1410,12 +1411,12 @@ struct server_slot_prompt_checkpoint {
     }
 };
 
-struct server_slot_prompt {
+struct server_prompt {
     server_tokens tokens;
 
     std::vector<uint8_t> data;
 
-    std::list<server_slot_prompt_checkpoint> checkpoints;
+    std::list<server_prompt_checkpoint> checkpoints;
 
     size_t size() const {
         size_t res = data.size();
@@ -1433,7 +1434,7 @@ struct server_slot_prompt {
 };
 
 struct server_prompt_cache {
-    std::list<server_slot_prompt> states;
+    std::list<server_prompt> states;
 
     // in bytes, 0 = no limit
     size_t limit_size = 0;
@@ -1466,12 +1467,12 @@ struct server_prompt_cache {
         return res;
     }
 
-    server_slot_prompt * alloc(const server_tokens & tokens, size_t state_size) {
+    server_prompt * alloc(const server_prompt & prompt, size_t state_size) {
         // first check if the current state is contained fully in the cache
         for (auto it = states.begin(); it != states.end(); ++it) {
-            const int cur_lcs_len = it->tokens.get_common_prefix(tokens);
+            const int cur_lcs_len = it->tokens.get_common_prefix(prompt.tokens);
 
-            if (cur_lcs_len == (int) tokens.size()) {
+            if (cur_lcs_len == (int) prompt.tokens.size()) {
                 SRV_WRN("%s", " - prompt is already cached, skipping\n");
                 return nullptr;
             }
@@ -1479,7 +1480,7 @@ struct server_prompt_cache {
 
         // next, remove any cached prompts that are fully contained in the current prompt
         for (auto it = states.begin(); it != states.end();) {
-            const int len = it->tokens.get_common_prefix(tokens);
+            const int len = it->tokens.get_common_prefix(prompt.tokens);
 
             if (len == (int) it->tokens.size()) {
                 SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
@@ -1510,15 +1511,15 @@ struct server_prompt_cache {
         // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
         auto & cur = states.emplace_back();
         cur = {
-            /*.tokens      =*/ server_tokens(tokens.get_text_tokens(), false),
+            /*.tokens      =*/ server_tokens(prompt.tokens.get_text_tokens(), false),
             /*.data        =*/ std::move(state_data),
-            /*.checkpoints =*/ {},
+            /*.checkpoints =*/ prompt.checkpoints,
         };
 
         return &cur;
     }
 
-    bool load(server_slot_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
         int lcs_len = prompt.tokens.get_common_prefix(tokens_new);
 
         SRV_WRN(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
@@ -1646,10 +1647,30 @@ struct server_slot {
     // state
     slot_state state = SLOT_STATE_IDLE;
 
-    server_slot_prompt prompt;
+    server_prompt prompt;
 
-    void prompt_save(server_prompt_cache & prompt_cache) const;
-    void prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens);
+    void prompt_save(server_prompt_cache & prompt_cache) const {
+        assert(prompt.data.size() == 0);
+
+        const size_t cur_size = llama_state_seq_get_size_ext(ctx, id, 0);
+
+        SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB\n",
+                (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
+
+        auto * cur = prompt_cache.alloc(prompt, cur_size);
+        if (cur == nullptr) {
+            return;
+        }
+
+        llama_state_seq_get_data_ext(ctx, cur->data.data(), cur_size, id, 0);
+    }
+
+    void prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
+        bool res = prompt_cache.load(prompt, tokens, ctx, id);
+        if (!res) {
+            SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+        }
+    }
 
     std::vector<common_adapter_lora_info> lora;
     int32_t alora_invocation_start = -1;
@@ -1789,19 +1810,19 @@ struct server_slot {
         result_timings timings;
         timings.cache_n = n_prompt_tokens_cache;
 
-        timings.prompt_n = n_prompt_tokens_processed;
-        timings.prompt_ms = t_prompt_processing;
+        timings.prompt_n            = n_prompt_tokens_processed;
+        timings.prompt_ms           = t_prompt_processing;
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
-        timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        timings.prompt_per_second   = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
 
-        timings.predicted_n = n_decoded;
-        timings.predicted_ms = t_token_generation;
+        timings.predicted_n            = n_decoded;
+        timings.predicted_ms           = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
-        timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+        timings.predicted_per_second   = 1e3 / t_token_generation * n_decoded;
 
         // Add speculative metrics
         if (n_draft_total > 0) {
-            timings.draft_n = n_draft_total;
+            timings.draft_n          = n_draft_total;
             timings.draft_n_accepted = n_draft_accepted;
         }
 
@@ -1912,31 +1933,6 @@ struct server_slot {
         return res;
     }
 };
-
-void server_slot::prompt_save(server_prompt_cache & prompt_cache) const {
-    assert(prompt.data.size() == 0);
-
-    const size_t cur_size = llama_state_seq_get_size_ext(ctx, id, 0);
-
-    SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB\n",
-            (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
-
-    auto * cur = prompt_cache.alloc(prompt.tokens, cur_size);
-    if (cur == nullptr) {
-        return;
-    }
-
-    cur->checkpoints = prompt.checkpoints;
-
-    llama_state_seq_get_data_ext(ctx, cur->data.data(), cur_size, id, 0);
-}
-
-void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-    bool res = prompt_cache.load(prompt, tokens, ctx, id);
-    if (!res) {
-        SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
-    }
-}
 
 struct server_metrics {
     int64_t t_start = 0;
@@ -4034,7 +4030,7 @@ struct server_context {
 
                             const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                            auto & cur = slot.prompt.checkpoints.emplace_back(server_slot_prompt_checkpoint{
+                            auto & cur = slot.prompt.checkpoints.emplace_back(server_prompt_checkpoint{
                                 /*.pos_min = */ pos_min,
                                 /*.pos_max = */ pos_max,
                                 /*.data    = */ std::vector<uint8_t>(checkpoint_size),
