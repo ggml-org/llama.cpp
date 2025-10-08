@@ -417,13 +417,6 @@ static __dpct_inline__ float warp_reduce_sum(float x,
     const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        /*
-        DPCT1096:98: The right-most dimension of the work-group used in the SYCL
-        kernel that calls this function may be less than "32". The function
-        "dpct::permute_sub_group_by_xor" may return an unexpected result on the
-        CPU device. Modify the size of the work-group to ensure that the value
-        of the right-most dimension is a multiple of "32".
-        */
         x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
     }
     return x;
@@ -488,47 +481,6 @@ static constexpr int ggml_sycl_get_physical_warp_size() {
 }
 
 template <int width = WARP_SIZE>
-static __dpct_inline__ int warp_reduce_all(int x) {
-  if (width == ggml_sycl_get_physical_warp_size()) {
-    return sycl::all_of_group(
-        sycl::ext::oneapi::this_work_item::get_sub_group(),
-        (~0xffffffff &
-         (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
-                     .get_local_linear_id())) ||
-            x);
-  } else {
-#pragma unroll
-    for (int offset = width / 2; offset > 0; offset >>= 1) {
-      x = dpct::permute_sub_group_by_xor(
-              sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset,
-              width) &&
-          x;
-    }
-    return x;
-  }
-}
-
-template <int width = WARP_SIZE>
-static __dpct_inline__ int warp_reduce_any(int x) {
-  if (width == ggml_sycl_get_physical_warp_size()) {
-    return sycl::any_of_group(
-        sycl::ext::oneapi::this_work_item::get_sub_group(),
-        (0xffffffff & (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
-                                  .get_local_linear_id())) &&
-            x);
-  } else {
-#pragma unroll
-    for (int offset = width / 2; offset > 0; offset >>= 1) {
-      x = dpct::permute_sub_group_by_xor(
-              sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset,
-              width) ||
-          x;
-    }
-    return x;
-  }
-}
-
-template <int width = WARP_SIZE>
 static __dpct_inline__ float warp_reduce_max(float x) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -543,13 +495,6 @@ static __dpct_inline__ float warp_reduce_max(float x,
     const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        /*
-        DPCT1096:97: The right-most dimension of the work-group used in the SYCL
-        kernel that calls this function may be less than "32". The function
-        "dpct::permute_sub_group_by_xor" may return an unexpected result on the
-        CPU device. Modify the size of the work-group to ensure that the value
-        of the right-most dimension is a multiple of "32".
-        */
         x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
             item_ct1.get_sub_group(), x, mask));
     }
