@@ -2313,13 +2313,13 @@ class AfmoeModel(LlamaModel):
         # Handle expert weights - they're already merged in the HF format
         if ".block_sparse_moe.experts.w1" in name:
             assert bid is not None
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXPS, bid), data_torch)]
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), data_torch)]
         elif ".block_sparse_moe.experts.w2" in name:
             assert bid is not None
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXPS, bid), data_torch)]
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), data_torch)]
         elif ".block_sparse_moe.experts.w3" in name:
             assert bid is not None
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXPS, bid), data_torch)]
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), data_torch)]
 
         # Map dual normalization layers
         if ".attn_norm_a." in name and bid is not None:
