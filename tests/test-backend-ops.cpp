@@ -318,6 +318,8 @@ static bool isinf_or_max(float f) {
     return _isinf(f) || f == FLT_MAX || f == -FLT_MAX;
 }
 
+using extra_buffer_map_t = std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t>;
+
 static bool ggml_is_view_op(enum ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
 }
@@ -1155,6 +1157,33 @@ struct test_case {
         }
     }
 
+    static void try_assign_extra_buffer(struct ggml_tensor * node_copy, const extra_buffer_map_t & extra_buf_map) {
+        struct ggml_tensor * src0_copy = node_copy->src[0];
+        ggml_backend_buffer_t org_buf  = src0_copy->buffer;
+
+        for (const auto& [buft, buf] : extra_buf_map) {
+            // Initialize the tensor in the extra buffer
+            if (ggml_backend_buffer_init_tensor(buf, src0_copy) != GGML_STATUS_SUCCESS) {
+                continue;
+            }
+
+            if (!src0_copy->extra) {
+                continue;
+            }
+
+            // Temporarily assign buffer so we can call ggml_backend_dev_supports_op
+            src0_copy->buffer = buf;
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+            // Check if extra buffer type supports the operation
+            if (dev && ggml_backend_dev_supports_op(dev, node_copy)) {
+                return;
+            } else {
+                src0_copy->buffer = org_buf; // Restore original buffer if not supported
+            }
+        }
+    }
+
     struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, struct ggml_cgraph * graph,
             std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
         GGML_ASSERT(graph);
@@ -1219,24 +1248,10 @@ struct test_case {
         for (int i = 0; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
-            if (node->op != GGML_OP_NONE && node->src[0]) {
-                for (const auto& [buft, buf] : extra_buf_map) {
-                    size_t id = ggml_hash_find(&hash_set, node);
-                    ggml_status status = ggml_backend_buffer_init_tensor(buf, node_copies[id]->src[0]);
-                    if (status == GGML_STATUS_SUCCESS) {
-                        if (node_copies[id]->src[0]->extra != nullptr) {
-                            if (strcmp(ggml_backend_buft_name(buft),"CPU_REPACK") == 0) {
-                                if (node_copies[id]->op == GGML_OP_MUL_MAT || node_copies[id]->op == GGML_OP_MUL_MAT_ID) {
-                                    if (ggml_n_dims(node_copies[id]->src[1]) == 2) {
-                                        node_copies[id]->src[0]->buffer = buf;
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        GGML_LOG_ERROR("%s: failed to initialize tensor in extra buffer type '%s' for graph copy\n", __func__, ggml_backend_buft_name(buft));
-                    }
-                }
+            // Handle extra buffer types (before graph_copy_init_tensor)
+            if (node->op != GGML_OP_NONE && !ggml_is_view_op(node->op) && node->src[0]) {
+                size_t id = ggml_hash_find(&hash_set, node);
+                try_assign_extra_buffer(node_copies[id], extra_buf_map);
             }
 
             graph_copy_init_tensor(&hash_set, node_copies, node_init, node);
@@ -7351,6 +7366,25 @@ static void print_backend_features(ggml_backend_t backend) {
     }
 }
 
+static extra_buffer_map_t load_cpu_extra_bufts() {
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+
+    std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map;
+    auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+    if (ggml_backend_dev_get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
+        while (extra_bufts && *extra_bufts) {
+            // TODO: What should the size be here? Do extra buffer types need a size even?
+            // We need to have a value larger than 0 to avoid the dummy backend buffer to be used.
+            extra_buf_map[*extra_bufts] = ggml_backend_buft_alloc_buffer(*extra_bufts, 1);
+            ++extra_bufts;
+        }
+    }
+    return extra_buf_map;
+}
+
 static bool test_cpu_variant(const char * variant_name, const char * op_names_filter,
         const char * params_filter, printer * output_printer) {
     // Load the variant first so that extra buffer types created only use that
@@ -7359,23 +7393,7 @@ static bool test_cpu_variant(const char * variant_name, const char * op_names_fi
     ggml_backend_load_variant("cpu", std::string(variant_name).substr(4).c_str());
 
     // Load extra buffer types and allocate a buffer from each type.
-    std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map;
-    {
-        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
-
-        auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
-            ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
-        if (ggml_backend_dev_get_extra_bufts_fn) {
-            ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
-            while (extra_bufts && *extra_bufts) {
-                // TODO: What should the size be here? Do extra buffer types need a size even?
-                // We need to have a value larger than 0 to avoid the dummy backend buffer to be used.
-                extra_buf_map[*extra_bufts] = ggml_backend_buft_alloc_buffer(*extra_bufts, 1);
-                ++extra_bufts;
-            }
-        }
-    }
+    auto extra_buf_map = load_cpu_extra_bufts();
 
     printf("\n");
     for (auto buft : extra_buf_map) {
