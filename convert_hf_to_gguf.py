@@ -5915,17 +5915,70 @@ class JambaModel(TextModel):
     def get_vocab_base_pre(self, tokenizer) -> str:
         del tokenizer  # unused
 
-        return "gpt-2"
+        return "default"
 
     def set_vocab(self):
         if (self.dir_model / "tokenizer.model").is_file():
-            # Using Jamba's tokenizer.json causes errors on model load
-            # (something about "byte not found in vocab"),
-            # but there's a working tokenizer.model
             self._set_vocab_sentencepiece()
         else:
-            # Some Jamba models only have a tokenizer.json, which works.
-            self._set_vocab_gpt2()
+            tokens: list[str] = []
+            toktypes: list[int] = []
+
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.dir_model, trust_remote_code=True
+            )
+            vocab = getattr(tokenizer, "vocab", tokenizer.get_vocab())
+            vocab_size = self.hparams.get("vocab_size", len(vocab))
+            assert max(vocab.values()) < vocab_size
+
+            tokpre = self.get_vocab_base_pre(tokenizer)
+
+            reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+            added_vocab = tokenizer.get_added_vocab()
+
+            added_tokens_decoder = tokenizer.added_tokens_decoder
+
+            for i in range(vocab_size):
+                if i not in reverse_vocab:
+                    tokens.append(f"[PAD{i}]")
+                    toktypes.append(gguf.TokenType.UNUSED)
+                else:
+                    token: str = reverse_vocab[i]
+
+                    if token in added_vocab:
+                        if not added_tokens_decoder[i].normalized:
+                            previous_token = token
+                            token = tokenizer.decode(
+                                tokenizer.encode(token, add_special_tokens=False)
+                            )
+                            if previous_token != token:
+                                logger.info(
+                                    f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer"
+                                )
+
+                        if added_tokens_decoder[i].special or self.does_token_look_special(
+                            token
+                        ):
+                            toktypes.append(gguf.TokenType.CONTROL)
+                        else:
+                            toktypes.append(gguf.TokenType.USER_DEFINED)
+                    elif re.fullmatch(r"<0x[0-9A-Fa-f]{2}>", token):
+                        toktypes.append(gguf.TokenType.BYTE)  # special
+                    else:
+                        toktypes.append(gguf.TokenType.NORMAL)
+                    tokens.append(token)
+
+            self.gguf_writer.add_tokenizer_model("llama")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+            special_vocab._set_special_token("bos", 1)
+            special_vocab.add_to_gguf(self.gguf_writer)
+
 
     def set_gguf_parameters(self):
         d_model = self.find_hparam(["hidden_size", "mamba_d_model"])
