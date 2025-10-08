@@ -337,7 +337,7 @@ struct ggml_backend_cpu_device_context {
 };
 
 static const char * ggml_backend_cpu_device_get_name(ggml_backend_dev_t dev) {
-    return "CPU";
+    return GGML_CPU_VARIANT_NAME;
 
     GGML_UNUSED(dev);
 }
