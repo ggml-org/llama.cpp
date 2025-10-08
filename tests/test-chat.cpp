@@ -1400,6 +1400,675 @@ static void test_template_output_parsers() {
                 "{\"arg1\": 1}\n"
                 "```<｜tool▁call▁end｜><｜tool▁calls▁end｜>");
     }
+    
+    // Test Qwen3-Coder XML format - Comprehensive test suite
+    {
+        printf("Testing Qwen3-Coder XML format - Comprehensive Suite\n");
+        
+        // Test 1: Basic XML tool call parsing
+        assert_msg_equals(
+            message_assist_call,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=special_function>\n"
+                "    <parameter=arg1>\n"
+                "      1\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+                
+        // Test 2: Multiple parameters with different types
+        common_chat_msg expected_multi_param;
+        expected_multi_param.role = "assistant";
+        expected_multi_param.tool_calls = {
+            { "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_multi_param,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=complex_function>\n"
+                "    <parameter=name>\n"
+                "      John Doe\n"
+                "    </parameter>\n"
+                "    <parameter=age>\n"
+                "      30\n"
+                "    </parameter>\n"
+                "    <parameter=active>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=score>\n"
+                "      95.5\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 3: Special characters and Unicode
+        common_chat_msg expected_special_chars;
+        expected_special_chars.role = "assistant";
+        expected_special_chars.tool_calls = {
+            { "unicode_function", "{\"message\":\"Hello 世界! 🌍 Special chars: @#$%^&*()\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_special_chars,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=unicode_function>\n"
+                "    <parameter=message>\n"
+                "      Hello 世界! 🌍 Special chars: @#$%^&*()\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 4: Multiline content with newlines and indentation
+        common_chat_msg expected_multiline;
+        expected_multiline.role = "assistant";
+        expected_multiline.tool_calls = {
+            { "code_function", "{\"code\":\"def hello():\\n    print(\\\"Hello, World!\\\")\\n    return True\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_multiline,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=code_function>\n"
+                "    <parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, World!\")\n"
+                "    return True\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 5: JSON object as parameter value
+        common_chat_msg expected_json_param;
+        expected_json_param.role = "assistant";
+        expected_json_param.tool_calls = {
+            { "json_function", "{\"config\":{\"host\":\"localhost\",\"port\":8080,\"ssl\":false}}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_json_param,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=json_function>\n"
+                "    <parameter=config>\n"
+                "      {\"host\": \"localhost\", \"port\": 8080, \"ssl\": false}\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 6: Array as parameter value
+        common_chat_msg expected_array_param;
+        expected_array_param.role = "assistant";
+        expected_array_param.tool_calls = {
+            { "array_function", "{\"items\":[\"apple\",\"banana\",\"cherry\"]}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_array_param,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=array_function>\n"
+                "    <parameter=items>\n"
+                "      [\"apple\", \"banana\", \"cherry\"]\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 7: Empty parameter
+        common_chat_msg expected_empty_param;
+        expected_empty_param.role = "assistant";
+        expected_empty_param.tool_calls = {
+            { "empty_function", "{\"empty_param\":\"\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_empty_param,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=empty_function>\n"
+                "    <parameter=empty_param>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 8: Boolean values (true/false)
+        common_chat_msg expected_boolean;
+        expected_boolean.role = "assistant";
+        expected_boolean.tool_calls = {
+            { "boolean_function", "{\"enabled\":true,\"debug\":false}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_boolean,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=boolean_function>\n"
+                "    <parameter=enabled>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=debug>\n"
+                "      false\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 9: Null value
+        common_chat_msg expected_null;
+        expected_null.role = "assistant";
+        expected_null.tool_calls = {
+            { "null_function", "{\"optional_param\":null}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_null,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=null_function>\n"
+                "    <parameter=optional_param>\n"
+                "      null\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 10: Negative numbers and scientific notation
+        common_chat_msg expected_numbers;
+        expected_numbers.role = "assistant";
+        expected_numbers.tool_calls = {
+            { "math_function", "{\"negative\":-42,\"decimal\":-3.14,\"scientific\":1.23e-4}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_numbers,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=math_function>\n"
+                "    <parameter=negative>\n"
+                "      -42\n"
+                "    </parameter>\n"
+                "    <parameter=decimal>\n"
+                "      -3.14\n"
+                "    </parameter>\n"
+                "    <parameter=scientific>\n"
+                "      1.23e-4\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 11: XML-like content in parameters (should be escaped)
+        common_chat_msg expected_xml_content;
+        expected_xml_content.role = "assistant";
+        expected_xml_content.tool_calls = {
+            { "xml_function", "{\"xml_content\":\"<root><item>value</item></root>\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_xml_content,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=xml_function>\n"
+                "    <parameter=xml_content>\n"
+                "      <root><item>value</item></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 12: Quotes and escape characters
+        common_chat_msg expected_quotes;
+        expected_quotes.role = "assistant";
+        expected_quotes.tool_calls = {
+            { "quote_function", "{\"message\":\"She said \\\"Hello!\\\" and left.\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_quotes,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=quote_function>\n"
+                "    <parameter=message>\n"
+                "      She said \"Hello!\" and left.\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 13: Long parameter value (simplified)
+        std::string long_text = "This is a long text parameter that should test the parser's ability to handle larger amounts of text data.";
+        
+        common_chat_msg expected_long_text;
+        expected_long_text.role = "assistant";
+        expected_long_text.tool_calls = {
+            { "long_function", "{\"long_text\":\"" + long_text + "\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_long_text,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=long_function>\n"
+                "    <parameter=long_text>\n"
+                "      " + long_text + "\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 14: Mixed content with text before and after tool call
+        common_chat_msg expected_mixed_content;
+        expected_mixed_content.role = "assistant";
+        expected_mixed_content.content = "I'll help you search for products. ";
+        expected_mixed_content.tool_calls = {
+            { "search_function", "{\"query\":\"laptops\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_mixed_content,
+            common_chat_parse(
+                "I'll help you search for products. <tool_call>\n"
+                "  <function=search_function>\n"
+                "    <parameter=query>\n"
+                "      laptops\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 15: Compact format (no extra whitespace)
+        common_chat_msg expected_compact;
+        expected_compact.role = "assistant";
+        expected_compact.tool_calls = {
+            { "compact_function", "{\"param\":\"value\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_compact,
+            common_chat_parse(
+                "<tool_call><function=compact_function><parameter=param>value</parameter></function></tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 16: Function name with underscores and numbers
+        common_chat_msg expected_complex_name;
+        expected_complex_name.role = "assistant";
+        expected_complex_name.tool_calls = {
+            { "get_user_data_v2", "{\"user_id\":12345}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_complex_name,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=get_user_data_v2>\n"
+                "    <parameter=user_id>\n"
+                "      12345\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 17: Parameter names with underscores and numbers
+        common_chat_msg expected_complex_params;
+        expected_complex_params.role = "assistant";
+        expected_complex_params.tool_calls = {
+            { "test_function", "{\"param_1\":\"value1\",\"param_2_name\":\"value2\",\"param3\":123}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_complex_params,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=test_function>\n"
+                "    <parameter=param_1>\n"
+                "      value1\n"
+                "    </parameter>\n"
+                "    <parameter=param_2_name>\n"
+                "      value2\n"
+                "    </parameter>\n"
+                "    <parameter=param3>\n"
+                "      123\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        printf("✅ All Qwen3-Coder XML format tests passed!\n");
+    }
+    
+    // Test Qwen3-Coder XML format - Error handling and edge cases
+    {
+        printf("Testing Qwen3-Coder XML format - Error handling and edge cases\n");
+        
+        // Test 1: No tool_call tags (should be treated as regular content)
+        common_chat_msg expected_no_tool_call;
+        expected_no_tool_call.role = "assistant";
+        expected_no_tool_call.content = "This is just regular text without any tool calls.";
+        
+        assert_msg_equals(
+            expected_no_tool_call,
+            common_chat_parse(
+                "This is just regular text without any tool calls.",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 2: Empty function name (should fall back to content)
+        common_chat_msg expected_empty_function;
+        expected_empty_function.role = "assistant";
+        expected_empty_function.content = "<tool_call><function=></function></tool_call>";
+        
+        assert_msg_equals(
+            expected_empty_function,
+            common_chat_parse(
+                "<tool_call><function=></function></tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 3: Malformed parameter tags (should still parse function but ignore malformed params)
+        common_chat_msg expected_malformed_params;
+        expected_malformed_params.role = "assistant";
+        expected_malformed_params.tool_calls = {
+            { "test", "{}", "" }  // Empty arguments since parameter is malformed
+        };
+        
+        assert_msg_equals(
+            expected_malformed_params,
+            common_chat_parse(
+                "<tool_call><function=test><parameter>no name</parameter></function></tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 4: Nested tool calls (should parse the first one)
+        common_chat_msg expected_nested;
+        expected_nested.role = "assistant";
+        expected_nested.tool_calls = {
+            { "outer_function", "{\"param\":\"value\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_nested,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=outer_function>\n"
+                "    <parameter=param>\n"
+                "      value\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "  <function=inner_function>\n"
+                "    <parameter=param2>\n"
+                "      value2\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 5: Very deeply nested XML content in parameter
+        common_chat_msg expected_deep_xml;
+        expected_deep_xml.role = "assistant";
+        expected_deep_xml.tool_calls = {
+            { "xml_parser", "{\"xml\":\"<root><level1><level2><level3>deep content</level3></level2></level1></root>\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_deep_xml,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=xml_parser>\n"
+                "    <parameter=xml>\n"
+                "      <root><level1><level2><level3>deep content</level3></level2></level1></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 6: Parameter with only whitespace
+        common_chat_msg expected_whitespace_param;
+        expected_whitespace_param.role = "assistant";
+        expected_whitespace_param.tool_calls = {
+            { "whitespace_function", "{\"spaces\":\"\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_whitespace_param,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=whitespace_function>\n"
+                "    <parameter=spaces>\n"
+                "      \n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 7: Parameter with tabs and mixed whitespace
+        common_chat_msg expected_mixed_whitespace;
+        expected_mixed_whitespace.role = "assistant";
+        expected_mixed_whitespace.tool_calls = {
+            { "tab_function", "{\"content\":\"line1\\n\\tindented line\\n    spaces\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_mixed_whitespace,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=tab_function>\n"
+                "    <parameter=content>\n"
+                "line1\n"
+                "\tindented line\n"
+                "    spaces\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 8: Control characters and special Unicode
+        common_chat_msg expected_control_chars;
+        expected_control_chars.role = "assistant";
+        expected_control_chars.tool_calls = {
+            { "control_function", "{\"text\":\"Line1\\nLine2\\tTabbed\\rCarriage return\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_control_chars,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=control_function>\n"
+                "    <parameter=text>\n"
+                "Line1\nLine2\tTabbed\rCarriage return\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 9: Emoji and extended Unicode characters
+        common_chat_msg expected_emoji;
+        expected_emoji.role = "assistant";
+        expected_emoji.tool_calls = {
+            { "emoji_function", "{\"message\":\"Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_emoji,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=emoji_function>\n"
+                "    <parameter=message>\n"
+                "      Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 10: Mathematical expressions and formulas
+        common_chat_msg expected_math;
+        expected_math.role = "assistant";
+        expected_math.tool_calls = {
+            { "math_function", "{\"formula\":\"E = mc² and ∫f(x)dx = F(x) + C\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_math,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=math_function>\n"
+                "    <parameter=formula>\n"
+                "      E = mc² and ∫f(x)dx = F(x) + C\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 11: SQL injection-like content (should be safely escaped)
+        common_chat_msg expected_sql;
+        expected_sql.role = "assistant";
+        expected_sql.tool_calls = {
+            { "sql_function", "{\"query\":\"SELECT * FROM users WHERE id = 1; DROP TABLE users; --\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_sql,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=sql_function>\n"
+                "    <parameter=query>\n"
+                "      SELECT * FROM users WHERE id = 1; DROP TABLE users; --\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 12: HTML/XML injection content
+        common_chat_msg expected_html;
+        expected_html.role = "assistant";
+        expected_html.tool_calls = {
+            { "html_function", "{\"content\":\"<script>alert('xss')</script><img src=x onerror=alert(1)>\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_html,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=html_function>\n"
+                "    <parameter=content>\n"
+                "      <script>alert('xss')</script><img src=x onerror=alert(1)>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 13: Binary-like content (base64)
+        common_chat_msg expected_binary;
+        expected_binary.role = "assistant";
+        expected_binary.tool_calls = {
+            { "binary_function", "{\"data\":\"SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\"}", "" }
+        };
+        
+        assert_msg_equals(
+            expected_binary,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=binary_function>\n"
+                "    <parameter=data>\n"
+                "      SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        // Test 14: Very large numbers (should be parsed as scientific notation)
+        common_chat_msg expected_large_numbers;
+        expected_large_numbers.role = "assistant";
+        expected_large_numbers.tool_calls = {
+            { "number_function", "{\"big_int\":1e+60}", "" }  // Large number becomes scientific notation
+        };
+        
+        assert_msg_equals(
+            expected_large_numbers,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=number_function>\n"
+                "    <parameter=big_int>\n"
+                "      999999999999999999999999999999999999999999999999999999999999\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+        
+        printf("✅ All Qwen3-Coder XML error handling and edge case tests passed!\n");
+    }
+    {
+        // Qwen3-Coder template: ensure grammar builds with union types and unsupported {"not": {}} branches
+        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+
+        common_chat_tool qwen_union_tool {
+            /* .name = */ "qwen_union",
+            /* .description = */ "Test tool for union/anyOf handling",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "priority": { "type": ["number", "null"] },
+                    "maybe_text": { "anyOf": [ { "not": {} }, { "type": "string" } ] },
+                    "config": { "anyOf": [ { "type": "object" }, { "type": "null" } ] }
+                },
+                "required": []
+            })",
+        };
+        inputs.tools = { qwen_union_tool };
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, params.format);
+        assert_equals(false, params.grammar.empty());
+
+        // Grammar should compile successfully
+        auto grammar = build_grammar(params.grammar);
+        if (!grammar) {
+            throw std::runtime_error("Failed to build Qwen3-Coder grammar with union types");
+        }
+    }
+    
     {
         auto tmpls = read_templates("models/templates/ibm-granite-granite-3.3-2B-Instruct.jinja");
         std::vector<std::string> end_tokens{ "<|end_of_text|>" };
@@ -2140,6 +2809,7 @@ static void test_template_output_parsers() {
     }
 
 }
+
 
 static void test_msg_diffs_compute() {
     printf("[%s]\n", __func__);
