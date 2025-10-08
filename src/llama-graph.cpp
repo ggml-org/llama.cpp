@@ -1937,6 +1937,38 @@ void llm_graph_context::build_pooling(
     ggml_build_forward_expand(gf, cur);
 }
 
+void llm_graph_context::cast_outputs() const {
+    ggml_tensor * ori_embd = res->t_embd;
+    if (cparams.embeddings && res->t_embd->type != GGML_TYPE_F32) {
+        ggml_tensor * embd = res->t_embd;
+        embd = ggml_cast(ctx0, embd, GGML_TYPE_F32);
+        cb(embd, "result_embd_cast", -1);
+        ggml_build_forward_expand(gf, embd);
+        res->t_embd = embd;
+    }
+
+    if (cparams.embeddings && res->t_embd_pooled->type != GGML_TYPE_F32) {
+        // if LLAMA_POOLING_TYPE_NONE, embd_pooled == embd
+        if (res->t_embd_pooled == ori_embd) {
+            res->t_embd_pooled = res->t_embd;
+        } else {
+            ggml_tensor * embd_pooled = res->t_embd_pooled;
+            embd_pooled = ggml_cast(ctx0, embd_pooled, GGML_TYPE_F32);
+            cb(embd_pooled, "result_embd_pooled_cast", -1);
+            ggml_build_forward_expand(gf, embd_pooled);
+            res->t_embd_pooled = embd_pooled;
+        }
+    }
+
+    if(res->t_logits->type != GGML_TYPE_F32) {
+        ggml_tensor * logits = res->t_logits;
+        logits = ggml_cast(ctx0, logits, GGML_TYPE_F32);
+        cb(logits, "result_logits_cast", -1);
+        ggml_build_forward_expand(gf, logits);
+        res->t_logits = logits;
+    }
+}
+
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional) {
     // TODO move to hparams if a T5 variant appears that uses a different value
     const int64_t max_distance = 128;

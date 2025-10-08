@@ -3047,7 +3047,10 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    // Tensor a is the weight, with its type determined by the model file.
+    // Tensor b is the activation, i.e., the intermediate computation result.
+    // Here, the destination type (dst) is kept the same as the input activation type.
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
@@ -3096,7 +3099,9 @@ struct ggml_tensor * ggml_mul_mat_id(
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
     const int64_t ne[4] = { as->ne[1], ids->ne[0], b->ne[2], 1 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    // Tensor b is the activation, i.e., the intermediate computation result.
+    // Here, the destination type (dst) is kept the same as the input activation type.
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT_ID;
     result->src[0] = as;
@@ -3651,7 +3656,9 @@ struct ggml_tensor * ggml_get_rows(
     GGML_ASSERT(b->type == GGML_TYPE_I32);
 
     // TODO: implement non F32 return
-    enum ggml_type type = GGML_TYPE_F32;
+    // TODO: Automatically select the destination type based on parameters, 
+    // environment variables, or backend support. Hard code F16 for example.
+    enum ggml_type type = GGML_TYPE_F16;
     if (a->type == GGML_TYPE_I32) {
         type = a->type;
     }
@@ -3699,7 +3706,8 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    // b->type also can be F16.
+    //GGML_ASSERT(b->type == GGML_TYPE_F32);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -5036,7 +5044,10 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     // permute(0, 2, 1, 3)
     int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    // The types of k and v are the same as those in the KV cache, 
+    // while q is an intermediate computation result.
+    // Here, the destination type (dst) is kept the same as the type of q.
+    struct ggml_tensor * result = ggml_new_tensor(ctx, q->type, 4, ne);
 
     float params[] = { scale, max_bias, logit_softcap };
     ggml_set_op_params(result, params, sizeof(params));
