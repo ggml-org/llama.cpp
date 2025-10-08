@@ -131,7 +131,11 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		<MarkdownContent content={messageContent || ''} />
+		{#if config().disableReasoningFormat}
+			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else}
+			<MarkdownContent content={messageContent || ''} />
+		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
 			{messageContent}
@@ -202,5 +206,22 @@
 		to {
 			background-position: -200% 0;
 		}
+	}
+
+	.raw-output {
+		width: 100%;
+		max-width: 48rem;
+		margin-top: 1.5rem;
+		padding: 1rem 1.25rem;
+		border-radius: 1rem;
+		background: hsl(var(--muted) / 0.3);
+		color: var(--foreground);
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
+		font-size: 0.875rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		word-break: break-word;
 	}
 </style>
