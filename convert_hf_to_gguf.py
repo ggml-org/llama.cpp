@@ -891,6 +891,9 @@ class TextModel(ModelBase):
         if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
             # ref: https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Base
             res = "llada-moe"
+        if chkhsh == "49fc0303c9e0d2c2c565c510f64b2d9b271276acdcdadff733249eda9f7d59df":
+            # ref: https://huggingface.co/arcee-ai/AFMoE
+            res = "afmoe"
 
         if res is None:
             logger.warning("\n")
@@ -2273,6 +2276,90 @@ class ArceeModel(LlamaModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+
+@ModelBase.register("AfmoeForCausalLM")
+class AfmoeModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.AFMOE
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # MoE parameters
+        if (n_experts := self.hparams.get("num_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        #if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+        #    self.gguf_writer.add_expert_used_count(n_experts_used)
+        if (n_shared_experts := self.hparams.get("num_shared_experts")) is not None:
+            self.gguf_writer.add_expert_shared_count(n_shared_experts)
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        if (n_dense_layers := self.hparams.get("num_dense_layers")) is not None:
+            self.gguf_writer.add_leading_dense_block_count(n_dense_layers)
+
+        # Gating function (sigmoid)
+        if (score_func := self.hparams.get("score_func")) is not None and score_func == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        # Route normalization and scaling
+        if (route_norm := self.hparams.get("route_norm")) is not None:
+            self.gguf_writer.add_expert_weights_norm(route_norm)
+        if (route_scale := self.hparams.get("route_scale")) is not None:
+            self.gguf_writer.add_expert_weights_scale(route_scale)
+
+        # Sliding window attention
+        if (sliding_window := self.hparams.get("sliding_window")) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Handle expert weights - they're already merged in the HF format
+        if ".block_sparse_moe.experts.w1" in name:
+            assert bid is not None
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXPS, bid), data_torch)]
+        elif ".block_sparse_moe.experts.w2" in name:
+            assert bid is not None
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXPS, bid), data_torch)]
+        elif ".block_sparse_moe.experts.w3" in name:
+            assert bid is not None
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXPS, bid), data_torch)]
+
+        # Map dual normalization layers
+        if ".attn_norm_a." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM, bid), data_torch)]
+        elif ".attn_norm_b." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM_2, bid), data_torch)]
+        elif ".ffn_norm_a." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch)]
+        elif ".ffn_norm_b." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_POST_NORM, bid), data_torch)]
+
+        # Map Q/K norms
+        elif ".self_attn.q_norm." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q_NORM, bid), data_torch)]
+        elif ".self_attn.k_norm." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K_NORM, bid), data_torch)]
+
+        # Map attention gate
+        elif ".self_attn.gate_proj." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), data_torch)]
+
+        # Map shared experts
+        elif ".block_sparse_moe.shared_experts.gate_proj." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), data_torch)]
+        elif ".block_sparse_moe.shared_experts.up_proj." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), data_torch)]
+        elif ".block_sparse_moe.shared_experts.down_proj." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), data_torch)]
+
+        # Map router
+        elif ".block_sparse_moe.router.gate." in name and bid is not None:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid), data_torch)]
+
+        # Skip expert_bias
+        elif "expert_bias" in name:
+            return []
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register(

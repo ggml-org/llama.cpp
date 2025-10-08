@@ -48,6 +48,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_KIMI_K2        = 37,
     LLAMA_VOCAB_PRE_TYPE_HUNYUAN_DENSE  = 38,
     LLAMA_VOCAB_PRE_TYPE_GROK_2         = 39,
+    LLAMA_VOCAB_PRE_TYPE_AFMOE          = 40,
 };
 
 struct LLM_KV;
