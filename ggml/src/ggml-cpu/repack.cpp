@@ -1920,7 +1920,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         if (    op->op == GGML_OP_MUL_MAT &&
                 op->src[0]->buffer &&
-                (ggml_n_dims(op->src[0]) == 2) &&
+                ggml_n_dims(op->src[0]) == 2 && ggml_n_dims(op->src[1]) <= 2 &&
                 op->src[0]->buffer->buft == ggml_backend_cpu_repack_buffer_type() &&
                 ggml_repack_get_optimal_repack_type(op->src[0])
                 ) {
@@ -1936,7 +1936,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             // may be possible if Q8_0 packed...
         } else if (op->op == GGML_OP_MUL_MAT_ID
                 && op->src[0]->buffer
-                && (ggml_n_dims(op->src[0]) == 3)
+                && ggml_n_dims(op->src[0]) == 3 && ggml_n_dims(op->src[1]) <= 2
                 && op->src[0]->buffer->buft == ggml_backend_cpu_repack_buffer_type()
                 && ggml_repack_get_optimal_repack_type(op->src[0])
                 ) {
