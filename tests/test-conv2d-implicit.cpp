@@ -63,8 +63,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     size_t buffer_size = 0;
     {
-        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
-        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
+        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
+        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
         buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
         buffer_size += 1024; // overhead
     }
@@ -112,7 +112,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     model.ctx = ggml_init(params);
 
     // create tensors
-    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
+    // model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
+    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32,  KW, KH, IC, OC);
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
 
     // create a allocator
@@ -123,9 +124,11 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
-        memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
+        // memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
+        memcpy(model.a->data, adata.data(), ggml_nbytes(model.a));
     } else {
-        ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+        // ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+        ggml_backend_tensor_set(model.a, adata.data(), 0, ggml_nbytes(model.a));
     }
 
     // alloc memory
