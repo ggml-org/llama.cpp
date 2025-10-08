@@ -1436,10 +1436,15 @@ struct server_prompt_cache {
     std::list<server_slot_prompt> states;
 
     // in bytes, 0 = no limit
-    size_t limit_size = 2ull*1024*1024*1024;
+    size_t limit_size = 0;
 
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
+
+    void init(size_t limit_size, size_t limit_tokens) {
+        this->limit_size   = limit_size;
+        this->limit_tokens = limit_tokens;
+    }
 
     size_t size() const {
         size_t res = 0;
@@ -1459,6 +1464,97 @@ struct server_prompt_cache {
         }
 
         return res;
+    }
+
+    server_slot_prompt * alloc(const server_tokens & tokens, size_t state_size) {
+        // first check if the current state is contained fully in the cache
+        for (auto it = states.begin(); it != states.end(); ++it) {
+            const int cur_lcs_len = it->tokens.get_common_prefix(tokens);
+
+            if (cur_lcs_len == (int) tokens.size()) {
+                SRV_WRN("%s", " - prompt is already cached, skipping\n");
+                return nullptr;
+            }
+        }
+
+        // next, remove any cached prompts that are fully contained in the current prompt
+        for (auto it = states.begin(); it != states.end();) {
+            const int len = it->tokens.get_common_prefix(tokens);
+
+            if (len == (int) it->tokens.size()) {
+                SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
+
+                it = states.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        std::vector<uint8_t> state_data;
+
+        // check if we can allocate enough memory for the new state
+        try {
+            state_data.resize(state_size);
+        } catch (const std::bad_alloc & e) {
+            SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
+
+            limit_size = std::max<size_t>(1, 0.4*size());
+
+            SRV_WRN(" - cache size limit reduced to %.3f MiB\n", limit_size / (1024.0 * 1024.0));
+
+            update();
+
+            return nullptr;
+        }
+
+        // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
+        auto & cur = states.emplace_back();
+        cur = {
+            /*.tokens      =*/ server_tokens(tokens.get_text_tokens(), false),
+            /*.data        =*/ std::move(state_data),
+            /*.checkpoints =*/ {},
+        };
+
+        return &cur;
+    }
+
+    bool load(server_slot_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
+        int lcs_len = prompt.tokens.get_common_prefix(tokens_new);
+
+        SRV_WRN(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
+
+        auto it_best = states.end();
+
+        // find the most similar cached prompt
+        for (auto it = states.begin(); it != states.end(); ++it) {
+            const int cur_lcs_len = it->tokens.get_common_prefix(tokens_new);
+
+            if (lcs_len < cur_lcs_len) {
+                lcs_len = cur_lcs_len;
+                it_best = it;
+            }
+        }
+
+        if (it_best != states.end()) {
+            SRV_WRN(" - found better prompt with lcs_len = %d\n", lcs_len);
+
+            const size_t size = it_best->data.size();
+            const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id_slot, 0);
+            if (n != size) {
+                SRV_WRN("failed to restore state with size %zu\n", size);
+
+                return false;
+            }
+
+            it_best->data.clear();
+            it_best->data.shrink_to_fit();
+
+            prompt = std::move(*it_best);
+
+            states.erase(it_best);
+        }
+
+        return true;
     }
 
     void update() {
@@ -1487,11 +1583,11 @@ struct server_prompt_cache {
             }
         }
 
-        SRV_WRN(" - cache state: %zu prompts, %.3f MiB, limits: %.3f MiB, %zu tokens\n",
+        SRV_WRN(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens)\n",
                 states.size(), size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0), limit_tokens);
 
         for (const auto & state : states) {
-            SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %.3f MiB\n", (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
+            SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n", (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
         }
     }
 };
@@ -1552,7 +1648,7 @@ struct server_slot {
 
     server_slot_prompt prompt;
 
-    void prompt_save(server_prompt_cache & prompt_cache);
+    void prompt_save(server_prompt_cache & prompt_cache) const;
     void prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens);
 
     std::vector<common_adapter_lora_info> lora;
@@ -1817,91 +1913,28 @@ struct server_slot {
     }
 };
 
-void server_slot::prompt_save(server_prompt_cache & prompt_cache) {
-    auto & states = prompt_cache.states;
-
+void server_slot::prompt_save(server_prompt_cache & prompt_cache) const {
     assert(prompt.data.size() == 0);
-
-    // first check if the current state is contained fully in the cache
-    for (auto it = states.begin(); it != states.end(); ++it) {
-        const auto & cached_prompt = it->tokens;
-
-        const int cur_lcs_len = cached_prompt.get_common_prefix(prompt.tokens);
-
-        if (cur_lcs_len == (int) prompt.tokens.size()) {
-            SRV_WRN("%s", " - prompt is already cached, skipping\n");
-            return;
-        }
-    }
-
-    // next, remove any cached prompts that are fully contained in the current prompt
-    for (auto it = states.begin(); it != states.end();) {
-        const auto & cached_prompt = it->tokens;
-
-        const int len = cached_prompt.get_common_prefix(prompt.tokens);
-
-        if (len == (int) cached_prompt.size()) {
-            SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
-
-            it = states.erase(it);
-        } else {
-            ++it;
-        }
-    }
 
     const size_t cur_size = llama_state_seq_get_size_ext(ctx, id, 0);
 
     SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB\n",
             (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
 
-    // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
-    auto & cur = states.emplace_back();
-    cur = {
-        /*.tokens      =*/ server_tokens(prompt.tokens.get_text_tokens(), false),
-        /*.data        =*/ std::vector<uint8_t>(cur_size),
-        /*.checkpoints =*/ prompt.checkpoints,
-    };
+    auto * cur = prompt_cache.alloc(prompt.tokens, cur_size);
+    if (cur == nullptr) {
+        return;
+    }
 
-    llama_state_seq_get_data_ext(ctx, cur.data.data(), cur_size, id, 0);
+    cur->checkpoints = prompt.checkpoints;
+
+    llama_state_seq_get_data_ext(ctx, cur->data.data(), cur_size, id, 0);
 }
 
 void server_slot::prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-    auto & states = prompt_cache.states;
-
-    int lcs_len = prompt.tokens.get_common_prefix(tokens);
-
-    SRV_WRN(" - looking for better prompt, base lcs_len = %d\n", lcs_len);
-
-    auto it_best = states.end();
-
-    // find the most similar cached prompt
-    for (auto it = states.begin(); it != states.end(); ++it) {
-        const auto & cached_prompt = it->tokens;
-
-        const int cur_lcs_len = cached_prompt.get_common_prefix(tokens);
-
-        if (lcs_len < cur_lcs_len) {
-            lcs_len = cur_lcs_len;
-            it_best = it;
-        }
-    }
-
-    if (it_best != states.end()) {
-        SRV_WRN(" - found better prompt with lcs_len = %d\n", lcs_len);
-
-        const size_t size = it_best->data.size();
-        const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id, 0);
-        if (n != size) {
-            SLT_WRN(*this, "failed to restore slot state with size %zu\n", size);
-            return;
-        }
-
-        it_best->data.clear();
-        it_best->data.shrink_to_fit();
-
-        prompt = std::move(*it_best);
-
-        states.erase(it_best);
+    bool res = prompt_cache.load(prompt, tokens, ctx, id);
+    if (!res) {
+        SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
     }
 }
 
@@ -2493,6 +2526,8 @@ struct server_context {
         }
 
         metrics.init();
+
+        prompt_cache.init(1024*1024ull*params_base.cache_ram_mb, n_ctx);
 
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
@@ -3908,7 +3943,7 @@ struct server_context {
 
                     // SLT_INF(slot, "new cache_tokens: %s\n", slot.cache_tokens.str().c_str());
 
-                    SLT_INF(slot, "prompt processing progress, n_past = %d, n_tokens = %d, progress = %f\n", slot.n_past, batch.n_tokens, (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens());
+                    SLT_INF(slot, "prompt processing progress, n_past = %d, n_tokens = %d, progress = %f\n", slot.n_past, batch.n_tokens, (float) slot.n_past / slot.n_prompt_tokens());
 
                     // entire prompt has been processed
                     if (slot.n_past == slot.n_prompt_tokens()) {
