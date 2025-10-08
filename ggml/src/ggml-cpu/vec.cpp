@@ -407,6 +407,8 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean) {
   int i = 0;
   ggml_float sum = 0;
+// TODO: optimize to process the remaining elements in groups using the smaller vector sizes from AVX2 and SSE
+// ref: https://github.com/ggml-org/llama.cpp/pull/15953#pullrequestreview-3310928344
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
     for (; i + 15 < n; i += 16) {
         __m512 val = _mm512_sub_ps(_mm512_loadu_ps(x + i),
