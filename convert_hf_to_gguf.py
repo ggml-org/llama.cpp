@@ -2288,8 +2288,6 @@ class AfmoeModel(LlamaModel):
         # MoE parameters
         if (n_experts := self.hparams.get("num_experts")) is not None:
             self.gguf_writer.add_expert_count(n_experts)
-        #if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
-        #    self.gguf_writer.add_expert_used_count(n_experts_used)
         if (n_shared_experts := self.hparams.get("num_shared_experts")) is not None:
             self.gguf_writer.add_expert_shared_count(n_shared_experts)
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
@@ -2332,12 +2330,6 @@ class AfmoeModel(LlamaModel):
             return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch)]
         elif ".ffn_norm_b." in name and bid is not None:
             return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_POST_NORM, bid), data_torch)]
-
-        # Map Q/K norms
-        elif ".self_attn.q_norm." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q_NORM, bid), data_torch)]
-        elif ".self_attn.k_norm." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K_NORM, bid), data_torch)]
 
         # Map attention gate
         elif ".self_attn.gate_proj." in name and bid is not None:
