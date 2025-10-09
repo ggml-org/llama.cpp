@@ -93,6 +93,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_OPENAI_MOE,       "gpt-oss"          },
     { LLM_ARCH_LFM2,             "lfm2"             },
+    { LLM_ARCH_LFM2MOE,          "lfm2moe"          },
     { LLM_ARCH_DREAM,            "dream"            },
     { LLM_ARCH_SMALLTHINKER,     "smallthinker"     },
     { LLM_ARCH_LLADA,            "llada"            },
@@ -2105,6 +2106,32 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         }
     },
     {
+        LLM_ARCH_LFM2MOE,
+        {
+            { LLM_TENSOR_ATTN_NORM,         "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,            "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,            "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,            "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,          "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_K_NORM,       "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_Q_NORM,       "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_FFN_DOWN,          "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_GATE,          "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_NORM,          "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_UP,            "blk.%d.ffn_up" },
+            { LLM_TENSOR_SHORTCONV_CONV,    "blk.%d.shortconv.conv" },
+            { LLM_TENSOR_SHORTCONV_INPROJ,  "blk.%d.shortconv.in_proj" },
+            { LLM_TENSOR_SHORTCONV_OUTPROJ, "blk.%d.shortconv.out_proj" },
+            { LLM_TENSOR_TOKEN_EMBD,        "token_embd" },
+            { LLM_TENSOR_TOKEN_EMBD_NORM,   "token_embd_norm" },
+            { LLM_TENSOR_FFN_GATE_INP,      "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,     "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,     "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,       "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,   "blk.%d.exp_probs_b" },
+        }
+    },
+    {
         LLM_ARCH_SMALLTHINKER,
         {
             { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
@@ -2493,6 +2520,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_PLAMO2:
         case LLM_ARCH_GRANITE_HYBRID:
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_NEMOTRON_H:
             return true;
         default:
