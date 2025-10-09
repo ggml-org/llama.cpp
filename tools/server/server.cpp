@@ -5084,10 +5084,7 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        int top_n = documents.size(); // no top_n will return all the documents
-        if (body.count("top_n") == 1) {
-            top_n = body.at("top_n");
-        }
+        int top_n = json_value(body, "top_n", (int)documents.size());
 
         // create and queue the task
         json responses = json::array();
