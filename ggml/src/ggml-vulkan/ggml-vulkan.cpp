@@ -4934,7 +4934,11 @@ static void ggml_vk_instance_init() {
         vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
     }
 
+#ifndef FORCE_GGML_VK_PERF_LOGGER
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+#else
+    vk_perf_logger_enabled = true;
+#endif
 
     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
