@@ -674,7 +674,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr double infinity = std::numeric_limits<double>::infinity();
     constexpr uint32_t file_magic = 0x42505731;  // BPW1
     const char * func = __func__;
-    const std::string checkpoint_file = ml.arch_name + ".bpw_state";
 
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
@@ -745,6 +744,26 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t n_elements = 0;
     };
 
+    auto djb2_hash = [](const uint8_t * data, size_t n) -> uint64_t {
+        uint64_t h = 5381;
+        for (size_t i = 0; i < n; ++i) {
+            h = (h << 5) + h + data[i];
+        }
+        return h ? h : 0xeabada55cafed00d;
+    };
+
+    auto metadata_id = [&](const gguf_context * ctx) -> uint64_t {
+        const size_t sz = gguf_get_meta_size(ctx);
+        std::vector<uint8_t> buf(sz);
+        gguf_get_meta_data(ctx, buf.data());
+        return djb2_hash(buf.data(), buf.size());
+    };
+
+    char hex[17];
+    const uint64_t model_id = metadata_id(ml.meta.get());
+    std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
+    const std::string checkpoint_file = ml.arch_name + "-" + std::string(hex) + ".bpw_state";
+
     auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
@@ -752,6 +771,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const float target_bpw = params->target_bpw;
         const uint8_t bias_mode = params->no_bias ? 1 : 0;
         ofs.write((const char *)&file_magic, sizeof(file_magic));
+        ofs.write((const char *)&model_id, sizeof(model_id));
         ofs.write((const char *)&target_bpw, sizeof(target_bpw));
         ofs.write((const char *)&bias_mode, sizeof(bias_mode));
         const uint64_t n = all_vec.size();
@@ -781,9 +801,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         ofs.close();
-        std::remove(checkpoint_file.c_str()); // TODO: handle errors
+        std::remove(checkpoint_file.c_str());
         std::rename(tmp.c_str(), checkpoint_file.c_str());
-        LLAMA_LOG_INFO("%s: saved bpw progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: saved progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
     };
 
     auto load_bpw_state = [&]() -> std::unordered_map<std::string, saved_info> {
@@ -792,22 +812,27 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (!ifs) { return out; }
 
         uint32_t magic = 0;
-        float target_bpw = 0.0f;
-        uint8_t bias_mode = 0;
+        uint64_t id = 0;
+        float bpw = 0.0f;
+        uint8_t bias = 0;
         ifs.read((char *)&magic, sizeof(magic));
-        ifs.read((char *)&target_bpw, sizeof(target_bpw));
-        ifs.read((char *)&bias_mode, sizeof(bias_mode));
+        ifs.read((char *)&id, sizeof(id));
+        ifs.read((char *)&bpw, sizeof(bpw));
+        ifs.read((char *)&bias, sizeof(bias));
         if (magic != file_magic) {
             LLAMA_LOG_WARN("%s: invalid resume file, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
-        }
-        if (target_bpw != params->target_bpw) {
-            LLAMA_LOG_WARN("%s: target bpw of %f does not match %f, ignoring: %s\n", func, params->target_bpw, target_bpw, checkpoint_file.c_str());
+        } else if (id != model_id) {
+            LLAMA_LOG_WARN("%s: model ID mismatch, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
-        }
-        if (bias_mode != (params->no_bias ? 1 : 0)) {
+        } else if (bpw != params->target_bpw) {
+            LLAMA_LOG_WARN("%s: target bpw of %f does not match %f, ignoring: %s\n", func, params->target_bpw, bpw, checkpoint_file.c_str());
+            return out;
+        } else if (bias != (params->no_bias ? 1 : 0)) {
             LLAMA_LOG_WARN("%s: bias mode does not match, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
+        } else {
+            LLAMA_LOG_INFO("%s: resuming tensor quantization\n", func);
         }
 
         uint64_t n = 0;
@@ -859,7 +884,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
         if (bpw_stop.load(std::memory_order_relaxed)) {
-            LLAMA_LOG_INFO("\n%s: saving bpw progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+            LLAMA_LOG_INFO("\n%s: saving progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
             save_bpw_state(all_vec);
             throw std::runtime_error("user interrupted the process");
         }
