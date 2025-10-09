@@ -918,6 +918,8 @@ void process_shaders() {
 
     string_to_spv("ssm_scan_f32", "ssm_scan.comp", {{"A_TYPE", "float"}});
 
+    string_to_spv("ssm_conv_f32", "ssm_conv.comp", {{"A_TYPE", "float"}});
+
     for (auto &c : compiles) {
         c.wait();
     }
