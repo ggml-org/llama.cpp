@@ -341,11 +341,18 @@ private:
 
 #ifdef USE_ACL_GRAPH
 struct ggml_graph_node_properties {
+    // dst tensor
     void * node_address;
-    ggml_op node_op;
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
+
+    // src tensor
     void * src_address[GGML_MAX_SRC];
+    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t  src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+
+    // op
+    ggml_op node_op;
     int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
 };
 
