@@ -32,7 +32,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--version` | show version and build info |
 | `--completion-bash` | print source-able bash completion script for llama.cpp |
 | `--verbose-prompt` | print a verbose prompt before generation (default: false) |
-| `-t, --threads N` | number of CPU threads to use during generation (default: -1, use all available.)<br/>(env: LLAMA_ARG_THREADS) |
+| `-t, --threads N` | number of threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |
 | `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
 | `-C, --cpu-mask M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "") |
 | `-Cr, --cpu-range lo-hi` | range of CPUs for affinity. Complements --cpu-mask |
