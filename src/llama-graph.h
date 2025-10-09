@@ -364,21 +364,27 @@ public:
 class llm_graph_input_mem_hybrid : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid(
+            const llama_cparams & cparams,
             std::unique_ptr<llm_graph_input_attn_kv> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>              inp_rs,
-            const llama_memory_hybrid_context *              mctx) :
+            std::unique_ptr<llm_graph_input_rs>      inp_rs,
+            const llama_memory_hybrid_context *      mctx) :
         inp_attn(std::move(inp_attn)),
         inp_rs(std::move(inp_rs)),
+        cparams(cparams),
         mctx(mctx) { }
     virtual ~llm_graph_input_mem_hybrid() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
 
     std::unique_ptr<llm_graph_input_attn_kv> inp_attn;
     std::unique_ptr<llm_graph_input_rs>      inp_rs;
 
     llm_graph_input_attn_kv * get_attn() const { return inp_attn.get(); }
     llm_graph_input_rs      * get_recr() const { return inp_rs.get(); }
+
+    const llama_cparams cparams;
 
     const llama_memory_hybrid_context * mctx;
 };
