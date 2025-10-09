@@ -1515,3 +1515,29 @@ jobs:
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-kleidiai:
+     runs-on: ubuntu-22.04-arm
+
+     steps:
+       - name: Clone
+         id: checkout
+         uses: actions/checkout@v4
+
+       - name: ccache
+         uses: ggml-org/ccache-action@v1.2.16
+         with:
+           key: ggml-ci-arm64-cpu-kleidiai
+           evict-old-files: 1d
+
+       - name: Dependencies
+         id: depends
+         run: |
+           sudo apt-get update
+           sudo apt-get install -y build-essential libcurl4-openssl-dev
+
+       - name: Test
+         id: ggml-ci
+         run: |
+           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
