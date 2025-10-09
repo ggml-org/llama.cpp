@@ -3480,19 +3480,14 @@ static void ggml_compute_forward_norm_f32(
                 float variance = 0;
 
 #ifdef GGML_USE_ACCELERATE
-
                 mean = -mean;
                 vDSP_vsadd(x, 1, &mean, y, 1, ne00);
                 vDSP_measqv(y, 1, &variance, ne00);
-
 #else
-
                 variance = ggml_vec_cvar_f32(ne00, y, x, mean);
-
 #endif //GGML_USE_ACCELERATE
 
                 const float scale = 1.0f/sqrtf(variance + eps);
-
                 ggml_vec_scale_f32(ne00, y, scale);
             }
         }
