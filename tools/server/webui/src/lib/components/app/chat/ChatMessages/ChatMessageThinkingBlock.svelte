@@ -56,13 +56,13 @@
 		</Collapsible.Trigger>
 
 		<Collapsible.Content>
-		<div class="border-t border-muted px-3 pb-3">
-			<div class="pt-3">
-				<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-					{reasoningContent ?? ''}
+			<div class="border-t border-muted px-3 pb-3">
+				<div class="pt-3">
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{reasoningContent ?? ''}
+					</div>
 				</div>
 			</div>
-		</div>
 		</Collapsible.Content>
 	</Card>
 </Collapsible.Root>
