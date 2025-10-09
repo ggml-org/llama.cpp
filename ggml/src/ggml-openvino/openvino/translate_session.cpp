@@ -132,7 +132,7 @@ void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 // Create common patterns
 void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     add_token_len(tensor_map);
-    add_sliced_mask(tensor_map, ggml_model_decoder);
+    // add_sliced_mask(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
