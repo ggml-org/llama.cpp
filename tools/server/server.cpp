@@ -1621,7 +1621,7 @@ struct server_slot {
     common_speculative * spec = nullptr;
 
     std::unique_ptr<const server_task> task;
-    std::unique_ptr<const server_task> task_prev;
+    std::unique_ptr<const server_task> task_prev; // used for debugging
 
     // used to determine the slot that has been used the longest
     int64_t t_last_used = -1;
