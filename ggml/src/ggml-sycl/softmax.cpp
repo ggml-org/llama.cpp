@@ -244,26 +244,24 @@ static void launch_soft_max_kernels(const float *           x,
             sycl::range<1>(nbytes_shared), cgh);
 
         cgh.parallel_for(
-            sycl::nd_range<3>(block_nums * block_dims, block_dims), [=
-        ](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                soft_max_f32<true, 0, 0>(
-                    x, mask, sinks, dst, p,
-                    dpct_local_acc_ct1
-                        .get_multi_ptr<sycl::access::decorated::no>()
-                        .get());
-                GGML_UNUSED(item_ct1);
-            });
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    soft_max_f32<true, 0, 0>(
+                        x, mask, sinks, dst, p,
+                        dpct_local_acc_ct1
+                            .get_multi_ptr<sycl::access::decorated::no>()
+                            .get());
+                    GGML_UNUSED(item_ct1);
+                });
     });
 }
 
 template <typename T>
-static void soft_max_f32_sycl(const float *           x,
-                              const T *               mask,
-                              const float *           sinks,
-                              float *                 dst,
-                              const soft_max_params & params,
-                              dpct::queue_ptr         stream,
-			      int device) {
+static void soft_max_f32_sycl(const float *x, const T *mask,
+                              const float *sinks, float *dst,
+                              const soft_max_params &params,
+                              dpct::queue_ptr stream, int device) {
     int nth = WARP_SIZE;
     int max_block_size = ggml_sycl_info().max_work_group_sizes[device];
     const int64_t ncols_x = params.ncols;
@@ -273,7 +271,8 @@ static void soft_max_f32_sycl(const float *           x,
 
     const dpct::dim3 block_dims(nth, 1, 1);
     const dpct::dim3 block_nums(params.ne01, params.ne02, params.ne03);
-    const size_t nbytes_shared = (GGML_PAD(ncols_x, WARP_SIZE) + WARP_SIZE)*sizeof(float);
+    const size_t nbytes_shared =
+        (GGML_PAD(ncols_x, WARP_SIZE) + WARP_SIZE) * sizeof(float);
 
     const int id       = get_current_device_id();
     const size_t smpbo = ggml_sycl_info().devices[id].smpbo;
