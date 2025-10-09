@@ -208,10 +208,18 @@ struct llama_layer {
     struct ggml_tensor * ssm_c_norm      = nullptr;
 
     // attention
-    struct ggml_tensor * wq        = nullptr;
-    struct ggml_tensor * wk        = nullptr;
-    struct ggml_tensor * wv        = nullptr;
-    struct ggml_tensor * wo        = nullptr;
+    struct ggml_tensor * wq             = nullptr;
+    struct ggml_tensor * wq_imag        = nullptr;
+    struct ggml_tensor * wq_real        = nullptr;
+    struct ggml_tensor * wk             = nullptr;
+    struct ggml_tensor * wk_imag        = nullptr;
+    struct ggml_tensor * wk_real        = nullptr;
+    struct ggml_tensor * wv             = nullptr;
+    struct ggml_tensor * wv_imag        = nullptr;
+    struct ggml_tensor * wv_real        = nullptr;
+    struct ggml_tensor * wo             = nullptr;
+    struct ggml_tensor * wo_imag        = nullptr;
+    struct ggml_tensor * wo_real        = nullptr;
     struct ggml_tensor * wqkv      = nullptr;
     struct ggml_tensor * wq_a      = nullptr;
     struct ggml_tensor * wq_b      = nullptr;
@@ -242,6 +250,8 @@ struct llama_layer {
 
     // normalization
     struct ggml_tensor * ffn_norm         = nullptr;
+    struct ggml_tensor * ffn_norm_imag         = nullptr;
+    struct ggml_tensor * ffn_norm_real         = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
     struct ggml_tensor * ffn_post_norm    = nullptr;
     struct ggml_tensor * layer_out_norm   = nullptr;
@@ -251,8 +261,14 @@ struct llama_layer {
 
     // ff
     struct ggml_tensor * ffn_gate     = nullptr; // w1
+    struct ggml_tensor * ffn_gate_real     = nullptr; // w1
+    struct ggml_tensor * ffn_gate_imag     = nullptr; // w1
     struct ggml_tensor * ffn_down     = nullptr; // w2
+    struct ggml_tensor * ffn_down_real     = nullptr; // w2
+    struct ggml_tensor * ffn_down_imag     = nullptr; // w2
     struct ggml_tensor * ffn_up       = nullptr; // w3
+    struct ggml_tensor * ffn_up_real       = nullptr; // w3
+    struct ggml_tensor * ffn_up_imag       = nullptr; // w3
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
@@ -356,6 +372,22 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale = nullptr;
     struct ggml_tensor * ffn_up_scale   = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;
+
+    // ifairy scale
+    struct ggml_tensor * wq_scale_imag       = nullptr;
+    struct ggml_tensor * wq_scale_real       = nullptr;
+    struct ggml_tensor * wk_scale_imag       = nullptr;
+    struct ggml_tensor * wk_scale_real       = nullptr;
+    struct ggml_tensor * wv_scale_imag       = nullptr;
+    struct ggml_tensor * wv_scale_real       = nullptr;
+    struct ggml_tensor * wo_scale_imag       = nullptr;
+    struct ggml_tensor * wo_scale_real       = nullptr;
+    struct ggml_tensor * ffn_gate_scale_imag = nullptr;
+    struct ggml_tensor * ffn_gate_scale_real = nullptr;
+    struct ggml_tensor * ffn_up_scale_imag   = nullptr;
+    struct ggml_tensor * ffn_up_scale_real   = nullptr;
+    struct ggml_tensor * ffn_down_scale_imag = nullptr;
+    struct ggml_tensor * ffn_down_scale_real = nullptr;
 
     // altup & laurel
     struct ggml_tensor * per_layer_inp_gate   = nullptr;
