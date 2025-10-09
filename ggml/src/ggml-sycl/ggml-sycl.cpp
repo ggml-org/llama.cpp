@@ -87,6 +87,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
+        info.devices[i].smpbo = prop.get_local_mem_size();
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -3741,6 +3742,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_SOFT_MAX:
             ggml_sycl_op_soft_max(ctx, dst);
             break;
+        case GGML_OP_SOFT_MAX_BACK:
+            ggml_sycl_op_soft_max_back(ctx, dst);
+            break;
         case GGML_OP_ROPE:
             ggml_sycl_rope(ctx, dst);
             break;
@@ -3778,6 +3782,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     return true;
 } catch (sycl::exception & e) {
     std::cerr << e.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::cerr << "Error OP "<<ggml_op_name(dst->op)<< std::endl;
     std::exit(1);
 }
 
@@ -4386,19 +4391,15 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
-        case GGML_OP_SOFT_MAX:
-            // TODO: support batching
-            if (op->src[0]->ne[3] != 1) {
-                return false;
-            }
-            // TODO: support attention sinks [TAG_ATTN_SINKS]
-            if (op->src[2]) {
-                return false;
-            }
-            // TODO: support broadcast
-            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
-            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
         case GGML_OP_DIAG_MASK_INF:
+            return true;
+        case GGML_OP_SOFT_MAX:
+            return true;
+        case GGML_OP_SOFT_MAX_BACK: {
+            float max_bias = 0.0f;
+            memcpy(&max_bias, (const float *) op->op_params + 1, sizeof(float));
+            return max_bias == 0.0f;
+        }
         case GGML_OP_ROPE:
         case GGML_OP_IM2COL:
             return true;

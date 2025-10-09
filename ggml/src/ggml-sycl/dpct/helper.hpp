@@ -277,6 +277,26 @@ namespace dpct
 
     } // namespace detail
 
+    // COPY from DPCT head files
+    /// dim3 is used to store 3 component dimensions.
+    class dim3 {
+        public:
+        unsigned x, y, z;
+
+        constexpr dim3(unsigned x = 1, unsigned y = 1, unsigned z = 1)
+            : x(x), y(y), z(z) {}
+
+        dim3(const sycl::id<3> &r) : dim3(r[2], r[1], r[0]) {}
+
+        operator sycl::range<3>() const { return sycl::range<3>(z, y, x); }
+    }; // namespace dim3
+
+    inline dim3 operator*(const dim3 &a, const dim3 &b) {
+    return dim3{a.x * b.x, a.y * b.y, a.z * b.z};
+    }
+    // COPY from DPCT head files
+
+
     /// Pitched 2D/3D memory data.
     class pitched_data
     {
