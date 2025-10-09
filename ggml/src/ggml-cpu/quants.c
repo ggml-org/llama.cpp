@@ -416,6 +416,73 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+// Complex 2-bit quantization dot product for Fairy±i model
+// Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act))
+// We use q8_K for both real and imaginary activation parts stored sequentially
+void ggml_vec_dot_cq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_cq2_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    float sum_real = 0.0f;
+    float sum_imag = 0.0f;
+
+    // For Fairy±i: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+    // where a,b are quantized 2-bit weights (real, imag)
+    // and c,d are activations in q8_K format
+
+    for (int i = 0; i < nb; ++i) {
+        // We assume y contains interleaved real and imaginary blocks
+        const block_q8_K * y_real = &y[i * 2];
+        const block_q8_K * y_imag = &y[i * 2 + 1];
+
+        int32_t sum_ac = 0; // real_weight * real_act
+        int32_t sum_bd = 0; // imag_weight * imag_act
+        int32_t sum_ad = 0; // real_weight * imag_act
+        int32_t sum_bc = 0; // imag_weight * real_act
+
+        // Process all elements in the block
+        for (size_t j = 0; j < sizeof(x->qs_real); j += 32) {
+            // Each byte contains 4 2-bit values
+            for (size_t l = 0; l < 4; ++l) {
+                for (size_t k = 0; k < 32; ++k) {
+                    // Extract 2-bit values and convert to signed (-1, 0, 1, 2) then shift to (-1, 0, 1)
+                    const int a = (int)(((x[i].qs_real[j + k] >> (l*2)) & 3)) - 1;
+                    const int b = (int)(((x[i].qs_imag[j + k] >> (l*2)) & 3)) - 1;
+                    const int c = (int)y_real->qs[j*4 + l*32 + k];
+                    const int d = (int)y_imag->qs[j*4 + l*32 + k];
+
+                    sum_ac += a * c;
+                    sum_bd += b * d;
+                    sum_ad += a * d;
+                    sum_bc += b * c;
+                }
+            }
+        }
+
+        // Apply scales
+        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+        const float scale_real = d_real * y_real->d;
+        const float scale_imag = d_imag * y_imag->d;
+
+        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        sum_real += scale_real * (float)sum_ac - scale_imag * (float)sum_bd;
+        sum_imag += scale_real * (float)sum_ad + scale_imag * (float)sum_bc;
+    }
+
+    // Store results: for inference we typically use magnitude or just real part
+    // Here we return the magnitude: sqrt(real^2 + imag^2)
+    *s = sqrtf(sum_real * sum_real + sum_imag * sum_imag);
+}
+
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);

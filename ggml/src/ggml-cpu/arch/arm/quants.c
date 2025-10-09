@@ -1415,6 +1415,258 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
+// Complex 2-bit quantization dot product with ARM NEON acceleration for Fairy±i
+void ggml_vec_dot_cq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_cq2_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__ARM_NEON)
+    float sum_real = 0.0f;
+    float sum_imag = 0.0f;
+
+    const uint8x16_t m3 = vdupq_n_u8(3);
+    const int8x16_t m1 = vdupq_n_s8(1);
+
+    for (int i = 0; i < nb; ++i) {
+        // Process interleaved real and imaginary activation blocks
+        const block_q8_K * y_real = &y[i * 2];
+        const block_q8_K * y_imag = &y[i * 2 + 1];
+
+#if defined(__ARM_FEATURE_DOTPROD)
+        int32x4_t sum_ac_0 = vdupq_n_s32(0);
+        int32x4_t sum_ac_1 = vdupq_n_s32(0);
+        int32x4_t sum_bd_0 = vdupq_n_s32(0);
+        int32x4_t sum_bd_1 = vdupq_n_s32(0);
+        int32x4_t sum_ad_0 = vdupq_n_s32(0);
+        int32x4_t sum_ad_1 = vdupq_n_s32(0);
+        int32x4_t sum_bc_0 = vdupq_n_s32(0);
+        int32x4_t sum_bc_1 = vdupq_n_s32(0);
+#else
+        int16x8_t sum_ac_0 = vdupq_n_s16(0);
+        int16x8_t sum_ac_1 = vdupq_n_s16(0);
+        int16x8_t sum_bd_0 = vdupq_n_s16(0);
+        int16x8_t sum_bd_1 = vdupq_n_s16(0);
+        int16x8_t sum_ad_0 = vdupq_n_s16(0);
+        int16x8_t sum_ad_1 = vdupq_n_s16(0);
+        int16x8_t sum_bc_0 = vdupq_n_s16(0);
+        int16x8_t sum_bc_1 = vdupq_n_s16(0);
+#endif
+
+        // Process all quantized elements
+        for (size_t j = 0; j < sizeof(x->qs_real); j += 32) {
+            // Load and unpack real weights
+            uint8x16_t qx_real_0 = vld1q_u8(x[i].qs_real + j);
+            uint8x16_t qx_real_1 = vld1q_u8(x[i].qs_real + j + 16);
+            uint8x16_t qx_real_2 = vshrq_n_u8(qx_real_0, 2);
+            uint8x16_t qx_real_3 = vshrq_n_u8(qx_real_1, 2);
+            uint8x16_t qx_real_4 = vshrq_n_u8(qx_real_0, 4);
+            uint8x16_t qx_real_5 = vshrq_n_u8(qx_real_1, 4);
+            uint8x16_t qx_real_6 = vshrq_n_u8(qx_real_0, 6);
+            uint8x16_t qx_real_7 = vshrq_n_u8(qx_real_1, 6);
+
+            // Load and unpack imaginary weights
+            uint8x16_t qx_imag_0 = vld1q_u8(x[i].qs_imag + j);
+            uint8x16_t qx_imag_1 = vld1q_u8(x[i].qs_imag + j + 16);
+            uint8x16_t qx_imag_2 = vshrq_n_u8(qx_imag_0, 2);
+            uint8x16_t qx_imag_3 = vshrq_n_u8(qx_imag_1, 2);
+            uint8x16_t qx_imag_4 = vshrq_n_u8(qx_imag_0, 4);
+            uint8x16_t qx_imag_5 = vshrq_n_u8(qx_imag_1, 4);
+            uint8x16_t qx_imag_6 = vshrq_n_u8(qx_imag_0, 6);
+            uint8x16_t qx_imag_7 = vshrq_n_u8(qx_imag_1, 6);
+
+            // Convert to signed and subtract 1 to get {-1, 0, 1, 2} - 1 = {-2, -1, 0, 1}
+            int8x16_t sqx_real_0 = vreinterpretq_s8_u8(vandq_u8(qx_real_0, m3)); sqx_real_0 = vsubq_s8(sqx_real_0, m1);
+            int8x16_t sqx_real_1 = vreinterpretq_s8_u8(vandq_u8(qx_real_1, m3)); sqx_real_1 = vsubq_s8(sqx_real_1, m1);
+            int8x16_t sqx_real_2 = vreinterpretq_s8_u8(vandq_u8(qx_real_2, m3)); sqx_real_2 = vsubq_s8(sqx_real_2, m1);
+            int8x16_t sqx_real_3 = vreinterpretq_s8_u8(vandq_u8(qx_real_3, m3)); sqx_real_3 = vsubq_s8(sqx_real_3, m1);
+            int8x16_t sqx_real_4 = vreinterpretq_s8_u8(vandq_u8(qx_real_4, m3)); sqx_real_4 = vsubq_s8(sqx_real_4, m1);
+            int8x16_t sqx_real_5 = vreinterpretq_s8_u8(vandq_u8(qx_real_5, m3)); sqx_real_5 = vsubq_s8(sqx_real_5, m1);
+            int8x16_t sqx_real_6 = vreinterpretq_s8_u8(vandq_u8(qx_real_6, m3)); sqx_real_6 = vsubq_s8(sqx_real_6, m1);
+            int8x16_t sqx_real_7 = vreinterpretq_s8_u8(vandq_u8(qx_real_7, m3)); sqx_real_7 = vsubq_s8(sqx_real_7, m1);
+
+            int8x16_t sqx_imag_0 = vreinterpretq_s8_u8(vandq_u8(qx_imag_0, m3)); sqx_imag_0 = vsubq_s8(sqx_imag_0, m1);
+            int8x16_t sqx_imag_1 = vreinterpretq_s8_u8(vandq_u8(qx_imag_1, m3)); sqx_imag_1 = vsubq_s8(sqx_imag_1, m1);
+            int8x16_t sqx_imag_2 = vreinterpretq_s8_u8(vandq_u8(qx_imag_2, m3)); sqx_imag_2 = vsubq_s8(sqx_imag_2, m1);
+            int8x16_t sqx_imag_3 = vreinterpretq_s8_u8(vandq_u8(qx_imag_3, m3)); sqx_imag_3 = vsubq_s8(sqx_imag_3, m1);
+            int8x16_t sqx_imag_4 = vreinterpretq_s8_u8(vandq_u8(qx_imag_4, m3)); sqx_imag_4 = vsubq_s8(sqx_imag_4, m1);
+            int8x16_t sqx_imag_5 = vreinterpretq_s8_u8(vandq_u8(qx_imag_5, m3)); sqx_imag_5 = vsubq_s8(sqx_imag_5, m1);
+            int8x16_t sqx_imag_6 = vreinterpretq_s8_u8(vandq_u8(qx_imag_6, m3)); sqx_imag_6 = vsubq_s8(sqx_imag_6, m1);
+            int8x16_t sqx_imag_7 = vreinterpretq_s8_u8(vandq_u8(qx_imag_7, m3)); sqx_imag_7 = vsubq_s8(sqx_imag_7, m1);
+
+            // Load activations
+            const int8x16_t qy_real_0 = vld1q_s8(y_real->qs + j*4 +   0);
+            const int8x16_t qy_real_1 = vld1q_s8(y_real->qs + j*4 +  16);
+            const int8x16_t qy_real_2 = vld1q_s8(y_real->qs + j*4 +  32);
+            const int8x16_t qy_real_3 = vld1q_s8(y_real->qs + j*4 +  48);
+            const int8x16_t qy_real_4 = vld1q_s8(y_real->qs + j*4 +  64);
+            const int8x16_t qy_real_5 = vld1q_s8(y_real->qs + j*4 +  80);
+            const int8x16_t qy_real_6 = vld1q_s8(y_real->qs + j*4 +  96);
+            const int8x16_t qy_real_7 = vld1q_s8(y_real->qs + j*4 + 112);
+
+            const int8x16_t qy_imag_0 = vld1q_s8(y_imag->qs + j*4 +   0);
+            const int8x16_t qy_imag_1 = vld1q_s8(y_imag->qs + j*4 +  16);
+            const int8x16_t qy_imag_2 = vld1q_s8(y_imag->qs + j*4 +  32);
+            const int8x16_t qy_imag_3 = vld1q_s8(y_imag->qs + j*4 +  48);
+            const int8x16_t qy_imag_4 = vld1q_s8(y_imag->qs + j*4 +  64);
+            const int8x16_t qy_imag_5 = vld1q_s8(y_imag->qs + j*4 +  80);
+            const int8x16_t qy_imag_6 = vld1q_s8(y_imag->qs + j*4 +  96);
+            const int8x16_t qy_imag_7 = vld1q_s8(y_imag->qs + j*4 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            // Complex multiplication using dot product
+            // a*c
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_0, qy_real_0);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_1, qy_real_1);
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_2, qy_real_2);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_3, qy_real_3);
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_4, qy_real_4);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_5, qy_real_5);
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_6, qy_real_6);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_7, qy_real_7);
+
+            // b*d
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_0, qy_imag_0);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_1, qy_imag_1);
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_2, qy_imag_2);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_3, qy_imag_3);
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_4, qy_imag_4);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_5, qy_imag_5);
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_6, qy_imag_6);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_7, qy_imag_7);
+
+            // a*d
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_0, qy_imag_0);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_1, qy_imag_1);
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_2, qy_imag_2);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_3, qy_imag_3);
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_4, qy_imag_4);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_5, qy_imag_5);
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_6, qy_imag_6);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_7, qy_imag_7);
+
+            // b*c
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_0, qy_real_0);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_1, qy_real_1);
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_2, qy_real_2);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_3, qy_real_3);
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_4, qy_real_4);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_5, qy_real_5);
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_6, qy_real_6);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_7, qy_real_7);
+#else
+            // Fallback to 16-bit multiply-accumulate
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_0), vget_low_s8(qy_real_0));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_0), vget_high_s8(qy_real_0));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_1), vget_low_s8(qy_real_1));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_1), vget_high_s8(qy_real_1));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_2), vget_low_s8(qy_real_2));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_2), vget_high_s8(qy_real_2));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_3), vget_low_s8(qy_real_3));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_3), vget_high_s8(qy_real_3));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_4), vget_low_s8(qy_real_4));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_4), vget_high_s8(qy_real_4));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_5), vget_low_s8(qy_real_5));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_5), vget_high_s8(qy_real_5));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_6), vget_low_s8(qy_real_6));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_6), vget_high_s8(qy_real_6));
+            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_7), vget_low_s8(qy_real_7));
+            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_7), vget_high_s8(qy_real_7));
+
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_0), vget_low_s8(qy_imag_0));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_0), vget_high_s8(qy_imag_0));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_1), vget_low_s8(qy_imag_1));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_1), vget_high_s8(qy_imag_1));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_2), vget_low_s8(qy_imag_2));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_2), vget_high_s8(qy_imag_2));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_3), vget_low_s8(qy_imag_3));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_3), vget_high_s8(qy_imag_3));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_4), vget_low_s8(qy_imag_4));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_4), vget_high_s8(qy_imag_4));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_5), vget_low_s8(qy_imag_5));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_5), vget_high_s8(qy_imag_5));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_6), vget_low_s8(qy_imag_6));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_6), vget_high_s8(qy_imag_6));
+            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_7), vget_low_s8(qy_imag_7));
+            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_7), vget_high_s8(qy_imag_7));
+
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_0), vget_low_s8(qy_imag_0));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_0), vget_high_s8(qy_imag_0));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_1), vget_low_s8(qy_imag_1));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_1), vget_high_s8(qy_imag_1));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_2), vget_low_s8(qy_imag_2));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_2), vget_high_s8(qy_imag_2));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_3), vget_low_s8(qy_imag_3));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_3), vget_high_s8(qy_imag_3));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_4), vget_low_s8(qy_imag_4));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_4), vget_high_s8(qy_imag_4));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_5), vget_low_s8(qy_imag_5));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_5), vget_high_s8(qy_imag_5));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_6), vget_low_s8(qy_imag_6));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_6), vget_high_s8(qy_imag_6));
+            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_7), vget_low_s8(qy_imag_7));
+            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_7), vget_high_s8(qy_imag_7));
+
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_0), vget_low_s8(qy_real_0));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_0), vget_high_s8(qy_real_0));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_1), vget_low_s8(qy_real_1));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_1), vget_high_s8(qy_real_1));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_2), vget_low_s8(qy_real_2));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_2), vget_high_s8(qy_real_2));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_3), vget_low_s8(qy_real_3));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_3), vget_high_s8(qy_real_3));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_4), vget_low_s8(qy_real_4));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_4), vget_high_s8(qy_real_4));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_5), vget_low_s8(qy_real_5));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_5), vget_high_s8(qy_real_5));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_6), vget_low_s8(qy_real_6));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_6), vget_high_s8(qy_real_6));
+            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_7), vget_low_s8(qy_real_7));
+            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_7), vget_high_s8(qy_real_7));
+#endif
+        }
+
+        // Apply scales
+        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real) * y_real->d;
+        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag) * y_imag->d;
+
+#if defined(__ARM_FEATURE_DOTPROD)
+        // Reduce 32-bit accumulators
+        int32_t ac = vaddvq_s32(vaddq_s32(sum_ac_0, sum_ac_1));
+        int32_t bd = vaddvq_s32(vaddq_s32(sum_bd_0, sum_bd_1));
+        int32_t ad = vaddvq_s32(vaddq_s32(sum_ad_0, sum_ad_1));
+        int32_t bc = vaddvq_s32(vaddq_s32(sum_bc_0, sum_bc_1));
+#else
+        // Reduce 16-bit accumulators
+        int32_t ac = vaddlvq_s16(vaddq_s16(sum_ac_0, sum_ac_1));
+        int32_t bd = vaddlvq_s16(vaddq_s16(sum_bd_0, sum_bd_1));
+        int32_t ad = vaddlvq_s16(vaddq_s16(sum_ad_0, sum_ad_1));
+        int32_t bc = vaddlvq_s16(vaddq_s16(sum_bc_0, sum_bc_1));
+#endif
+
+        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        sum_real += d_real * (float)ac - d_imag * (float)bd;
+        sum_imag += d_real * (float)ad + d_imag * (float)bc;
+    }
+
+    // Return magnitude
+    *s = sqrtf(sum_real * sum_real + sum_imag * sum_imag);
+
+#else
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(nb);
+    ggml_vec_dot_cq2_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
