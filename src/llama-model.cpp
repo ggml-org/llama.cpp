@@ -13729,10 +13729,15 @@ struct llm_build_ifairy : public  llm_graph_context{
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
-        ggml_tensor * cur;
-        ggml_tensor * inpL;
+        ggml_tensor * cur_real;
+        ggml_tensor * cur_imag;
+        ggml_tensor * inpL_real;
+        ggml_tensor * inpL_imag;
 
-        inpL = build_inp_embd(model.tok_embd);
+        // For Fairy±i model, we have separate real and imaginary embeddings
+        // tok_embd stores the real part, tok_embd_imag stores the imaginary part
+        inpL_real = build_inp_embd(model.tok_embd);
+        inpL_imag = build_inp_embd(model.tok_embd_imag);
 
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
@@ -13742,143 +13747,255 @@ struct llm_build_ifairy : public  llm_graph_context{
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
-            ggml_tensor * inpSA = inpL;
+            ggml_tensor * inpSA_real = inpL_real;
+            ggml_tensor * inpSA_imag = inpL_imag;
 
-            cur = build_norm(inpL,
+            // Attention normalization - applied separately to real and imaginary parts
+            cur_real = build_norm(inpL_real,
                     model.layers[il].attn_norm, NULL,
                     LLM_NORM_RMS, il);
-            cb(cur, "attn_norm", il);
+            cb(cur_real, "attn_norm_real", il);
 
-            // self-attention
+            cur_imag = build_norm(inpL_imag,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur_imag, "attn_norm_imag", il);
+
+            // self-attention with complex-valued weights
             {
-                // compute Q and K and RoPE them
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-                if (model.layers[il].wq_scale) {
-                    Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_scale);
-                }
-                // todo_liweitao 添加一个转换weight的函数？ build_lora 内部就是矩阵乘法
+                // Complex linear transformation for Q: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+                // Qcur_real = cur_real * wq_real - cur_imag * wq_imag
+                // Qcur_imag = cur_real * wq_imag + cur_imag * wq_real
 
-                cb(Qcur, "Qcur", il);
+                ggml_tensor * Qcur_real_part1 = build_lora_mm(model.layers[il].wq_real, cur_real);
+                ggml_tensor * Qcur_real_part2 = build_lora_mm(model.layers[il].wq_imag, cur_imag);
+                ggml_tensor * Qcur_real = ggml_sub(ctx0, Qcur_real_part1, Qcur_real_part2);
+
+                ggml_tensor * Qcur_imag_part1 = build_lora_mm(model.layers[il].wq_imag, cur_real);
+                ggml_tensor * Qcur_imag_part2 = build_lora_mm(model.layers[il].wq_real, cur_imag);
+                ggml_tensor * Qcur_imag = ggml_add(ctx0, Qcur_imag_part1, Qcur_imag_part2);
+
+                cb(Qcur_real, "Qcur_real", il);
+                cb(Qcur_imag, "Qcur_imag", il);
+
                 if (model.layers[il].bq) {
-                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-                    cb(Qcur, "Qcur", il);
+                    Qcur_real = ggml_add(ctx0, Qcur_real, model.layers[il].bq);
+                    cb(Qcur_real, "Qcur_real", il);
                 }
 
-                // B1.K
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-                if (model.layers[il].wk_scale) {
-                    Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_scale);
-                }
-                cb(Kcur, "Kcur", il);
+                // Complex linear transformation for K
+                ggml_tensor * Kcur_real_part1 = build_lora_mm(model.layers[il].wk_real, cur_real);
+                ggml_tensor * Kcur_real_part2 = build_lora_mm(model.layers[il].wk_imag, cur_imag);
+                ggml_tensor * Kcur_real = ggml_sub(ctx0, Kcur_real_part1, Kcur_real_part2);
+
+                ggml_tensor * Kcur_imag_part1 = build_lora_mm(model.layers[il].wk_imag, cur_real);
+                ggml_tensor * Kcur_imag_part2 = build_lora_mm(model.layers[il].wk_real, cur_imag);
+                ggml_tensor * Kcur_imag = ggml_add(ctx0, Kcur_imag_part1, Kcur_imag_part2);
+
+                cb(Kcur_real, "Kcur_real", il);
+                cb(Kcur_imag, "Kcur_imag", il);
+
                 if (model.layers[il].bk) {
-                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-                    cb(Kcur, "Kcur", il);
+                    Kcur_real = ggml_add(ctx0, Kcur_real, model.layers[il].bk);
+                    cb(Kcur_real, "Kcur_real", il);
                 }
 
-                // B1.V
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-                if (model.layers[il].wv_scale) {
-                    Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_scale);
-                }
-                cb(Vcur, "Vcur", il);
+                // Complex linear transformation for V
+                ggml_tensor * Vcur_real_part1 = build_lora_mm(model.layers[il].wv_real, cur_real);
+                ggml_tensor * Vcur_real_part2 = build_lora_mm(model.layers[il].wv_imag, cur_imag);
+                ggml_tensor * Vcur_real = ggml_sub(ctx0, Vcur_real_part1, Vcur_real_part2);
+
+                ggml_tensor * Vcur_imag_part1 = build_lora_mm(model.layers[il].wv_imag, cur_real);
+                ggml_tensor * Vcur_imag_part2 = build_lora_mm(model.layers[il].wv_real, cur_imag);
+                ggml_tensor * Vcur_imag = ggml_add(ctx0, Vcur_imag_part1, Vcur_imag_part2);
+
+                cb(Vcur_real, "Vcur_real", il);
+                cb(Vcur_imag, "Vcur_imag", il);
+
                 if (model.layers[il].bv) {
-                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                    cb(Vcur, "Vcur", il);
+                    Vcur_real = ggml_add(ctx0, Vcur_real, model.layers[il].bv);
+                    cb(Vcur_real, "Vcur_real", il);
                 }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                // Reshape for attention - both real and imaginary parts
+                Qcur_real = ggml_reshape_3d(ctx0, Qcur_real, n_embd_head, n_head,    n_tokens);
+                Qcur_imag = ggml_reshape_3d(ctx0, Qcur_imag, n_embd_head, n_head,    n_tokens);
+                Kcur_real = ggml_reshape_3d(ctx0, Kcur_real, n_embd_head, n_head_kv, n_tokens);
+                Kcur_imag = ggml_reshape_3d(ctx0, Kcur_imag, n_embd_head, n_head_kv, n_tokens);
+                Vcur_real = ggml_reshape_3d(ctx0, Vcur_real, n_embd_head, n_head_kv, n_tokens);
+                Vcur_imag = ggml_reshape_3d(ctx0, Vcur_imag, n_embd_head, n_head_kv, n_tokens);
 
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
+                // Apply RoPE to real and imaginary parts separately
+                Qcur_real = ggml_rope_ext(
+                        ctx0, Qcur_real, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
+                Qcur_imag = ggml_rope_ext(
+                        ctx0, Qcur_imag, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
+                Kcur_real = ggml_rope_ext(
+                        ctx0, Kcur_real, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
 
-                // todo_liweitao 这里要改一下逻辑
-                cur = build_attn(inp_attn,
+                Kcur_imag = ggml_rope_ext(
+                        ctx0, Kcur_imag, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                cb(Qcur_real, "Qcur_real", il);
+                cb(Qcur_imag, "Qcur_imag", il);
+                cb(Kcur_real, "Kcur_real", il);
+                cb(Kcur_imag, "Kcur_imag", il);
+                cb(Vcur_real, "Vcur_real", il);
+                cb(Vcur_imag, "Vcur_imag", il);
+
+                // For complex attention, we compute magnitude for attention scores
+                // |Q*K| = sqrt((Q_r*K_r - Q_i*K_i)^2 + (Q_r*K_i + Q_i*K_r)^2)
+                // Simplified: use real part for attention computation
+                cur_real = build_attn(inp_attn,
                         NULL, NULL,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                        Qcur_real, Kcur_real, Vcur_real, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
-                cur = build_norm(cur,
+                cur_imag = build_attn(inp_attn,
+                        NULL, NULL,
+                        Qcur_imag, Kcur_imag, Vcur_imag, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+
+                // Apply sub-normalization
+                cur_real = build_norm(cur_real,
                         model.layers[il].attn_sub_norm, NULL,
                         LLM_NORM_RMS, il);
-                cb(cur, "attn_sub_norm", il);
+                cb(cur_real, "attn_sub_norm_real", il);
 
-                cur = build_lora_mm(model.layers[il].wo, cur);
-                if (model.layers[il].wo_scale) {
-                    cur = ggml_mul(ctx0, cur, model.layers[il].wo_scale);
-                }
+                cur_imag = build_norm(cur_imag,
+                        model.layers[il].attn_sub_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur_imag, "attn_sub_norm_imag", il);
+
+                // Complex output projection: wo * (cur_real + i*cur_imag)
+                ggml_tensor * attn_out_real_part1 = build_lora_mm(model.layers[il].wo_real, cur_real);
+                ggml_tensor * attn_out_real_part2 = build_lora_mm(model.layers[il].wo_imag, cur_imag);
+                ggml_tensor * attn_out_real = ggml_sub(ctx0, attn_out_real_part1, attn_out_real_part2);
+
+                ggml_tensor * attn_out_imag_part1 = build_lora_mm(model.layers[il].wo_imag, cur_real);
+                ggml_tensor * attn_out_imag_part2 = build_lora_mm(model.layers[il].wo_real, cur_imag);
+                ggml_tensor * attn_out_imag = ggml_add(ctx0, attn_out_imag_part1, attn_out_imag_part2);
+
+                cur_real = attn_out_real;
+                cur_imag = attn_out_imag;
+
                 if (model.layers[il].bo) {
-                    cur = ggml_add(ctx0, cur, model.layers[il].bo);
+                    cur_real = ggml_add(ctx0, cur_real, model.layers[il].bo);
                 }
-                cb(cur, "attn_o_out", il);
+                cb(cur_real, "attn_o_out_real", il);
+                cb(cur_imag, "attn_o_out_imag", il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+                cur_real   = ggml_get_rows(ctx0,   cur_real, inp_out_ids);
+                cur_imag   = ggml_get_rows(ctx0,   cur_imag, inp_out_ids);
+                inpSA_real = ggml_get_rows(ctx0, inpSA_real, inp_out_ids);
+                inpSA_imag = ggml_get_rows(ctx0, inpSA_imag, inp_out_ids);
             }
 
-            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-            cb(ffn_inp, "ffn_inp", il);
+            // Residual connection with complex addition
+            ggml_tensor * ffn_inp_real = ggml_add(ctx0, cur_real, inpSA_real);
+            ggml_tensor * ffn_inp_imag = ggml_add(ctx0, cur_imag, inpSA_imag);
+            cb(ffn_inp_real, "ffn_inp_real", il);
+            cb(ffn_inp_imag, "ffn_inp_imag", il);
 
-            // feed-forward forward
-            cur = build_norm(ffn_inp,
+            // feed-forward forward - applied separately to real and imaginary parts
+            // Note: For Fairy±i, FFN weights are typically real-valued (not complex)
+            // So we apply the same FFN to both real and imaginary components
+            cur_real = build_norm(ffn_inp_real,
                     model.layers[il].ffn_norm, NULL,
                     LLM_NORM_RMS, il);
-            cb(cur, "ffn_norm", il);
+            cb(cur_real, "ffn_norm_real", il);
 
-            cur = build_ffn(cur,
+            cur_imag = build_norm(ffn_inp_imag,
+                    model.layers[il].ffn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur_imag, "ffn_norm_imag", il);
+
+            cur_real = build_ffn(cur_real,
                     model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_scale,
                     model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
                     NULL,                      NULL, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
-            cb(cur, "ffn_sub_out", il);
+            cb(cur_real, "ffn_sub_out_real", il);
 
-            cur = build_norm(cur,
+            cur_imag = build_ffn(cur_imag,
+                    model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_scale,
+                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
+                    NULL,                      NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cb(cur_imag, "ffn_sub_out_imag", il);
+
+            cur_real = build_norm(cur_real,
                     model.layers[il].ffn_sub_norm, NULL,
                     LLM_NORM_RMS, il);
-            cb(cur, "ffn_sub_norm", il);
+            cb(cur_real, "ffn_sub_norm_real", il);
 
-            cur = build_lora_mm(model.layers[il].ffn_down, cur);
+            cur_imag = build_norm(cur_imag,
+                    model.layers[il].ffn_sub_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur_imag, "ffn_sub_norm_imag", il);
+
+            cur_real = build_lora_mm(model.layers[il].ffn_down, cur_real);
+            cur_imag = build_lora_mm(model.layers[il].ffn_down, cur_imag);
             if (model.layers[il].ffn_down_scale) {
-                cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
+                cur_real = ggml_mul(ctx0, cur_real, model.layers[il].ffn_down_scale);
+                cur_imag = ggml_mul(ctx0, cur_imag, model.layers[il].ffn_down_scale);
             }
-            cb(cur, "ffn_down", il);
+            cb(cur_real, "ffn_down_real", il);
+            cb(cur_imag, "ffn_down_imag", il);
 
-            cur = ggml_add(ctx0, cur, ffn_inp);
-            cb(cur, "l_out", il);
+            // Residual connection
+            cur_real = ggml_add(ctx0, cur_real, ffn_inp_real);
+            cur_imag = ggml_add(ctx0, cur_imag, ffn_inp_imag);
+            cb(cur_real, "l_out_real", il);
+            cb(cur_imag, "l_out_imag", il);
 
             // input for next layer
-            inpL = cur;
+            inpL_real = cur_real;
+            inpL_imag = cur_imag;
         }
 
-        cur = inpL;
+        cur_real = inpL_real;
+        cur_imag = inpL_imag;
 
-        cur = build_norm(cur,
+        // Final output normalization - separate for real and imaginary parts
+        cur_real = build_norm(cur_real,
                 model.output_norm, NULL,
                 LLM_NORM_RMS, -1);
+        cb(cur_real, "result_norm_real", -1);
 
-        cb(cur, "result_norm", -1);
-        res->t_embd = cur;
+        cur_imag = build_norm(cur_imag,
+                model.output_norm_imag, NULL,
+                LLM_NORM_RMS, -1);
+        cb(cur_imag, "result_norm_imag", -1);
 
-        // lm_head
-        // FIXME: do not use model.tok_embd directly, duplicate as model.output
-        cur = build_lora_mm(model.tok_embd, cur);
-        
+        // Store embeddings - for Fairy±i, we compute magnitude: sqrt(real^2 + imag^2)
+        // This gives us the final real-valued representation
+        ggml_tensor * embd_real_sq = ggml_mul(ctx0, cur_real, cur_real);
+        ggml_tensor * embd_imag_sq = ggml_mul(ctx0, cur_imag, cur_imag);
+        ggml_tensor * embd_mag_sq = ggml_add(ctx0, embd_real_sq, embd_imag_sq);
+        res->t_embd = ggml_sqrt(ctx0, embd_mag_sq);
+
+        // lm_head - complex projection to get logits
+        // For output, we use real part of complex projection as logits
+        ggml_tensor * logits_real_part1 = build_lora_mm(model.tok_embd, cur_real);
+        ggml_tensor * logits_real_part2 = build_lora_mm(model.tok_embd_imag, cur_imag);
+        ggml_tensor * cur = ggml_sub(ctx0, logits_real_part1, logits_real_part2);
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;
