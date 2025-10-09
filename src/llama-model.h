@@ -438,6 +438,12 @@ struct llama_model {
 
     std::vector<llama_layer> layers;
 
+    //Dense linear projections for SentenceTransformers models like embeddinggemma
+    // For Sentence Transformers models structure see
+    // https://sbert.net/docs/sentence_transformer/usage/custom_models.html#structure-of-sentence-transformer-models
+    struct ggml_tensor * dense_2_out_layers = nullptr;
+    struct ggml_tensor * dense_3_out_layers = nullptr;
+
     llama_model_params params;
 
     // gguf metadata
