@@ -224,6 +224,8 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    bool can_reuse(const llm_graph_params & params) override;
+
     ggml_tensor * s_copy;  // I32 [n_rs]
 
     // views of s_copy, computed once per graph
