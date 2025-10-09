@@ -1621,6 +1621,7 @@ struct server_slot {
     common_speculative * spec = nullptr;
 
     std::unique_ptr<const server_task> task;
+    std::unique_ptr<const server_task> task_prev; // used for debugging
 
     // used to determine the slot that has been used the longest
     int64_t t_last_used = -1;
@@ -1739,6 +1740,7 @@ struct server_slot {
         n_draft_accepted = 0;
 
         task.reset();
+        task_prev.reset();
 
         // clear alora start
         alora_invocation_start = -1;
@@ -1813,6 +1815,8 @@ struct server_slot {
             t_last_used = ggml_time_us();
             t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
             state = SLOT_STATE_IDLE;
+
+            task_prev = std::move(task);
             task.reset();
 
             callback_on_release(id);
@@ -1924,11 +1928,13 @@ struct server_slot {
             {"n_ctx",         n_ctx},
             {"speculative",   can_speculate()},
             {"is_processing", is_processing()},
-            {"id_task",       task ? task->id : -1},
         };
 
-        if (task) {
-            res["params"] = task->params.to_json(only_metrics);
+        const auto & ptask = task ? task : task_prev;
+
+        if (ptask) {
+            res["id_task"] = ptask->id;
+            res["params"] = ptask->params.to_json(only_metrics);
             res["next_token"] = {
                 {
                     {"has_next_token", has_next_token},
@@ -1939,7 +1945,8 @@ struct server_slot {
             };
 
             if (!only_metrics) {
-                res["prompt"] = task->tokens.detokenize(ctx, true);
+                res["prompt"] = ptask->tokens.detokenize(ctx, true);
+                res["generated"] = generated_text;
             }
         }
 
@@ -2335,6 +2342,8 @@ struct server_context {
     // slots / clients
     std::vector<server_slot> slots;
 
+    int slots_debug = 0;
+
     server_queue    queue_tasks;
     server_response queue_results;
 
@@ -2525,6 +2534,15 @@ struct server_context {
             slot.reset();
 
             slots.push_back(std::move(slot));
+        }
+
+        {
+            const char * LLAMA_SERVER_SLOTS_DEBUG = getenv("LLAMA_SERVER_SLOTS_DEBUG");
+            slots_debug = LLAMA_SERVER_SLOTS_DEBUG ? atoi(LLAMA_SERVER_SLOTS_DEBUG) : 0;
+
+            if (slots_debug) {
+                SRV_WRN("slots debug = %d\n", slots_debug);
+            }
         }
 
         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
@@ -3331,7 +3349,7 @@ struct server_context {
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
-                        json slot_data = slot.to_json(true);
+                        json slot_data = slot.to_json(slots_debug == 0);
 
                         if (slot.is_processing()) {
                             n_processing_slots++;
@@ -4578,18 +4596,18 @@ int main(int argc, char ** argv) {
         }
 
         // TODO: get rid of this dynamic_cast
-        auto res_metrics = dynamic_cast<server_task_result_metrics*>(result.get());
-        GGML_ASSERT(res_metrics != nullptr);
+        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        GGML_ASSERT(res_task != nullptr);
 
         // optionally return "fail_on_no_slot" error
         if (req.has_param("fail_on_no_slot")) {
-            if (res_metrics->n_idle_slots == 0) {
+            if (res_task->n_idle_slots == 0) {
                 res_error(res, format_error_response("no slot available", ERROR_TYPE_UNAVAILABLE));
                 return;
             }
         }
 
-        res_ok(res, res_metrics->slots_data);
+        res_ok(res, res_task->slots_data);
     };
 
     const auto handle_metrics = [&](const httplib::Request &, httplib::Response & res) {
@@ -4617,56 +4635,56 @@ int main(int argc, char ** argv) {
         }
 
         // TODO: get rid of this dynamic_cast
-        auto res_metrics = dynamic_cast<server_task_result_metrics*>(result.get());
-        GGML_ASSERT(res_metrics != nullptr);
+        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        GGML_ASSERT(res_task != nullptr);
 
         // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
         json all_metrics_def = json {
             {"counter", {{
                     {"name",  "prompt_tokens_total"},
                     {"help",  "Number of prompt tokens processed."},
-                    {"value",  (uint64_t) res_metrics->n_prompt_tokens_processed_total}
+                    {"value",  (uint64_t) res_task->n_prompt_tokens_processed_total}
             }, {
                     {"name",  "prompt_seconds_total"},
                     {"help",  "Prompt process time"},
-                    {"value",  (uint64_t) res_metrics->t_prompt_processing_total / 1.e3}
+                    {"value",  (uint64_t) res_task->t_prompt_processing_total / 1.e3}
             }, {
                     {"name",  "tokens_predicted_total"},
                     {"help",  "Number of generation tokens processed."},
-                    {"value",  (uint64_t) res_metrics->n_tokens_predicted_total}
+                    {"value",  (uint64_t) res_task->n_tokens_predicted_total}
             }, {
                     {"name",  "tokens_predicted_seconds_total"},
                     {"help",  "Predict process time"},
-                    {"value",  (uint64_t) res_metrics->t_tokens_generation_total / 1.e3}
+                    {"value",  (uint64_t) res_task->t_tokens_generation_total / 1.e3}
             }, {
                     {"name",  "n_decode_total"},
                     {"help",  "Total number of llama_decode() calls"},
-                    {"value",  res_metrics->n_decode_total}
+                    {"value",  res_task->n_decode_total}
             }, {
                     {"name",  "n_past_max"},
                     {"help",  "Largest observed n_past."},
-                    {"value",  res_metrics->n_past_max}
+                    {"value",  res_task->n_past_max}
             }, {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
-                    {"value",  (float) res_metrics->n_busy_slots_total / std::max((float) res_metrics->n_decode_total, 1.f)}
+                    {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
                     {"help",  "Average prompt throughput in tokens/s."},
-                    {"value",  res_metrics->n_prompt_tokens_processed ? 1.e3 / res_metrics->t_prompt_processing * res_metrics->n_prompt_tokens_processed : 0.}
+                    {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
             },{
                     {"name",  "predicted_tokens_seconds"},
                     {"help",  "Average generation throughput in tokens/s."},
-                    {"value",  res_metrics->n_tokens_predicted ? 1.e3 / res_metrics->t_tokens_generation * res_metrics->n_tokens_predicted : 0.}
+                    {"value",  res_task->n_tokens_predicted ? 1.e3 / res_task->t_tokens_generation * res_task->n_tokens_predicted : 0.}
             },{
                     {"name",  "requests_processing"},
                     {"help",  "Number of requests processing."},
-                    {"value",  (uint64_t) res_metrics->n_processing_slots}
+                    {"value",  (uint64_t) res_task->n_processing_slots}
             },{
                     {"name",  "requests_deferred"},
                     {"help",  "Number of requests deferred."},
-                    {"value",  (uint64_t) res_metrics->n_tasks_deferred}
+                    {"value",  (uint64_t) res_task->n_tasks_deferred}
             }}}
         };
 
@@ -4687,7 +4705,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        res.set_header("Process-Start-Time-Unix", std::to_string(res_metrics->t_start));
+        res.set_header("Process-Start-Time-Unix", std::to_string(res_task->t_start));
 
         res.set_content(prometheus.str(), "text/plain; version=0.0.4");
         res.status = 200; // HTTP OK
