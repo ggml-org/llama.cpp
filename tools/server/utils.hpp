@@ -851,7 +851,6 @@ static json format_response_rerank(
         bool is_tei_format,
         std::vector<std::string> & texts,
         int top_n) {
-    json results;
     int32_t n_tokens = 0;
     bool return_text = is_tei_format && json_value(request, "return_text", false);
     std::vector<json> elements; // Temporary vector to hold unsorted elements
@@ -868,17 +867,14 @@ static json format_response_rerank(
         }
         elements.push_back(elem);
     }
-    
+
     std::sort(elements.begin(), elements.end(), [score_label](const json& a, const json& b) {
         return json_value(a, score_label, 0.0) > json_value(b, score_label, 0.0);
     });
 
-    results = json::array();
-    int count = 0;
-    for (const auto & elem : elements) {
-        if (++count > top_n) break;
-        results.push_back(elem);
-    }
+    elements.resize(std::min(top_n, (int)elements.size()));
+    json results = elements;
+
     if (is_tei_format) return results;
 
     json res = json{
