@@ -1434,6 +1434,11 @@ struct server_prompt {
 };
 
 struct server_prompt_cache {
+    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+        this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
+        this->limit_tokens = limit_tokens;
+    }
+
     std::list<server_prompt> states;
 
     // in bytes, 0 = no limit
@@ -1441,11 +1446,6 @@ struct server_prompt_cache {
 
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
-
-    void init(size_t limit_size, size_t limit_tokens) {
-        this->limit_size   = limit_size;
-        this->limit_tokens = limit_tokens;
-    }
 
     size_t size() const {
         size_t res = 0;
@@ -1473,7 +1473,7 @@ struct server_prompt_cache {
             const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
 
             if (cur_lcp_len == (int) prompt.tokens.size()) {
-                SRV_WRN("%s", " - prompt is already cached, skipping\n");
+                SRV_WRN("%s", " - prompt is already in the cache, skipping\n");
                 return nullptr;
             }
         }
@@ -2347,7 +2347,7 @@ struct server_context {
     server_queue    queue_tasks;
     server_response queue_results;
 
-    server_prompt_cache prompt_cache;
+    std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
 
@@ -2554,7 +2554,19 @@ struct server_context {
 
         metrics.init();
 
-        prompt_cache.init(1024*1024ull*params_base.cache_ram_mb, n_ctx);
+        if (params_base.cache_ram_mib != 0) {
+            if (params_base.cache_ram_mib < 0) {
+                SRV_WRN("prompt cache is enabled, size limit: %s\n", "no limit");
+            } else {
+                SRV_WRN("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
+            }
+            SRV_WRN("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+
+            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+        } else {
+            SRV_WRN("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        }
+        SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
@@ -2657,6 +2669,8 @@ struct server_context {
         if (ret) {
             const auto & tokens = ret->prompt.tokens;
 
+            update_cache = update_cache && prompt_cache;
+
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
@@ -2671,10 +2685,10 @@ struct server_context {
 
                 const int64_t t_start = ggml_time_us();
 
-                ret->prompt_save(prompt_cache);
-                ret->prompt_load(prompt_cache, task.tokens);
+                ret->prompt_save(*prompt_cache);
+                ret->prompt_load(*prompt_cache, task.tokens);
 
-                prompt_cache.update();
+                prompt_cache->update();
 
                 SRV_WRN("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
@@ -5682,7 +5696,7 @@ int main(int argc, char ** argv) {
 #endif
 
     LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
-            is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
+            is_sock ? string_format("unix://%s",    params.hostname.c_str()).c_str() :
                       string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
 
     // this call blocks the main thread until queue_tasks.terminate() is called
