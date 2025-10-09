@@ -75,6 +75,11 @@
 					key: 'pdfAsImage',
 					label: 'Parse PDF as image',
 					type: 'checkbox'
+				},
+				{
+					key: 'showModelInfo',
+					label: 'Show model information',
+					type: 'checkbox'
 				}
 			]
 		},
@@ -142,6 +147,12 @@
 				{
 					key: 'showThoughtInProgress',
 					label: 'Show thought in progress',
+					type: 'checkbox'
+				},
+				{
+					key: 'disableReasoningFormat',
+					label:
+						'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 					type: 'checkbox'
 				}
 			]

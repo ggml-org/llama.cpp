@@ -730,6 +730,10 @@ class GGUFWriter:
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
 
+    def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
+        self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
+        self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
+
     def add_logit_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.LOGIT_SCALE.format(arch=self.arch), value)
 
@@ -1037,6 +1041,9 @@ class GGUFWriter:
     def add_vision_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
 
+    def add_vision_preproc_image_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
+
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
@@ -1083,6 +1090,18 @@ class GGUFWriter:
 
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    def add_xielu_alpha_p(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_P, values)
+
+    def add_xielu_alpha_n(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_N, values)
+
+    def add_xielu_beta(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.BETA, values)
+
+    def add_xielu_eps(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.EPS, values)
 
     # diffusion models
 

@@ -116,17 +116,36 @@ embedding-convert-model:
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/embedding/convert-model.sh
 
+embedding-convert-model-st:
+	$(call validate_embedding_model_path,embedding-convert-model-st)
+	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
+	./scripts/embedding/convert-model.sh -st
+
 embedding-run-original-model:
 	$(call validate_embedding_model_path,embedding-run-original-model)
 	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	USE_SENTENCE_TRANSFORMERS="$(USE_SENTENCE_TRANSFORMERS)" \
 	./scripts/embedding/run-original-model.py \
-	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
+	$(if $(USE_SENTENCE_TRANSFORMERS),--use-sentence-transformers)
+
+embedding-run-original-model-st: USE_SENTENCE_TRANSFORMERS=1
+embedding-run-original-model-st: embedding-run-original-model
 
 embedding-run-converted-model:
 	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
-	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
+	$(if $(USE_POOLING),--pooling)
+
+embedding-run-converted-model-st: USE_POOLING=1
+embedding-run-converted-model-st: embedding-run-converted-model
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
+	@./scripts/embedding/compare-embeddings-logits.sh \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
+
+embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model-st
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 

@@ -32,13 +32,11 @@
 #include <thread>
 #include <vector>
 
-//#define LLAMA_USE_CURL
-
 #if defined(LLAMA_USE_CURL)
 #include <curl/curl.h>
 #include <curl/easy.h>
 #else
-#include <cpp-httplib/httplib.h>
+#include "http.h"
 #endif
 
 #ifdef __linux__
@@ -596,77 +594,6 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 
 #else
 
-struct common_url {
-    std::string scheme;
-    std::string user;
-    std::string password;
-    std::string host;
-    std::string path;
-};
-
-static common_url parse_url(const std::string & url) {
-    common_url parts;
-    auto scheme_end = url.find("://");
-
-    if (scheme_end == std::string::npos) {
-        throw std::runtime_error("invalid URL: no scheme");
-    }
-    parts.scheme = url.substr(0, scheme_end);
-
-    if (parts.scheme != "http" && parts.scheme != "https") {
-        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
-    }
-
-    auto rest = url.substr(scheme_end + 3);
-    auto at_pos = rest.find('@');
-
-    if (at_pos != std::string::npos) {
-        auto auth = rest.substr(0, at_pos);
-        auto colon_pos = auth.find(':');
-        if (colon_pos != std::string::npos) {
-            parts.user = auth.substr(0, colon_pos);
-            parts.password = auth.substr(colon_pos + 1);
-        } else {
-            parts.user = auth;
-        }
-        rest = rest.substr(at_pos + 1);
-    }
-
-    auto slash_pos = rest.find('/');
-
-    if (slash_pos != std::string::npos) {
-        parts.host = rest.substr(0, slash_pos);
-        parts.path = rest.substr(slash_pos);
-    } else {
-        parts.host = rest;
-        parts.path = "/";
-    }
-    return parts;
-}
-
-static std::pair<httplib::Client, common_url> http_client(const std::string & url) {
-    common_url parts = parse_url(url);
-
-    if (parts.host.empty()) {
-        throw std::runtime_error("error: invalid URL format");
-    }
-
-    if (!parts.user.empty()) {
-        throw std::runtime_error("error: user:password@ not supported yet"); // TODO
-    }
-
-    httplib::Client cli(parts.scheme + "://" + parts.host);
-    cli.set_follow_location(true);
-
-    // TODO cert
-
-    return { std::move(cli), std::move(parts) };
-}
-
-static std::string show_masked_url(const common_url & parts) {
-    return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + parts.host + parts.path;
-}
-
 static void print_progress(size_t current, size_t total) {
     if (!is_output_a_tty()) {
         return;
@@ -759,7 +686,7 @@ static bool common_download_file_single_online(const std::string & url,
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    auto [cli, parts] = http_client(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
     if (!bearer_token.empty()) {
@@ -839,7 +766,7 @@ static bool common_download_file_single_online(const std::string & url,
 
         // start the download
         LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
-                __func__, show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
+                __func__, common_http_show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
         const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
         if (!was_pull_successful) {
             if (i + 1 < max_attempts) {
@@ -867,7 +794,7 @@ static bool common_download_file_single_online(const std::string & url,
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = http_client(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {{"User-Agent", "llama-cpp"}};
     for (const auto & header : params.headers) {
@@ -1688,18 +1615,14 @@ static void add_rpc_devices(const std::string & servers) {
     if (!rpc_reg) {
         throw std::invalid_argument("failed to find RPC backend");
     }
-    typedef ggml_backend_dev_t (*ggml_backend_rpc_add_device_t)(const char * endpoint);
-    ggml_backend_rpc_add_device_t ggml_backend_rpc_add_device_fn = (ggml_backend_rpc_add_device_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_device");
-    if (!ggml_backend_rpc_add_device_fn) {
-        throw std::invalid_argument("failed to find RPC device add function");
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        throw std::invalid_argument("failed to find RPC add server function");
     }
     for (const auto & server : rpc_servers) {
-        ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
-        if (dev) {
-            ggml_backend_device_register(dev);
-        } else {
-            throw std::invalid_argument("failed to register RPC device");
-        }
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        ggml_backend_register(reg);
     }
 }
 
@@ -2005,13 +1928,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--swa-checkpoints"}, "N",
-        string_format("max number of SWA checkpoints per slot to create (default: %d)\n"
-            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_swa_checkpoints),
+        {"--ctx-checkpoints", "--swa-checkpoints"}, "N",
+        string_format("max number of context checkpoints to create per slot (default: %d)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
         [](common_params & params, int value) {
-            params.n_swa_checkpoints = value;
+            params.n_ctx_checkpoints = value;
         }
-    ).set_env("LLAMA_ARG_SWA_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--kv-unified", "-kvu"},
         string_format("use single unified KV buffer for the KV cache of all sequences (default: %s)\n"
@@ -2661,6 +2584,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.no_extra_bufts = true;
         }
     ).set_env("LLAMA_ARG_NO_REPACK"));
+    add_opt(common_arg(
+        {"--no-host"},
+        "bypass host buffer allowing extra buffers to be used",
+        [](common_params & params) {
+            params.no_host = true;
+        }
+    ).set_env("LLAMA_ARG_NO_HOST"));
     add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
@@ -3502,7 +3432,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
-        "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+        "- deepseek: puts thoughts in `message.reasoning_content`\n"
+        "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
         "(default: auto)",
         [](common_params & params, const std::string & value) {
             params.reasoning_format = common_reasoning_format_from_name(value);
@@ -3929,7 +3860,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
             params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
@@ -3943,7 +3873,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
             params.model.hf_file = "e5-small-v2-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
@@ -3957,7 +3886,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
             params.model.hf_file = "gte-small-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
             params.verbose_prompt = true;
