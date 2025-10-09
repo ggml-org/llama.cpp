@@ -66,8 +66,7 @@ def test_server_slots():
     assert len(res.body) == server.n_slots
     assert server.n_ctx is not None and server.n_slots is not None
     assert res.body[0]["n_ctx"] == server.n_ctx / server.n_slots
-    assert "params" in res.body[0]
-    assert res.body[0]["params"]["seed"] == server.seed
+    assert "params" not in res.body[0]
 
 
 def test_load_split_model():
