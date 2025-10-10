@@ -726,6 +726,7 @@ class Me {
         this.defaultChatIds = [ "Default", "Other" ];
         this.multiChat = new MultiChatUI();
         this.bStream = true;
+        this.bTools = false;
         this.bCompletionFreshChatAlways = true;
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
@@ -804,6 +805,8 @@ class Me {
 
             ui.el_create_append_p(`bStream:${this.bStream}`, elDiv);
 
+            ui.el_create_append_p(`bTools:${this.bTools}`, elDiv);
+
             ui.el_create_append_p(`bTrimGarbage:${this.bTrimGarbage}`, elDiv);
 
             ui.el_create_append_p(`ApiEndPoint:${this.apiEP}`, elDiv);
@@ -875,6 +878,11 @@ class Me {
 
         let bb = ui.el_creatediv_boolbutton("SetStream", "Stream", {true: "[+] yes stream", false: "[-] do oneshot"}, this.bStream, (val)=>{
             this.bStream = val;
+        });
+        elDiv.appendChild(bb.div);
+
+        bb = ui.el_creatediv_boolbutton("SetTools", "Tools", {true: "[+] yes tools", false: "[-] no tools"}, this.bTools, (val)=>{
+            this.bTools = val;
         });
         elDiv.appendChild(bb.div);
 
