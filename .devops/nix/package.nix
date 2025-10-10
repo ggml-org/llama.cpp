@@ -32,8 +32,11 @@
   useMpi ? false,
   useRocm ? config.rocmSupport,
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
+  rocmUseWmma ? true,
   enableCurl ? true,
   useVulkan ? false,
+  buildAllCudaFaQuants ? false,
+  enableUma ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -91,11 +94,16 @@ let
     libcublas
   ];
 
-  rocmBuildInputs = with rocmPackages; [
-    clr
-    hipblas
-    rocblas
-  ];
+  rocmBuildInputs =
+    with rocmPackages;
+    [
+      clr
+      hipblas
+      rocblas
+      llvm.lld
+      llvm.bintools
+    ]
+    ++ optionals rocmUseWmma [ rocmPackages.rocwmma ];
 
   vulkanBuildInputs = [
     vulkan-headers
@@ -156,7 +164,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   buildInputs =
     optionals effectiveStdenv.isDarwin darwinBuildInputs
     ++ optionals useCuda cudaBuildInputs
-    ++ optionals useMpi [ mpi ]
+    ++ optionals (useMpi && !useRocm) [ mpi ]
+    ++ optionals (useMpi && useRocm) [ rocmPackages.mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
     ++ optionals useVulkan vulkanBuildInputs
@@ -183,10 +192,18 @@ effectiveStdenv.mkDerivation (finalAttrs: {
           builtins.concatStringsSep ";" (map dropDot cudaCapabilities)
         )
       )
+      (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
+      (cmakeBool "GGML_CUDA_ENABLE_UNIFIED_MEMORY" enableUma)
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
+      (cmakeFeature "AMDGPU_TARGETS" rocmGpuTargets)
+      (cmakeBool "GGML_CUDA_FA_ALL_QUANTS" buildAllCudaFaQuants)
+      (cmakeBool "GGML_CUDA_ENABLE_UNIFIED_MEMORY" enableUma)
+    ]
+    ++ optionals rocmUseWmma [
+      (cmakeBool "GGML_HIP_ROCWMMA_FATTN" rocmUseWmma)
+      (cmakeFeature "GGML_HIP_ROCWMMA_PATH" "${rocmPackages.rocwmma}")
     ]
     ++ optionals useMetalKit [
       (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
