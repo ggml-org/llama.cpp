@@ -139,7 +139,7 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
         if (type == GGML_TYPE_F32 && src1_ncols > 512) {
             return false;
         }
-        if ((type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) && src1_ncols > 8192) {
+        if ((type == GGML_TYPE_F16 || type == GGML_TYPE_BF16) && src1_ncols > 1024) {
             return false;
         }
     } else {
