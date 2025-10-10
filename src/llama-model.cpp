@@ -8044,6 +8044,8 @@ struct llm_build_modern_bert : public llm_graph_context {
         inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, -1);
         cb(inpL, "inp_norm", -1);
 
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
         auto * inp_attn = build_attn_inp_kv_iswa(); // TODO: support cacheless iSWA embeddings [TAG_NO_CACHE_ISWA]
 
         for (int il = 0; il < n_layer; ++il) {
