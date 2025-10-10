@@ -1,7 +1,10 @@
 echo "DONT FORGET TO RUN llama-server"
 echo "build/bin/llama-server -m ~/Downloads/GenAi.Text/gemma-3n-E4B-it-Q8_0.gguf --path tools/server/public_simplechat --jinja"
+echo "Note: Remove stream: true line below, if you want one shot instead of streaming response from ai server"
+echo "Note: Using different locations below, as the mechanism / url used to fetch will / may need to change"
 curl http://localhost:8080/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
+    "stream": true,
     "tools": [
       {
         "type":"function",
@@ -58,7 +61,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
     "messages": [
         {
         "role": "user",
-        "content": "Add 324 to todays temperature in celcius in kochi. Dont forget to get todays weather info about kochi so that the temperature is valid. Use a free weather info site which doesnt require any api keys to get the info"
+        "content": "what is your name."
         }
     ]
 }'
@@ -67,6 +70,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 exit
 
 
+        "content": "what is your name."
         "content": "Print a hello world message with python."
         "content": "Print a hello world message with javascript."
         "content": "Calculate the sum of 5 and 27."
@@ -76,8 +80,9 @@ exit
         "content": "Who is known as father of the nation in India, Add 10 to double his year of birth and show me the results."
         "content": "How is the weather today in london."
         "content": "How is the weather today in london. Add 324 to todays temperature in celcius in london"
-        "content": "How is the weather today in london. Add 324 to todays temperature in celcius in kochi"
+        "content": "How is the weather today in bengaluru. Add 324 to todays temperature in celcius in kochi"
         "content": "Add 324 to todays temperature in celcius in london"
+        "content": "Add 324 to todays temperature in celcius in delhi"
         "content": "Add 324 to todays temperature in celcius in delhi. Dont forget to get todays weather info about delhi so that the temperature is valid"
-        "content": "Add 324 to todays temperature in celcius in mumbai. Dont forget to get todays weather info about mumbai so that the temperature is valid. Use a free weather info site which doesnt require any api keys to get the info"
+        "content": "Add 324 to todays temperature in celcius in bengaluru. Dont forget to get todays weather info about bengaluru so that the temperature is valid. Use a free weather info site which doesnt require any api keys to get the info"
         "content": "Can you get the cutoff rank for all the deemed medical universities in India for UGNeet 25"
