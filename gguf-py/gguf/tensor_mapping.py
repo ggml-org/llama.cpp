@@ -17,7 +17,7 @@ class TensorNameMap:
             "embed_tokens",                              # embeddinggemma
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
-            "embeddings.tok_embeddings",                 # modern bert
+            "embeddings.tok_embeddings",                 # modern-bert
             "language_model.embedding.word_embeddings",  # persimmon
             "wte",                                       # gpt2
             "transformer.embd.wte",                      # phi2
