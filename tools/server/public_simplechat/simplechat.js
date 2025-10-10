@@ -152,10 +152,10 @@ class SimpleChat {
     /**
      * Collate the latest response from the server/ai-model, as it is becoming available.
      * This is mainly useful for the stream mode.
-     * @param {string} content
+     * @param {{key: string, value: string}} resp
      */
-    append_response(content) {
-        this.latestResponse.content += content;
+    append_response(resp) {
+        this.latestResponse[resp.key] += resp.value;
     }
 
     /**
@@ -311,10 +311,25 @@ class SimpleChat {
      * @param {string} apiEP
      */
     response_extract_stream(respBody, apiEP) {
+        let key = "content"
         let assistant = "";
         if (apiEP == ApiEP.Type.Chat) {
-            if (respBody["choices"][0]["finish_reason"] !== "stop") {
-                assistant = respBody["choices"][0]["delta"]["content"];
+            if (respBody["choices"][0]["finish_reason"] !== null) {
+                if (respBody["choices"][0]["delta"]["content"] !== undefined) {
+                    assistant = respBody["choices"][0]["delta"]["content"];
+                } else {
+                    if (respBody["choices"][0]["delta"]["tool_calls"] !== undefined) {
+                        if (respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] !== undefined) {
+                            key = "toolname";
+                            assistant = respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["name"];
+                        } else {
+                            if (respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] !== undefined) {
+                                key = "toolargs";
+                                assistant = respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
+                            }
+                        }
+                    }
+                }
             }
         } else {
             try {
@@ -323,7 +338,7 @@ class SimpleChat {
                 assistant = respBody["content"];
             }
         }
-        return assistant;
+        return { key: key, value: assistant };
     }
 
     /**
