@@ -72,12 +72,16 @@ class SimpleChat {
          */
         this.xchat = [];
         this.iLastSys = -1;
-        this.latestResponse = "";
+        this.latestResponse = { content: "", toolname: "", toolargs: "" };
     }
 
     clear() {
         this.xchat = [];
         this.iLastSys = -1;
+    }
+
+    clear_latestresponse() {
+        this.latestResponse = { content: "", toolname: "", toolargs: "" };
     }
 
     ods_key() {
@@ -151,7 +155,7 @@ class SimpleChat {
      * @param {string} content
      */
     append_response(content) {
-        this.latestResponse += content;
+        this.latestResponse.content += content;
     }
 
     /**
@@ -392,7 +396,7 @@ class SimpleChat {
         }
         let tdUtf8 = new TextDecoder("utf-8");
         let rr = resp.body.getReader();
-        this.latestResponse = "";
+        this.clear_latestresponse()
         let xLines = new du.NewLines();
         while(true) {
             let { value: cur,  done: done } = await rr.read();
@@ -419,14 +423,14 @@ class SimpleChat {
                 console.debug("DBUG:SC:PART:Json:", curJson);
                 this.append_response(this.response_extract_stream(curJson, apiEP));
             }
-            elP.innerText = this.latestResponse;
+            elP.innerText = this.latestResponse.content;
             elP.scrollIntoView(false);
             if (done) {
                 break;
             }
         }
-        console.debug("DBUG:SC:PART:Full:", this.latestResponse);
-        return this.latestResponse;
+        console.debug("DBUG:SC:PART:Full:", this.latestResponse.content);
+        return this.latestResponse.content;
     }
 
     /**
@@ -455,11 +459,11 @@ class SimpleChat {
         if (gMe.bStream) {
             try {
                 theResp.assistant = await this.handle_response_multipart(resp, apiEP, elDiv);
-                this.latestResponse = "";
+                this.clear_latestresponse()
             } catch (error) {
-                theResp.assistant = this.latestResponse;
+                theResp.assistant = this.latestResponse.content;
                 this.add(Roles.Assistant, theResp.assistant);
-                this.latestResponse = "";
+                this.clear_latestresponse()
                 throw error;
             }
         } else {
