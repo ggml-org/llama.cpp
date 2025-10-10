@@ -408,6 +408,28 @@ def test_context_size_exceeded():
     assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
 
 
+def test_context_size_exceeded_stream():
+    global server
+    server.start()
+    try:
+        for _ in server.make_stream_request("POST", "/chat/completions", data={
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ] * 100, # make the prompt too long
+            "stream": True}):
+                pass
+        assert False, "Should have failed"
+    except ServerError as e:
+        assert e.code == 400
+        assert "error" in e.body
+        assert e.body["error"]["type"] == "exceed_context_size_error"
+        assert e.body["error"]["n_prompt_tokens"] > 0
+        assert server.n_ctx is not None
+        assert server.n_slots is not None
+        assert e.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
+
+
 @pytest.mark.parametrize(
     "n_batch,batch_count,reuse_cache",
     [
