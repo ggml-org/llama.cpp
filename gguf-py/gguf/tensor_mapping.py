@@ -47,7 +47,7 @@ class TensorNameMap:
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
-            "embeddings.norm",            # modern bert
+            "embeddings.norm",            # modern-bert
             "emb_ln",                     # nomic-bert
             "transformer.norm",           # openelm
             "rwkv.blocks.0.pre_ln",       # rwkv
