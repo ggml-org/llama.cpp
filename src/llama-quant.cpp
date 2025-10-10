@@ -2180,8 +2180,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
-        /*.target_bpw                  =*/ -1.0f,
-        /*.no_bias                     =*/ false
+        /*.target_bpw                  =*/ -1.0f
     };
 
     return result;
