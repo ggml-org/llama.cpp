@@ -889,7 +889,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/JetBrains/Mellum-4b-base
             res = "mellum"
         if chkhsh == "a0b64b4385f123663873756336c085744376d015ff328bb1d901598f63c44152":
-            # ref: https://huggingface.co/ibm-granite/granite-embedding-small-english-r2
+            # ref: https://huggingface.co/answerdotai/ModernBERT-base
             res = "modern-bert"
         if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
             # ref: https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Base
