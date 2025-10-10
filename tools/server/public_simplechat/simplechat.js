@@ -443,7 +443,11 @@ class SimpleChat {
                 console.debug("DBUG:SC:PART:Json:", curJson);
                 this.append_response(this.response_extract_stream(curJson, apiEP));
             }
-            elP.innerText = this.latestResponse.content;
+            if (this.latestResponse.content !== "") {
+                elP.innerText = this.latestResponse.content;
+            } else {
+                elP.innerText = `ToolCall:${this.latestResponse.toolname}:${this.latestResponse.toolargs}`;
+            }
             elP.scrollIntoView(false);
             if (done) {
                 break;
