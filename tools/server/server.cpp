@@ -4368,7 +4368,7 @@ struct server_context {
 
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip GH copilot requests when using default port
-    if (req.path == "/v1/health" || req.path == "/v1/completions") {
+    if (req.path == "/v1/health") {
         return;
     }
 
