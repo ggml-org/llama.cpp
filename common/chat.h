@@ -33,8 +33,8 @@ struct common_chat_msg_content_part {
 struct common_chat_msg {
     std::string role;
     std::string content;
-    std::vector<common_chat_msg_content_part> content_parts = {};
-    std::vector<common_chat_tool_call> tool_calls = {};
+    std::vector<common_chat_msg_content_part> content_parts;
+    std::vector<common_chat_tool_call> tool_calls;
     std::string reasoning_content;
     std::string tool_name;
     std::string tool_call_id;
@@ -44,7 +44,7 @@ struct common_chat_msg {
     bool empty() const {
         return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() && tool_name.empty() && tool_call_id.empty();
     }
-    void ensure_tool_call_ids_set(std::vector<std::string> & ids_cache, const std::function<std::string()> & gen_tool_call_id) {
+    void set_tool_call_ids(std::vector<std::string> & ids_cache, const std::function<std::string()> & gen_tool_call_id) {
         for (auto i = 0u; i < tool_calls.size(); i++) {
             if (ids_cache.size() <= i) {
                 auto id = tool_calls[i].id;

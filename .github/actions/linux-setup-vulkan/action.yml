@@ -1,0 +1,20 @@
+name: "Linux - Setup Vulkan SDK"
+description: "Setup Vulkan SDK for Linux"
+inputs:
+  path:
+    description: "Installation path"
+    required: true
+  version:
+    description: "Vulkan SDK version"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Vulkan SDK
+      id: setup
+      uses: ./.github/actions/unarchive-tar
+      with:
+        url: https://sdk.lunarg.com/sdk/download/${{ inputs.version }}/linux/vulkan_sdk.tar.xz
+        path: ${{ inputs.path }}
+        strip: 1

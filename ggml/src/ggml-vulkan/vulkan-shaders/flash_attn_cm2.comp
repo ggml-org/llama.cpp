@@ -16,9 +16,9 @@
 #extension GL_KHR_shader_subgroup_vote : enable
 #extension GL_EXT_null_initializer : enable
 
-#include "types.comp"
-#include "dequant_funcs_cm2.comp"
-#include "flash_attn_base.comp"
+#include "types.glsl"
+#include "dequant_funcs_cm2.glsl"
+#include "flash_attn_base.glsl"
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
