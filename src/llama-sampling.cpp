@@ -2543,6 +2543,8 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
         cur_p->data[0].id = ctx->vocab->token_eot();
         cur_p->data[0].logit = 1.0f;
 
+        GGML_ASSERT(cur_p->data[0].id != LLAMA_TOKEN_NULL);
+
         return;
     }
 
