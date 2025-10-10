@@ -8,6 +8,7 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
+	import { maskInlineLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
 	import 'katex/dist/katex.min.css';
 
@@ -210,7 +211,7 @@
 		});
 
 		// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
-		content = protectLaTeXButNotMoney(content, latexExpressions);
+		content = maskInlineLaTeX(content, latexExpressions);
 
 		// Step 3: Escape standalone $ before digits (currency like $5 → \$5)
 		// (Now that inline math is protected, this will only escape dollars not already protected)
@@ -238,60 +239,6 @@
 			.replace(/\\\[(.+?)\\\]/g, '$$$$1$$'); // display
 
 		return content;
-	}
-
-	function protectLaTeXButNotMoney(content: string, latexExpressions: string[]): string {
-		if (content.indexOf('$') == -1) {
-			return content;
-		}
-		return content
-			.split('\n')
-			.map((line) => {
-				if (line.indexOf('$') == -1) {
-					return line;
-				}
-				let result = '';
-				let index = 0;
-				while (index + 2 < line.length) {
-					const openIndex = line.indexOf('$', index);
-					if (openIndex == -1) {
-						result += line.slice(index);
-						break;
-					}
-
-					// Is there a next $-sign?
-					const nextIndex = line.indexOf('$', openIndex + 1);
-					if (nextIndex == -1) {
-						result += line.slice(index);
-						break;
-					}
-
-					const beforeOpenChar = openIndex > 0 ? line[openIndex - 1] : '';
-					const afterOpenChar = line[openIndex + 1];
-					const afterCloseChar = nextIndex + 1 < line.length ? line[nextIndex + 1] : '';
-					if (/[A-Za-z0-9_$-]/.test(beforeOpenChar)) {
-						// character, digit, $, _ or - before first '$', no TeX.
-						result += line.slice(index, openIndex + 1);
-						index = openIndex + 1;
-						continue;
-					}
-					if (/[0-9]/.test(afterOpenChar) && /[A-Za-z0-9_$-]/.test(afterCloseChar)) {
-						// First $ seems to belong to an amount.
-						result += line.slice(index, openIndex + 1);
-						index = openIndex + 1;
-						continue;
-					}
-
-					// Treat as LaTeX
-					result += line.slice(index, openIndex);
-					const latexContent = line.slice(openIndex, nextIndex + 1);
-					latexExpressions.push(latexContent);
-					result += `<<LATEX_${latexExpressions.length - 1}>>`;
-					index = nextIndex + 1;
-				}
-				return result;
-			})
-			.join('\n');
 	}
 
 	function escapeBrackets(text: string): string {
