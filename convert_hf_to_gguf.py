@@ -8962,9 +8962,10 @@ class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 
     def set_vocab(self):
-        self._set_vocab_gpt2()
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
+        self.gguf_writer.add_add_sep_token(True)
+        self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
