@@ -4,6 +4,8 @@
 
 import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
+import * as tools from "./tools.mjs"
+
 
 class Roles {
     static System = "system";
@@ -227,6 +229,9 @@ class SimpleChat {
         }
         if (gMe.bStream) {
             obj["stream"] = true;
+        }
+        if (gMe.bTools) {
+            obj["tools"] = tools.meta();
         }
         return JSON.stringify(obj);
     }
@@ -927,6 +932,8 @@ function startme() {
     gMe.debug_disable();
     document["gMe"] = gMe;
     document["du"] = du;
+    document["tools"] = tools;
+    tools.setup()
     for (let cid of gMe.defaultChatIds) {
         gMe.multiChat.new_chat_session(cid);
     }
