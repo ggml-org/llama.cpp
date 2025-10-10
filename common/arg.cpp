@@ -3358,7 +3358,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--chat-template-kwargs"}, "STRING",
         string_format("sets additional params for the json template parser"),
-        [](common_params & params, const std::string &  value) {
+        [](common_params & params, const std::string & value) {
             auto parsed = json::parse(value);
             for (const auto & item : parsed.items()) {
                 params.default_template_kwargs[item.key()] = item.value().dump();
@@ -3946,7 +3946,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     add_opt(common_arg(
         {"--embd-gemma-default"},
-        string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
+        string_format("use default EmbeddingGemma model (note: can download weights from the internet)"),
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF";
             params.model.hf_file = "embeddinggemma-300M-qat-Q4_0.gguf";
@@ -4043,6 +4043,45 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_batch = 1024;
             params.n_ctx = 0;
             params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--gpt-oss-20b-default"},
+        string_format("use gpt-oss-20b (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gpt-oss-20b-GGUF";
+            params.model.hf_file = "gpt-oss-20b-mxfp4.gguf";
+            params.port = 8013;
+            params.n_ubatch = 2048;
+            params.n_batch = 32768;
+            params.n_parallel = 2;
+            params.n_ctx = 131072*params.n_parallel;
+            params.sampling.temp = 1.0f;
+            params.sampling.top_p = 1.0f;
+            params.sampling.top_k = 0;
+            params.sampling.min_p = 0.01f;
+            params.use_jinja = true;
+            params.default_template_kwargs["reasoning_effort"] = "\"high\"";
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--gpt-oss-120b-default"},
+        string_format("use gpt-oss-120b (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gpt-oss-120b-GGUF";
+            params.port = 8013;
+            params.n_ubatch = 2048;
+            params.n_batch = 32768;
+            params.n_parallel = 2;
+            params.n_ctx = 131072*params.n_parallel;
+            params.sampling.temp = 1.0f;
+            params.sampling.top_p = 1.0f;
+            params.sampling.top_k = 0;
+            params.sampling.min_p = 0.01f;
+            params.use_jinja = true;
+            params.default_template_kwargs["reasoning_effort"] = "\"high\"";
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
