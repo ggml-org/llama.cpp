@@ -155,6 +155,10 @@ class SimpleChat {
      * @param {{key: string, value: string}} resp
      */
     append_response(resp) {
+        if (resp.value == null) {
+            return
+        }
+        console.debug(resp.key, resp.value)
         this.latestResponse[resp.key] += resp.value;
     }
 
@@ -311,10 +315,11 @@ class SimpleChat {
      * @param {string} apiEP
      */
     response_extract_stream(respBody, apiEP) {
+        console.debug(respBody, apiEP)
         let key = "content"
         let assistant = "";
         if (apiEP == ApiEP.Type.Chat) {
-            if (respBody["choices"][0]["finish_reason"] !== null) {
+            if (respBody["choices"][0]["finish_reason"] === null) {
                 if (respBody["choices"][0]["delta"]["content"] !== undefined) {
                     assistant = respBody["choices"][0]["delta"]["content"];
                 } else {
