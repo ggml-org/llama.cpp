@@ -219,7 +219,7 @@ public:
 
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
-    llm_graph_input_rs(const llama_memory_recurrent_context * mctx);
+    llm_graph_input_rs(const llama_memory_recurrent_context * mctx) : mctx(mctx) {}
     virtual ~llm_graph_input_rs() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -235,9 +235,9 @@ public:
 
     const llama_memory_recurrent_context * mctx;
 
-    // need to match for valid graph reuse
-    const uint32_t head;
-    const  int32_t rs_z;
+    // used in view offsets, need to match for valid graph reuse
+    uint32_t head;
+    int32_t rs_z;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
