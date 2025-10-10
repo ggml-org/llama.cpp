@@ -37,6 +37,39 @@ class ApiEP {
 
 }
 
+class AssistantResponse {
+
+    constructor() {
+        this.response = { content: "", toolname: "", toolargs: "" };
+    }
+
+    clear() {
+        this.response = { content: "", toolname: "", toolargs: "" };
+    }
+
+    /**
+     * Helps collate the latest response from the server/ai-model, as it is becoming available.
+     * This is mainly useful for the stream mode.
+     * @param {{key: string, value: string}} resp
+     */
+    append_response(resp) {
+        if (resp.value == null) {
+            return
+        }
+        console.debug(resp.key, resp.value)
+        this.response[resp.key] += resp.value;
+    }
+
+    content_equiv() {
+        if (this.response.content !== "") {
+            return this.response.content;
+        } else {
+            return `ToolCall:${this.response.toolname}:${this.response.toolargs}`;
+        }
+    }
+
+}
+
 
 let gUsageMsg = `
     <p class="role-system">Usage</p>
@@ -72,16 +105,12 @@ class SimpleChat {
          */
         this.xchat = [];
         this.iLastSys = -1;
-        this.latestResponse = { content: "", toolname: "", toolargs: "" };
+        this.latestResponse = new AssistantResponse();
     }
 
     clear() {
         this.xchat = [];
         this.iLastSys = -1;
-    }
-
-    clear_latestresponse() {
-        this.latestResponse = { content: "", toolname: "", toolargs: "" };
     }
 
     ods_key() {
@@ -147,19 +176,6 @@ class SimpleChat {
             rchat.push({role: msg.role, content: msg.content});
         }
         return rchat;
-    }
-
-    /**
-     * Collate the latest response from the server/ai-model, as it is becoming available.
-     * This is mainly useful for the stream mode.
-     * @param {{key: string, value: string}} resp
-     */
-    append_response(resp) {
-        if (resp.value == null) {
-            return
-        }
-        console.debug(resp.key, resp.value)
-        this.latestResponse[resp.key] += resp.value;
     }
 
     /**
@@ -416,7 +432,7 @@ class SimpleChat {
         }
         let tdUtf8 = new TextDecoder("utf-8");
         let rr = resp.body.getReader();
-        this.clear_latestresponse()
+        this.latestResponse.clear()
         let xLines = new du.NewLines();
         while(true) {
             let { value: cur,  done: done } = await rr.read();
@@ -441,20 +457,16 @@ class SimpleChat {
                 }
                 let curJson = JSON.parse(curLine);
                 console.debug("DBUG:SC:PART:Json:", curJson);
-                this.append_response(this.response_extract_stream(curJson, apiEP));
+                this.latestResponse.append_response(this.response_extract_stream(curJson, apiEP));
             }
-            if (this.latestResponse.content !== "") {
-                elP.innerText = this.latestResponse.content;
-            } else {
-                elP.innerText = `ToolCall:${this.latestResponse.toolname}:${this.latestResponse.toolargs}`;
-            }
+            elP.innerText = this.latestResponse.content_equiv()
             elP.scrollIntoView(false);
             if (done) {
                 break;
             }
         }
-        console.debug("DBUG:SC:PART:Full:", this.latestResponse.content);
-        return this.latestResponse.content;
+        console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
+        return this.latestResponse;
     }
 
     /**
@@ -483,11 +495,11 @@ class SimpleChat {
         if (gMe.bStream) {
             try {
                 theResp.assistant = await this.handle_response_multipart(resp, apiEP, elDiv);
-                this.clear_latestresponse()
+                this.latestResponse.clear()
             } catch (error) {
                 theResp.assistant = this.latestResponse.content;
                 this.add(Roles.Assistant, theResp.assistant);
-                this.clear_latestresponse()
+                this.latestResponse.clear()
                 throw error;
             }
         } else {
