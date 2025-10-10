@@ -182,7 +182,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
-            "layers.{bid}.attn.Wqkv",                                              # modern bert
+            "layers.{bid}.attn.Wqkv",                                              # modern-bert
         ),
 
         # Attention query
