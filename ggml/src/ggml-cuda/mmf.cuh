@@ -291,7 +291,7 @@ static __global__ void mul_mat_f_ids(
     extern __shared__ char data_mmv[];
     char * compute_base = data_mmv;
 
-    const float2 * y2 = (const float2 *) y;
+    //const float2 * y2 = (const float2 *) y;
 
     tile_C C[ntA][ntB];
 
@@ -311,13 +311,12 @@ static __global__ void mul_mat_f_ids(
             }
         }
 
-#pragma unroll
-        for (int itB = 0; itB < ntB; ++itB) {
-            if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<T, float>) {
+            float vals_buf[2][tile_B::I];
+            auto gather_tile = [&](int tile_idx_local, float *vals) {
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
-                    const int j = j0 + itB*tile_B::I;
-
+                    const int j = j0 + tile_idx_local*tile_B::I;
                     const int global_j = col_base + j;
                     float val = 0.0f;
                     if (j < cols_per_block && global_j < ncols_expert) {
@@ -329,13 +328,48 @@ static __global__ void mul_mat_f_ids(
                             val = y[channel*stride_channel_y + token*stride_col_y + col];
                         }
                     }
-                    tile_xy[j0*tile_k_padded + threadIdx.x] = val;
+                    vals[j0] = val;
                 }
-            } else if constexpr (std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) {
+            };
+
+            if (ntB > 0) {
+                gather_tile(0, vals_buf[0]);
+            }
+
+            int curr_buf = 0;
+            int next_buf = 1;
+#pragma unroll
+            for (int itB = 0; itB < ntB; ++itB) {
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
-                    const int j = j0 + itB*tile_B::I;
+                    tile_xy[j0*tile_k_padded + threadIdx.x] = vals_buf[curr_buf][j0];
+                }
 
+                if (itB + 1 < ntB) {
+                    gather_tile(itB + 1, vals_buf[next_buf]);
+                }
+
+#pragma unroll
+                for (int k0 = 0; k0 < warp_size; k0 += tile_B::J) {
+                    tile_B B;
+                    load_ldmatrix(B, tile_xy + k0, tile_k_padded);
+#pragma unroll
+                    for (int itA = 0; itA < ntA; ++itA) {
+                        mma(C[itA][itB], A[itA][k0/tile_B::J], B);
+                    }
+                }
+
+                if (itB + 1 < ntB) {
+                    curr_buf ^= 1;
+                    next_buf ^= 1;
+                }
+            }
+        } else if constexpr (std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) {
+            float2 vals_buf[2][tile_B::I];
+            auto gather_tile = [&](int tile_idx_local, float2 *vals) {
+#pragma unroll
+                for (int j0 = 0; j0 < tile_B::I; ++j0) {
+                    const int j = j0 + tile_idx_local*tile_B::I;
                     const int global_j = col_base + j;
                     float2 tmp = make_float2(0.0f, 0.0f);
                     if (j < cols_per_block && global_j < ncols_expert) {
@@ -344,23 +378,48 @@ static __global__ void mul_mat_f_ids(
                         const int token   = (int) qrm.x;
                         const int channel = (int) qrm.y;
                         if (token < ncols_dst_total) {
-                            tmp =  y2[channel*stride_channel_y/2 + token*stride_col_y + col];
+                            tmp = *(const float2*) &y[channel*stride_channel_y + 2*(token*stride_col_y + col)];
                         }
                     }
+                    vals[j0] = tmp;
+                }
+            };
+
+            if (ntB > 0) {
+                gather_tile(0, vals_buf[0]);
+            }
+
+            int curr_buf = 0;
+            int next_buf = 1;
+#pragma unroll
+            for (int itB = 0; itB < ntB; ++itB) {
+#pragma unroll
+                for (int j0 = 0; j0 < tile_B::I; ++j0) {
+                    const float2 tmp = vals_buf[curr_buf][j0];
                     tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
                 }
-            } else {
-                static_assert(std::is_same_v<T, void>, "unsupported type");
-            }
+
+                if (itB + 1 < ntB) {
+                    gather_tile(itB + 1, vals_buf[next_buf]);
+                }
+
 #pragma unroll
-            for (int k0 = 0; k0 < warp_size; k0 += tile_B::J) {
-                tile_B B;
-                load_ldmatrix(B, tile_xy + k0, tile_k_padded);
+                for (int k0 = 0; k0 < warp_size; k0 += tile_B::J) {
+                    tile_B B;
+                    load_ldmatrix(B, tile_xy + k0, tile_k_padded);
 #pragma unroll
-                for (int itA = 0; itA < ntA; ++itA) {
-                    mma(C[itA][itB], A[itA][k0/tile_B::J], B);
+                    for (int itA = 0; itA < ntA; ++itA) {
+                        mma(C[itA][itB], A[itA][k0/tile_B::J], B);
+                    }
+                }
+
+                if (itB + 1 < ntB) {
+                    curr_buf ^= 1;
+                    next_buf ^= 1;
                 }
             }
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
         }
     }
 
