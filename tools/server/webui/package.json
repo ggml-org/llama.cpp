@@ -76,6 +76,7 @@
 	},
 	"dependencies": {
 		"highlight.js": "^11.11.1",
+		"katex": "^0.16.23",
 		"mode-watcher": "^1.1.0",
 		"pdfjs-dist": "^5.4.54",
 		"rehype-highlight": "^7.0.2",
