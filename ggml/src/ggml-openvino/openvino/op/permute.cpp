@@ -40,15 +40,6 @@ OutputVector translate_permute(const NodeContext& context) {
         }
     } else {
         auto src = context.get_input(0);
-        Output<Node> attention_size;
-        if (context.is_static()) {
-            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
-        } else if (op_case == 2) {
-            attention_size = context.get_input("attention_size");
-        } else {
-            attention_size = context.get_input("attention_size_swa");
-        }
-
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 
         if (context.is_static()) {
@@ -58,9 +49,8 @@ OutputVector translate_permute(const NodeContext& context) {
                 src,
                 ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
                 false);
-            auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, zero);
-            res = std::make_shared<ov::op::v1::Transpose>(src_slice,
-                                                          ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+            res = std::make_shared<ov::op::v1::Transpose>(
+                src_reshaped, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
         } else {
             if (src.get_partial_shape().rank() == 3) {
                 src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);

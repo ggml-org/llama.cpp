@@ -73,7 +73,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
         set_input_output(cur_node);
     }
 
-    add_extra_inputs();
+    // add_extra_inputs();
 }
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
@@ -336,9 +336,10 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
 
 void GgmlOvDecoder::add_extra_inputs() {
     // Extra inputs:
-    // 1. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
+    // 1. `attention_size`, used in FLASH_ATTN where the shape of the matmul's are 256 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
-    //     Not used for NPU
+    //     Not used for NPU.
+    //     Update: not used anymore after the optimization of making kvcache dynamic (but breaks iSWA models)
     int64_t attention_size = -1;
     int64_t attention_size_swa = -1;
     for (const auto& node : m_nodes) {
