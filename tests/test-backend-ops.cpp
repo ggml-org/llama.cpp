@@ -131,6 +131,50 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     }
 }
 
+// generate an F16 mask where certain blocks are randomly masked with -INF value
+static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F16);
+
+    GGML_TENSOR_LOCALS( int32_t, ne, tensor, ne);
+
+    std::vector<float>       data_f32(ne0*ne1*ne2*ne3);
+    std::vector<ggml_fp16_t> data_f16(ne0*ne1*ne2*ne3);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(min, max);
+
+    for (size_t i = 0; i < data_f32.size(); i++) {
+        data_f32[i] = dis(gen);
+    }
+
+    // block size
+    const int blck0 = 128;
+    const int blck1 = 64;
+
+    // number of INF blocks
+    const int n_inf_blocks = 0.1*(ne0*ne1*ne2*ne3)/(blck0*blck1);
+
+    for (int b = 0; b < n_inf_blocks; b++) {
+        const int p3 = (rd() % ne3);
+        const int p2 = (rd() % ne2);
+        const int p1 = (rd() % ne1);
+        const int p0 = (rd() % ne0);
+
+        for (int i1 = 0; i1 < blck1 && p1 + i1 < ne1; i1++) {
+            const int idx = p3*ne2*ne1*ne0 + p2*ne1*ne0 + (p1 + i1)*ne0 + p0;
+
+            for (int i0 = 0; i0 < blck0 && p0 + i0 < ne0; i0++) {
+                data_f32[idx + i0] = -INFINITY;
+            }
+        }
+    }
+
+    ggml_fp32_to_fp16_row(data_f32.data(), data_f16.data(), ne0*ne1*ne2*ne3);
+
+    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+}
+
 static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
@@ -3752,9 +3796,10 @@ struct test_soft_max : public test_case {
     const std::array<int64_t, 2> nr23; // broadcast only dims 2 and 3
     const float scale;
     const float max_bias;
+    const bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR8(type, ne, mask, sinks, m_prec, nr23, scale, max_bias);
+        return VARS_TO_STR9(type, ne, mask, sinks, m_prec, nr23, scale, max_bias, inplace);
     }
 
     // the 1024 test with bias occasionally fails:
@@ -3770,8 +3815,9 @@ struct test_soft_max : public test_case {
             ggml_type m_prec = GGML_TYPE_F32,
             std::array<int64_t, 2> nr23 = {1, 1},
             float scale = 1.0f,
-            float max_bias = 0.0f)
-        : type(type), ne(ne), mask(mask), sinks(sinks), m_prec(m_prec), nr23(nr23), scale(scale), max_bias(max_bias) {}
+            float max_bias = 0.0f,
+            bool inplace = false)
+        : type(type), ne(ne), mask(mask), sinks(sinks), m_prec(m_prec), nr23(nr23), scale(scale), max_bias(max_bias), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2]*nr23[0], ne[3]*nr23[1]);
@@ -3790,7 +3836,12 @@ struct test_soft_max : public test_case {
             ggml_set_name(sinks, "sinks");
         }
 
-        ggml_tensor * out = ggml_soft_max_ext(ctx, a, mask, scale, max_bias);
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_soft_max_ext_inplace(ctx, a, mask, scale, max_bias);
+        } else {
+            out = ggml_soft_max_ext(ctx, a, mask, scale, max_bias);
+        }
         ggml_soft_max_add_sinks(out, sinks);
         ggml_set_name(out, "out");
 
@@ -5104,6 +5155,8 @@ struct test_flash_attn_ext : public test_case {
             if (strcmp(t->name, "s") == 0) {
                 // make the sink values more noticable in order to trigger a test failure when the implementation is wrong
                 init_tensor_uniform(t, -10.0f, 10.0f);
+            } else if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask(t);
             } else {
                 init_tensor_uniform(t);
             }
@@ -6562,6 +6615,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     }
                 }
             }
+            // inplace tests
+            test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, mask, sinks, GGML_TYPE_F32, {1, 1}, 0.1f, 0.0f, true));
+            test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, mask, sinks, GGML_TYPE_F16, {1, 1}, 0.1f, 0.0f, true));
         }
     }
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, true,  true,  GGML_TYPE_F32, {1, 1}, 0.1f, 0.0f));
@@ -6717,7 +6773,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
                                     for (int nr2 : { 1, 4, 16 }) {
                                         if (nr2 == 16 && hsk != 128) continue;
-                                        for (int kv : { 512, 1024, }) {
+                                        //for (int kv : { 1, 17, 31, 33, 61, 113, 65, 127, 129, 130, 255, 260, 371, 380, 407, 512, 1024, }) {
+                                        for (int kv : { 113, 512, 1024, }) {
                                             if (nr2 != 1 && kv != 512) continue;
                                             for (int nb : { 1, 3, 32, 35, }) {
                                                 for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_DEFAULT}) {

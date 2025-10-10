@@ -346,4 +346,39 @@ export class DatabaseStore {
 	): Promise<void> {
 		await db.messages.update(id, updates);
 	}
+
+	/**
+	 * Imports multiple conversations and their messages.
+	 * Skips conversations that already exist.
+	 *
+	 * @param data - Array of { conv, messages } objects
+	 */
+	static async importConversations(
+		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
+	): Promise<{ imported: number; skipped: number }> {
+		let importedCount = 0;
+		let skippedCount = 0;
+
+		return await db.transaction('rw', [db.conversations, db.messages], async () => {
+			for (const item of data) {
+				const { conv, messages } = item;
+
+				const existing = await db.conversations.get(conv.id);
+				if (existing) {
+					console.warn(`Conversation "${conv.name}" already exists, skipping...`);
+					skippedCount++;
+					continue;
+				}
+
+				await db.conversations.add(conv);
+				for (const msg of messages) {
+					await db.messages.put(msg);
+				}
+
+				importedCount++;
+			}
+
+			return { imported: importedCount, skipped: skippedCount };
+		});
+	}
 }

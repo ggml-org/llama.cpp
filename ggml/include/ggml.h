@@ -576,6 +576,7 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_XIELU,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1150,6 +1151,18 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // xIELU activation function
+    // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)
+    // where c_a = softplus and c_b(a, b) = softplus(a) + b are constraining functions
+    // that constrain the positive and negative source alpha values respectively
+    GGML_API struct ggml_tensor * ggml_xielu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float alpha_n,
+            float alpha_p,
+            float beta,
+            float eps);
+
     // gated linear unit ops
     // A: n columns, r rows,
     // result is n / 2 columns, r rows,
@@ -1611,6 +1624,13 @@ extern "C" {
     // fused soft_max(a*scale + mask*(ALiBi slope))
     // max_bias = 0.0f for no ALiBi
     GGML_API struct ggml_tensor * ggml_soft_max_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias);
+
+    GGML_API struct ggml_tensor * ggml_soft_max_ext_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * mask,

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getDeletionInfo } from '$lib/stores/chat.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
-	import { parseThinkingContent } from '$lib/utils/thinking';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 
@@ -47,24 +46,11 @@
 
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
-			if (message.thinking) {
-				return message.thinking;
-			}
+			const trimmedThinking = message.thinking?.trim();
 
-			const parsed = parseThinkingContent(message.content);
-
-			return parsed.thinking;
+			return trimmedThinking ? trimmedThinking : null;
 		}
 		return null;
-	});
-
-	let messageContent = $derived.by(() => {
-		if (message.role === 'assistant') {
-			const parsed = parseThinkingContent(message.content);
-			return parsed.cleanContent?.replace('<|channel|>analysis', '');
-		}
-
-		return message.content?.replace('<|channel|>analysis', '');
 	});
 
 	function handleCancelEdit() {
@@ -165,7 +151,7 @@
 		{editedContent}
 		{isEditing}
 		{message}
-		{messageContent}
+		messageContent={message.content}
 		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
