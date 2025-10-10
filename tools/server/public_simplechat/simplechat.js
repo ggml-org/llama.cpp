@@ -39,8 +39,16 @@ class ApiEP {
 
 class AssistantResponse {
 
-    constructor() {
-        this.response = { content: "", toolname: "", toolargs: "", trimmedContent: "" };
+    constructor(content="", toolname="", toolargs="", trimmedContent="") {
+        this.response = { content: content, toolname: toolname, toolargs: toolargs, trimmedContent: trimmedContent };
+    }
+
+    /**
+     * Create a new instance from an existing instance
+     * @param {AssistantResponse} old
+     */
+    static newFrom(old) {
+        return new AssistantResponse(old.response.content, old.response.toolname, old.response.toolargs, old.response.trimmedContent)
     }
 
     clear() {
@@ -466,7 +474,7 @@ class SimpleChat {
             }
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
-        return this.latestResponse;
+        return AssistantResponse.newFrom(this.latestResponse);
     }
 
     /**
