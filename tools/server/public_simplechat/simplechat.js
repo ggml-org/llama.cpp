@@ -40,11 +40,11 @@ class ApiEP {
 class AssistantResponse {
 
     constructor() {
-        this.response = { content: "", toolname: "", toolargs: "" };
+        this.response = { content: "", toolname: "", toolargs: "", trimmedContent: "" };
     }
 
     clear() {
-        this.response = { content: "", toolname: "", toolargs: "" };
+        this.response = { content: "", toolname: "", toolargs: "", trimmedContent: "" };
     }
 
     /**
@@ -312,14 +312,14 @@ class SimpleChat {
      * @param {string} apiEP
      */
     response_extract(respBody, apiEP) {
-        let assistant = "";
+        let assistant = new AssistantResponse();
         if (apiEP == ApiEP.Type.Chat) {
-            assistant = respBody["choices"][0]["message"]["content"];
+            assistant.response.content = respBody["choices"][0]["message"]["content"];
         } else {
             try {
-                assistant = respBody["choices"][0]["text"];
+                assistant.response.content = respBody["choices"][0]["text"];
             } catch {
-                assistant = respBody["content"];
+                assistant.response.content = respBody["content"];
             }
         }
         return assistant;
@@ -483,34 +483,33 @@ class SimpleChat {
     /**
      * Handle the response from the server be it in oneshot or multipart/stream mode.
      * Also take care of the optional garbage trimming.
+     * TODO: Need to handle tool calling and related flow, including how to show
+     * the assistant's request for tool calling and the response from tool.
      * @param {Response} resp
      * @param {string} apiEP
      * @param {HTMLDivElement} elDiv
      */
     async handle_response(resp, apiEP, elDiv) {
-        let theResp = {
-            assistant: "",
-            trimmed: "",
-        }
+        let theResp = null
         if (gMe.bStream) {
             try {
-                theResp.assistant = await this.handle_response_multipart(resp, apiEP, elDiv);
+                theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
                 this.latestResponse.clear()
             } catch (error) {
-                theResp.assistant = this.latestResponse.content;
-                this.add(Roles.Assistant, theResp.assistant);
+                theResp = this.latestResponse;
+                this.add(Roles.Assistant, theResp.content_equiv());
                 this.latestResponse.clear()
                 throw error;
             }
         } else {
-            theResp.assistant = await this.handle_response_oneshot(resp, apiEP);
+            theResp = await this.handle_response_oneshot(resp, apiEP);
         }
         if (gMe.bTrimGarbage) {
-            let origMsg = theResp.assistant;
-            theResp.assistant = du.trim_garbage_at_end(origMsg);
-            theResp.trimmed = origMsg.substring(theResp.assistant.length);
+            let origMsg = theResp.response.content;
+            theResp.response.content = du.trim_garbage_at_end(origMsg);
+            theResp.response.trimmedContent = origMsg.substring(theResp.response.content.length);
         }
-        this.add(Roles.Assistant, theResp.assistant);
+        this.add(Roles.Assistant, theResp.content_equiv());
         return theResp;
     }
 
@@ -678,8 +677,8 @@ class MultiChatUI {
         let theResp = await chat.handle_response(resp, apiEP, this.elDivChat);
         if (chatId == this.curChatId) {
             chat.show(this.elDivChat);
-            if (theResp.trimmed.length > 0) {
-                let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmed}`, this.elDivChat);
+            if (theResp.response.trimmedContent.length > 0) {
+                let p = ui.el_create_append_p(`TRIMMED:${theResp.response.trimmedContent}`, this.elDivChat);
                 p.className="role-trim";
             }
         } else {
