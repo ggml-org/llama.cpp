@@ -71,8 +71,10 @@ class AssistantResponse {
     content_equiv() {
         if (this.response.content !== "") {
             return this.response.content;
-        } else {
+        } else if (this.response.toolname !== "") {
             return `ToolCall:${this.response.toolname}:${this.response.toolargs}`;
+        } else {
+            return ""
         }
     }
 
