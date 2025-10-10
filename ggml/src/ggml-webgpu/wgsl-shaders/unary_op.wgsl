@@ -208,7 +208,7 @@
     "SHADER_NAME": "sigmoid_in_place_f16",
     "REPLS": { "TYPE": "f16", "FUNC": "src[dst_i] = 1.0h / (1.0h + exp(-src[src_i]));" },
     "DECLS": ["INPLACE"]
-  },  
+  },
   {
     "SHADER_NAME": "gelu_f32",
     "REPLS": { "TYPE": "f32", "FUNC": "dst[dst_i] = 0.5 * src[src_i] * (1.0 + tanh(clamp(sqrt(2.0 / 3.14159265) * (src[src_i] + 0.044715 * pow(src[src_i], 3.0)), -9.010913, 9.010913)));" },
@@ -437,7 +437,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.ne) {
       return;
     }
-    
+
     var i = gid.x;
     let i3 = i / (params.src_ne2 * params.src_ne1 * params.src_ne0);
     i = i % (params.src_ne2 * params.src_ne1 * params.src_ne0);
