@@ -7,10 +7,8 @@
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
-#include <openvino/op/gather.hpp>
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/multiply.hpp>
-#include <openvino/op/unsqueeze.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/softmax.hpp>
 #include <vector>
@@ -59,20 +57,9 @@ OutputVector translate_soft_max(const NodeContext& context) {
     } else {
         auto token_len = get_dimensions(input_node, {1});
         auto mask_node = context.get_input(1);
-        auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
-        auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
-        auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,2});
-        auto inp_pos = context.get_input("inp_pos");
-        auto shape_of_inp_pos = std::make_shared<ov::op::v3::ShapeOf>(inp_pos);
-        auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(shape_of_inp_pos, two_1d, zero_1d);
-        auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, gather_inp_pos}, 0);
-        mask_node_sliced =
-            std::make_shared<ov::op::v8::Slice>(mask_node, zero_2d, stop, one_2d, axes);
-        if (!(context.is_static())) {
-            mask_node_sliced = std::make_shared<ov::op::v0::Unsqueeze>(mask_node_sliced, zero_1d);
-        }
+        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        mask_node_sliced = std::make_shared<ov::op::v8::Slice>(mask_node, zero, token_len, one, one);
     }
 
     if (mask_node_sliced.get_element_type() != context.get_output_type(0)) {
