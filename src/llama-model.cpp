@@ -827,6 +827,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 switch (hparams.n_layer) {
                     case 12:
                         type = LLM_TYPE_47M; break; // granite-embedding-small
+                    case 22:
+                        type = LLM_TYPE_149M; break; // modern-bert-base
+                    case 28:
+                        type = LLM_TYPE_395M; break; // modern-bert-large
                     default: type = LLM_TYPE_UNKNOWN; 
                 }
             } break;
