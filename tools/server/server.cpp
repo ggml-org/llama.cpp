@@ -4226,7 +4226,7 @@ struct server_context {
                     metrics.on_prompt_eval(slot);
                 }
 
-                slot.t_token_generation = (t_current - slot.t_start_generation) / 1e3;
+                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
                 completion_token_output result;
                 result.tok          = id;
