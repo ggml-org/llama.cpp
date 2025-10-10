@@ -34,9 +34,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -f $OUT/*.log
+rm -f $OUT/*.exit
+rm -f $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -512,12 +512,7 @@ function gg_run_rerank_tiny {
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/tokenizer_config.json
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/special_tokens_map.json
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/resolve/main/pytorch_model.bin
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/sentence_bert_config.json
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/vocab.txt
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/modules.json
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/config.json
-
-    gg_wget models-mnt/rerank-tiny/1_Pooling https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/1_Pooling/config.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/vocab.json
 
     path_models="../models-mnt/rerank-tiny"
 
@@ -607,6 +602,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
+
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
@@ -623,5 +619,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
 fi
+
+cat $OUT/README.md
 
 exit $ret

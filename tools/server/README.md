@@ -393,7 +393,7 @@ node index.js
 
 ### GET `/health`: Returns health check result
 
-This endpoint is public (no API key check).
+This endpoint is public (no API key check). `/v1/health` also works.
 
 **Response format**
 
@@ -1045,6 +1045,7 @@ Available metrics:
 - `llamacpp:kv_cache_tokens`: KV-cache tokens.
 - `llamacpp:requests_processing`: Number of requests processing.
 - `llamacpp:requests_deferred`: Number of requests deferred.
+- `llamacpp:n_past_max`: High watermark of the context size observed.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 

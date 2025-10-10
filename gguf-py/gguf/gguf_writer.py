@@ -1037,6 +1037,9 @@ class GGUFWriter:
     def add_vision_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
 
+    def add_vision_preproc_image_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
+
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
@@ -1083,6 +1086,18 @@ class GGUFWriter:
 
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    def add_xielu_alpha_p(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_P, values)
+
+    def add_xielu_alpha_n(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.ALPHA_N, values)
+
+    def add_xielu_beta(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.BETA, values)
+
+    def add_xielu_eps(self, values: Sequence[float]):
+        self.add_array(Keys.xIELU.EPS, values)
 
     # diffusion models
 

@@ -576,6 +576,7 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_XIELU,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1149,6 +1150,18 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
+    // xIELU activation function
+    // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)
+    // where c_a = softplus and c_b(a, b) = softplus(a) + b are constraining functions
+    // that constrain the positive and negative source alpha values respectively
+    GGML_API struct ggml_tensor * ggml_xielu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float alpha_n,
+            float alpha_p,
+            float beta,
+            float eps);
 
     // gated linear unit ops
     // A: n columns, r rows,
