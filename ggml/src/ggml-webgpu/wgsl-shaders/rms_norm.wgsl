@@ -88,8 +88,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
 
     let elems = (params.ne0 + wg_size - 1) / wg_size;
 
-    let elems = (params.ne0 + wg_size - 1) / wg_size;
-
     var sum = 0.0f;
     var col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
