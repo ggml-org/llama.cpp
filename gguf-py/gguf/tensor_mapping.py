@@ -333,7 +333,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
-            "layers.{bid}.mlp_norm"                                          # modern bert
+            "layers.{bid}.mlp_norm"                                          # modern-bert
         ),
 
         # Post feed-forward norm
