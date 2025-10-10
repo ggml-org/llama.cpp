@@ -2,6 +2,7 @@ echo "DONT FORGET TO RUN llama-server"
 echo "build/bin/llama-server -m ~/Downloads/GenAi.Text/gemma-3n-E4B-it-Q8_0.gguf --path tools/server/public_simplechat --jinja"
 echo "Note: Remove stream: true line below, if you want one shot instead of streaming response from ai server"
 echo "Note: Using different locations below, as the mechanism / url used to fetch will / may need to change"
+echo "Note: sudo tcpdump -i lo -s 0 -vvv -A host 127.0.0.1 and port 8080 | tee /tmp/td.log can be used to capture the hs"
 curl http://localhost:8080/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
     "stream": true,
@@ -61,7 +62,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
     "messages": [
         {
         "role": "user",
-        "content": "what is your name."
+        "content": "What and all tools you have access to"
         }
     ]
 }'
@@ -71,6 +72,7 @@ exit
 
 
         "content": "what is your name."
+        "content": "What and all tools you have access to"
         "content": "Print a hello world message with python."
         "content": "Print a hello world message with javascript."
         "content": "Calculate the sum of 5 and 27."
