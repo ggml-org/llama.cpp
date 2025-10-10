@@ -769,11 +769,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         if (!ofs) { return; } // best-effort
         const float target_bpw = params->target_bpw;
-        const uint8_t bias_mode = params->no_bias ? 1 : 0;
         ofs.write((const char *)&file_magic, sizeof(file_magic));
         ofs.write((const char *)&model_id, sizeof(model_id));
         ofs.write((const char *)&target_bpw, sizeof(target_bpw));
-        ofs.write((const char *)&bias_mode, sizeof(bias_mode));
         const uint64_t n = all_vec.size();
         ofs.write((const char *)&n, sizeof(n));
         for (const auto & ti : all_vec) {
@@ -814,11 +812,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         uint32_t magic = 0;
         uint64_t id = 0;
         float bpw = 0.0f;
-        uint8_t bias = 0;
         ifs.read((char *)&magic, sizeof(magic));
         ifs.read((char *)&id, sizeof(id));
         ifs.read((char *)&bpw, sizeof(bpw));
-        ifs.read((char *)&bias, sizeof(bias));
         if (magic != file_magic) {
             LLAMA_LOG_WARN("%s: invalid resume file, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
@@ -827,9 +823,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return out;
         } else if (bpw != params->target_bpw) {
             LLAMA_LOG_WARN("%s: target bpw of %f does not match %f, ignoring: %s\n", func, params->target_bpw, bpw, checkpoint_file.c_str());
-            return out;
-        } else if (bias != (params->no_bias ? 1 : 0)) {
-            LLAMA_LOG_WARN("%s: bias mode does not match, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
         } else {
             LLAMA_LOG_INFO("%s: resuming tensor quantization\n", func);
@@ -1319,13 +1312,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> lambdas;
         const float * values = values_sample.empty() ? nullptr : values_sample.data();
         const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
-        if (!params->no_bias) {
-            double acc = 0.0;
-            int ns = 0;
-            lambdas = estimate_lambda(values, activations, n_per_row, ne2);
-            for (float l : lambdas) { acc += l; ++ns; }
-            tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
-        }
+        double acc = 0.0;
+        int ns = 0;
+        lambdas = estimate_lambda(values, activations, n_per_row, ne2);
+        for (float l : lambdas) { acc += l; ++ns; }
+        tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
 
         // Evaluate candidates
         std::vector<candidate_types> eval_candidates(compatible_candidates.size());
@@ -1925,11 +1916,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->target_bpw != -1.0f && !params->only_copy) {
         if (params->imatrix) {
             if (params->activations) {
-                LLAMA_LOG_INFO("%s: imatrix with activations provided, target bpw quantization will be more accurate - ",__func__);
+                LLAMA_LOG_INFO("%s: imatrix with activations provided, target bpw quantization will be more accurate\n",__func__);
             } else {
-                LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate - ", __func__);
+                LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate\n", __func__);
             }
-            LLAMA_LOG_INFO("using %s error estimation\n", params->no_bias ? "MSE only (no alignment bias)" : "alignment bias (default)");
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
             bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
         } else {
