@@ -8027,6 +8027,7 @@ template <bool iswa>
 struct llm_build_modern_bert : public llm_graph_context {
     llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head     = hparams.n_embd_head_v;
+        const int64_t n_embd_gqa      = hparams.n_embd_v_gqa();
         const float rope_theta_global = hparams.rope_freq_base_train;
         const float rope_theta_local  = hparams.rope_freq_base_train_swa;
 
