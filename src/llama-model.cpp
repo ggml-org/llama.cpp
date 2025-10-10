@@ -2357,7 +2357,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     first_moved_to_buft   = buft;
                 }
             }
-            
+
             ggml_context * ctx = ctx_for_buft(buft);
 
             // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
