@@ -291,6 +291,8 @@ static __global__ void mul_mat_f_ids(
     extern __shared__ char data_mmv[];
     char * compute_base = data_mmv;
 
+    const float2 * y2 = (const float2 *) y;
+
     tile_C C[ntA][ntB];
 
     T * tile_xy = (T *) compute_base + threadIdx.y*(tile_A::I * tile_k_padded);
@@ -342,7 +344,7 @@ static __global__ void mul_mat_f_ids(
                         const int token   = (int) qrm.x;
                         const int channel = (int) qrm.y;
                         if (token < ncols_dst_total) {
-                            tmp = *(const float2*) &y[channel*stride_channel_y + 2*(token*stride_col_y + col)];
+                            tmp =  y2[channel*stride_channel_y/2 + token*stride_col_y + col];
                         }
                     }
                     tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
