@@ -508,7 +508,8 @@ void mul_mat_f_cuda(
     const int nbytes_shared_iter = nwarps_best * tile_A::I * (warp_size + 4) * 4;
     const int nbytes_shared_combine = GGML_PAD(cols_per_block, tile_B::I) * (nwarps_best*rows_per_block + 4) * 4;
     const int nbytes_shared = std::max(nbytes_shared_iter, nbytes_shared_combine);
-    const int nbytes_shared_total = nbytes_shared;
+    const int nbytes_slotmap = ids ? GGML_PAD(cols_per_block, 16) * sizeof(int) : 0;
+    const int nbytes_shared_total = nbytes_shared + nbytes_slotmap;
     const int64_t grid_y = ids ? nchannels_x : nchannels_dst;
 
     const dim3 block_nums(nrows_x/rows_per_block, grid_y, nsamples_dst);
@@ -609,93 +610,80 @@ static void mul_mat_f_switch_cols_per_block(
         return &ids_case;
     };
 
+    mmf_ids_data * ids_case_ptr = nullptr;
+
     switch (ncols_case) {
         case  1: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(1);
             mul_mat_f_cuda<T,  1>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  2: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(2);
             mul_mat_f_cuda<T,  2>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  3: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(3);
             mul_mat_f_cuda<T,  3>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  4: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(4);
             mul_mat_f_cuda<T,  4>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  5: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(5);
             mul_mat_f_cuda<T,  5>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y,  stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  6: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(6);
             mul_mat_f_cuda<T,  6>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  7: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(7);
             mul_mat_f_cuda<T,  7>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  8: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(8);
             mul_mat_f_cuda<T,  8>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case  9: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(9);
             mul_mat_f_cuda<T,  9>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 10: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(10);
             mul_mat_f_cuda<T, 10>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 11: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(11);
             mul_mat_f_cuda<T, 11>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 12: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(12);
             mul_mat_f_cuda<T, 12>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 13: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(13);
             mul_mat_f_cuda<T, 13>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 14: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(14);
             mul_mat_f_cuda<T, 14>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
         } break;
         case 15: {
-            const mmf_ids_data * ids_case_ptr = prepare_ids(15);
             mul_mat_f_cuda<T, 15>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_case_ptr);
