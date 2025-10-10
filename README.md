@@ -22,3 +22,6 @@
 ## Description
 The `llama.cpp` project is an effiency and low-cost framework to enable LLM inference with minimal setup and state-of-the-art performance on a wide range of hardware.
 We noticed that the framework already supports the OpenCL backend, but its capabilities are limited. Therefore, our plan is to expand the OpenCL backend to accommodate a broader range of GPUs.
+
+## Use
+
