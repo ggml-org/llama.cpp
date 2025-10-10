@@ -8122,7 +8122,7 @@ struct llm_build_modern_bert : public llm_graph_context {
         cur = inpL;
         
         cur = build_norm(cur,
-                model.output_norm_enc, NULL,
+                model.output_norm, NULL,
                 LLM_NORM, -1);
         cb(cur, "final_norm_out", -1);
 
