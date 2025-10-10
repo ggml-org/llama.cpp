@@ -175,8 +175,10 @@ private:
 
     //
     // data needed for building the compute graph for the current ubatch:
-    // TODO: extract all the state like `head` and `n` here
     //
 
-    const bool is_full = false;
+    const uint32_t n_rs = 0;
+    const uint32_t head = 0;
+    const int32_t  rs_z = -1;
+    const uint32_t size = 0;
 };
