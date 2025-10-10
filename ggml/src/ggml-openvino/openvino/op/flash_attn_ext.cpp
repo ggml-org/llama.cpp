@@ -2,7 +2,6 @@
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
-#include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scaled_dot_product_attention.hpp>
 #include <openvino/op/transpose.hpp>
