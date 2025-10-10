@@ -387,7 +387,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.up_proj",                               # embeddinggemma
             "layers.{bid}.feed_forward.w3",                           # llama-pth
             "encoder.layer.{bid}.intermediate.dense",                 # bert
-            "layers.{bid}.mlp.Wi",                                    # modern bert
+            "layers.{bid}.mlp.Wi",                                    # modern-bert
             "transformer.layer.{bid}.ffn.lin1",                       # distillbert
             "transformer.h.{bid}.mlp.fc_in",                          # gpt-j
             "transformer.h.{bid}.mlp.linear_3",                       # refact
