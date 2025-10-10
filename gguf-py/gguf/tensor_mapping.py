@@ -101,7 +101,7 @@ class TensorNameMap:
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
             "model.transformer.ln_f",                  # llada
-            "final_norm",                              # modern bert
+            "final_norm",                              # modern-bert
         ),
 
         # Rope frequencies
