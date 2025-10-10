@@ -150,7 +150,7 @@ $$\lim_{x \to 0} \frac{\sin x}{x} = 1$$
 
 $$\lim_{n \to \infty} \left(1 + \frac{x}{n}\right)^n = e^x$$
 
-## Further Bracket Styles
+## Further Bracket Styles and Amounts
 
 -  \( \mathrm{GL}_2(\mathbb{F}_7) \): Group of invertible matrices with entries in \(\mathbb{F}_7\).
 - Some kernel of \(\mathrm{SL}_2(\mathbb{F}_7)\):
@@ -159,6 +159,8 @@ $$\lim_{n \to \infty} \left(1 + \frac{x}{n}\right)^n = e^x$$
   \]
 - $100 and $12.99 are amounts, not LaTeX.
 - I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.
+- Emma buys 2 cupcakes for $3 each and 1 cookie for $1.50. How much money does she spend in total?
+- Maria has $20. She buys a notebook for $4.75 and a pack of pencils for $3.25. How much change does she receive?
 
 ---
 
