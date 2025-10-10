@@ -4085,5 +4085,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--vision-gemma-4b-default"},
+        string_format("use Gemma 3 4B QAT (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gemma-3-4b-it-qat-GGUF";
+            params.port = 8014;
+            params.n_ctx = 0;
+            params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--vision-gemma-12b-default"},
+        string_format("use Gemma 3 12B QAT (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gemma-3-12b-it-qat-GGUF";
+            params.port = 8014;
+            params.n_ctx = 0;
+            params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
     return ctx_arg;
 }
