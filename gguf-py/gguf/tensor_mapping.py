@@ -151,7 +151,7 @@ class TensorNameMap:
             "layers.{bid}.attn_norm",                              # bert
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
-            "layers.{bid}.input_layernorm",                         # qwen3-embedding,
+            "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm"                # apertus
         ),
 
