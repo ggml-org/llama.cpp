@@ -213,7 +213,7 @@ export class ChatService {
 					userFriendlyError = new Error('Connection refused - server may be offline');
 					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ETIMEDOUT')) {
-					userFriendlyError = new Error('TCP Timeout');
+					userFriendlyError = new Error('Request timed out - the server took too long to respond');
 					userFriendlyError.name = 'TimeoutError';
 				} else {
 					userFriendlyError = error;
