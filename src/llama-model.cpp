@@ -19483,7 +19483,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
-        //case LLM_ARCH_MODERN_BERT: // TODO: disabled until cachless SWA logic is fixed [TAG_NO_CACHE_ISWA]
+        //case LLM_ARCH_MODERN_BERT: // TODO: disabled until cacheless SWA logic is fixed [TAG_NO_CACHE_ISWA]
         //case LLM_ARCH_GEMMA_EMBEDDING: // TODO: disabled until the cacheless SWA logic is fixed [TAG_NO_CACHE_ISWA]
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
