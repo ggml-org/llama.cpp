@@ -7,6 +7,40 @@
 //
 
 
+let gConsoleStr = ""
+/**
+ * @type { {(...data: any[]): void} | null}
+ */
+let gOrigConsoleLog = null
+
+
+/**
+ * @param {any[]} args
+ */
+function console_trapped(...args) {
+    let res = args.map((arg)=>{
+        if (typeof arg == 'object') {
+            return JSON.stringify(arg);
+        } else {
+            return String(arg);
+        }
+    }).join(' ');
+    gConsoleStr += res;
+}
+
+function console_redir() {
+    gOrigConsoleLog = console.log
+    console.log = console_trapped
+    gConsoleStr = ""
+}
+
+function console_revert() {
+    if (gOrigConsoleLog !== null) {
+        console.log = gOrigConsoleLog
+    }
+}
+
+
 let js_meta = {
         "type": "function",
         "function": {
@@ -32,8 +66,11 @@ let js_meta = {
  * @param {any} obj
  */
 function js_run(obj) {
+    console_redir()
     let func = new Function(obj["code"])
     func()
+    console_revert()
+    tc_switch["javascript"]["result"] = gConsoleStr
 }
 
 
@@ -62,22 +99,27 @@ let calc_meta = {
  * @param {any} obj
  */
 function calc_run(obj) {
+    console_redir()
     let func = new Function(obj["arithexpr"])
     func()
+    console_revert()
+    tc_switch["simple_calculator"]["result"] = gConsoleStr
 }
 
 
 /**
- * @type {Object<string, Object>}
+ * @type {Object<string, Object<string, any>>}
  */
 export let tc_switch = {
     "javascript": {
         "handler": js_run,
-        "meta": js_meta
+        "meta": js_meta,
+        "result": ""
     },
     "simple_calculator": {
         "handler": calc_run,
-        "meta": calc_meta
+        "meta": calc_meta,
+        "result": ""
     }
 }
 
