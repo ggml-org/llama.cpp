@@ -5912,11 +5912,6 @@ class Mamba2Model(TextModel):
 class JambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAMBA
 
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        del tokenizer  # unused
-
-        return "default"
-
     def set_vocab(self):
         if (self.dir_model / "tokenizer.model").is_file():
             self._set_vocab_sentencepiece()
