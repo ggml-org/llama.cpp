@@ -20,6 +20,8 @@
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
 
+#include "ggml-impl.h"
+
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -39,6 +41,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <unordered_map>
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -359,6 +362,8 @@ static bool isinf_or_max(float f) {
     return _isinf(f) || f == FLT_MAX || f == -FLT_MAX;
 }
 
+using extra_buffer_map_t = std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t>;
+
 static bool ggml_is_view_op(enum ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
 }
@@ -368,6 +373,7 @@ enum test_mode {
     MODE_PERF,
     MODE_GRAD,
     MODE_SUPPORT,
+    MODE_CPU_VARIANTS,
 };
 
 // Output format support similar to llama-bench
@@ -1127,7 +1133,255 @@ struct test_case {
         }
     }
 
-    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer) {
+    struct ggml_tensor * ggml_dup_tensor_layout(struct ggml_context * ctx, const struct ggml_tensor * tensor) {
+        struct ggml_tensor * dup = ggml_dup_tensor(ctx, tensor);
+        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+            dup->nb[i] = tensor->nb[i];
+        }
+        return dup;
+    }
+
+    struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set, struct ggml_tensor ** node_copies,
+        struct ggml_context * ctx_allocated, struct ggml_context * ctx_unallocated, struct ggml_tensor * src) {
+
+        GGML_ASSERT(src != NULL);
+        GGML_ASSERT(src->data && "graph must be allocated");
+
+        size_t id = ggml_hash_insert(&hash_set, src);
+        if (id == GGML_HASHSET_ALREADY_EXISTS) {
+            return node_copies[ggml_hash_find(&hash_set, src)];
+        }
+
+        struct ggml_tensor * dst = ggml_dup_tensor_layout(src->data && !src->view_src ? ctx_allocated : ctx_unallocated, src);
+        if (src->view_src != NULL) {
+            dst->view_src = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, src->view_src);
+            dst->view_offs = src->view_offs;
+        }
+        dst->op = src->op;
+        memcpy(dst->op_params, src->op_params, sizeof(dst->op_params));
+        ggml_set_name(dst, src->name);
+
+        // copy src
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            struct ggml_tensor * s = src->src[i];
+            if (s == NULL) {
+                continue;
+            }
+            dst->src[i] = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, s);
+        }
+
+        node_copies[id] = dst;
+        return dst;
+    }
+
+    void graph_copy_init_tensor(struct ggml_hash_set * hash_set, struct ggml_tensor ** node_copies, bool * node_init, struct ggml_tensor * src) {
+        size_t id = ggml_hash_find(hash_set, src);
+        if (node_init[id]) {
+            return;
+        }
+        node_init[id] = true;
+
+        struct ggml_tensor * dst = node_copies[id];
+        if (dst->view_src != NULL) {
+            graph_copy_init_tensor(hash_set, node_copies, node_init, src->view_src);
+            enum ggml_status status = ggml_backend_view_init(dst);
+            GGML_ASSERT(status == GGML_STATUS_SUCCESS);
+        }
+        else {
+            ggml_backend_tensor_copy(src, dst);
+        }
+
+        // init src
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            struct ggml_tensor * s = src->src[i];
+            if (s == NULL) {
+                continue;
+            }
+            graph_copy_init_tensor(hash_set, node_copies, node_init, s);
+        }
+    }
+
+    static void try_assign_extra_buffer(struct ggml_tensor * node_copy, const extra_buffer_map_t & extra_buf_map) {
+        struct ggml_tensor * src0_copy = node_copy->src[0];
+        ggml_backend_buffer_t org_buf  = src0_copy->buffer;
+
+        for (const auto& [buft, buf] : extra_buf_map) {
+            // Initialize the tensor in the extra buffer
+            if (ggml_backend_buffer_init_tensor(buf, src0_copy) != GGML_STATUS_SUCCESS) {
+                continue;
+            }
+
+            if (!src0_copy->extra) {
+                continue;
+            }
+
+            // Temporarily assign buffer so we can call ggml_backend_dev_supports_op
+            src0_copy->buffer = buf;
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+            // Check if extra buffer type supports the operation
+            if (dev && ggml_backend_dev_supports_op(dev, node_copy)) {
+                return;
+            } else {
+                src0_copy->buffer = org_buf; // Restore original buffer if not supported
+            }
+        }
+    }
+
+    struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, struct ggml_cgraph * graph,
+            std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
+        GGML_ASSERT(graph);
+        struct ggml_hash_set hash_set = ggml_hash_set_new(graph->visited_hash_set.size);
+        struct ggml_tensor ** node_copies = (ggml_tensor **) calloc(hash_set.size, sizeof(node_copies[0])); // NOLINT
+        bool * node_init = (bool *) calloc(hash_set.size, sizeof(node_init[0]));
+
+        struct ggml_init_params params = {
+            /* .mem_size   = */ ggml_tensor_overhead()*hash_set.size + ggml_graph_overhead_custom(graph->size, false),
+            /* .mem_buffer = */ NULL,
+            /* .no_alloc   = */ true
+        };
+
+        struct ggml_context * ctx_allocated = ggml_init(params);
+        struct ggml_context * ctx_unallocated = ggml_init(params);
+
+        if (ctx_allocated == NULL || ctx_unallocated == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate context for graph copy\n", __func__);
+            ggml_hash_set_free(&hash_set);
+            free(node_copies);
+            free(node_init);
+            ggml_free(ctx_allocated);
+            ggml_free(ctx_unallocated);
+            return {
+                /* .buffer           = */ NULL,
+                /* .ctx_allocated    = */ NULL,
+                /* .ctx_unallocated  = */ NULL,
+                /* .graph            = */ NULL,
+            };
+        }
+
+        // dup nodes
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+            graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, node);
+        }
+
+        // allocate nodes
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx_allocated, backend);
+
+        if (buffer == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate buffer for graph copy\n", __func__);
+            ggml_hash_set_free(&hash_set);
+            free(node_copies);
+            free(node_init);
+            ggml_free(ctx_allocated);
+            ggml_free(ctx_unallocated);
+            for (auto buft : extra_buf_map) {
+                ggml_backend_buffer_free(buft.second);
+            }
+            return {
+                /* .buffer           = */ NULL,
+                /* .ctx_allocated    = */ NULL,
+                /* .ctx_unallocated  = */ NULL,
+                /* .graph            = */ NULL,
+            };
+        }
+
+        //printf("copy buffer size: %zu MB\n", ggml_backend_buffer_get_size(buffer) / 1024 / 1024);
+
+        // copy data and init views
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+
+            // Handle extra buffer types (before graph_copy_init_tensor)
+            if (node->op != GGML_OP_NONE && !ggml_is_view_op(node->op) && node->src[0]) {
+                size_t id = ggml_hash_find(&hash_set, node);
+                try_assign_extra_buffer(node_copies[id], extra_buf_map);
+            }
+
+            graph_copy_init_tensor(&hash_set, node_copies, node_init, node);
+        }
+
+        // build graph copy
+        struct ggml_cgraph * graph_copy = ggml_new_graph_custom(ctx_allocated, graph->size, false);
+        for (int i = 0; i < graph->n_nodes; i++) {
+            struct ggml_tensor * node = graph->nodes[i];
+            struct ggml_tensor * node_copy = node_copies[ggml_hash_find(&hash_set, node)];
+            graph_copy->nodes[i] = node_copy;
+        }
+        graph_copy->n_nodes = graph->n_nodes;
+
+        ggml_hash_set_free(&hash_set);
+        free(node_copies);
+        free(node_init);
+
+        return {
+            /* .buffer           = */ buffer,
+            /* .ctx_allocated    = */ ctx_allocated,
+            /* .ctx_unallocated  = */ ctx_unallocated,
+            /* .graph            = */ graph_copy,
+        };
+    }
+
+    bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t backend2,
+            struct ggml_cgraph * graph, ggml_backend_eval_callback callback, void * user_data,
+            struct ggml_tensor * test_node,
+            std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
+        struct ggml_backend_graph_copy copy = ggml_backend_graph_copy(backend2, graph, extra_buf_map);
+        if (copy.buffer == NULL) {
+            return false;
+        }
+
+        struct ggml_cgraph * g1 = graph;
+        struct ggml_cgraph * g2 = copy.graph;
+
+        assert(g1->n_nodes == g2->n_nodes);
+
+        if (test_node != nullptr) {
+            // Compute the whole graph and only test the output for a specific tensor
+            ggml_backend_graph_compute(backend1, g1);
+            ggml_backend_graph_compute(backend2, g2);
+
+            int test_node_idx = -1;
+            for (int i = 0; i < g1->n_nodes; i++) {
+                struct ggml_tensor * t1 = g1->nodes[i];
+                if (t1 == test_node) {
+                    test_node_idx = i;
+                    break;
+                }
+            }
+            GGML_ASSERT(test_node_idx != -1);
+
+            callback(test_node_idx, g1->nodes[test_node_idx], g2->nodes[test_node_idx], user_data);
+        } else {
+            for (int i = 0; i < g1->n_nodes; i++) {
+                struct ggml_tensor * t1 = g1->nodes[i];
+                struct ggml_tensor * t2 = g2->nodes[i];
+
+                assert(t1->op == t2->op && ggml_are_same_layout(t1, t2));
+
+                struct ggml_cgraph g1v = ggml_graph_view(g1, i, i + 1);
+                struct ggml_cgraph g2v = ggml_graph_view(g2, i, i + 1);
+
+                ggml_backend_graph_compute(backend1, &g1v);
+                ggml_backend_graph_compute(backend2, &g2v);
+
+                if (ggml_is_view_op(t1->op)) {
+                    continue;
+                }
+
+                // compare results, calculate rms etc
+                if (!callback(i, t1, t2, user_data)) {
+                    break;
+                }
+            }
+        }
+        ggml_backend_graph_copy_free(copy);
+
+        return true;
+    }
+
+    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer,
+            std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -1180,12 +1434,6 @@ struct test_case {
 
         // allocate
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
-
-        if (buf == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            ggml_free(ctx);
-            return false;
-        }
 
         // build graph
         ggml_build_forward_expand(gf, out);
@@ -1273,7 +1521,8 @@ struct test_case {
             GGML_UNUSED(index);
         };
 
-        const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud, run_whole_graph() ? out : nullptr);
+        const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback,
+                &ud, run_whole_graph() ? out : nullptr, extra_buf_map);
 
         ggml_backend_buffer_free(buf);
 
@@ -7008,7 +7257,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval(backend, backend_cpu, op_names_filter, output_printer)) {
+            if (test->eval(backend, backend_cpu, op_names_filter, output_printer, {})) {
                 n_ok++;
             }
         }
@@ -7146,18 +7395,161 @@ static void show_test_coverage() {
     printf("  Coverage: %.1f%%\n", (double)covered_ops.size() / all_ops.size() * 100.0);
 }
 
+static void print_backend_features(ggml_backend_t backend) {
+    auto device = ggml_backend_get_device(backend);
+    auto reg = ggml_backend_dev_backend_reg(device);
+    auto name = ggml_backend_dev_name(device);
+    auto * get_features_fn = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+    if (get_features_fn) {
+        ggml_backend_feature * features = get_features_fn(reg);
+        printf("%s features:\n", name);
+        if (features->name == nullptr) {
+            printf("  (no features reported)\n");
+        } else {
+            for (; features->name; features++) {
+                printf("  %s = %s\n", features->name, features->value);
+            }
+        }
+    }
+}
+
+static extra_buffer_map_t load_cpu_extra_bufts() {
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+
+    std::unordered_map<ggml_backend_buffer_type_t, ggml_backend_buffer_t> extra_buf_map;
+    auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+    if (ggml_backend_dev_get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
+        while (extra_bufts && *extra_bufts) {
+            // TODO: What should the size be here? Do extra buffer types need a size even?
+            // We need to have a value larger than 0 to avoid the dummy backend buffer to be used.
+            extra_buf_map[*extra_bufts] = ggml_backend_buft_alloc_buffer(*extra_bufts, 1);
+            ++extra_bufts;
+        }
+    }
+    return extra_buf_map;
+}
+
+static bool test_cpu_variant(const char * variant_name, const char * op_names_filter,
+        const char * params_filter, printer * output_printer) {
+    // Load the variant first so that extra buffer types created only use that
+    // backend as the features of the backend can determine if the extra buf
+    // types are enabled or not.
+    ggml_backend_load_variant("cpu", std::string(variant_name).substr(4).c_str());
+
+    // Load extra buffer types and allocate a buffer from each type.
+    auto extra_buf_map = load_cpu_extra_bufts();
+
+    printf("\n");
+    for (auto buft : extra_buf_map) {
+        printf("Using extra buffer type: %s\n", ggml_backend_buft_name(buft.first));
+    }
+    printf("\n");
+
+    std::string backend_ref_name = "CPU-ref";
+    ggml_backend_load_variant("cpu", std::string(backend_ref_name).substr(4).c_str());
+
+    ggml_backend_t backend_ref = ggml_backend_init_by_name(backend_ref_name.c_str(), nullptr);
+    if (backend_ref == nullptr) {
+        printf("Error: CPU-ref backend not found. Make sure it's built and available.\n");
+        return false;
+    }
+    print_backend_features(backend_ref);
+
+    ggml_backend_t backend_variant = ggml_backend_init_by_name(variant_name, nullptr);
+    if (backend_variant == nullptr) {
+        printf("Error: CPU variant '%s' not found or failed to initialize.\n", variant_name);
+        printf("Use --list to see available variants.\n");
+        ggml_backend_free(backend_ref);
+        return false;
+    }
+    print_backend_features(backend_variant);
+
+
+
+    printf("Testing CPU variant '%s' against '%s' backend...\n\n", variant_name, backend_ref_name.c_str());
+
+    auto test_cases = make_test_cases_eval();
+
+    if (params_filter != nullptr) {
+        std::regex regex(params_filter);
+        auto it = test_cases.begin();
+        while (it != test_cases.end()) {
+            std::string test_params = (*it)->vars();
+            if (!std::regex_search(test_params, regex)) {
+                it = test_cases.erase(it);
+            } else {
+                it++;
+            }
+        }
+    }
+
+    size_t n_ok = 0;
+    for (auto & test : test_cases) {
+        // Switch the order so that we copy from the reference backend to the
+        // variant backend.
+        if (test->eval(backend_ref, backend_variant, op_names_filter, output_printer, extra_buf_map)) {
+            n_ok++;
+        }
+    }
+
+    output_printer->print_summary(test_summary_info(n_ok, test_cases.size(), false));
+
+    ggml_backend_free(backend_variant);
+    ggml_backend_free(backend_ref);
+
+    for (auto buft : extra_buf_map) {
+        ggml_backend_buffer_free(buft.second);
+    }
+
+    return n_ok == test_cases.size();
+}
+
+static void list_cpu_variants() {
+    std::unordered_map<std::string, std::string> variant_names;
+    ggml_backend_load_all_variants("cpu");
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            const char * name = ggml_backend_dev_name(dev);
+            if (strcmp(name, "CPU-ref") != 0) {
+                variant_names.emplace(name, ggml_backend_dev_description(dev));
+            }
+        }
+    }
+
+    if (variant_names.size() == 0) {
+        printf("No CPU backend variants found. To enable CPU variants, rebuild with:\n");
+        printf("    cmake -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON\n");
+        return;
+    }
+
+    printf("CPU variants:\n");
+    for (const auto & it : variant_names) {
+        printf("  %-15s - %s\n", it.first.c_str(), it.second.c_str());
+    }
+}
+
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--show-coverage]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--list-cpu-variants] [--show-coverage]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("      - support (probe backend operation support)\n");
+    printf("      - cpu-variants (test CPU variants against cpu-ref backend)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc),\n");
     printf("        optionally including the full test case string (e.g. \"ADD(type=f16,ne=[1,1,8,1],nr=[1,1,1,1],nf=1)\")\n");
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
+    printf("    --list-cpu-variants lists all available CPU backend variants\n");
     printf("    --show-coverage shows test coverage\n");
+    printf("    cpu-variants mode options:\n");
+    printf("      --list lists available CPU variants on this system\n");
+    printf("      --variant <name> test specific CPU variant against cpu-ref backend\n");
 }
 
 int main(int argc, char ** argv) {
@@ -7166,6 +7558,7 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
+    const char * cpu_variant_name = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -7176,6 +7569,8 @@ int main(int argc, char ** argv) {
             mode = MODE_GRAD;
         } else if (strcmp(argv[i], "support") == 0) {
             mode = MODE_SUPPORT;
+        } else if (strcmp(argv[i], "cpu-variants") == 0) {
+            mode = MODE_CPU_VARIANTS;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_names_filter = argv[++i];
@@ -7210,6 +7605,16 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--list-ops") == 0) {
             list_all_ops();
             return 0;
+        } else if (strcmp(argv[i], "--list") == 0) {
+            list_cpu_variants();
+            return 0;
+        } else if (strcmp(argv[i], "--variant") == 0) {
+            if (i + 1 < argc) {
+                cpu_variant_name = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--show-coverage") == 0) {
             show_test_coverage();
             return 0;
@@ -7219,14 +7624,25 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // load and enumerate backends
-    ggml_backend_load_all();
 
     // Create printer for output format
     std::unique_ptr<printer> output_printer = create_printer(output_format);
     if (output_printer) {
         output_printer->print_header();
     }
+
+    if (mode == MODE_CPU_VARIANTS) {
+        if (cpu_variant_name == nullptr) {
+            printf("Error: cpu-variants mode requires --variant <name> or --list\n");
+            usage(argv);
+            return 1;
+        }
+
+        return test_cpu_variant(cpu_variant_name, op_names_filter, params_filter, output_printer.get()) ? 0 : 1;
+    }
+
+    // load and enumerate backends
+    ggml_backend_load_all();
 
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));
 
