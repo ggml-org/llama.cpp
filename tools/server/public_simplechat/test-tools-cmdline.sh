@@ -73,10 +73,12 @@ exit
 
         "content": "what is your name."
         "content": "What and all tools you have access to"
+        "content": "do you have access to any tools"
         "content": "Print a hello world message with python."
         "content": "Print a hello world message with javascript."
         "content": "Calculate the sum of 5 and 27."
         "content": "Can you get me todays date."
+        "content": "Can you get me a summary of latest news from bbc world"
         "content": "Can you get todays date. And inturn add 10 to todays date"
         "content": "Who is known as father of the nation in India, also is there a similar figure for USA as well as UK"
         "content": "Who is known as father of the nation in India, Add 10 to double his year of birth and show me the results."
