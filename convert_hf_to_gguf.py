@@ -867,6 +867,9 @@ class TextModel(ModelBase):
         if chkhsh == "96a5f08be6259352137b512d4157e333e21df7edd3fcd152990608735a65b224":
             # ref: https://huggingface.co/inclusionAI/Ling-lite
             res = "bailingmoe"
+        if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
+            # ref: https://huggingface.co/inclusionAI/Ling-mini-2.0
+            res = "bailingmoe-v2"
         if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
             # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
             res = "llama4"
@@ -8042,6 +8045,143 @@ class BailingMoeModel(TextModel):
         if new_name == output_name and self.hparams.get("norm_head"):
             data_torch = data_torch.float()
             data_torch /= torch.norm(data_torch, p=2, dim=0, keepdim=True) + 1e-7
+
+        return [(new_name, data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+@ModelBase.register("BailingMoeV2ForCausalLM")
+class BailingMoeV2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE_V2
+
+    @staticmethod
+    def permute(
+        weights: Tensor, n_head: int, n_head_kv: int | None, rope_dim: int | None
+    ):
+        if n_head_kv is not None and n_head != n_head_kv:
+            n_head = n_head_kv
+        if rope_dim is None:
+            rope_dim = weights.shape[0] // n_head
+        weights_rope, weights_nope = weights.reshape(
+            n_head, weights.shape[0] // n_head, *weights.shape[1:]
+        ).split([rope_dim, weights.shape[0] // n_head - rope_dim], dim=1)
+        return torch.cat(
+            [
+                weights_rope.reshape(
+                    n_head, 2, rope_dim // 2, *weights_rope.shape[2:]
+                )
+                .swapaxes(1, 2)
+                .reshape(weights_rope.shape),
+                weights_nope,
+            ], dim=1
+        ).reshape(weights.shape)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        rope_dim = int(hparams['partial_rotary_factor'] * hparams['head_dim'])
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        else:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+        if hparams["score_function"] == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif hparams["score_function"] == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported score_function value: {hparams['score_function']}")
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip Multi-Token Prediction (MTP) layers
+        block_count = self.hparams["num_hidden_layers"]
+        match = re.match(r"model.layers.(\d+)", name)
+        if match and int(match.group(1)) >= block_count:
+            return []
+
+        rope_dim = int(self.hparams['partial_rotary_factor'] * self.hparams['head_dim'])
+        if name.endswith("query_key_value.weight"):
+            n_head = self.hparams["num_attention_heads"]
+            n_kv_head = self.hparams.get("num_key_value_heads")
+            n_embd = self.hparams["hidden_size"]
+            if (head_dim := self.hparams.get("head_dim")) is None:
+                head_dim = n_embd // n_head
+            q, k, v = data_torch.split([n_head * head_dim, n_kv_head * head_dim, n_kv_head * head_dim], dim=-2)
+
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), BailingMoeV2Model.permute(q, n_head, n_head, rope_dim)),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), BailingMoeV2Model.permute(k, n_head, n_kv_head, rope_dim)),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), v)
+            ]
+        elif "attention.key_layernorm" in name or "attention.query_layernorm" in name:
+            mapping = {
+                "attention.key_layernorm": "self_attn.key_layernorm",
+                "attention.query_layernorm": "self_attn.query_layernorm",
+            }
+            for k, v in mapping.items():
+                name = name.replace(k, v)
+            return [(self.map_tensor_name(name), BailingMoeV2Model.permute(data_torch, 1, 1, rope_dim))]
+        elif name.find("mlp.experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            tensors: list[tuple[str, Tensor]] = []
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+
+            return tensors
+
+        pre_tensor_name_mapping = {
+            "attention.dense": "self_attn.dense",
+            "mlp.gate.expert_bias": "mlp.gate.e_score_correction.bias",
+        }
+        for k, v in pre_tensor_name_mapping.items():
+            name = name.replace(k, v)
+        new_name = self.map_tensor_name(name)
 
         return [(new_name, data_torch)]
 

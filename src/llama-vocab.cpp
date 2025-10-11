@@ -1972,6 +1972,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_BAILINGMOE;
                 clean_spaces = false;
             } else if (
+                tokenizer_pre == "bailingmoe-v2") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_BAILINGMOE;
+                clean_spaces = false;
+            } else if (
                 tokenizer_pre == "seed-coder") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SEED_CODER;
                 clean_spaces = false;
@@ -2341,6 +2345,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "_<EOT>"
                     || t.first == "<|end_of_text|>"
                     || t.first == "<end_of_utterance>" // smoldocling
+                    || t.first == "<|role_end|>" // Ling v2
                ) {
                 special_eog_ids.insert(t.second);
                 if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
