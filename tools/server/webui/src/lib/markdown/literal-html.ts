@@ -1,6 +1,7 @@
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mdast';
+import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants/literal-html';
 
 /**
  * remark plugin that rewrites raw HTML nodes into plain-text equivalents.
@@ -11,22 +12,6 @@ import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mda
  * them. Leading spaces and tab characters are converted to non‑breaking spaces to
  * keep indentation identical to the original author input.
  */
-
-const LINE_BREAK = /\r?\n/;
-
-const PHRASE_PARENTS = new Set([
-	'paragraph',
-	'heading',
-	'emphasis',
-	'strong',
-	'delete',
-	'link',
-	'linkReference',
-	'tableCell'
-]);
-
-const NBSP = '\u00a0';
-const TAB_AS_SPACES = NBSP.repeat(4);
 
 function preserveIndent(line: string): string {
 	let index = 0;
