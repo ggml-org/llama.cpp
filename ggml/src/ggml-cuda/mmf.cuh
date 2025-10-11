@@ -495,7 +495,9 @@ static inline void mul_mat_f_switch_ids(
         const mmf_ids_data * ids_data) {
     const bool has_ids_data = ids_data && ids_data->ids_src_compact;
 
-    if (has_ids_data) {
+    // Use the compact-ids kernel only for larger tiles; for small ncols_dst (< 16)
+    // we prefer the normal mul_mat_f path with has_ids=true.
+    if (has_ids_data && ncols_dst > 16) {
         const int max_tiles = (int) ((ncols_dst + cols_per_block - 1) / cols_per_block);
         if (max_tiles == 0) {
             return;
