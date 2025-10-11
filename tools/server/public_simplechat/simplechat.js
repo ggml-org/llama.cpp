@@ -190,6 +190,7 @@ class SimpleChat {
 
     /**
      * Add an entry into xchat
+     * Also update iLastSys system prompt index tracker
      * @param {string} role
      * @param {string|undefined|null} content
      */
@@ -398,6 +399,7 @@ class SimpleChat {
 
     /**
      * Allow setting of system prompt, at any time.
+     * Updates the system prompt, if one was never set or if the newly passed is different from the last set system prompt.
      * @param {string} sysPrompt
      * @param {string} msgTag
      */
@@ -521,6 +523,24 @@ class SimpleChat {
         }
         this.add(Roles.Assistant, theResp.content_equiv());
         return theResp;
+    }
+
+    /**
+     * Call the requested tool/function and get its response
+     * @param {AssistantResponse} ar
+     */
+    async handle_toolcall(ar) {
+        let toolname = ar.response.toolname.trim();
+        if (toolname === "") {
+            return undefined
+        }
+        for (const fn in tools.tc_switch) {
+            if (fn == toolname) {
+                tools.tc_switch[fn]["handler"](JSON.parse(ar.response.toolargs))
+                return tools.tc_switch[fn]["result"]
+            }
+        }
+        return `Unknown Tool/Function Call:${toolname}`
     }
 
 }
@@ -693,6 +713,10 @@ class MultiChatUI {
             }
         } else {
             console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
+        }
+        let toolResult = await chat.handle_toolcall(theResp)
+        if (toolResult !== undefined) {
+            this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
         }
         this.ui_reset_userinput();
     }

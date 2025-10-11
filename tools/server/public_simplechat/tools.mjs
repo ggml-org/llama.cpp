@@ -11,7 +11,7 @@ import * as tjs from './tooljs.mjs'
 /**
  * @type {Object<string,Object<string,any>>}
  */
-let tc_switch = {}
+export let tc_switch = {}
 
 export function setup() {
     for (const key in tjs.tc_switch) {
