@@ -5617,8 +5617,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         auto & layer = layers[i];
 
                         // dual attention normalization
-                        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM,   "weight", i), {n_embd}, 0);
-                        layer.attn_norm_2 = create_tensor(tn(LLM_TENSOR_ATTN_NORM_2, "weight", i), {n_embd}, 0);
+                        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+                        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
                         // attention projections
                         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
@@ -18247,9 +18247,9 @@ struct llm_build_afmoe : public llm_graph_context {
 
             // dual attention normalization (post)
             cur = build_norm(cur,
-                    model.layers[il].attn_norm_2, NULL,
+                    model.layers[il].attn_post_norm, NULL,
                     LLM_NORM_RMS, il);
-            cb(cur, "attn_norm_2", il);
+            cb(cur, "attn_post_norm", il);
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);

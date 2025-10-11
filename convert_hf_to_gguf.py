@@ -2333,7 +2333,7 @@ class AfmoeModel(LlamaModel):
         if ".attn_norm_a." in name and bid is not None:
             return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM, bid), data_torch)]
         elif ".attn_norm_b." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM_2, bid), data_torch)]
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_POST_NORM, bid), data_torch)]
         elif ".ffn_norm_a." in name and bid is not None:
             return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch)]
         elif ".ffn_norm_b." in name and bid is not None:
