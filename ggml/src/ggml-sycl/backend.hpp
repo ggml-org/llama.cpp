@@ -18,6 +18,7 @@
 #include "concat.hpp"
 #include "conv.hpp"
 #include "convert.hpp"
+#include "count-equal.hpp"
 #include "cpy.hpp"
 #include "dequantize.hpp"
 #include "dmmv.hpp"
