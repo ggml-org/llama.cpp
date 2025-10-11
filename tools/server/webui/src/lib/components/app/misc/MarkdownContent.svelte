@@ -70,6 +70,27 @@
 		return tempDiv.innerHTML;
 	}
 
+	function preprocessLatexDelimiters(text: string): string {
+		// Handle escaped bracket delimiters \[...\]
+		text = text.replace(/\\\[([\s\S]*?)\\\]/g, (match, content) => `$$${content}$$`);
+
+		// Handle standalone bracket delimiters [...]
+		text = text.replace(
+			/(^|\n)\s*\[\s*([\s\S]*?)\s*\](\s*(?:\n|$))/gm,
+			(match, prefix, content, suffix) => {
+				const mathSymbols = /[=+\-*/^_{}\\()αβγδεζηθικλμνξοπρστυφχψω∑∫∂∇±×÷≤≥≠≈∞]/;
+
+				if (mathSymbols.test(content)) {
+					return `${prefix}$$${content}$$${suffix}`;
+				}
+
+				return match;
+			}
+		);
+
+		return text;
+	}
+
 	function enhanceCodeBlocks(html: string): string {
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
@@ -132,7 +153,10 @@
 
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const result = await processor().process(text);
+			// Preprocess LaTeX-style bracket delimiters before markdown processing
+			const preprocessedText = preprocessLatexDelimiters(text);
+
+			const result = await processor().process(preprocessedText);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
 
