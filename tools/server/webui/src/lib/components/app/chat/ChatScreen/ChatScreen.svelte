@@ -455,10 +455,10 @@
 />
 
 <ChatErrorDialog
-	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? 'server'}
 	message={activeErrorDialog?.message ?? ''}
 	onOpenChange={handleErrorDialogOpenChange}
+	open={Boolean(activeErrorDialog)}
+	type={activeErrorDialog?.type ?? 'server'}
 />
 
 <style>
