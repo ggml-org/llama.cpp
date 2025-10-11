@@ -80,8 +80,8 @@
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
-	let isServerLoading = $derived(serverLoading());
 	let activeErrorDialog = $derived(errorDialog());
+	let isServerLoading = $derived(serverLoading());
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
