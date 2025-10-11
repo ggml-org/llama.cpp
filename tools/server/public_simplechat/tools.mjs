@@ -9,7 +9,7 @@ import * as tjs from './tooljs.mjs'
 
 
 /**
- * @type {Object<string,Object>}
+ * @type {Object<string,Object<string,any>>}
  */
 let tc_switch = {}
 
