@@ -300,6 +300,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         workgroupBarrier();
     }
     let row_max = scratch[0];
+    workgroupBarrier();
 
     var sum = 0.0f;
     col = lid.x;
