@@ -4,11 +4,14 @@
 #include "llama-model-loader.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <cinttypes>
+#include <csignal>
 #include <fstream>
 #include <mutex>
+#include <random>
 #include <regex>
 #include <thread>
 #include <unordered_map>
@@ -18,6 +21,87 @@ struct tensor_quantization {
     std::string name;
     ggml_type quant = GGML_TYPE_COUNT;
 };
+
+static bool is_quantizable(const std::string & name, const llm_arch arch, const llama_model_quantize_params * params) {
+    if (params->only_copy) { return false; }
+
+    const auto tn = LLM_TN(arch);
+
+    // This used to be a regex, but <regex> has an extreme cost to compile times.
+    bool q = name.size() >= 6 && name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+
+    // Do not quantize norm tensors
+    q &= name.find("_norm.weight") == std::string::npos;
+
+    // Do not quantize expert gating tensors
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    q &= name.find("ffn_gate_inp.weight") == std::string::npos;
+
+    // These are very small (e.g. 4x4)
+    q &= name.find("altup") == std::string::npos;
+    q &= name.find("laurel") == std::string::npos;
+
+    // These are not too big so keep them as it is
+    q &= name.find("per_layer_model_proj") == std::string::npos;
+
+    // Do not quantize positional embeddings and token types (BERT)
+    q &= name != tn(LLM_TENSOR_POS_EMBD, "weight");
+    q &= name != tn(LLM_TENSOR_TOKEN_TYPES, "weight");
+
+    // Do not quantize Jamba, Mamba, LFM2's small yet 2D weights
+    // NOTE: can't use LLM_TN here because the layer number is not known
+    q &= name.find("ssm_conv1d.weight") == std::string::npos;
+    q &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // Do not quantize ARWKV, RWKV's small yet 2D weights
+    q &= name.find("time_mix_first.weight") == std::string::npos;
+    q &= name.find("time_mix_w0.weight") == std::string::npos;
+    q &= name.find("time_mix_w1.weight") == std::string::npos;
+    q &= name.find("time_mix_w2.weight") == std::string::npos;
+    q &= name.find("time_mix_v0.weight") == std::string::npos;
+    q &= name.find("time_mix_v1.weight") == std::string::npos;
+    q &= name.find("time_mix_v2.weight") == std::string::npos;
+    q &= name.find("time_mix_a0.weight") == std::string::npos;
+    q &= name.find("time_mix_a1.weight") == std::string::npos;
+    q &= name.find("time_mix_a2.weight") == std::string::npos;
+    q &= name.find("time_mix_g1.weight") == std::string::npos;
+    q &= name.find("time_mix_g2.weight") == std::string::npos;
+    q &= name.find("time_mix_decay_w1.weight") == std::string::npos;
+    q &= name.find("time_mix_decay_w2.weight") == std::string::npos;
+    q &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
+
+    // Do not quantize relative position bias (T5)
+    q &= name.find("attn_rel_b.weight") == std::string::npos;
+
+    return q;
+}
+
+static enum ggml_type fallback_type(const enum ggml_type new_type) {
+    switch (new_type) {
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
+            return GGML_TYPE_Q4_0; // symmetric-ish fallback
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ4_XS:
+            return GGML_TYPE_IQ4_NL;
+        case GGML_TYPE_Q4_K:
+            return GGML_TYPE_Q5_0;
+        case GGML_TYPE_Q5_K:
+            return GGML_TYPE_Q5_1;
+        case GGML_TYPE_Q6_K:
+            return GGML_TYPE_Q8_0;
+        default:
+            return new_type;
+    }
+}
 
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
@@ -66,7 +150,6 @@ static std::string remap_imatrix (const std::string & orig_name, const std::map<
 
         for (const auto & p : mapped) {
             if (p.second == blk) {
-                LLAMA_LOG_DEBUG("(blk.%d imatrix) ", p.first);
                 return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
             }
         }
@@ -89,10 +172,11 @@ struct quantize_state_impl {
     int i_ffn_gate     = 0;
     int i_ffn_up       = 0;
 
-    int n_k_quantized = 0;
-    int n_fallback    = 0;
+    int n_k_quantized  = 0;
+    int n_fallback     = 0;
 
-    bool has_imatrix = false;
+    bool has_imatrix     = false;
+    bool has_activations = false;
 
     // used to figure out if a model shares tok_embd with the output weight
     bool has_output = false;
@@ -530,6 +614,1088 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
+static std::atomic<bool> bpw_stop{ false };
+
+static void signal_handler(int) {
+    bpw_stop.store(true, std::memory_order_relaxed);
+}
+
+// Returns tensor type overrides to meet a global bpw target
+static std::unordered_map<std::string, ggml_type> target_bpw_type(
+    llama_model_loader & ml,
+    std::vector<no_init<uint8_t>> & buffer,
+    const llama_model & model,
+    const std::vector<const llama_model_loader::llama_tensor_weight *> & tensors,
+    const std::map<int, std::string> & mapped,
+    const std::unordered_map<std::string, std::vector<float>> * values_data,
+    const std::unordered_map<std::string, std::vector<float>> * activations_data,
+    const llama_model_quantize_params * params,
+    int nthread
+) {
+    struct candidate_types {
+        ggml_type type;
+        float bpw;
+        size_t bytes;
+        double error;
+        double mse = 0.0;
+        double proj = 0.0;
+    };
+
+    struct tensor_info {
+        const llama_model_loader::llama_tensor_weight * w = nullptr;
+        std::vector<candidate_types> candidate;
+        int choice = -1;
+        float min_bpw = 0.0;
+        float max_bpw = 0.0;
+        size_t n_elements = 0;
+    };
+
+    // subset of quantization types with the best accuracy/size tradeoff
+    constexpr ggml_type quant_types[] = {
+        GGML_TYPE_IQ1_S,
+        GGML_TYPE_IQ1_M,
+        GGML_TYPE_IQ2_XXS,
+        GGML_TYPE_Q2_K,
+        GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_Q3_K,
+        GGML_TYPE_IQ4_XS,
+        GGML_TYPE_Q4_K,
+        GGML_TYPE_Q5_K,
+        GGML_TYPE_Q6_K,
+        GGML_TYPE_Q8_0
+    };
+
+    const char * important_tensors[] = {
+        ".output.weight",
+        ".attn_output.weight",
+        ".ffn_down.weight",
+        ".ffn_down_shexp.weight"
+    };
+
+    constexpr double epsilon = 1e-12;
+    constexpr double infinity = std::numeric_limits<double>::infinity();
+    constexpr uint32_t file_magic = 0x42505731;  // BPW1
+    const char * func = __func__;
+
+    auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
+        const int64_t n_per_row = t->ne[0];
+        const size_t row_sz = ggml_row_size(typ, n_per_row);
+        return (size_t)ggml_nrows(t) * row_sz;
+    };
+
+    auto tensor_bpw = [&](const ggml_tensor * t, const ggml_type typ) -> double {
+        const size_t bytes = tensor_bytes(t, typ);
+        return (double)bytes * 8.0 / (double)ggml_nelements(t);
+    };
+
+    auto is_compatible = [](const ggml_tensor * t, const ggml_type typ) -> bool {
+        const int64_t blck = ggml_blck_size(typ);
+        return blck <= 1 || (t->ne[0] % blck) == 0;
+    };
+
+    auto is_iq = [](const enum ggml_type t) {
+        switch (t) {
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_M:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_IQ4_XS:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    auto make_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> ggml_type {
+        if (is_compatible(t, typ)) { return typ; }
+        ggml_type fb = fallback_type(typ);
+        return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
+    };
+
+    auto can_quantize = [&](const ggml_tensor * t) -> bool {
+        if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
+        return is_quantizable(ggml_get_name(t), model.arch, params);
+    };
+
+    auto install_signal_handlers = [] {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::signal(SIGINT, signal_handler);
+            std::signal(SIGTERM, signal_handler);
+        });
+    };
+
+    auto uninstall_signal_handlers = [] {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::signal(SIGINT, SIG_DFL);
+            std::signal(SIGTERM, SIG_DFL);
+        });
+    };
+
+    // Saved state per tensor
+    struct saved_info {
+        std::vector<candidate_types> candidate;
+        int choice = -1;
+        float min_bpw = 0.0f;
+        float max_bpw = 0.0f;
+        size_t n_elements = 0;
+    };
+
+    auto djb2_hash = [](const uint8_t * data, size_t n) -> uint64_t {
+        uint64_t h = 5381;
+        for (size_t i = 0; i < n; ++i) {
+            h = (h << 5) + h + data[i];
+        }
+        return h ? h : 0xeabada55cafed00d;
+    };
+
+    auto metadata_id = [&](const gguf_context * ctx) -> uint64_t {
+        const size_t sz = gguf_get_meta_size(ctx);
+        std::vector<uint8_t> buf(sz);
+        gguf_get_meta_data(ctx, buf.data());
+        return djb2_hash(buf.data(), buf.size());
+    };
+
+    char hex[17];
+    const uint64_t model_id = metadata_id(ml.meta.get());
+    std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
+    const std::string checkpoint_file = ml.arch_name + "-" + std::string(hex) + ".bpw_state";
+
+    auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
+        const std::string tmp = checkpoint_file + ".tmp";
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) { return; } // best-effort
+        const float target_bpw = params->target_bpw;
+        ofs.write((const char *)&file_magic, sizeof(file_magic));
+        ofs.write((const char *)&model_id, sizeof(model_id));
+        ofs.write((const char *)&target_bpw, sizeof(target_bpw));
+        const uint64_t n = all_vec.size();
+        ofs.write((const char *)&n, sizeof(n));
+        for (const auto & ti : all_vec) {
+            const std::string name = ggml_get_name(ti.w->tensor);
+            const uint32_t len = (uint32_t)name.size();
+            ofs.write((const char *)&len, sizeof(len));
+            ofs.write(name.data(), len);
+
+            const uint64_t cn = ti.candidate.size();
+            ofs.write((const char *)&cn, sizeof(cn));
+            ofs.write((const char *)&ti.choice, sizeof(ti.choice));
+            ofs.write((const char *)&ti.min_bpw, sizeof(ti.min_bpw));
+            ofs.write((const char *)&ti.max_bpw, sizeof(ti.max_bpw));
+            const uint64_t ne = ti.n_elements;
+            ofs.write((const char *)&ne, sizeof(ne));
+
+            for (const auto & c : ti.candidate) {
+                const int32_t  t = c.type;
+                const uint64_t b = c.bytes;
+                ofs.write((const char *)&t, sizeof(t));
+                ofs.write((const char *)&c.bpw, sizeof(c.bpw));
+                ofs.write((const char *)&b, sizeof(b));
+                ofs.write((const char *)&c.error, sizeof(c.error));
+            }
+        }
+
+        ofs.close();
+        std::remove(checkpoint_file.c_str());
+        std::rename(tmp.c_str(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: saved progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+    };
+
+    auto load_bpw_state = [&]() -> std::unordered_map<std::string, saved_info> {
+        std::unordered_map<std::string, saved_info> out;
+        std::ifstream ifs(checkpoint_file, std::ios::binary);
+        if (!ifs) { return out; }
+
+        uint32_t magic = 0;
+        uint64_t id = 0;
+        float bpw = 0.0f;
+        ifs.read((char *)&magic, sizeof(magic));
+        ifs.read((char *)&id, sizeof(id));
+        ifs.read((char *)&bpw, sizeof(bpw));
+        if (magic != file_magic) {
+            LLAMA_LOG_WARN("%s: invalid resume file, ignoring: %s\n", func, checkpoint_file.c_str());
+            return out;
+        } else if (id != model_id) {
+            LLAMA_LOG_WARN("%s: model ID mismatch, ignoring: %s\n", func, checkpoint_file.c_str());
+            return out;
+        } else if (bpw != params->target_bpw) {
+            LLAMA_LOG_WARN("%s: target bpw of %f does not match %f, ignoring: %s\n", func, params->target_bpw, bpw, checkpoint_file.c_str());
+            return out;
+        } else {
+            LLAMA_LOG_INFO("%s: resuming tensor quantization\n", func);
+        }
+
+        uint64_t n = 0;
+        ifs.read((char *)&n, sizeof(n));
+        for (uint64_t i = 0; i < n; ++i) {
+            uint32_t len = 0;
+            ifs.read((char *)&len, sizeof(len));
+            std::string name(len, '\0');
+            ifs.read(name.data(), len);
+
+            uint64_t cn = 0;
+            ifs.read((char *)&cn, sizeof(cn));
+
+            saved_info si;
+            ifs.read((char *)&si.choice, sizeof(si.choice));
+            ifs.read((char *)&si.min_bpw, sizeof(si.min_bpw));
+            ifs.read((char *)&si.max_bpw, sizeof(si.max_bpw));
+            uint64_t ne = 0;
+            ifs.read((char *)&ne, sizeof(ne));
+            si.n_elements = (size_t)ne;
+
+            si.candidate.resize(cn);
+            for (size_t j = 0; j < si.candidate.size(); ++j) {
+                int32_t t = 0;
+                uint64_t b = 0;
+                ifs.read((char *)&t, sizeof(t));
+                si.candidate[j].type = (ggml_type)t;
+                ifs.read((char *)&si.candidate[j].bpw, sizeof(si.candidate[j].bpw));
+                ifs.read((char *)&b, sizeof(b));
+                si.candidate[j].bytes = (size_t)b;
+                ifs.read((char *)&si.candidate[j].error, sizeof(si.candidate[j].error));
+            }
+
+            out.emplace(std::move(name), std::move(si));
+        }
+
+        LLAMA_LOG_INFO("%s: loaded bpw state for %lu tensors from %s\n", func, out.size(), checkpoint_file.c_str());
+        return out;
+    };
+
+    auto delete_bpw_state = [&] {
+        std::ifstream ifs(checkpoint_file);
+        if (ifs.good()) {
+            LLAMA_LOG_INFO("%s: deleting %s\n", func, checkpoint_file.c_str());
+            std::remove(checkpoint_file.c_str());
+        }
+
+    };
+
+    auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
+        if (bpw_stop.load(std::memory_order_relaxed)) {
+            LLAMA_LOG_INFO("\n%s: saving progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+            save_bpw_state(all_vec);
+            throw std::runtime_error("user interrupted the process");
+        }
+    };
+
+    // Estimate error for a given type using a sampled subset of rows
+    auto estimate_error = [&](const ggml_tensor * t,
+        const ggml_type quant_type,
+        const std::vector<float> & f32_sample,
+        const std::vector<int64_t> & rows_sample,
+        const float * values_sample,
+        const float * activations_sample,
+        std::vector<uint8_t> & quantized_buffer,
+        std::vector<float> & dequantized_buffer,
+        float tensor_bias_lambda,
+        const float * slice_bias_lambda,
+        double * out_mse = nullptr,
+        double * out_proj = nullptr) -> double
+    {
+        const int64_t n_per_row = t->ne[0];
+        const int64_t nrows = t->ne[1];
+        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
+        const size_t sample_elems = f32_sample.size();
+        const size_t sample_rows  = n_per_row > 0 ? sample_elems / (size_t)n_per_row : 0;
+
+        if (sample_rows == 0) {
+            if (out_mse) { *out_mse = 0.0; }
+            if (out_proj) { *out_proj = 0.0; }
+            return 0.0;
+        }
+
+        size_t expected_rows = 0;
+        for (int64_t s = 0; s < ne2; ++s) {
+            expected_rows += (size_t)rows_sample[s];
+        }
+
+        if (expected_rows != sample_rows) {
+            if (out_mse) { *out_mse = infinity; }
+            if (out_proj) { *out_proj = 0.0; }
+            return infinity;
+        }
+
+        const size_t row_sz = ggml_row_size(quant_type, n_per_row);
+        const size_t buf_sz = row_sz * sample_rows;
+
+        if (quantized_buffer.size() < buf_sz) { quantized_buffer.resize(buf_sz); }
+        if (dequantized_buffer.size() < sample_elems) { dequantized_buffer.resize(sample_elems); }
+
+        const bool has_values = values_sample != nullptr;
+        const bool has_activations = activations_sample != nullptr;
+
+        // Bias denominators per slice
+        std::vector<double> bias_denom(ne2, 0.0);
+        if (has_activations) {
+            for (int64_t s = 0; s < ne2; ++s) {
+                const float * v = has_values ? values_sample + s * n_per_row : nullptr;
+                const float * a = activations_sample + s * n_per_row;
+                double denom = 0.0;
+                for (int64_t j = 0; j < n_per_row; ++j) {
+                    const double w  = v ? std::max(0.0f, v[j]) : 1.0;
+                    const double aj = a[j];
+                    denom += w * aj * aj;
+                }
+
+                bias_denom[s] = denom;
+            }
+        }
+
+        // Row squared norms (weighted if values present)
+        std::vector<double> row_sq_norm(sample_rows, 0.0);
+        {
+            size_t off = 0;
+            size_t ridx = 0;
+            for (int64_t s = 0; s < ne2; ++s) {
+                const int64_t rs = rows_sample[s];
+                if (rs == 0) { continue; }
+
+                const float * v = has_values ? values_sample + s * n_per_row : nullptr;
+                for (int64_t r = 0; r < rs; ++r, ++ridx) {
+                    const float * x = f32_sample.data() + off;
+                    double sum = 0.0;
+                    if (v) {
+                        for (int64_t j = 0; j < n_per_row; ++j) {
+                            const double w = std::max(0.0f, v[j]);
+                            const double xx = x[j];
+                            sum += w * xx * xx;
+                        }
+                    } else {
+                        for (int64_t j = 0; j < n_per_row; ++j) {
+                            const double xx = x[j];
+                            sum += xx * xx;
+                        }
+                    }
+
+                    row_sq_norm[ridx] = sum;
+                    off += (size_t)n_per_row;
+                }
+            }
+        }
+
+        // Quantize per slice into quantized_buffer
+        {
+            size_t qoff = 0;
+            size_t foff = 0;
+            for (int64_t s = 0; s < ne2; ++s) {
+                const int64_t rs = rows_sample[s];
+                if (rs == 0) { continue; }
+
+                const float * v = has_values ? values_sample + s * n_per_row : nullptr;
+                (void)ggml_quantize_chunk(quant_type, f32_sample.data() + foff, quantized_buffer.data() + qoff, 0, rs, n_per_row, v);
+                qoff += row_sz * (size_t)rs;
+                foff += (size_t)rs * (size_t)n_per_row;
+            }
+        }
+
+        // Dequantize into dequantized_buffer
+        {
+            const ggml_type_traits * traits = ggml_get_type_traits(quant_type);
+            if (!traits || !traits->to_float) {
+                if (out_mse) { *out_mse = infinity; }
+                if (out_proj) { *out_proj = 0.0; }
+                return infinity;
+            }
+
+            for (size_t r = 0; r < sample_rows; ++r) {
+                const uint8_t * src = quantized_buffer.data() + r * row_sz;
+                float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
+                traits->to_float(src, dst, (int)n_per_row);
+            }
+        }
+
+        // Compute error per slice with trimmed aggregation
+        auto trimmed_mean = [](std::vector<double> & v) -> double {
+            const int64_t n = (int64_t)v.size();
+            if (n == 0) { return 0.0; }
+            double sum = std::accumulate(v.begin(), v.end(), 0.0);
+            if (n < 50) { return sum / (double)n; } // too few elements to trim
+            int64_t k = (int64_t) std::floor(0.025 * (double)n); // trim 5% (2.5% each side)
+            std::sort(v.begin(), v.end());
+            const auto num = (double)(n - 2 * k);
+            sum = std::accumulate(v.begin() + k, v.begin() + (n - k), 0.0);
+            return sum / std::max(1.0, num);
+        };
+
+        size_t off = 0;
+        size_t ridx = 0;
+        double total_mse = 0.0;
+        double total_proj = 0.0;
+        double total_bias = 0.0;
+        for (int64_t s = 0; s < ne2; ++s) {
+            const int64_t rs = rows_sample[s];
+            if (rs == 0) { continue; }
+
+            const float * v = has_values ? values_sample + s * n_per_row : nullptr;
+            const float * a = has_activations ? activations_sample + s * n_per_row : nullptr;
+            const double denom_bias = has_activations ? bias_denom[s] : 0.0;
+            std::vector<double> row_mse_norm;
+            row_mse_norm.reserve(rs);
+            std::vector<double> row_proj_norm;
+            if (a) { row_proj_norm.reserve(rs); }
+
+            for (int64_t r = 0; r < rs; ++r, ++ridx) {
+                const float * x = f32_sample.data() + off;
+                const float * y = dequantized_buffer.data() + off;
+                double w_mse = 0.0;
+                double bias_num = 0.0;
+                for (int64_t j = 0; j < n_per_row; ++j) {
+                    const double wj = v ? std::max(0.0f, v[j]) : 1.0;
+                    const double e = y[j] - x[j];
+                    w_mse += wj * e * e;
+                    if (a) { bias_num += wj * e * a[j]; }
+                }
+
+                const double denom_x = row_sq_norm[ridx];
+                const double m_norm = w_mse / (denom_x + epsilon);
+                row_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : infinity);
+
+                if (a) {
+                    double p_norm = 0.0;
+                    if (denom_bias > 0.0) {
+                        const double proj = bias_num * bias_num / (denom_bias + epsilon);
+                        p_norm = std::isfinite(proj) ? proj : 0.0;
+                    }
+
+                    row_proj_norm.push_back(p_norm);
+                }
+
+                off += (size_t)n_per_row;
+            }
+
+            const double slice_mse = trimmed_mean(row_mse_norm) * (double)nrows;
+            const double slice_proj = a ? trimmed_mean(row_proj_norm) * (double)nrows : 0.0;
+
+            total_mse += slice_mse;
+            total_proj += slice_proj;
+
+            const double bl = slice_bias_lambda ? (double)std::max(0.0f, slice_bias_lambda[s]) : (double)tensor_bias_lambda;
+            total_bias += bl * slice_proj;
+
+            if (!std::isfinite(total_mse) || !std::isfinite(total_proj) || !std::isfinite(total_bias)) {
+                if (out_mse) { *out_mse = infinity; }
+                if (out_proj) { *out_proj = 0.0; }
+                return infinity;
+            }
+        }
+
+        if (out_mse) { *out_mse = total_mse; }
+        if (out_proj) { *out_proj = total_proj; }
+
+        const double total_err = total_mse + total_bias;
+        return std::isfinite(total_err) ? total_err : infinity;
+    };
+
+    // Returns lambda per slice or 0.0 if no activations
+    auto estimate_lambda = [](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
+        const int64_t ns = std::max<int64_t>(1, ne2);
+        std::vector<float> lambdas(ns, 0.0f);
+        if (!activations) { return lambdas; }
+
+        for (int64_t s = 0; s < ns; ++s) {
+            const float * v = values ? values + s * n_per_row : nullptr;
+            const float * a = activations + s * n_per_row;
+            double s1 = 0.0;
+            double s2 = 0.0;
+            for (int64_t j = 0; j < n_per_row; ++j) {
+                const double w = v ? std::max(0.0f, v[j]) : 1.0;
+                const double aw = std::sqrt(w) * a[j];
+                const double z  = aw * aw;
+                s1 += z;
+                s2 += z * z;
+            }
+
+            float l = 0.0f;
+            if (s1 > 0.0) {
+                const auto n = (double)n_per_row;
+                const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
+                l = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 16.0);
+            }
+
+            lambdas[(size_t)s] = l;
+        }
+
+        return lambdas;
+    };
+
+    install_signal_handlers();
+    auto bpw_data = load_bpw_state();
+    std::vector<tensor_info> all;
+    all.reserve(tensors.size());
+    for (const auto * tw : tensors) {
+        ggml_tensor * tensor = tw->tensor;
+        const std::string name = ggml_get_name(tensor);
+        if (!can_quantize(tensor)) { continue; }
+        check_signal_handler(all);
+
+        // If we already have fully evaluatedd this tensor then reuse it
+        if (auto it_saved = bpw_data.find(name); it_saved != bpw_data.end()) {
+            tensor_info info;
+            info.w = tw;
+            info.candidate = it_saved->second.candidate;
+            info.choice = it_saved->second.choice;
+            info.min_bpw = it_saved->second.min_bpw;
+            info.max_bpw = it_saved->second.max_bpw;
+            info.n_elements = it_saved->second.n_elements ? it_saved->second.n_elements : (size_t)ggml_nelements(tensor);
+            all.push_back(std::move(info));
+            continue;
+        }
+
+        LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", __func__, name.c_str(), ggml_nelements(tensor));
+        if (!ml.use_mmap) {
+            if (buffer.size() < ggml_nbytes(tensor)) { buffer.resize(ggml_nbytes(tensor)); }
+            tensor->data = buffer.data();
+        }
+
+        ml.load_data_for(tensor);
+
+        // Dequantize sampled rows into f32_sample
+        const int64_t n_per_row = tensor->ne[0];
+        const int64_t nrows_total = tensor->ne[1];
+        const int64_t ne2 = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
+
+        // Compute rows based on tensor shape and slice count
+        auto sample_rows = [](const int64_t n, const int64_t rows, const int64_t n2, const bool has_acts) -> int64_t {
+            const double tensor_budget = has_acts ? 1 * 1024 * 1024 : 0.5 * 1024 * 1024;
+            const double scale_rows = std::clamp(std::sqrt(std::max(1.0, (double)rows) / 4096.0), 0.5, 2.0); // favour more rows for large nrt
+            const double slice_budget = tensor_budget * scale_rows / std::max<int64_t>(1, n2);
+            const int64_t min_rows = has_acts ? 128 : 64;
+            const int64_t max_rows = 4096;
+            int64_t total_rows = std::llround(slice_budget / std::max<int64_t>(1, n));
+            total_rows = std::max<int64_t>(min_rows, std::min<int64_t>(total_rows, std::min<int64_t>(rows, max_rows)));
+            if (rows <= min_rows * 2) { total_rows = rows; } // use all rows for small tensors
+            return total_rows;
+        };
+
+        const int64_t rows_sample_per_expert = sample_rows(n_per_row, nrows_total, ne2, activations_data != nullptr);
+        std::vector<float> f32_sample;
+        f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, rows_sample_per_expert) * (size_t)n_per_row);
+        std::vector<int64_t> rows_sample(ne2, 0);
+        const ggml_type src_type = tensor->type;
+        const ggml_type_traits * src_traits = ggml_get_type_traits(src_type);
+        const bool src_is_quant = ggml_is_quantized(src_type);
+        const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
+
+        // Convert a single row to fp32
+        auto row_to_fp32 = [&](const uint8_t * src, float * dst) {
+            const ggml_type t = src_type;
+            if (t == GGML_TYPE_F32) {
+                std::memcpy(dst, src, sizeof(float) * (size_t)n_per_row);
+                return;
+            }
+            if (t == GGML_TYPE_F16) {
+                ggml_fp16_to_fp32_row((const ggml_fp16_t *) src, dst, (int)n_per_row);
+                return;
+            }
+            if (t == GGML_TYPE_BF16) {
+                ggml_bf16_to_fp32_row((const ggml_bf16_t *) src, dst, (int)n_per_row);
+                return;
+            }
+
+            if (src_is_quant) {
+                GGML_ASSERT(src_traits && src_traits->to_float);
+                src_traits->to_float(src, dst, (int) n_per_row);
+                return;
+            }
+
+            throw std::runtime_error(format("unsupported src type %s for sampling", ggml_type_name(t)));
+        };
+
+        // Sample rows randomly per slice
+        {
+            f32_sample.clear();
+            std::vector<float> row_buffer(n_per_row);
+            for (int64_t slice = 0; slice < ne2; ++slice) {
+                std::mt19937 rng(std::hash<std::string>{}(name) ^ 0xeabada55cafed00d ^ slice);
+                const int64_t rows_sample_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, rows_sample_per_expert));
+                const int64_t stride = std::max<int64_t>(1, nrows_total / rows_sample_max);
+                int64_t offset = 0;
+                if (stride > 1) {
+                    std::uniform_int_distribution<int64_t> dist(0, stride - 1);
+                    offset = dist(rng);
+                }
+
+                int64_t current = 0;
+                for (int64_t r = offset; r < nrows_total && current < rows_sample_max; r += stride) {
+                    const uint8_t * src_row = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
+                    if (src_type == GGML_TYPE_F32) {
+                        const auto *src_f32 = (const float *)src_row;
+                        f32_sample.insert(f32_sample.end(), src_f32, src_f32 + n_per_row);
+                    } else {
+                        row_to_fp32(src_row, row_buffer.data());
+                        f32_sample.insert(f32_sample.end(), row_buffer.begin(), row_buffer.end());
+                    }
+
+                    ++current;
+                }
+
+                rows_sample[slice] = current;
+            }
+        }
+
+        auto side_data = [&](const std::unordered_map<std::string, std::vector<float>> * m, const std::string & tensor_name) {
+            if (!m) { return std::pair<const float*, size_t>{nullptr, 0}; }
+
+            const std::string key = remap_imatrix(tensor_name, mapped);
+            const auto it = m->find(key);
+            return it == m->end() ? std::pair<const float*, size_t>{nullptr, 0} : std::pair<const float*, size_t>{ it->second.data(), it->second.size() };
+        };
+
+        // Copy this row's side data (values and activations), or broadcasts to all slices
+        auto copy_or_broadcast = [&](const float * src, size_t src_sz, std::vector<float> & dst) {
+            dst.clear();
+            if (!src || src_sz == 0) { return; }
+
+            const size_t want = (size_t)ne2 * (size_t)n_per_row;
+            if (src_sz == want) {
+                dst.assign(src, src + want);
+                return;
+            }
+            if (src_sz == (size_t)n_per_row) {
+                dst.resize(want);
+                for (int64_t s = 0; s < ne2; ++s) {
+                    std::memcpy(dst.data() + s * n_per_row, src, n_per_row * sizeof(float));
+                }
+                return;
+            }
+
+            LLAMA_LOG_WARN("%s: side data size mismatch for %s: got %zu, expected %zu or %zu; ignoring\n", func, name.c_str(), src_sz, (size_t)n_per_row, want);
+        };
+
+        const auto [values_all, values_sz] = side_data(values_data, name);
+        const auto [activations_all, activations_sz] = side_data(activations_data, name);
+        std::vector<float> values_sample;
+        std::vector<float> activations_sample;
+        if (values_all) { copy_or_broadcast(values_all, values_sz, values_sample); }
+        if (activations_all) { copy_or_broadcast(activations_all, activations_sz, activations_sample); }
+
+        const int64_t nelem = ggml_nelements(tensor);
+        tensor_info info;
+        info.w = tw;
+        info.n_elements = nelem;
+
+        // Prepare scratch buffers sized for the largest candidate row size
+        size_t total_sampled_rows = f32_sample.size() / n_per_row;
+
+        // Build list of candidate types first (compatible ones)
+        const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
+        size_t max_row_sz = 0;
+        const ggml_type * base_arr = quant_types;
+        const size_t base_sz = std::size(quant_types);
+        std::vector<ggml_type> compatible_candidates;
+        compatible_candidates.reserve(base_sz);
+
+        for (size_t i = 0; i < base_sz; ++i) {
+            ggml_type ts_type = base_arr[i];
+            if (is_iq(ts_type) && !has_valid_imatrix) {
+                LLAMA_LOG_WARN("%s: skipping %s for %s, no or mismatched imatrix\n", __func__, ggml_type_name(ts_type), name.c_str());
+                continue;
+            }
+
+            ggml_type tt = make_compatible(tensor, ts_type);
+            if (!is_compatible(tensor, tt)) { continue; }
+            compatible_candidates.push_back(tt);
+            max_row_sz = std::max(max_row_sz, ggml_row_size(tt, n_per_row));
+        }
+
+        std::sort(compatible_candidates.begin(), compatible_candidates.end());
+        compatible_candidates.erase(std::unique(compatible_candidates.begin(), compatible_candidates.end()), compatible_candidates.end());
+
+        // Adjusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE.
+        // Larger values favours quantisation types that produce smaller bias even if the MSE is slightly bigger
+        float tensor_lambda = 0.0f;
+        std::vector<float> lambdas;
+        const float * values = values_sample.empty() ? nullptr : values_sample.data();
+        const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
+        double acc = 0.0;
+        int ns = 0;
+        lambdas = estimate_lambda(values, activations, n_per_row, ne2);
+        for (float l : lambdas) { acc += l; ++ns; }
+        tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
+
+        // Evaluate candidates
+        std::vector<candidate_types> eval_candidates(compatible_candidates.size());
+        std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
+        std::vector<float> dequantized_buffer(f32_sample.size());
+        const float * slice_lambda = lambdas.empty() ? nullptr : lambdas.data();
+        int n_eval_threads = std::max(1, std::min<int>(nthread, (int)compatible_candidates.size()));
+        std::atomic<size_t> cidx{0};
+        std::vector<std::thread> eval_workers;
+        eval_workers.reserve(n_eval_threads);
+        for (int ti = 0; ti < n_eval_threads; ++ti) {
+            eval_workers.emplace_back([&] {
+                // thread-local scratch
+                std::vector<uint8_t> tl_quantized_buffer(quantized_buffer.size());
+                std::vector<float> tl_dequantized_buffer(dequantized_buffer.size());
+                for (;;) {
+                    if (bpw_stop.load(std::memory_order_relaxed)) { break; } // stop if a signal arrived
+                    const size_t i = cidx.fetch_add(1, std::memory_order_acq_rel);
+                    if (i >= compatible_candidates.size()) { break; }
+
+                    const ggml_type tensor_types = compatible_candidates[i];
+                    const auto bpw = (float)tensor_bpw(tensor, tensor_types);
+                    const size_t bytes = tensor_bytes(tensor, tensor_types);
+                    double mse = 0.0;
+                    double proj = 0.0;
+                    const auto err = estimate_error(tensor, tensor_types, f32_sample, rows_sample, values, activations,
+                        tl_quantized_buffer, tl_dequantized_buffer, tensor_lambda, slice_lambda, &mse, &proj);
+                    eval_candidates[i] = candidate_types{ tensor_types, bpw, bytes, err, mse, proj };
+                }
+            });
+        }
+
+        for (auto &th : eval_workers) { th.join(); }
+
+        // If interruption happened mid-evaluation, exit without adding a half-baked tensor entry
+        if (bpw_stop.load(std::memory_order_relaxed) && cidx.load(std::memory_order_relaxed) < compatible_candidates.size()) {
+            check_signal_handler(all);
+        }
+
+        // Check if biasing is needed
+        bool bias_needed = false;
+        if (!lambdas.empty()) {
+            int min_mse  = -1;
+            int min_bias = -1;
+            {
+                double best_mse = std::numeric_limits<double>::infinity();
+                double best_err = std::numeric_limits<double>::infinity();
+                for (int i = 0; i < (int)eval_candidates.size(); ++i) {
+                    const auto & c = eval_candidates[i];
+                    if (c.bytes == 0) { continue; }
+                    if (c.mse  < best_mse) {
+                        best_mse = c.mse;
+                        min_mse  = i;
+                    }
+                    if (c.error < best_err) {
+                        best_err = c.error;
+                        min_bias = i;
+                    }
+                }
+            }
+
+            if (min_mse != min_bias) {
+                bias_needed = true;
+            } else {
+                double max_rel_bias = 0.0;
+                for (const auto & c : eval_candidates) {
+                    if (c.bytes == 0) { continue; }
+                    const double mse = std::max(c.mse, epsilon);
+                    const double bias_term = std::max(0.0, c.error - c.mse);
+                    const double rel = bias_term / mse;
+                    max_rel_bias = std::max(rel, max_rel_bias);
+                }
+
+                bias_needed = max_rel_bias >= 0.5; // >= 50% of MSE?
+            }
+        }
+
+        for (auto & c : eval_candidates) {
+            if (c.bytes == 0) { continue; }
+            const double final_err = bias_needed ? c.error : c.mse;
+            info.candidate.push_back(candidate_types{ c.type, c.bpw, c.bytes, final_err, c.mse, c.proj });
+        }
+
+        if (info.candidate.empty()) {
+            // As a last resort, keep original type
+            float bpw = ggml_nbytes(tensor) * 8.0f / nelem;
+            info.candidate.push_back(candidate_types{ tensor->type, bpw, ggml_nbytes(tensor), 0.0 });
+        }
+
+        // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
+        auto pareto_convex = [](std::vector<candidate_types> & candidates) {
+            if (candidates.empty()) { return; }
+
+            std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
+                if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
+                return a.error < b.error;
+            });
+            const auto last = std::unique(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
+                return a.bytes == b.bytes;
+            });
+            candidates.erase(last, candidates.end());
+
+            // Pareto by bytes -> error
+            std::vector<candidate_types> pareto;
+            pareto.reserve(candidates.size());
+            double best_err = infinity;
+            size_t last_b = std::numeric_limits<size_t>::max();
+            for (const auto & c : candidates) {
+                if (c.bytes != last_b) {
+                    last_b = c.bytes;
+                    if (c.error < best_err) {
+                        best_err = c.error;
+                        pareto.push_back(c);
+                    }
+                }
+            }
+
+            candidates.swap(pareto);
+            if (candidates.size() < 3) { return; } // need at least 3 points to do convex hull
+
+            // Convex hull (lower envelope)
+            std::vector<candidate_types> hull; hull.reserve(candidates.size());
+            for (const auto & c : candidates) {
+                auto cross_product = [](const candidate_types & h0, const candidate_types & h1, const candidate_types & p) -> double {
+                    const double dx1 = (double)h1.bytes - (double)h0.bytes;
+                    const double dy1 = h1.error - h0.error;
+                    const double dx2 = (double)p.bytes - (double)h0.bytes;
+                    const double dy2 = p.error - h0.error;
+                    return dx1 * dy2 - dx2 * dy1;
+                };
+
+                while (hull.size() >= 2) {
+                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= -1 * epsilon) { // very small negative tolerance
+                        hull.pop_back();
+                    } else {
+                        break;
+                    }
+                }
+
+                hull.push_back(c);
+            }
+
+            candidates.swap(hull);
+        };
+
+        pareto_convex(info.candidate);
+
+        // Initialize choice at the smallest bpw candidate
+        info.choice = 0;
+        info.min_bpw = info.candidate.front().bpw;
+        info.max_bpw = info.candidate.back().bpw;
+        all.push_back(std::move(info));
+        check_signal_handler(all); // save after each tensor
+    }
+
+    if (all.empty()) { return {}; }
+
+    // Compute total elements across all tensors and bytes for non-quantizable tensors
+    size_t nq_elements = 0;
+    size_t nq_bytes = 0;
+    for (const auto & it : ml.weights_map) {
+        const ggml_tensor * tensor = it.second.tensor;
+        const std::string name = it.first;
+        nq_elements += (size_t)ggml_nelements(tensor);
+        if (!is_quantizable(name, model.arch, params)) {
+            nq_bytes += ggml_nbytes(tensor);
+        }
+    }
+
+    auto total_bytes = [&]() -> size_t {
+        size_t tb = 0;
+        for (const auto & ti : all) {
+            tb += ti.candidate[ti.choice].bytes;
+        }
+
+        return tb;
+    };
+
+    size_t q_elements = 0;
+    size_t min_bytes = 0;
+    size_t max_bytes = 0;
+    for (const auto & ti : all) {
+        q_elements += (size_t)ti.n_elements;
+        min_bytes += ti.candidate.front().bytes;  // smallest candidate per tensor
+        max_bytes += ti.candidate.back().bytes;   // largest candidate per tensor
+    }
+
+    if (q_elements == 0) { return {}; }
+
+    const double target_bpw = params->target_bpw;
+    size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
+    size_t budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_bytes;
+
+    auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
+        std::unordered_map<std::string, ggml_type> overrides;
+        LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", func);
+        for (const auto & ti : all) {
+            LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
+                func, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidate[ti.choice].type), ti.candidate[ti.choice].bpw, ti.candidate[ti.choice].error);
+            overrides[ggml_get_name(ti.w->tensor)] = ti.candidate[ti.choice].type;
+        }
+
+        return overrides;
+    };
+
+    if (budget_bytes <= min_bytes) {
+        for (auto & ti : all) { ti.choice = 0; }
+        return emit_overrides();
+    }
+    if (budget_bytes >= max_bytes) {
+        for (auto & ti : all) { ti.choice = (int)ti.candidate.size() - 1; }
+        return emit_overrides();
+    }
+
+    auto is_important = [&](const std::string & tensor_name) -> bool {
+        return std::any_of(std::begin(important_tensors), std::end(important_tensors), [&](const char* imp) {
+                return tensor_name.find(imp) != std::string::npos;
+            }
+        );
+    };
+
+    // Lagrangian relaxation to minimise error subject to a bpw target constraint
+    auto lagrange_penalty = [&](const double mu, std::vector<int> & choice, size_t & bytes, double & err) {
+        choice.resize(all.size());
+        bytes = 0;
+        err = 0.0;
+        for (size_t i = 0; i < all.size(); ++i) {
+            const auto & candidate = all[i].candidate;
+            const std::string tensor_name = ggml_get_name(all[i].w->tensor);
+            double effective_mu = mu;
+            if (is_important(tensor_name)) { effective_mu *= 0.1; } // important tensors get 10x lower penalty
+
+            int best_j = 0;
+            double best_val = infinity;
+            for (int j = 0; j < (int)candidate.size(); ++j) {
+                const double bits = (double)candidate[j].bytes * 8.0;
+                const double val = candidate[j].error + effective_mu * bits;
+                if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && candidate[j].bytes < candidate[best_j].bytes)) {
+                    best_val = val;
+                    best_j = j;
+                }
+            }
+
+            choice[i] = best_j;
+            bytes += candidate[best_j].bytes;
+            err += candidate[best_j].error;
+        }
+    };
+
+    size_t bytes_lo = 0;
+    size_t bytes_hi = 0;
+    size_t bytes_mid = 0;
+    double mu_lo = 0.0;
+    double mu_hi = 1.0;
+    double err_lo = 0.0;
+    double err_hi = 0.0;
+    double err_mid = 0.0;
+    std::vector<int> choice_lo;
+    std::vector<int> choice_hi;
+    std::vector<int> choice_mid;
+    std::vector<int> best_under_choice;
+    std::vector<int> best_over_choice;
+
+    lagrange_penalty(mu_lo, choice_lo, bytes_lo, err_lo);
+
+    // increase mu until we get under budget or hit a safety cap
+    {
+        int expand = 0;
+        size_t prev_bytes_hi = std::numeric_limits<size_t>::max();
+        while (true) {
+            lagrange_penalty(mu_hi, choice_hi, bytes_hi, err_hi);
+            if (bytes_hi <= budget_bytes) { break; }
+            if (bytes_hi >= prev_bytes_hi) { break; }
+            prev_bytes_hi = bytes_hi;
+
+            mu_hi *= 2.0; // double the penalty multiplier to reduce tensor sizes
+            if (++expand > 60) { break; } // safety cap to prevent an infinite loop
+        }
+    }
+
+    double best_under_gap = infinity;
+    double best_over_gap = infinity;
+    double best_under_err = infinity;
+    double best_over_err = infinity;
+    for (int it = 0; it < 40; ++it) { // binary search iterations for optimal Lagrange multiplier (40 ≈ 1e-12 precision)
+        double mu = 0.5 * (mu_lo + mu_hi); // midpoint of current bounds
+        lagrange_penalty(mu, choice_mid, bytes_mid, err_mid);
+
+        const double gap = std::abs((double)bytes_mid - (double)budget_bytes);
+        if (bytes_mid > budget_bytes) {
+            // Too big, need stronger penalty
+            mu_lo = mu;
+            if (gap < best_over_gap - epsilon || (std::abs(gap - best_over_gap) <= epsilon && err_mid < best_over_err)) {
+                best_over_gap = gap;
+                best_over_err = err_mid;
+                best_over_choice = choice_mid;
+            }
+        } else {
+            // Under budget, good candidate
+            mu_hi = mu;
+            if (gap < best_under_gap - epsilon || (std::abs(gap - best_under_gap) <= epsilon && err_mid < best_under_err)) {
+                best_under_gap = gap;
+                best_under_err = err_mid;
+                best_under_choice = choice_mid;
+            }
+        }
+    }
+
+    if (!best_under_choice.empty()) {
+        for (size_t i = 0; i < all.size(); ++i) {
+            all[i].choice = best_under_choice[i];
+        }
+    } else if (!best_over_choice.empty()) {
+        for (size_t i = 0; i < all.size(); ++i) {
+            all[i].choice = best_over_choice[i];
+        }
+    } else {
+        // Pick whichever side we already have, or keep minimal
+        if (bytes_hi <= budget_bytes && !choice_hi.empty()) {
+            for (size_t i = 0; i < all.size(); ++i) {
+                all[i].choice = choice_hi[i];
+            }
+        } else {
+            for (auto & ti : all) {
+                ti.choice = 0;
+            }
+        }
+    }
+
+    // Spend any remaining budget with best upgrades that still fit (one pass)
+    {
+        auto cur_bytes = total_bytes();
+        while (true) {
+            int best_i = -1;
+            int best_j = -1;
+            double best_ratio = -1.0;
+            double best_gain = -1.0;
+
+            for (int i = 0; i < (int)all.size(); ++i) {
+                const auto & ti = all[i];
+                const std::string tensor_name  = ggml_get_name(ti.w->tensor);
+                int j = ti.choice + 1;
+                while (j < (int)ti.candidate.size() && ti.candidate[j].bytes == ti.candidate[ti.choice].bytes) { ++j; }
+                if (j >= (int)ti.candidate.size()) { continue; } // no upgrade available
+
+                size_t delta_bytes = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
+                if (cur_bytes + delta_bytes > budget_bytes) { continue; } // won't fit in budget
+
+                double err_gain = std::max(0.0, ti.candidate[ti.choice].error - ti.candidate[j].error);
+                if (err_gain < epsilon) { continue; } // no error improvement
+
+                double ratio = err_gain / (double)delta_bytes; // error reduction per byte
+                if (is_important(tensor_name)) { ratio *= 2.0; } // important tensors get 2x boost
+
+                // For tie-breaking, prioritize the largest absolute error improvement.
+                if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && err_gain > best_gain)) {
+                    best_ratio = ratio;
+                    best_gain = err_gain;
+                    best_i = i;
+                    best_j = j;
+                }
+            }
+
+            if (best_i < 0) { break; } // no more upgrades within budget found
+
+            size_t upgrade_cost = all[best_i].candidate[best_j].bytes - all[best_i].candidate[all[best_i].choice].bytes;
+            all[best_i].choice = best_j;
+            cur_bytes += upgrade_cost;
+        }
+    }
+
+    delete_bpw_state(); // we're done, clear any checkpoint
+    uninstall_signal_handlers();
+
+    return emit_overrides();
+}
+
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -610,14 +1776,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->only_copy) {
         ftype = ml.ftype;
     }
-    const std::unordered_map<std::string, std::vector<float>> * imatrix_data = nullptr;
+    const std::unordered_map<std::string, std::vector<float>> * values_data = nullptr;
+    const std::unordered_map<std::string, std::vector<float>> * activations_data = nullptr;
     if (params->imatrix) {
-        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
-        if (imatrix_data) {
-            LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(imatrix_data->size()));
+        values_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
+        if (values_data) {
+            LLAMA_LOG_INFO("================================ Have weights data with %d entries",int(values_data->size()));
             qs.has_imatrix = true;
             // check imatrix for nans or infs
-            for (const auto & kv : *imatrix_data) {
+            for (const auto & kv : *values_data) {
                 for (float f : kv.second) {
                     if (!std::isfinite(f)) {
                         throw std::runtime_error(format("imatrix contains non-finite value %f\n", f));
@@ -626,8 +1793,23 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
         }
     }
+    if (params->activations) {
+        activations_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->activations);
+        if (activations_data) {
+            LLAMA_LOG_INFO(" and %d activations",int(activations_data->size()));
+            qs.has_activations = true;
+            // check activations for nans or infs
+            for (const auto & kv : *activations_data) {
+                for (float f : kv.second) {
+                    if (!std::isfinite(f)) {
+                        throw std::runtime_error(format("activations contain non-finite value %f\n", f));
+                    }
+                }
+            }
+        }
+    }
+    LLAMA_LOG_INFO("\n");
 
-    const size_t align = GGUF_DEFAULT_ALIGNMENT;
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
     std::vector<int> prune_list = {};
@@ -774,6 +1956,21 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    std::unordered_map<std::string, ggml_type> bpw_overrides = {};
+    if (params->target_bpw != -1.0f && !params->only_copy) {
+        if (params->imatrix) {
+            if (params->activations) {
+                LLAMA_LOG_INFO("%s: imatrix with activations provided, target bpw quantization will be more accurate\n",__func__);
+            } else {
+                LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate\n", __func__);
+            }
+            LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
+            bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
+        } else {
+            LLAMA_LOG_WARN("%s: no imatrix provided, target bpw will not apply\n", __func__);
+        }
+    }
+
     int cur_split = -1;
     std::ofstream fout;
     auto close_ofstream = [&]() {
@@ -806,6 +2003,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
     for (const auto * it : tensors) {
+        const size_t  align  = GGUF_DEFAULT_ALIGNMENT;
         const auto & weight = *it;
         ggml_tensor * tensor = weight.tensor;
         if (weight.idx != cur_split && params->keep_split) {
@@ -824,62 +2022,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ml.load_data_for(tensor);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-               ++idx, ml.n_tensors,
-               ggml_get_name(tensor),
-               llama_format_tensor_shape(tensor).c_str(),
-               ggml_type_name(tensor->type));
+            ++idx, ml.n_tensors, ggml_get_name(tensor), llama_format_tensor_shape(tensor).c_str(), ggml_type_name(tensor->type));
 
-        // This used to be a regex, but <regex> has an extreme cost to compile times.
-        bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
-
-        // quantize only 2D and 3D tensors (experts)
-        quantize &= (ggml_n_dims(tensor) >= 2);
-
-        // do not quantize norm tensors
-        quantize &= name.find("_norm.weight") == std::string::npos;
-
+        bool quantize = ggml_n_dims(tensor) >= 2 && is_quantizable(name, model.arch, params);
         quantize &= params->quantize_output_tensor || name != "output.weight";
-        quantize &= !params->only_copy;
-
-        // do not quantize expert gating tensors
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
-
-        // these are very small (e.g. 4x4)
-        quantize &= name.find("altup")  == std::string::npos;
-        quantize &= name.find("laurel") == std::string::npos;
-
-        // these are not too big so keep them as it is
-        quantize &= name.find("per_layer_model_proj") == std::string::npos;
-
-        // do not quantize positional embeddings and token types (BERT)
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
-        quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
-
-        // do not quantize Mamba's small yet 2D weights
-        // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
-        quantize &= name.find("shortconv.conv.weight") == std::string::npos;
-
-        // do not quantize RWKV's small yet 2D weights
-        quantize &= name.find("time_mix_first.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_v2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a0.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_a2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_g2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-        quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-        quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
-
-        // do not quantize relative position bias (T5)
-        quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
         ggml_type new_type;
         void * new_data;
@@ -892,14 +2038,24 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (!params->pure && ggml_is_quantized(default_type)) {
                 int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
-                // unless the user specifies a type, and the tensor geometry will not require fallback quantisation
+
+                // get quantization type overrides targeting a given bits per weight budget
+                if (params->target_bpw != -1.0f && !bpw_overrides.empty()) {
+                    const auto override = bpw_overrides.find(name);
+                    if (override != bpw_overrides.end() && override->second != new_type) {
+                        LLAMA_LOG_DEBUG("(bpw override %s) ", ggml_type_name(new_type));
+                        new_type = override->second;
+                    }
+                }
+
+                // unless the user specifies a type, and the tensor shape will not require fallback quantisation
                 if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
-                                LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
+                                LLAMA_LOG_DEBUG("(type override %s) ", ggml_type_name(new_type));
                                 new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                             }
                         }
@@ -927,10 +2083,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             const int64_t nelements = ggml_nelements(tensor);
 
             const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it == imatrix_data->end()) {
-                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
+            if (values_data) {
+                auto it = values_data->find(remap_imatrix(tensor->name, mapped));
+                if (it == values_data->end()) {
+                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s, ", __func__, tensor->name);
                 } else {
                     if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                         imatrix = it->second.data();
@@ -1064,9 +2220,11 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.pure                        =*/ false,
         /*.keep_split                  =*/ false,
         /*.imatrix                     =*/ nullptr,
+        /*.activations                 =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr
+        /*.prune_layers                =*/ nullptr,
+        /*.target_bpw                  =*/ -1.0f
     };
 
     return result;
