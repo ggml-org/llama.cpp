@@ -100,7 +100,7 @@ let calc_meta = {
  */
 function calc_run(obj) {
     console_redir()
-    let func = new Function(obj["arithexpr"])
+    let func = new Function(`console.log(${obj["arithexpr"]})`)
     func()
     console_revert()
     tc_switch["simple_calculator"]["result"] = gConsoleStr
