@@ -3951,6 +3951,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_repo = "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF";
             params.model.hf_file = "embeddinggemma-300M-qat-Q4_0.gguf";
             params.port = 8011;
+            params.n_ubatch = 2048;
+            params.n_batch = 2048;
             params.n_parallel = 32;
             params.n_ctx = 2048*params.n_parallel;
             params.verbose_prompt = true;
