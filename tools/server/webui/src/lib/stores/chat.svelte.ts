@@ -419,6 +419,7 @@ class ChatStore {
 
 				if (messageIndex !== -1) {
 					const [failedMessage] = this.activeMessages.splice(messageIndex, 1);
+
 					if (failedMessage) {
 						DatabaseStore.deleteMessage(failedMessage.id).catch((cleanupError) => {
 							console.error('Failed to remove assistant message after error:', cleanupError);
