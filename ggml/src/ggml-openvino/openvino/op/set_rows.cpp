@@ -25,7 +25,7 @@ namespace ggml {
 namespace op {
 
 OutputVector translate_set_rows(const NodeContext& context) {
-    num_inputs_check(context, 2, 2);
+    num_inputs_check(context, 3, 3);
 
     auto data = context.get_input(0);
     data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type(0));

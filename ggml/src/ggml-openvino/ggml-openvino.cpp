@@ -70,6 +70,7 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
     /* .graph_compute           = */ ggml_backend_openvino_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 int ggml_backend_openvino_get_device_count() {
