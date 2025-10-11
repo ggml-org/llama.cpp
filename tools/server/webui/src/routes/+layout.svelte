@@ -14,6 +14,7 @@
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { initializeSettingsSync } from '$lib/services/settings-sync';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
@@ -94,9 +95,10 @@
 		}
 	});
 
-	// Initialize server properties on app load
+	// Initialize server properties and settings sync on app load
 	$effect(() => {
 		serverStore.fetchServerProps();
+		initializeSettingsSync();
 	});
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
