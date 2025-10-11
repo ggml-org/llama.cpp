@@ -586,12 +586,15 @@ class MultiChatUI {
 
     /**
      * Reset user input ui.
-     * * clear user input
+     * * clear user input (if requested, default true)
      * * enable user input
      * * set focus to user input
+     * @param {boolean} [bClearElInUser=true]
      */
-    ui_reset_userinput() {
-        this.elInUser.value = "";
+    ui_reset_userinput(bClearElInUser=true) {
+        if (bClearElInUser) {
+            this.elInUser.value = "";
+        }
         this.elInUser.disabled = false;
         this.elInUser.focus();
     }
@@ -718,7 +721,7 @@ class MultiChatUI {
         if (toolResult !== undefined) {
             this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
         }
-        this.ui_reset_userinput();
+        this.ui_reset_userinput(toolResult === undefined);
     }
 
     /**
