@@ -14,7 +14,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { remarkLiteralHtml } from '$lib/markdown/literalHtml';
+	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 
 	interface Props {
 		content: string;
