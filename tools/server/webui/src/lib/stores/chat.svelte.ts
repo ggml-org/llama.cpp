@@ -428,6 +428,7 @@ class ChatStore {
 				}
 
 				const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+
 				this.showErrorDialog(dialogType, error.message);
 
 				if (onError) {
