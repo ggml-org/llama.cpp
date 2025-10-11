@@ -5966,20 +5966,12 @@ class Mamba2Model(TextModel):
 class JambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAMBA
 
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        del tokenizer  # unused
-
-        return "gpt-2"
-
     def set_vocab(self):
         if (self.dir_model / "tokenizer.model").is_file():
-            # Using Jamba's tokenizer.json causes errors on model load
-            # (something about "byte not found in vocab"),
-            # but there's a working tokenizer.model
             self._set_vocab_sentencepiece()
         else:
-            # Some Jamba models only have a tokenizer.json, which works.
-            self._set_vocab_gpt2()
+            self._set_vocab_llama_hf()
+            self.gguf_writer.add_add_space_prefix(False)
 
     def set_gguf_parameters(self):
         d_model = self.find_hparam(["hidden_size", "mamba_d_model"])
