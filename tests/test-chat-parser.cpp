@@ -524,6 +524,64 @@ static void test_json_with_dumped_args() {
     R"({"foo": "bar", "args": {"arg1": [)",
     R"({"foo":"bar","args":"{\"arg1\":["})"
   );
+
+  // Unicode tests
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u0)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u0"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u00)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u00"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u000)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u000"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u0000)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u0000"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud8)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud8"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud80)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud80"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\u)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\u"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\ud)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\ud"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc0)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc0"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc00)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc00"})"
+  );
 }
 
 static void test_positions() {
