@@ -4149,9 +4149,9 @@ kernel void kernel_conv_transpose_2d(
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3    tgpg[[threadgroups_per_grid]]) {
 
-    const int32_t out_x = tgpig[0];
-    const int32_t out_y = tgpig[1];
-    const int32_t out_c = tgpig[2];
+    const int64_t out_x = tgpig[0];
+    const int64_t out_y = tgpig[1];
+    const int64_t out_c = tgpig[2];
 
     float v = 0.0f;
 
