@@ -300,6 +300,8 @@ work.
 
 ### Tool Calling
 
+#### Extending wiht new tools
+
 Provide a descriptive meta data explaining the tool / function being provided for tool calling.
 
 Provide a handler which should implement the specified tool / function call. It should place
@@ -310,6 +312,23 @@ Update the tc_switch to include a object entry for the tool, which inturn icnlud
 * the meta data as well as
 * a reference to the handler and also
 * the result key
+
+#### Mapping tool calls and responses to normal assistant - user chat flow
+
+Instead of maintaining tool_call request and resultant response in logically seperate parallel
+channel used for requesting tool_calls by the assistant and the resulstant tool role response,
+the SimpleChatTC pushes it into the normal assistant - user chat flow itself, by including the
+tool call and response as a pair of tagged request with details in the assistant block and inturn
+tagged response in the subsequent user block.
+
+This allows the GenAi/LLM to be aware of the tool calls it made as well as the responses it got,
+so that it can incorporate the results of the same in the subsequent chat / interactions.
+
+NOTE: This flow tested to be ok enough with Gemma-3N-E4B-it-Q8_0 LLM ai model for now.
+
+TODO: Need to think later, whether to continue this simple flow, or atleast use tool role wrt
+the tool call responses or even go further and have the logically seperate tool_call request
+structures also.
 
 
 ### Debuging the handshake
