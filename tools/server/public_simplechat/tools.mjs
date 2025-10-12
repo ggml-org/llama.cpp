@@ -37,7 +37,7 @@ export async function tool_call(toolname, toolargs) {
     for (const fn in tc_switch) {
         if (fn == toolname) {
             try {
-                tc_switch[fn]["handler"](JSON.parse(toolargs))
+                tc_switch[fn]["handler"](fn, JSON.parse(toolargs))
                 return tc_switch[fn]["result"]
             } catch (/** @type {any} */error) {
                 return `Tool/Function call raised an exception:${error.name}:${error.message}`

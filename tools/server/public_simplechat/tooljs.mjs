@@ -63,14 +63,15 @@ let js_meta = {
 /**
  * Implementation of the javascript interpretor logic. Minimal skeleton for now.
  * ALERT: Has access to the javascript environment and can mess with it and beyond
+ * @param {string} toolname
  * @param {any} obj
  */
-function js_run(obj) {
+function js_run(toolname, obj) {
     console_redir()
     let func = new Function(obj["code"])
     func()
     console_revert()
-    tc_switch["javascript"]["result"] = gConsoleStr
+    tc_switch[toolname]["result"] = gConsoleStr
 }
 
 
@@ -96,14 +97,15 @@ let calc_meta = {
 /**
  * Implementation of the simple calculator logic. Minimal skeleton for now.
  * ALERT: Has access to the javascript environment and can mess with it and beyond
+ * @param {string} toolname
  * @param {any} obj
  */
-function calc_run(obj) {
+function calc_run(toolname, obj) {
     console_redir()
     let func = new Function(`console.log(${obj["arithexpr"]})`)
     func()
     console_revert()
-    tc_switch["simple_calculator"]["result"] = gConsoleStr
+    tc_switch[toolname]["result"] = gConsoleStr
 }
 
 
