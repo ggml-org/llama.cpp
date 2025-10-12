@@ -91,7 +91,11 @@ let gUsageMsg = `
         <li> Completion mode - no system prompt normally.</li>
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
-    <li> Enter your query to ai assistant below.</li>
+    <li> Enter your query to ai assistant in textarea provided below.</li>
+    <li> If ai assistant requests a tool call, varify same before triggering it.</li>
+        <ul class="ul2">
+        <li> submit tool response placed into user query textarea</li>
+        </ul>
     <li> Default ContextWindow = [System, Last Query+Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
@@ -562,6 +566,10 @@ class MultiChatUI {
         this.elDivHeading = /** @type{HTMLSelectElement} */(document.getElementById("heading"));
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
+        this.elDivTool = /** @type{HTMLDivElement} */(document.getElementById("tool-div"));
+        this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
+        this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
+        this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
 
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
@@ -569,6 +577,10 @@ class MultiChatUI {
         this.validate_element(this.elDivHeading, "heading");
         this.validate_element(this.elDivChat, "sessions-div");
         this.validate_element(this.elBtnSettings, "settings");
+        this.validate_element(this.elDivTool, "tool-div");
+        this.validate_element(this.elInToolName, "toolname-in");
+        this.validate_element(this.elInToolArgs, "toolargs-in");
+        this.validate_element(this.elBtnTool, "tool-btn");
     }
 
     /**
