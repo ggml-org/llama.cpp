@@ -781,4 +781,8 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_opt_step_adamw;
 
+typedef struct {
+    int64_t  np;
+} ggml_metal_kargs_opt_step_sgd;
+
 #endif // GGML_METAL_IMPL
