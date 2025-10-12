@@ -1,11 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import {
-		ChatSidebar,
-		ConversationTitleUpdateDialog,
-		MaximumContextAlertDialog
-	} from '$lib/components/app';
+	import { ChatSidebar, ConversationTitleUpdateDialog } from '$lib/components/app';
 	import {
 		activeMessages,
 		isLoading,
@@ -144,8 +140,6 @@
 <ModeWatcher />
 
 <Toaster richColors />
-
-<MaximumContextAlertDialog />
 
 <ConversationTitleUpdateDialog
 	bind:open={titleUpdateDialogOpen}

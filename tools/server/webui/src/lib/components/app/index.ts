@@ -30,11 +30,10 @@ export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
 
+export { default as ChatErrorDialog } from './dialogs/ChatErrorDialog.svelte';
 export { default as EmptyFileAlertDialog } from './dialogs/EmptyFileAlertDialog.svelte';
 
 export { default as ConversationTitleUpdateDialog } from './dialogs/ConversationTitleUpdateDialog.svelte';
-
-export { default as MaximumContextAlertDialog } from './dialogs/MaximumContextAlertDialog.svelte';
 
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
 
