@@ -773,4 +773,8 @@ typedef struct {
     uint64_t nb01;
 } ggml_metal_kargs_argmax;
 
+typedef struct {
+    int64_t  np;
+} ggml_metal_kargs_opt_step_adamw;
+
 #endif // GGML_METAL_IMPL

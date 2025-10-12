@@ -8756,12 +8756,17 @@ kernel void kernel_pool_2d_avg_f32(
 }
 
 kernel void kernel_opt_step_adamw_f32(
+        constant    ggml_metal_kargs_opt_step_adamw & args,
         device       float * x,
         device const float * g,
         device       float * g_m,
         device       float * g_v,
         device const float * pars,
         uint        gid[[thread_position_in_grid]]) {
+
+    if (gid >= args.np) {
+        return;
+    }
 
     const float alpha  = pars[0];
     const float beta1  = pars[1];
