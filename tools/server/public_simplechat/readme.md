@@ -328,8 +328,9 @@ to the generated code directly. Either way always remember to cross check the to
 generated responses when using tool calling.
 
 May add
-* web_fetch along with a corresponding simple local proxy server logic that can bypass the
-  CORS restrictions applied if trying to directly fetch from the browser js runtime environment.
+* web_fetch along with a corresponding simple local web proxy/caching server logic that can bypass
+  the CORS restrictions applied if trying to directly fetch from the browser js runtime environment.
+  Inturn maybe with a white list of allowed sites to access or so.
 
 
 #### Extending wiht new tools
@@ -367,7 +368,7 @@ structures also.
 
 Update to use web worker.
 
-Make the Tool Call related ui elements use up horizontal space properly.
+WebFetch and Local web proxy/caching server
 
 Try and trap promises based flows to ensure all generated results or errors if any are caught
 before responding back to the ai model.
