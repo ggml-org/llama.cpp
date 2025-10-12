@@ -387,6 +387,48 @@ jobs:
           cd build
           ctest -L main --verbose
 
+  ubuntu-24-cmake-vulkan-deb:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-24-cmake-vulkan-deb
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get install -y glslc libvulkan-dev libcurl4-openssl-dev
+
+      - name: Configure
+        id: cmake_configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_VULKAN=ON
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake --build build -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          export GGML_VK_VISIBLE_DEVICES=0
+          export GGML_VK_DISABLE_F16=1
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 4200
+
   ubuntu-24-cmake-vulkan:
     runs-on: ubuntu-24.04
 
