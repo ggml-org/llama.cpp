@@ -798,6 +798,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                         return false;
                 };
             }
+        case GGML_OP_OPT_STEP_ADAMW:
+            return true;
         default:
             return false;
     }
