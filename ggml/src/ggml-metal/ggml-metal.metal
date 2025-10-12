@@ -1723,6 +1723,11 @@ kernel void kernel_geglu_quick_f32(
     }
 }
 
+kernel void kernel_sum_f32() {
+    // TODO
+    return;
+}
+
 template <bool norm>
 kernel void kernel_sum_rows(
         constant ggml_metal_kargs_sum_rows & args,
