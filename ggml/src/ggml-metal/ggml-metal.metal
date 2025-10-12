@@ -4131,6 +4131,81 @@ kernel void kernel_conv_transpose_1d<half>(
     uint3   tgpig[[threadgroup_position_in_grid]],
     uint3    tgpg[[threadgroups_per_grid]]);
 
+
+typedef void (conv_transpose_2d_t)(
+        constant ggml_metal_kargs_conv_transpose_2d & args,
+        device const float * src0,
+        device const float * src1,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3    tgpg[[threadgroups_per_grid]]);
+
+template <typename T>
+kernel void kernel_conv_transpose_2d(
+        constant ggml_metal_kargs_conv_transpose_2d & args,
+        device const T * src0,
+        device const float * src1,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3    tgpg[[threadgroups_per_grid]]) {
+
+    const int32_t out_x = tgpig[0];
+    const int32_t out_y = tgpig[1];
+    const int32_t out_c = tgpig[2];
+
+    float v = 0.0f;
+
+    for (int32_t in_c = 0; in_c<args.IC; in_c++){
+        for (int32_t kh = 0; kh<args.KH; kh++){
+
+            int32_t in_y = out_y - kh;
+
+            if (in_y < 0 || in_y % args.s0) continue;
+
+            in_y /= args.s0;
+
+            if (in_y >= args.IH) continue;
+
+            for (int32_t kw = 0; kw<args.KW; kw++){
+                int32_t in_x = out_x - kw;
+
+                if (in_x <0 || in_x % args.s0) continue;
+
+                in_x /= args.s0;
+
+                if (in_x >= args.IW) continue;
+
+                const int32_t input_idx = (args.IW * args.IH) * in_c + (args.IW) * in_y + in_x;
+                const int32_t kernel_idx = (args.KH * args.KW * args.OC) * in_c + (args.KH * args.KW) * out_c + (args.KW) * kh + kw;
+
+                v += (float)src0[kernel_idx] * src1[input_idx];
+
+            }
+        }
+    }
+    device float * dst_ptr = (device float *) (dst + out_x*args.nb0 + out_y * args.nb1 + out_c*args.nb2);
+
+    dst_ptr[0] = v;
+}
+
+template [[host_name("kernel_conv_transpose_2d_f32_f32")]]
+kernel void kernel_conv_transpose_2d<float>(
+    constant ggml_metal_kargs_conv_transpose_2d & args,
+    device const float * src0,
+    device const float * src1,
+    device        char * dst,
+    uint3   tgpig[[threadgroup_position_in_grid]],
+    uint3    tgpg[[threadgroups_per_grid]]);
+
+template [[host_name("kernel_conv_transpose_2d_f16_f32")]]
+kernel void kernel_conv_transpose_2d<half>(
+    constant ggml_metal_kargs_conv_transpose_2d & args,
+    device const half  * src0,
+    device const float * src1,
+    device        char * dst,
+    uint3   tgpig[[threadgroup_position_in_grid]],
+    uint3    tgpg[[threadgroups_per_grid]]);
+
 kernel void kernel_upscale_f32(
     constant ggml_metal_kargs_upscale & args,
     device  const char * src0,
