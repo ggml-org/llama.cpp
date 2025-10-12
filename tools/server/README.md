@@ -1032,6 +1032,50 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 </details>
 
+
+### GET `/slots/status`: Secure slot monitoring without sensitive data
+
+This endpoint provides slot monitoring information suitable for production environments, load balancers, and monitoring dashboards. Unlike `/slots`, it does not expose sensitive user data such as prompts or generated text.
+
+**Response format:**
+
+```json
+{
+  "slots": [
+    {
+      "id": 0,
+      "state": "idle",
+      "is_processing": false
+    },
+    {
+      "id": 1,
+      "state": "processing",
+      "is_processing": true,
+      "n_ctx": 2048,
+      "n_past": 128,
+      "n_decoded": 45,
+      "n_remaining": 155,
+      "truncated": false
+    }
+    ],
+  "total_slots": 4,
+  "idle_slots": 3,
+  "processing_slots": 1,
+  "queue_size": 2,
+  "server_uptime_ms": 45231.5
+}
+```
+
+
+**Use cases:**
+- Monitoring dashboards that need capacity information
+- Load balancers (e.g., Paddler) for request routing
+- Capacity planning and resource allocation
+- Production deployments where prompt privacy is required
+
+**Security:** This endpoint excludes all sensitive data including prompts, generated text, tokens, and detailed task parameters.
+
+
 ### GET `/metrics`: Prometheus compatible metrics exporter
 
 This endpoint is only accessible if `--metrics` is set.
