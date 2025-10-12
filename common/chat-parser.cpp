@@ -432,7 +432,7 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
         if (is_arguments_path({})) {
             // Entire JSON is the arguments and was parsed fully.
             return consume_json_result {
-                partial->json.dump(),
+                partial->json.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true),
                 /* .is_partial = */ false,
             };
         }
