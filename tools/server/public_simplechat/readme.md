@@ -7,7 +7,7 @@ by Humans for All.
 
 To run from the build dir
 
-bin/llama-server -m path/model.gguf --path ../tools/server/public_simplechat
+bin/llama-server -m path/model.gguf --path ../tools/server/public_simplechat --jinja
 
 Continue reading for the details.
 
@@ -67,6 +67,16 @@ first run tools/server
 next run this web front end in tools/server/public_simplechat
 * cd ../tools/server/public_simplechat
 * python3 -m http.server PORT
+
+### for tool calling
+
+remember to
+
+* pass --jinja to llama-server to enable tool calling support from the server ai engine end.
+
+* enable bTools in the settings page of the client side gui.
+
+* use a GenAi/LLM model which supports tool calling.
 
 ### using the front end
 
