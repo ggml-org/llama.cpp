@@ -7,13 +7,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.arm.aichat.LLamaTier
+import com.arm.aichat.ArmCpuTier
 import com.arm.aichat.TierDetection
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 /**
- * Internal [LLamaTier] detection implementation
+ * Internal [ArmCpuTier] detection implementation
  */
 internal class TierDetectionImpl private constructor(
     private val context: Context
@@ -25,7 +25,7 @@ internal class TierDetectionImpl private constructor(
         // CPU feature detection preferences
         private const val DATASTORE_CPU_DETECTION = "cpu-detection"
         private const val DATASTORE_VERSION = 1
-        private val Context.llamaTierDataStore: DataStore<Preferences>
+        private val Context.armCpuTierDataStore: DataStore<Preferences>
             by preferencesDataStore(name = DATASTORE_CPU_DETECTION)
 
         private val DETECTION_VERSION = intPreferencesKey("detection_version")
@@ -49,12 +49,12 @@ internal class TierDetectionImpl private constructor(
 
     private external fun getCpuFeaturesString(): String
 
-    private var _detectedTier: LLamaTier? = null
+    private var _detectedTier: ArmCpuTier? = null
 
     /**
      * Get the detected tier, loading from cache if needed
      */
-    override fun getDetectedTier(): LLamaTier? =
+    override fun getDetectedTier(): ArmCpuTier? =
         _detectedTier ?: runBlocking { obtainTier() }
 
     /**
@@ -73,13 +73,13 @@ internal class TierDetectionImpl private constructor(
     /**
      * Load cached tier from datastore without performing detection
      */
-    private suspend fun loadDetectedTierFromDataStore(): LLamaTier? {
-        val preferences = context.llamaTierDataStore.data.first()
+    private suspend fun loadDetectedTierFromDataStore(): ArmCpuTier? {
+        val preferences = context.armCpuTierDataStore.data.first()
         val cachedVersion = preferences[DETECTION_VERSION] ?: -1
         val cachedTierValue = preferences[DETECTED_TIER] ?: -1
 
         return if (cachedVersion == DATASTORE_VERSION && cachedTierValue >= 0) {
-            LLamaTier.fromRawValue(cachedTierValue)?.also {
+            ArmCpuTier.fromRawValue(cachedTierValue)?.also {
                 Log.i(TAG, "Loaded cached tier: ${it.name}")
                 _detectedTier = it
             }
@@ -92,7 +92,7 @@ internal class TierDetectionImpl private constructor(
     /**
      * Actual implementation of optimal tier detection via native methods
      */
-    private fun performOptimalTierDetection(): LLamaTier? {
+    private fun performOptimalTierDetection(): ArmCpuTier? {
         try {
             // Load CPU detection library
             System.loadLibrary("cpu-detector")
@@ -104,13 +104,13 @@ internal class TierDetectionImpl private constructor(
             Log.i(TAG, "Raw tier $tierValue w/ CPU features: $features")
 
             // Convert to enum and validate
-            val tier = LLamaTier.fromRawValue(tierValue) ?: run {
+            val tier = ArmCpuTier.fromRawValue(tierValue) ?: run {
                 Log.e(TAG, "Invalid tier value $tierValue")
-                return LLamaTier.NONE
+                return ArmCpuTier.NONE
             }
 
             // Ensure we don't exceed maximum supported tier
-            val maxTier = LLamaTier.maxSupportedTier
+            val maxTier = ArmCpuTier.maxSupportedTier
             return if (tier.rawValue > maxTier.rawValue) {
                 Log.w(TAG, "Detected tier ${tier.name} exceeds max supported, using ${maxTier.name}")
                 maxTier
@@ -132,13 +132,13 @@ internal class TierDetectionImpl private constructor(
      * Clear cached detection results (for testing/debugging)
      */
     override fun clearCache() {
-        runBlocking { context.llamaTierDataStore.edit { it.clear() } }
+        runBlocking { context.armCpuTierDataStore.edit { it.clear() } }
         _detectedTier = null
         Log.i(TAG, "Cleared CPU detection results")
     }
 
-    private suspend fun LLamaTier.saveToDataStore() {
-        context.llamaTierDataStore.edit { prefs ->
+    private suspend fun ArmCpuTier.saveToDataStore() {
+        context.armCpuTierDataStore.edit { prefs ->
             prefs[DETECTED_TIER] = this.rawValue
             prefs[DETECTION_VERSION] = DATASTORE_VERSION
         }

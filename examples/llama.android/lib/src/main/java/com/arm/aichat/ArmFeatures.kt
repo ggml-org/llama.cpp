@@ -11,7 +11,7 @@ data class ArmFeature(
 )
 
 /**
- * Helper class to map LLamaTier to supported Arm® features.
+ * Helper class to map [ArmCpuTier] to supported Arm® features.
  */
 object ArmFeaturesMapper {
 
@@ -62,7 +62,7 @@ object ArmFeaturesMapper {
     /**
      * Gets the feature support data for UI display.
      */
-    fun getFeatureDisplayData(tier: LLamaTier?): List<DisplayItem>? =
+    fun getFeatureDisplayData(tier: ArmCpuTier?): List<DisplayItem>? =
         getSupportedFeatures(tier).let { optFlags ->
             optFlags?.let { flags ->
                 allFeatures.mapIndexed { index, feature ->
@@ -75,16 +75,16 @@ object ArmFeaturesMapper {
         }
 
     /**
-     * Maps a LLamaTier to its supported Arm® features.
+     * Maps a [ArmCpuTier] to its supported Arm® features.
      * Returns a list of booleans where each index corresponds to allFeatures.
      */
-    private fun getSupportedFeatures(tier: LLamaTier?): List<Boolean>? =
+    private fun getSupportedFeatures(tier: ArmCpuTier?): List<Boolean>? =
         when (tier) {
-            LLamaTier.NONE, null -> null                              // No tier detected
-            LLamaTier.T1 -> listOf(true, false, false, false, false)  // ASIMD only
-            LLamaTier.T2 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
-            LLamaTier.T3 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
-            LLamaTier.T4 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE/2
-            LLamaTier.T5 -> listOf(true, true, true, true, true)     // ASIMD + DOTPROD + I8MM + SVE/2 + SME/2
+            ArmCpuTier.NONE, null -> null                              // No tier detected
+            ArmCpuTier.T1 -> listOf(true, false, false, false, false)  // ASIMD only
+            ArmCpuTier.T2 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
+            ArmCpuTier.T3 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
+            ArmCpuTier.T4 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE/2
+            ArmCpuTier.T5 -> listOf(true, true, true, true, true)     // ASIMD + DOTPROD + I8MM + SVE/2 + SME/2
         }
 }

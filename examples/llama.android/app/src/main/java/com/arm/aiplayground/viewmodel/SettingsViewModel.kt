@@ -2,7 +2,7 @@ package com.arm.aiplayground.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.arm.aichat.LLamaTier
+import com.arm.aichat.ArmCpuTier
 import com.arm.aichat.TierDetection
 import com.arm.aiplayground.data.repo.ModelRepository
 import com.arm.aiplayground.data.source.prefs.ColorThemeMode
@@ -66,7 +66,7 @@ class SettingsViewModel @Inject constructor(
     private val _darkThemeMode = MutableStateFlow(DarkThemeMode.AUTO)
     val darkThemeMode: StateFlow<DarkThemeMode> = _darkThemeMode.asStateFlow()
 
-    val detectedTier: LLamaTier?
+    val detectedTier: ArmCpuTier?
         get() = tierDetection.getDetectedTier()
 
     init {
