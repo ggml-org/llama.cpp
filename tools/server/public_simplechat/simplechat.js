@@ -536,17 +536,11 @@ class SimpleChat {
         if (toolname === "") {
             return undefined
         }
-        for (const fn in tools.tc_switch) {
-            if (fn == toolname) {
-                try {
-                    tools.tc_switch[fn]["handler"](JSON.parse(ar.response.toolargs))
-                    return tools.tc_switch[fn]["result"]
-                } catch (/** @type {any} */error) {
-                    return `Tool/Function call raised an exception:${error.name}:${error.message}`
-                }
-            }
+        try {
+            return await tools.tool_call(toolname, ar.response.toolargs)
+        } catch (/** @type {any} */error) {
+            return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
-        return `Unknown Tool/Function Call:${toolname}`
     }
 
 }
