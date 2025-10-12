@@ -773,15 +773,4 @@ typedef struct {
     uint64_t nb01;
 } ggml_metal_kargs_argmax;
 
-typedef struct {
-    float    alpha;
-    float    beta1;
-    float    beta2;
-    float    eps;
-    float    wd;
-    float    beta1h;
-    float    beta2h;
-    int64_t  np;
-} ggml_metal_kargs_opt_step_adamw;
-
 #endif // GGML_METAL_IMPL
