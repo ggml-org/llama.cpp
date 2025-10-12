@@ -419,14 +419,14 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 // Complex 2-bit quantization dot product for Fairy±i model
 // Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act))
 // We use q8_K for both real and imaginary activation parts stored sequentially
-void ggml_vec_dot_cq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
 
-    const block_cq2_0 * GGML_RESTRICT x = vx;
+    const block_ifairy * GGML_RESTRICT x = vx;
     const block_q8_K  * GGML_RESTRICT y = vy;
 
     const int nb = n / QK_K;
@@ -449,6 +449,7 @@ void ggml_vec_dot_cq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         int32_t sum_bc = 0; // imag_weight * real_act
 
         // Process all elements in the block
+        // todo_liweitao fix with qs(decode complex weight)
         for (size_t j = 0; j < sizeof(x->qs_real); j += 32) {
             // Each byte contains 4 2-bit values
             for (size_t l = 0; l < 4; ++l) {

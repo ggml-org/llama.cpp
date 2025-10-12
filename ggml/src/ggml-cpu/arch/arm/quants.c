@@ -1416,14 +1416,14 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 // Complex 2-bit quantization dot product with ARM NEON acceleration for Fairy±i
-void ggml_vec_dot_cq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
 
-    const block_cq2_0 * GGML_RESTRICT x = vx;
+    const block_ifairy * GGML_RESTRICT x = vx;
     const block_q8_K  * GGML_RESTRICT y = vy;
 
     const int nb = n / QK_K;
@@ -1663,7 +1663,7 @@ void ggml_vec_dot_cq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(x);
     UNUSED(y);
     UNUSED(nb);
-    ggml_vec_dot_cq2_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+    ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 
