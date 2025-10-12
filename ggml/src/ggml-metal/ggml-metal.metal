@@ -1723,6 +1723,24 @@ kernel void kernel_geglu_quick_f32(
     }
 }
 
+kernel void kernel_op_sum_f32(
+        constant ggml_metal_kargs_sum & args,
+        device const float * src0,
+        device       float * dst,
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+
+    if (tiitg != 0) {
+        return;
+    }
+
+    float acc = 0.0f;
+    for (ulong i = 0; i < args.np; ++i) {
+        acc += src0[i];
+    }
+
+    dst[0] = acc;
+}
+
 template <bool norm>
 kernel void kernel_sum_rows(
         constant ggml_metal_kargs_sum_rows & args,
@@ -8753,4 +8771,38 @@ kernel void kernel_pool_2d_avg_f32(
     }
 
     o_ptr[cur_oh * args.OW + cur_ow] = res;
+}
+
+kernel void kernel_opt_step_adamw_f32(
+        constant    ggml_metal_kargs_opt_step_adamw & args,
+        device       float * x,
+        device const float * g,
+        device       float * g_m,
+        device       float * g_v,
+        device const float * pars,
+        uint        gid[[thread_position_in_grid]]) {
+
+    if (gid >= args.np) {
+        return;
+    }
+
+    const float alpha  = pars[0];
+    const float beta1  = pars[1];
+    const float beta2  = pars[2];
+    const float eps    = pars[3];
+    const float wd     = pars[4];
+    const float beta1h = pars[5];
+    const float beta2h = pars[6];
+
+    const float gi = g[gid];
+    const float gmi = g_m[gid] * beta1 +      gi * (1.0f - beta1);
+    const float gvi = g_v[gid] * beta2 + gi * gi * (1.0f - beta2);
+
+    g_m[gid] = gmi;
+    g_v[gid] = gvi;
+
+    const float mh =      gmi * beta1h;
+    const float vh = sqrt(gvi * beta2h) + eps;
+
+    x[gid] = x[gid] * (1.0f - alpha * wd) - alpha * mh / vh;
 }
