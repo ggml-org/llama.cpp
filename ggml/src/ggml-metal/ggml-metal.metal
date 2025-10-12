@@ -1723,7 +1723,6 @@ kernel void kernel_geglu_quick_f32(
     }
 }
 
-// TODO:
 kernel void kernel_op_sum_f32(
         constant ggml_metal_kargs_sum & args,
         device const float * src0,
