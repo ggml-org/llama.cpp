@@ -18,6 +18,7 @@ class ApiEP {
         Chat: "chat",
         Completion: "completion",
     }
+    /** @type {Object<string, string>} */
     static UrlSuffix = {
         'chat': `/chat/completions`,
         'completion': `/completions`,
@@ -40,6 +41,7 @@ class ApiEP {
 class AssistantResponse {
 
     constructor(content="", toolname="", toolargs="", trimmedContent="") {
+        /** @type {Object<string, string>} */
         this.response = { content: content, toolname: toolname, toolargs: toolargs, trimmedContent: trimmedContent };
     }
 
@@ -539,7 +541,7 @@ class SimpleChat {
                 try {
                     tools.tc_switch[fn]["handler"](JSON.parse(ar.response.toolargs))
                     return tools.tc_switch[fn]["result"]
-                } catch (error) {
+                } catch (/** @type {any} */error) {
                     return `Tool/Function call raised an exception:${error.name}:${error.message}`
                 }
             }
@@ -824,11 +826,15 @@ class Me {
             "Last4": 5,
         };
         this.apiEP = ApiEP.Type.Chat;
+        /** @type {Object<string, string>} */
         this.headers = {
             "Content-Type": "application/json",
             "Authorization": "", // Authorization: Bearer OPENAI_API_KEY
         }
-        // Add needed fields wrt json object to be sent wrt LLM web services completions endpoint.
+        /**
+         * Add needed fields wrt json object to be sent wrt LLM web services completions endpoint.
+         * @type {Object<string, any>}
+         */
         this.apiRequestOptions = {
             "model": "gpt-3.5-turbo",
             "temperature": 0.7,
