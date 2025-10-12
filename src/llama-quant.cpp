@@ -655,8 +655,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_IQ1_S,
         GGML_TYPE_IQ1_M,
         GGML_TYPE_IQ2_XXS,
+        GGML_TYPE_IQ2_XS,
+        GGML_TYPE_IQ2_S,
         GGML_TYPE_Q2_K,
         GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_IQ3_S,
         GGML_TYPE_Q3_K,
         GGML_TYPE_IQ4_XS,
         GGML_TYPE_IQ4_NL,
@@ -1155,7 +1158,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
         {
             std::lock_guard<std::mutex> lock(log_mutex);
-            LLAMA_LOG_INFO("\ttarget_bpw_type: - processing tensor %45s \t(%12" PRId64 " elements)\n", name.c_str(), ggml_nelements(tensor));
+            LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", func, name.c_str(), ggml_nelements(tensor));
         }
 
         if (!ml.use_mmap) {
@@ -1457,19 +1460,19 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     std::vector<tensor_info> all; // this vector will be populated by the parallel workers
     {
         std::atomic<size_t> tensor_idx{0}; // shared work queue index for all threads
-        const size_t num_tensors_to_process = tensors.size();
+        const size_t tensors_to_process = tensors.size();
         std::mutex loader_mutex;
         std::mutex log_mutex;
         std::mutex results_mutex;
         std::vector<std::thread> workers;
-        int num_threads_to_spawn = std::max(1, std::min<int>(nthread, (int)num_tensors_to_process));
+        int threads_to_spawn = std::max(1, std::min<int>(nthread, (int)tensors_to_process));
 
-        for (int i = 0; i < num_threads_to_spawn; ++i) {
+        for (int i = 0; i < threads_to_spawn; ++i) {
             workers.emplace_back([&]() {
                 std::vector<no_init<uint8_t>> thread_local_buffer;
                 while (true) {
                     const size_t current_idx = tensor_idx.fetch_add(1);
-                    if (current_idx >= num_tensors_to_process) { break; }
+                    if (current_idx >= tensors_to_process) { break; }
                     const auto * tw = tensors[current_idx];
                     if (!can_quantize(tw->tensor)) { continue; }
                     // Execute the main processing logic for this tensor
