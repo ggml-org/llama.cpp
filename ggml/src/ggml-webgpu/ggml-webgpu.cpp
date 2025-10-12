@@ -2294,8 +2294,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     case GGML_UNARY_OP_EXP:
                     case GGML_UNARY_OP_GELU_ERF:
                     case GGML_UNARY_OP_XIELU:
-                        supports_op = supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type) &&
-                          (src1 ? (src1->type == op->type) : true);
+                        supports_op = supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
                         break;
                     case GGML_UNARY_OP_COUNT:
                     default:
