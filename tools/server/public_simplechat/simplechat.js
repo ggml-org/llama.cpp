@@ -649,6 +649,8 @@ class MultiChatUI {
             this.handle_session_switch(this.curChatId);
         }
 
+        this.ui_reset_toolcall_as_needed(new AssistantResponse());
+
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
             gMe.show_settings(this.elDivChat);
@@ -729,6 +731,8 @@ class MultiChatUI {
             chat.clear();
         }
 
+        this.ui_reset_toolcall_as_needed(new AssistantResponse());
+
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
         let content = this.elInUser.value;
@@ -766,6 +770,7 @@ class MultiChatUI {
     }
 
     /**
+     * Handle running of specified tool call if any, for the specified chat session.
      * @param {string} chatId
      */
     async handle_tool_run(chatId) {
