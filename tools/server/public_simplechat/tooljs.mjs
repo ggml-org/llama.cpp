@@ -44,14 +44,14 @@ function console_revert() {
 let js_meta = {
         "type": "function",
         "function": {
-            "name": "javascript",
-            "description": "Runs code in an javascript interpreter and returns the result of the execution after few seconds",
+            "name": "run_javascript_function_code",
+            "description": "Runs given code as a function in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The code to run in the javascript interpreter."
+                        "description": "The code belonging to a function to run in the browser's javascript interpreter."
                     }
                 },
                 "required": ["code"]
@@ -78,13 +78,13 @@ let calc_meta = {
         "type": "function",
         "function": {
             "name": "simple_calculator",
-            "description": "Calculates the provided arithmatic expression using javascript interpreter and returns the result of the execution after few seconds",
+            "description": "Calculates the provided arithmatic expression using console.log of a browser's javascript interpreter and returns the output of the execution once it is done in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "arithexpr":{
                         "type":"string",
-                        "description":"The arithmatic expression that will be calculated using javascript interpreter."
+                        "description":"The arithmatic expression that will be calculated by passing it to console.log of a browser's javascript interpreter."
                     }
                 },
                 "required": ["arithexpr"]
@@ -111,7 +111,7 @@ function calc_run(obj) {
  * @type {Object<string, Object<string, any>>}
  */
 export let tc_switch = {
-    "javascript": {
+    "run_javascript_function_code": {
         "handler": js_run,
         "meta": js_meta,
         "result": ""
