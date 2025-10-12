@@ -1723,9 +1723,23 @@ kernel void kernel_geglu_quick_f32(
     }
 }
 
-kernel void kernel_sum_f32() {
-    // TODO
-    return;
+// TODO:
+kernel void kernel_op_sum_f32(
+        constant ggml_metal_kargs_sum & args,
+        device const float * src0,
+        device       float * dst,
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+
+    if (tiitg != 0) {
+        return;
+    }
+
+    float acc = 0.0f;
+    for (ulong i = 0; i < args.np; ++i) {
+        acc += src0[i];
+    }
+
+    dst[0] = acc;
 }
 
 template <bool norm>
