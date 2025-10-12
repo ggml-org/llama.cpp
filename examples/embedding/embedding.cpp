@@ -4,6 +4,7 @@
 #include "llama.h"
 
 #include <ctime>
+#include <cstdio>
 #include <algorithm>
 
 #if defined(_MSC_VER)
@@ -67,6 +68,29 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
 
         float * out = output + embd_pos * n_embd;
         common_embd_normalize(embd, out, n_embd, embd_norm);
+    }
+}
+
+// plain, pipe-friendly output: one embedding per line
+static void print_raw_embeddings(const float * emb,
+                                 int n_embd_count,
+                                 int n_embd,
+                                 const llama_model * model,
+                                 enum llama_pooling_type pooling_type,
+                                 int embd_normalize) {
+    const uint32_t n_cls_out = llama_model_n_cls_out(model);
+    const bool is_rank = (pooling_type == LLAMA_POOLING_TYPE_RANK);
+    const int cols = is_rank ? std::min<int>(n_embd, (int) n_cls_out) : n_embd;
+
+    for (int j = 0; j < n_embd_count; ++j) {
+        for (int i = 0; i < cols; ++i) {
+            if (embd_normalize == 0) {
+                printf("%1.0f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
+            } else {
+                printf("%1.7f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
+            }
+        }
+        printf("\n");
     }
 }
 
@@ -258,6 +282,10 @@ int main(int argc, char ** argv) {
     // final batch
     float * out = emb + e * n_embd;
     batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
+
+    if (params.embd_out == "raw") {
+        print_raw_embeddings(emb, n_embd_count, n_embd, model, pooling_type, params.embd_normalize);
+    }
 
     if (params.embd_out.empty()) {
         LOG("\n");
