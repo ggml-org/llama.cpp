@@ -45,13 +45,13 @@ let js_meta = {
         "type": "function",
         "function": {
             "name": "run_javascript_function_code",
-            "description": "Runs given code as a function in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
+            "description": "Runs given code using function constructor mechanism in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The code belonging to a function to run in the browser's javascript interpreter."
+                        "description": "The code belonging to the dynamic function to run in the browser's javascript interpreter environment."
                     }
                 },
                 "required": ["code"]
