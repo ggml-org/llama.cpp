@@ -118,7 +118,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights]\n", executable);
-    printf("       [--target-bpw n] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
+    printf("       [--target-bpw n] [--keep-bpw-state] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
@@ -134,6 +134,7 @@ static void usage(const char * executable) {
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 8.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
+    printf("  --keep-bpw-state: preserve the bpw computations in a state file\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -557,6 +558,8 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--keep-bpw-state") == 0) {
+            params.keep_bpw_state = true;
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
             if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
                 usage(argv[0]);

@@ -659,7 +659,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_IQ2_S,
         GGML_TYPE_Q2_K,
         GGML_TYPE_IQ3_XXS,
-        GGML_TYPE_IQ3_S,
         GGML_TYPE_Q3_K,
         GGML_TYPE_IQ4_XS,
         GGML_TYPE_IQ4_NL,
@@ -773,11 +772,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
-        if (!ofs) { return; } // best-effort
-        const float target_bpw = params->target_bpw;
+        if (!ofs) { return; }
         ofs.write((const char *)&file_magic, sizeof(file_magic));
         ofs.write((const char *)&model_id, sizeof(model_id));
-        ofs.write((const char *)&target_bpw, sizeof(target_bpw));
         const uint64_t n = all_vec.size();
         ofs.write((const char *)&n, sizeof(n));
         for (const auto & ti : all_vec) {
@@ -817,18 +814,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         uint32_t magic = 0;
         uint64_t id = 0;
-        float bpw = 0.0f;
         ifs.read((char *)&magic, sizeof(magic));
         ifs.read((char *)&id, sizeof(id));
-        ifs.read((char *)&bpw, sizeof(bpw));
         if (magic != file_magic) {
             LLAMA_LOG_WARN("%s: invalid resume file, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
         } else if (id != model_id) {
             LLAMA_LOG_WARN("%s: model ID mismatch, ignoring: %s\n", func, checkpoint_file.c_str());
-            return out;
-        } else if (bpw != params->target_bpw) {
-            LLAMA_LOG_WARN("%s: target bpw of %f does not match %f, ignoring: %s\n", func, params->target_bpw, bpw, checkpoint_file.c_str());
             return out;
         } else {
             LLAMA_LOG_INFO("%s: resuming tensor quantization\n", func);
@@ -874,7 +866,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto delete_bpw_state = [&] {
         std::ifstream ifs(checkpoint_file);
-        if (ifs.good()) {
+        if (ifs.good() && !params->keep_bpw_state) {
             LLAMA_LOG_INFO("%s: deleting %s\n", func, checkpoint_file.c_str());
             std::remove(checkpoint_file.c_str());
         }
@@ -1489,6 +1481,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     check_signal_handler(all);
+    if (params->keep_bpw_state) { save_bpw_state(all); }
 
     if (all.empty()) { return {}; }
 
@@ -2240,7 +2233,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
-        /*.target_bpw                  =*/ -1.0f
+        /*.target_bpw                  =*/ -1.0f,
+        /*.keep_bpw_state              =*/ false
     };
 
     return result;
