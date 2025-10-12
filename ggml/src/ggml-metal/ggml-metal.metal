@@ -1487,6 +1487,23 @@ kernel void kernel_log_f32_4(
     dst[tpig] = log(src0[tpig]);
 }
 
+kernel void kernel_log_f16(
+    device const half * src0,
+    device       half * dst,
+    uint tpig [[thread_position_in_grid]]) {
+    const float x = (float)src0[tpig];
+    dst[tpig] = (half)log(x);
+}
+
+kernel void kernel_log_f16_4(
+    device const half4 * src0,
+    device       half4 * dst,
+    uint tpig [[thread_position_in_grid]]) {
+    const half4 xh = src0[tpig];
+    float4 xf = float4(xh);
+    dst[tpig] = half4(log(xf));
+}
+
 kernel void kernel_neg_f32(
         device const float * src0,
         device       float * dst,
