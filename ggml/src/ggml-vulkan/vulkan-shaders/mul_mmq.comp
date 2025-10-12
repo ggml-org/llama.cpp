@@ -81,33 +81,23 @@ layout (constant_id = 10) const uint WARP = 32;
 
 #ifdef COOPMAT
 #define SHMEM_STRIDE (BK / 4 + 4)
-#else
-#define SHMEM_STRIDE (BK / 4 + 1)
 #endif
 
-shared int32_t buf_a_qs[BM * SHMEM_STRIDE];
+#define MMQ_SHMEM
 
-#ifdef DATA_A_QUANT_K
-#define SHMEM_SCALES_STRIDE (SCALES_PER_32 + 1)
-shared uint8_t buf_a_scales[BM * SHMEM_SCALES_STRIDE];
-#endif
+#include "mul_mmq_shmem_types.glsl"
 
-#ifndef COOPMAT
-#if QUANT_AUXF == 1
-shared FLOAT_TYPE buf_a_dm[BM];
-#else
-shared FLOAT_TYPE_VEC2 buf_a_dm[BM];
-#endif
-#endif
+// Shared memory cache
+shared block_a_cache buf_a[BM];
+shared block_b_cache buf_b[BN];
+// Register cache
+block_a_cache cache_a[WMITER * TM];
+block_b_cache cache_b[TN];
 
-shared int32_t buf_b_qs[BN * SHMEM_STRIDE];
-#ifndef COOPMAT
-shared FLOAT_TYPE_VEC2 buf_b_ds[BN];
-#endif
-
-#define LOAD_VEC_A (4 * QUANT_R)
+#define LOAD_VEC_A (4 * QUANT_R_MMQ)
 #define LOAD_VEC_B 16
 
+// TODO: Recheck if this can work with mul_mat_id
 #ifdef MUL_MAT_ID
 shared u16vec2 row_ids[4096];
 #endif // MUL_MAT_ID
@@ -230,13 +220,6 @@ void main() {
         sums[i] = coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0f);
     }
 #else
-    int32_t cache_a_qs[WMITER * TM * BK / 4];
-
-#ifdef DATA_A_QUANT_K
-    uint8_t cache_a_scales[WMITER * TM * SCALES_PER_32];
-#endif
-
-    int32_t cache_b_qs[TN * BK / 4];
 
     ACC_TYPE sums[WMITER * TM * WNITER * TN];
 
@@ -245,40 +228,13 @@ void main() {
     }
 #endif
 
-#if QUANT_AUXF == 1
-    FLOAT_TYPE cache_a_dm[WMITER * TM];
-#else
-    FLOAT_TYPE_VEC2 cache_a_dm[WMITER * TM];
-#endif
-
-    FLOAT_TYPE_VEC2 cache_b_ds[TN];
-
     for (uint block = start_k; block < end_k; block += BK) {
         [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
             const uint buf_ib = loadc_a + l;
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;
             const uint iqs = loadr_a;
 
-            if (iqs == 0) {
-#if QUANT_AUXF == 1
-                buf_a_dm[buf_ib] = get_d(ib);
-#else
-                buf_a_dm[buf_ib] = get_dm(ib);
-#endif
-            }
-#if QUANT_R == 1
-            buf_a_qs[buf_ib * SHMEM_STRIDE + iqs] = repack(ib, iqs);
-#else
-            const i32vec2 vals = repack(ib, iqs);
-            buf_a_qs[buf_ib * SHMEM_STRIDE + iqs    ] = vals.x;
-            buf_a_qs[buf_ib * SHMEM_STRIDE + iqs + 4] = vals.y;
-#endif
-
-#ifdef DATA_A_QUANT_K
-            if (iqs % 4 == 0) {
-                buf_a_scales[buf_ib * SHMEM_SCALES_STRIDE + iqs / 4] = get_scale(ib, iqs);
-            }
-#endif
+            block_a_to_shmem(buf_ib, ib, iqs);
         }
         [[unroll]] for (uint l = 0; loadc_b + l < BN; l += loadstride_b) {
 #ifdef MUL_MAT_ID
@@ -297,13 +253,13 @@ void main() {
             const uint buf_ib = loadc_b + l;
 
             if (iqs == 0) {
-                buf_b_ds[buf_ib] = FLOAT_TYPE_VEC2(data_b[ib_outer].ds[ib_inner]);
+                buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(data_b[ib_outer].ds[ib_inner]);
             }
             const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
-            buf_b_qs[buf_ib * SHMEM_STRIDE + iqs * 4    ] = values.x;
-            buf_b_qs[buf_ib * SHMEM_STRIDE + iqs * 4 + 1] = values.y;
-            buf_b_qs[buf_ib * SHMEM_STRIDE + iqs * 4 + 2] = values.z;
-            buf_b_qs[buf_ib * SHMEM_STRIDE + iqs * 4 + 3] = values.w;
+            buf_b[buf_ib].qs[iqs * 4    ] = values.x;
+            buf_b[buf_ib].qs[iqs * 4 + 1] = values.y;
+            buf_b[buf_ib].qs[iqs * 4 + 2] = values.z;
+            buf_b[buf_ib].qs[iqs * 4 + 3] = values.w;
         }
 
         barrier();
@@ -346,25 +302,19 @@ void main() {
         // Load from shared into cache
         [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
             [[unroll]] for (uint cr = 0; cr < TM; cr++) {
-                const uint ib = warp_r * WM + wsir * WSUBM + tiwr * TM + cr;
-                cache_a_dm[wsir * TM + cr] = buf_a_dm[ib];
-                [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
-                    cache_a_qs[(wsir * TM + cr) * (BK / 4) + idx_k] = buf_a_qs[ib * SHMEM_STRIDE + idx_k];
-                }
-#ifdef DATA_A_QUANT_K
-                [[unroll]] for (uint s = 0; s < SCALES_PER_32; s++) {
-                    cache_a_scales[(wsir * TM + cr) * SCALES_PER_32 + s] = buf_a_scales[ib * SHMEM_SCALES_STRIDE + s];
-                }
-#endif
+                const uint reg_ib = wsir * TM + cr;
+                const uint buf_ib = warp_r * WM + wsir * WSUBM + tiwr * TM + cr;
+
+                block_a_to_registers(reg_ib, buf_ib);
             }
         }
 
         [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
             [[unroll]] for (uint cc = 0; cc < TN; cc++) {
                 const uint ib = warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
-                cache_b_ds[cc] = buf_b_ds[ib];
-                [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
-                    cache_b_qs[cc * (BK / 4) + idx_k] = buf_b_qs[ib * SHMEM_STRIDE + idx_k];
+                cache_b[cc].ds = buf_b[ib].ds;
+                [[unroll]] for (uint iqs = 0; iqs < BK / 4; iqs++) {
+                    cache_b[cc].qs[iqs] = buf_b[ib].qs[iqs];
                 }
             }
 
@@ -374,44 +324,7 @@ void main() {
                         const uint cache_a_idx = wsir * TM + cr;
                         const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
 
-#if defined(DATA_A_QUANT_LEGACY)
-                        int32_t q_sum = 0;
-                        [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
-                            q_sum += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
-                                                     cache_b_qs[cc * (BK / 4) + idx_k]);
-                        }
-
-                        sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc], 1);
-#elif defined(DATA_A_QUANT_K)
-                        int32_t sum_d = 0;
-                        int32_t sum_m = 0;
-
-                        const int32_t scale0 = cache_a_scales[cache_a_idx * SCALES_PER_32];
-                        const int32_t scale1 = cache_a_scales[cache_a_idx * SCALES_PER_32 + 1];
-                        int32_t scale_m = scale0 >> 4;
-                        scale_m |= scale_m << 8;
-                        scale_m |= scale_m << 16;
-
-                        [[unroll]] for (uint idx_k = 0; idx_k < BK / 8; idx_k++) {
-                            sum_d += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
-                                                     cache_b_qs[cc * (BK / 4) + idx_k]) * (scale0 & 0xF);
-                            sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[cc * (BK / 4) + idx_k]);
-                        }
-
-                        scale_m = scale1 >> 4;
-                        scale_m |= scale_m << 8;
-                        scale_m |= scale_m << 16;
-
-                        [[unroll]] for (uint idx_k = BK / 8; idx_k < BK / 4; idx_k++) {
-                            sum_d += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
-                                                     cache_b_qs[cc * (BK / 4) + idx_k]) * (scale1 & 0xF);
-                            sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[cc * (BK / 4) + idx_k]);
-                        }
-
-                        sums[sums_idx] += mul_q8_1(sum_d, sum_m, cache_a_dm[cache_a_idx], cache_b_ds[cc], 1);
-#else
-#error unsupported
-#endif
+                        sums[sums_idx] += mmq_dot_product(cache_a_idx, cc);
                     }
                 }
             }
