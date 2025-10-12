@@ -262,7 +262,7 @@ struct webgpu_context_struct {
     webgpu_pipeline glu_pipeline[7][2][2];           // glu-op, type, split
     webgpu_pipeline scale_pipeline[2];               // inplace
     webgpu_pipeline soft_max_pipeline[3][2][2];  // (no_mask, f32_mask, f16_mask), has_sink, inplace
-    webgpu_pipeline unary_pipeline[16][2][2];
+    webgpu_pipeline unary_pipeline[GGML_UNARY_OP_COUNT][2][2];
 
 
     size_t memset_bytes_per_thread;
@@ -344,6 +344,8 @@ static void ggml_webgpu_create_pipeline(wgpu::Device &                          
         pipeline_desc.compute.constants     = constants.data();
         pipeline_desc.compute.constantCount = constants.size();
     }
+
+
     pipeline = { device.CreateComputePipeline(&pipeline_desc), label };
 }
 
@@ -867,7 +869,8 @@ static webgpu_command ggml_webgpu_unary_op(      webgpu_context &        ctx,
                                   ggml_tensor *           src,
                                   ggml_tensor *           dst,
                                   webgpu_pipeline & pipeline,
-                                  bool                    in_place) {
+                                  bool                    in_place,
+                                  bool                    additional_params=false) {
 
 
     uint32_t ne = (uint32_t) ggml_nelements(dst);
@@ -885,6 +888,11 @@ static webgpu_command ggml_webgpu_unary_op(      webgpu_context &        ctx,
         (uint32_t) dst->ne[1], (uint32_t) dst->ne[2]
     };
 
+    if (additional_params) {
+      for (uint i = 1; i < 5; i++) {
+        params.push_back((uint32_t)(ggml_get_op_params_f32(dst, i))); // alpha_n, alpha_p, beta, eps
+      }
+    }
 
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0,
@@ -1302,8 +1310,10 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_UNARY:
             {
                 const ggml_unary_op UNARY_OP = ggml_get_unary_op(node);
+
                 int in_place = ggml_webgpu_tensor_equal(src0, node);
-                return ggml_webgpu_unary_op(ctx, src0, node, ctx->unary_pipeline[UNARY_OP][node->type][in_place], in_place);
+                bool XIELU = (UNARY_OP == GGML_UNARY_OP_XIELU);
+                return ggml_webgpu_unary_op(ctx, src0, node, ctx->unary_pipeline[UNARY_OP][node->type][in_place], in_place, XIELU);
             }
 
         default:
@@ -2023,6 +2033,16 @@ static void ggml_webgpu_init_unary_pipeline(webgpu_context & webgpu_ctx) {
         wgsl_gelu_erf_in_place_f32, "gelu_erf_in_place_f32", constants);
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->unary_pipeline[GGML_UNARY_OP_GELU_ERF][GGML_TYPE_F16][1],
         wgsl_gelu_erf_in_place_f16, "gelu_erf_in_place_f16", constants);
+
+    // XIELU
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->unary_pipeline[GGML_UNARY_OP_XIELU][GGML_TYPE_F32][0],
+        wgsl_xielu_f32, "xielu_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->unary_pipeline[GGML_UNARY_OP_XIELU][GGML_TYPE_F16][0],
+        wgsl_xielu_f16, "xielu_f16", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->unary_pipeline[GGML_UNARY_OP_XIELU][GGML_TYPE_F32][1],
+        wgsl_xielu_in_place_f32, "xielu_in_place_f32", constants);
+    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->unary_pipeline[GGML_UNARY_OP_XIELU][GGML_TYPE_F16][1],
+        wgsl_xielu_in_place_f16, "xielu_in_place_f16", constants);
 }
 
 static void ggml_webgpu_init_scale_pipeline(webgpu_context & webgpu_ctx) {
@@ -2254,9 +2274,36 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32;
             break;
         case GGML_OP_UNARY:
-            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type) &&
+            {
+                const ggml_unary_op UNARY_OP = ggml_get_unary_op(op);
+
+                switch (UNARY_OP) {
+                    case GGML_UNARY_OP_ABS:
+                    case GGML_UNARY_OP_SGN:
+                    case GGML_UNARY_OP_NEG:
+                    case GGML_UNARY_OP_STEP:
+                    case GGML_UNARY_OP_TANH:
+                    case GGML_UNARY_OP_ELU:
+                    case GGML_UNARY_OP_RELU:
+                    case GGML_UNARY_OP_SIGMOID:
+                    case GGML_UNARY_OP_GELU:
+                    case GGML_UNARY_OP_GELU_QUICK:
+                    case GGML_UNARY_OP_SILU:
+                    case GGML_UNARY_OP_HARDSWISH:
+                    case GGML_UNARY_OP_HARDSIGMOID:
+                    case GGML_UNARY_OP_EXP:
+                    case GGML_UNARY_OP_GELU_ERF:
+                    case GGML_UNARY_OP_XIELU:
+                        supports_op = supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type) &&
                           (src1 ? (src1->type == op->type) : true);
+                        break;
+                    case GGML_UNARY_OP_COUNT:
+                    default:
+                        break;
+                }
+            }
             break;
+
         default:
             break;
     }
