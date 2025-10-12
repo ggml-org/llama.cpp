@@ -4155,10 +4155,10 @@ kernel void kernel_conv_transpose_2d(
 
     float v = 0.0f;
 
-    for (int32_t in_c = 0; in_c<args.IC; in_c++){
-        for (int32_t kh = 0; kh<args.KH; kh++){
+    for (int64_t in_c = 0; in_c<args.IC; in_c++){
+        for (int64_t kh = 0; kh<args.KH; kh++){
 
-            int32_t in_y = out_y - kh;
+            int64_t in_y = out_y - kh;
 
             if (in_y < 0 || in_y % args.s0) continue;
 
@@ -4166,8 +4166,8 @@ kernel void kernel_conv_transpose_2d(
 
             if (in_y >= args.IH) continue;
 
-            for (int32_t kw = 0; kw<args.KW; kw++){
-                int32_t in_x = out_x - kw;
+            for (int64_t kw = 0; kw<args.KW; kw++){
+                int64_t in_x = out_x - kw;
 
                 if (in_x <0 || in_x % args.s0) continue;
 
@@ -4175,8 +4175,8 @@ kernel void kernel_conv_transpose_2d(
 
                 if (in_x >= args.IW) continue;
 
-                const int32_t input_idx = (args.IW * args.IH) * in_c + (args.IW) * in_y + in_x;
-                const int32_t kernel_idx = (args.KH * args.KW * args.OC) * in_c + (args.KH * args.KW) * out_c + (args.KW) * kh + kw;
+                const int64_t input_idx = (args.IW * args.IH) * in_c + (args.IW) * in_y + in_x;
+                const int64_t kernel_idx = (args.KH * args.KW * args.OC) * in_c + (args.KH * args.KW) * out_c + (args.KW) * kh + kw;
 
                 v += (float)src0[kernel_idx] * src1[input_idx];
 
