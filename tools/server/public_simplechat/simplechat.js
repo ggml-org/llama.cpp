@@ -74,7 +74,7 @@ class AssistantResponse {
         if (this.response.content !== "") {
             return this.response.content;
         } else if (this.response.toolname !== "") {
-            return `ToolCall:${this.response.toolname}:${this.response.toolargs}`;
+            return `<tool_call>\n<tool_name>${this.response.toolname}</tool_name>\n<tool_args>${this.response.toolargs}</tool_args>\n</tool_call>`;
         } else {
             return ""
         }
