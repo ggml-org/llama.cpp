@@ -4624,6 +4624,68 @@ int main(int argc, char ** argv) {
         res_ok(res, res_task->slots_data);
     };
 
+    // Secure slots monitoring endpoint - exposes only non-sensitive slot data
+    const auto handle_slots_status = [&](const httplib::Request &req, httplib::Response &res) {
+        if (!params.endpoint_slots) {
+            res_error(res, format_error_response("This server does not support slots endpoint. Start it with --slots", ERROR_TYPE_NOT_SUPPORTED));
+            return;
+        }
+
+        int task_id = ctx_server.queue_tasks.get_new_id();
+        server_task task(SERVER_TASK_TYPE_METRICS);
+        task.id = task_id;
+
+        ctx_server.queue_results.add_waiting_task_id(task_id);
+        ctx_server.queue_tasks.post(std::move(task), true);
+
+        server_task_result_ptr result = ctx_server.queue_results.recv(task_id);
+        ctx_server.queue_results.remove_waiting_task_id(task_id);
+
+        if (result->is_error()) {
+            res_error(res, result->to_json());
+            return;
+        }
+
+        auto res_task = dynamic_cast<server_task_result_metrics *>(result.get());
+        GGML_ASSERT(res_task != nullptr);
+
+        json slots_status = json::array();  // build response with only safe data
+        int n_idle = 0;
+        int n_processing = 0;
+
+        for (const auto &slot_data : res_task->slots_data) {
+            json secure_slot;
+            
+            secure_slot["id"] = slot_data["id"];
+            secure_slot["state"] = slot_data["state"];
+            secure_slot["is_processing"] = slot_data["is_processing"];
+            
+            if (slot_data["is_processing"]) {
+                secure_slot["n_ctx"] = slot_data["n_ctx"];
+                secure_slot["n_past"] = slot_data["n_past"];
+                secure_slot["n_decoded"] = slot_data["n_decoded"];
+                secure_slot["n_remaining"] = slot_data["n_remaining"];
+                secure_slot["truncated"] = slot_data["truncated"];
+                n_processing++;
+            } else {
+                n_idle++;
+            }
+            
+            slots_status.push_back(secure_slot);
+        }
+
+        json response;
+        response["slots"] = slots_status;
+        response["total_slots"] = res_task->slots_data.size();
+        response["idle_slots"] = n_idle;
+        response["processing_slots"] = n_processing;
+        response["queue_size"] = res_task->n_tasks_deferred;
+        response["server_uptime_ms"] = (ggml_time_us() - res_task->t_start) / 1000.0;
+
+        res_ok(res, response);
+    };
+
+
     const auto handle_metrics = [&](const httplib::Request &, httplib::Response & res) {
         if (!params.endpoint_metrics) {
             res_error(res, format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
@@ -5596,6 +5658,7 @@ int main(int argc, char ** argv) {
     svr->Post(params.api_prefix + "/lora-adapters",       handle_lora_adapters_apply);
     // Save & load slots
     svr->Get (params.api_prefix + "/slots",               handle_slots);
+    svr->Get(params.api_prefix + "/slots/status",         handle_slots_status);
     svr->Post(params.api_prefix + "/slots/:id_slot",      handle_slots_action);
 
     //
