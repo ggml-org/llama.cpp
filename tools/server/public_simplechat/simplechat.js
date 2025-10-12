@@ -70,10 +70,17 @@ class AssistantResponse {
         this.response[resp.key] += resp.value;
     }
 
+    has_toolcall() {
+        if (this.response.toolname.trim() == "") {
+            return false
+        }
+        return true
+    }
+
     content_equiv() {
         if (this.response.content !== "") {
             return this.response.content;
-        } else if (this.response.toolname !== "") {
+        } else if (this.has_toolcall()) {
             return `<tool_call>\n<tool_name>${this.response.toolname}</tool_name>\n<tool_args>${this.response.toolargs}</tool_args>\n</tool_call>`;
         } else {
             return ""
@@ -533,15 +540,15 @@ class SimpleChat {
 
     /**
      * Call the requested tool/function and get its response
-     * @param {AssistantResponse} ar
+     * @param {string} toolname
+     * @param {string} toolargs
      */
-    async handle_toolcall(ar) {
-        let toolname = ar.response.toolname.trim();
+    async handle_toolcall(toolname, toolargs) {
         if (toolname === "") {
             return undefined
         }
         try {
-            return await tools.tool_call(toolname, ar.response.toolargs)
+            return await tools.tool_call(toolname, toolargs)
         } catch (/** @type {any} */error) {
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
@@ -597,6 +604,24 @@ class MultiChatUI {
     }
 
     /**
+     * Reset/Setup Tool Call UI parts as needed
+     * @param {AssistantResponse} ar
+     */
+    ui_reset_toolcall_as_needed(ar) {
+        if (ar.has_toolcall()) {
+            this.elDivTool.hidden = false
+            this.elInToolName.value = ar.response.toolname
+            this.elInToolArgs.value = ar.response.toolargs
+            this.elBtnTool.disabled = false
+        } else {
+            this.elDivTool.hidden = true
+            this.elInToolName.value = ""
+            this.elInToolArgs.value = ""
+            this.elBtnTool.disabled = true
+        }
+    }
+
+    /**
      * Reset user input ui.
      * * clear user input (if requested, default true)
      * * enable user input
@@ -640,6 +665,13 @@ class MultiChatUI {
                 this.ui_reset_userinput();
             });
         });
+
+        this.elBtnTool.addEventListener("click", (ev)=>{
+            if (this.elDivTool.hidden) {
+                return;
+            }
+            this.handle_tool_run(this.curChatId);
+        })
 
         this.elInUser.addEventListener("keyup", (ev)=> {
             // allow user to insert enter into their message using shift+enter.
@@ -729,7 +761,18 @@ class MultiChatUI {
         } else {
             console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
         }
-        let toolResult = await chat.handle_toolcall(theResp)
+        this.ui_reset_toolcall_as_needed(theResp);
+        this.ui_reset_userinput();
+    }
+
+    /**
+     * @param {string} chatId
+     */
+    async handle_tool_run(chatId) {
+        let chat = this.simpleChats[chatId];
+        this.elInUser.value = "toolcall in progress...";
+        this.elInUser.disabled = true;
+        let toolResult = await chat.handle_toolcall(this.elInToolName.value, this.elInToolArgs.value)
         if (toolResult !== undefined) {
             this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
         }
