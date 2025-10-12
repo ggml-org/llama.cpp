@@ -78,6 +78,7 @@ Once inside
   * try trim garbage in response or not
   * amount of chat history in the context sent to server/ai-model
   * oneshot or streamed mode.
+  * use built in tool calling or not
 
 * In completion mode
   * one normally doesnt use a system prompt in completion mode.
@@ -115,6 +116,13 @@ Once inside
   * the user is not allowed to enter any fresh query during this time.
   * the user input box will be disabled and a working message will be shown in it.
   * if trim garbage is enabled, the logic will try to trim repeating text kind of garbage to some extent.
+
+* tool calling flow
+  * if tool calling is enabled and the user query results in need for one of the builtin tools to be
+    called, then the response will include request for tool call.
+  * the SimpleChat client will call the requested tool and inturn place the returned result into user
+    entry text area with <tool_response> generated result </tool_response>
+  * if user is ok with the tool response, they can click submit to send the same to the GenAi/LLM.
 
 * just refresh the page, to reset wrt the chat history and or system prompt and start afresh.
 
@@ -157,6 +165,15 @@ It is attached to the document object. Some of these can also be updated using t
       if a very long text is being generated, which leads to no user interaction for sometime and
       inturn the machine goes into power saving mode or so, the platform may stop network connection,
       leading to exception.
+
+  bTools - control whether tool calling is enabled or not
+
+    remember to enable this only for GenAi/LLM models which support tool/function calling.
+
+    the builtin tools meta data is sent to the ai model in the requests sent to it.
+
+    inturn if the ai model requests a tool call to be made, the same will be done and the response
+    sent back to the ai model, under user control.
 
   apiEP - select between /completions and /chat/completions endpoint provided by the server/ai-model.
 
@@ -279,6 +296,27 @@ for a minimal chatting experimentation by setting the below.
 
 NOTE: Not tested, as there is no free tier api testing available. However logically this might
 work.
+
+
+### Tool Calling
+
+Provide a descriptive meta data explaining the tool / function being provided for tool calling.
+
+Provide a handler which should implement the specified tool / function call. It should place
+the result to be sent back to the ai model in the result key of the tc_switch entry for the
+corresponding tool.
+
+Update the tc_switch to include a object entry for the tool, which inturn icnludes
+* the meta data as well as
+* a reference to the handler and also
+* the result key
+
+
+### Debuging the handshake
+
+When working with llama.cpp server based GenAi/LLM running locally
+
+sudo tcpdump -i lo -s 0 -vvv -A host 127.0.0.1 and port 8080 | tee /tmp/td.log
 
 
 ## At the end
