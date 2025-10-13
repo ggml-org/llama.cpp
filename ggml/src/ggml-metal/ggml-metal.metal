@@ -4155,8 +4155,8 @@ kernel void kernel_conv_transpose_2d(
 
     float v = 0.0f;
 
-    for (int64_t in_c = 0; in_c<args.IC; in_c++){
-        for (int64_t kh = 0; kh<args.KH; kh++){
+    for (int64_t in_c = 0; in_c < args.IC; in_c++) {
+        for (int64_t kh = 0; kh < args.KH; kh++) {
 
             int64_t in_y = out_y - kh;
 
