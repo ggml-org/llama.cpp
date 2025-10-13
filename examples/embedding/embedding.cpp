@@ -283,10 +283,6 @@ int main(int argc, char ** argv) {
     float * out = emb + e * n_embd;
     batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
 
-    if (params.embd_out == "raw") {
-        print_raw_embeddings(emb, n_embd_count, n_embd, model, pooling_type, params.embd_normalize);
-    }
-
     if (params.embd_out.empty()) {
         LOG("\n");
 
@@ -400,6 +396,10 @@ int main(int argc, char ** argv) {
         }
 
         if (notArray) LOG("\n}\n");
+    }
+
+    if (params.embd_out == "raw") {
+        print_raw_embeddings(emb, n_embd_count, n_embd, model, pooling_type, params.embd_normalize);
     }
 
     LOG("\n");
