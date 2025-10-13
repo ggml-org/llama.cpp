@@ -45,13 +45,16 @@ enum ggml_type {
     GGML_TYPE_F64     = 28,
     GGML_TYPE_IQ1_M   = 29,
     GGML_TYPE_BF16    = 30,
-    GGML_TYPE_Q4_0_4_4 = 31,
-    GGML_TYPE_Q4_0_4_8 = 32,
-    GGML_TYPE_Q4_0_8_8 = 33,
+    // GGML_TYPE_Q4_0_4_4 = 31, support has been removed from gguf files
+    // GGML_TYPE_Q4_0_4_8 = 32,
+    // GGML_TYPE_Q4_0_8_8 = 33,
     GGML_TYPE_TQ1_0   = 34,
     GGML_TYPE_TQ2_0   = 35,
-
-    GGML_TYPE_COUNT,
+    // GGML_TYPE_IQ4_NL_4_4 = 36,
+    // GGML_TYPE_IQ4_NL_4_8 = 37,
+    // GGML_TYPE_IQ4_NL_8_8 = 38,
+    GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
+    GGML_TYPE_COUNT   = 40,
 };
 
 // Operations supported by GGML
@@ -60,6 +63,7 @@ enum ggml_op {
 
     GGML_OP_DUP,
     GGML_OP_ADD,
+    GGML_OP_ADD_ID,
     GGML_OP_ADD1,
     GGML_OP_ACC,
     GGML_OP_SUB,
@@ -83,6 +87,7 @@ enum ggml_op {
     GGML_OP_RMS_NORM,
     GGML_OP_RMS_NORM_BACK,
     GGML_OP_GROUP_NORM,
+    GGML_OP_L2_NORM,
 
     GGML_OP_MUL_MAT,
     GGML_OP_MUL_MAT_ID,
@@ -98,6 +103,7 @@ enum ggml_op {
     GGML_OP_TRANSPOSE,
     GGML_OP_GET_ROWS,
     GGML_OP_GET_ROWS_BACK,
+    GGML_OP_SET_ROWS,
     GGML_OP_DIAG,
     GGML_OP_DIAG_MASK_INF,
     GGML_OP_DIAG_MASK_ZERO,
@@ -106,9 +112,53 @@ enum ggml_op {
     GGML_OP_ROPE,
     GGML_OP_ROPE_BACK,
     GGML_OP_CLAMP,
-    
-    // Add more operations as needed
-    
+    GGML_OP_CONV_TRANSPOSE_1D,
+    GGML_OP_IM2COL,
+    GGML_OP_IM2COL_BACK,
+    GGML_OP_IM2COL_3D,
+    GGML_OP_CONV_2D,
+    GGML_OP_CONV_3D,
+    GGML_OP_CONV_2D_DW,
+    GGML_OP_CONV_TRANSPOSE_2D,
+    GGML_OP_POOL_1D,
+    GGML_OP_POOL_2D,
+    GGML_OP_POOL_2D_BACK,
+    GGML_OP_UPSCALE,
+    GGML_OP_PAD,
+    GGML_OP_PAD_REFLECT_1D,
+    GGML_OP_ROLL,
+    GGML_OP_ARANGE,
+    GGML_OP_TIMESTEP_EMBEDDING,
+    GGML_OP_ARGSORT,
+    GGML_OP_LEAKY_RELU,
+
+    GGML_OP_FLASH_ATTN_EXT,
+    GGML_OP_FLASH_ATTN_BACK,
+    GGML_OP_SSM_CONV,
+    GGML_OP_SSM_SCAN,
+    GGML_OP_WIN_PART,
+    GGML_OP_WIN_UNPART,
+    GGML_OP_GET_REL_POS,
+    GGML_OP_ADD_REL_POS,
+    GGML_OP_RWKV_WKV6,
+    GGML_OP_GATED_LINEAR_ATTN,
+    GGML_OP_RWKV_WKV7,
+
+    GGML_OP_UNARY,
+
+    GGML_OP_MAP_CUSTOM1,
+    GGML_OP_MAP_CUSTOM2,
+    GGML_OP_MAP_CUSTOM3,
+
+    GGML_OP_CUSTOM,
+
+    GGML_OP_CROSS_ENTROPY_LOSS,
+    GGML_OP_CROSS_ENTROPY_LOSS_BACK,
+    GGML_OP_OPT_STEP_ADAMW,
+    GGML_OP_OPT_STEP_SGD,
+
+    GGML_OP_GLU,
+
     GGML_OP_COUNT,
 };
 
