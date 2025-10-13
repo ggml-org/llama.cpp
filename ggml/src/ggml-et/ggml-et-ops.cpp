@@ -892,15 +892,24 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
 
     GGML_LOG_DEBUG("ET: CONT operation called\n");
 
-    // Validate tensor types
-    if (node->type != GGML_TYPE_F32) {
-        GGML_LOG_ERROR("ET: CONT operation only supports F32 output, got %s\n", ggml_type_name(node->type));
+    // Validate source tensor exists
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: CONT operation missing source tensor\n");
         return false;
     }
 
-    if (!node->src[0] || node->src[0]->type != GGML_TYPE_F32) {
-        GGML_LOG_ERROR("ET: CONT operation requires F32 input tensor, got %s\n",
-                       node->src[0] ? ggml_type_name(node->src[0]->type) : "null");
+    // Validate types match (input and output must be same type)
+    if (node->type != node->src[0]->type) {
+        GGML_LOG_ERROR("ET: CONT operation type mismatch: src=%s dst=%s\n",
+                       ggml_type_name(node->src[0]->type),
+                       ggml_type_name(node->type));
+        return false;
+    }
+
+    // Validate supported types
+    if (node->type != GGML_TYPE_F32 && node->type != GGML_TYPE_F16) {
+        GGML_LOG_ERROR("ET: CONT operation unsupported type: %s (only F32 and F16 supported)\n",
+                       ggml_type_name(node->type));
         return false;
     }
 
@@ -910,13 +919,27 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         return false;
     }
 
-    ggml_et_cont_params params;
-    params.src0 = *node->src[0];  // F32 input tensor (potentially non-contiguous)
-    params.dst = *node;           // F32 output tensor (contiguous)
+    // Select kernel based on type
+    const char* kernel_name;
+    if (node->type == GGML_TYPE_F32) {
+        kernel_name = "cont_f32";
+    } else if (node->type == GGML_TYPE_F16) {
+        kernel_name = "cont_f16";
+    } else {
+        GGML_LOG_ERROR("ET: CONT operation with unsupported type: %s\n", ggml_type_name(node->type));
+        return false;
+    }
 
-    GGML_LOG_DEBUG("ET: Launching CONT kernel (F32[%lld,%lld,%lld,%lld] -> F32[%lld,%lld,%lld,%lld])\n",
+    ggml_et_cont_params params;
+    params.src0 = *node->src[0];  // Input tensor (potentially non-contiguous)
+    params.dst = *node;           // Output tensor (contiguous)
+
+    GGML_LOG_DEBUG("ET: Launching CONT kernel %s (%s[%lld,%lld,%lld,%lld] -> %s[%lld,%lld,%lld,%lld])\n",
+                   kernel_name,
+                   ggml_type_name(node->src[0]->type),
                    (long long)node->src[0]->ne[0], (long long)node->src[0]->ne[1],
                    (long long)node->src[0]->ne[2], (long long)node->src[0]->ne[3],
+                   ggml_type_name(node->type),
                    (long long)node->ne[0], (long long)node->ne[1],
                    (long long)node->ne[2], (long long)node->ne[3]);
 
@@ -940,7 +963,7 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         }
     }
 
-    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "cont_f32", &params, sizeof(params), 0xFFFFFFFF);
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
 
     // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
     if (cpu_comparison_active) {
@@ -951,7 +974,7 @@ bool ggml_et_op_cont(ggml_backend_et_device_context* dev_ctx, const ggml_tensor*
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
-    ET_PERF_END("CONT", "cont_f32", node);
+    ET_PERF_END("CONT", kernel_name, node);
     return kernel_result;
 }
 

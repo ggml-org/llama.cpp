@@ -606,9 +606,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_CONT:
-            // Support F32->F32 CONT operations (rearrange non-contiguous to contiguous)
-            if (op->type == GGML_TYPE_F32 &&
-                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+            // Support F32->F32 and F16->F16 CONT operations (rearrange non-contiguous to contiguous)
+            if ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                op->src[0] && op->src[0]->type == op->type &&
                 ggml_is_contiguous(op)) {
                 // Defensive check: ensure dst and src0 are not aliased (separate buffers)
                 // While GGML design currently guarantees this, check for future robustness
