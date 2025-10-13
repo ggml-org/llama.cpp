@@ -33,14 +33,25 @@
 
 import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import { ParameterSyncService, type ParameterRecord } from '$lib/services/parameter-sync';
+import { normalizeFloatingPoint } from '$lib/utils/precision';
+import { ParameterSyncService } from '$lib/services/parameter-sync';
 import { getServerDefaultParams } from '$lib/services/settings-sync';
+import { setConfigValue, getConfigValue, configToParameterRecord } from '$lib/utils/config-helpers';
 
 class SettingsStore {
 	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
 	theme = $state<string>('auto');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
+
+	/**
+	 * Helper method to get server defaults with null safety
+	 * Centralizes the pattern of getting and extracting server defaults
+	 */
+	private getServerDefaults(): Record<string, string | number | boolean> {
+		const serverParams = getServerDefaultParams();
+		return serverParams ? ParameterSyncService.extractServerDefaults(serverParams) : {};
+	}
 
 	constructor() {
 		if (browser) {
@@ -104,21 +115,13 @@ class SettingsStore {
 
 		// Only mark as user override if this is a syncable parameter AND differs from props default
 		if (ParameterSyncService.canSyncParameter(key as string)) {
-			const serverParams = getServerDefaultParams();
-			const propsDefaults = serverParams
-				? ParameterSyncService.extractServerDefaults(serverParams)
-				: {};
-
+			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
 
 			// Compare with props default - apply rounding for numbers to handle precision issues
 			if (propsDefault !== undefined) {
-				const normalizedValue =
-					typeof value === 'number' ? Math.round(value * 1000000) / 1000000 : value;
-				const normalizedDefault =
-					typeof propsDefault === 'number'
-						? Math.round(propsDefault * 1000000) / 1000000
-						: propsDefault;
+				const normalizedValue = normalizeFloatingPoint(value);
+				const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
 				if (normalizedValue === normalizedDefault) {
 					this.userOverrides.delete(key as string);
@@ -139,10 +142,7 @@ class SettingsStore {
 		Object.assign(this.config, updates);
 
 		// Get props defaults once for efficiency
-		const serverParams = getServerDefaultParams();
-		const propsDefaults = serverParams
-			? ParameterSyncService.extractServerDefaults(serverParams)
-			: {};
+		const propsDefaults = this.getServerDefaults();
 
 		// Check each updated parameter against props defaults
 		for (const [key, value] of Object.entries(updates)) {
@@ -151,12 +151,8 @@ class SettingsStore {
 
 				// Compare with props default - apply rounding for numbers to handle precision issues
 				if (propsDefault !== undefined) {
-					const normalizedValue =
-						typeof value === 'number' ? Math.round(value * 1000000) / 1000000 : value;
-					const normalizedDefault =
-						typeof propsDefault === 'number'
-							? Math.round(propsDefault * 1000000) / 1000000
-							: propsDefault;
+					const normalizedValue = normalizeFloatingPoint(value);
+					const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
 					if (normalizedValue === normalizedDefault) {
 						this.userOverrides.delete(key);
@@ -260,31 +256,28 @@ class SettingsStore {
 		const serverParams = getServerDefaultParams();
 		if (!serverParams) {
 			console.warn('No server parameters available for initialization');
+
 			return;
 		}
 
-		const propsDefaults = ParameterSyncService.extractServerDefaults(serverParams);
+		const propsDefaults = this.getServerDefaults();
 
 		// Clean up user overrides by comparing current values with props defaults
 		// This fixes cases where localStorage has stale override flags
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
-			const currentValue = (this.config as ParameterRecord)[key];
+			const currentValue = getConfigValue(this.config, key);
 
 			// Apply same rounding logic for comparison
-			const normalizedCurrent =
-				typeof currentValue === 'number'
-					? Math.round(currentValue * 1000000) / 1000000
-					: currentValue;
-			const normalizedDefault =
-				typeof propsValue === 'number' ? Math.round(propsValue * 1000000) / 1000000 : propsValue;
+			const normalizedCurrent = normalizeFloatingPoint(currentValue);
+			const normalizedDefault = normalizeFloatingPoint(propsValue);
 
 			if (normalizedCurrent === normalizedDefault) {
 				// Values match - remove from overrides and ensure we use props value
 				this.userOverrides.delete(key);
-				(this.config as ParameterRecord)[key] = propsValue;
+				setConfigValue(this.config, key, propsValue);
 			} else if (!this.userOverrides.has(key)) {
 				// Values differ but not marked as override - use props default
-				(this.config as ParameterRecord)[key] = propsValue;
+				setConfigValue(this.config, key, propsValue);
 			}
 			// If values differ and it's marked as override, keep the current value
 		}
@@ -314,11 +307,11 @@ class SettingsStore {
 			return;
 		}
 
-		const propsDefaults = ParameterSyncService.extractServerDefaults(serverParams);
+		const propsDefaults = this.getServerDefaults();
 
 		// Reset all syncable parameters and clear user overrides
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
-			(this.config as ParameterRecord)[key] = propsValue;
+			setConfigValue(this.config, key, propsValue);
 			this.userOverrides.delete(key); // Clear user override since we're resetting
 		}
 
@@ -330,17 +323,14 @@ class SettingsStore {
 	 * Get parameter information including source for a specific parameter
 	 */
 	getParameterInfo(key: string) {
-		const serverParams = getServerDefaultParams();
-		const propsDefaults = serverParams
-			? ParameterSyncService.extractServerDefaults(serverParams)
-			: {};
+		const propsDefaults = this.getServerDefaults();
 
 		// Get the current value for this specific parameter
-		const currentValue = (this.config as ParameterRecord)[key];
+		const currentValue = getConfigValue(this.config, key);
 
 		return ParameterSyncService.getParameterInfo(
 			key,
-			currentValue,
+			currentValue ?? '',
 			propsDefaults,
 			this.userOverrides
 		);
@@ -350,23 +340,18 @@ class SettingsStore {
 	 * Reset a parameter to server default (or webui default if no server default)
 	 */
 	resetParameterToServerDefault(key: string): void {
-		const serverParams = getServerDefaultParams();
-		const serverDefaults = serverParams
-			? ParameterSyncService.extractServerDefaults(serverParams)
-			: {};
+		const serverDefaults = this.getServerDefaults();
 
 		if (serverDefaults[key] !== undefined) {
 			// Apply the same rounding to ensure consistency
-			const value =
-				typeof serverDefaults[key] === 'number'
-					? Math.round((serverDefaults[key] as number) * 1000000) / 1000000
-					: serverDefaults[key];
+			const value = normalizeFloatingPoint(serverDefaults[key]);
 			this.config[key as keyof SettingsConfigType] =
 				value as SettingsConfigType[keyof SettingsConfigType];
 		} else {
 			// Fallback to webui default
 			if (key in SETTING_CONFIG_DEFAULT) {
-				(this.config as ParameterRecord)[key] = (SETTING_CONFIG_DEFAULT as ParameterRecord)[key];
+				const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+				setConfigValue(this.config, key, defaultValue);
 			}
 		}
 
@@ -379,11 +364,14 @@ class SettingsStore {
 	 * Get diff between current settings and server defaults
 	 */
 	getParameterDiff() {
-		const serverParams = getServerDefaultParams();
-		if (!serverParams) return {};
-
-		const serverDefaults = ParameterSyncService.extractServerDefaults(serverParams);
-		return ParameterSyncService.createParameterDiff(this.config as ParameterRecord, serverDefaults);
+		const serverDefaults = this.getServerDefaults();
+		if (Object.keys(serverDefaults).length === 0) return {};
+		// Convert config to ParameterRecord for diff comparison using shared helper
+		const configAsRecord = configToParameterRecord(
+			this.config,
+			ParameterSyncService.getSyncableParameterKeys()
+		);
+		return ParameterSyncService.createParameterDiff(configAsRecord, serverDefaults);
 	}
 }
 

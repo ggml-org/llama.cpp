@@ -13,6 +13,7 @@
  */
 
 import type { ApiLlamaCppServerProps } from '$lib/types/api';
+import { normalizeFloatingPoint } from '$lib/utils/precision';
 
 export type ParameterSource = 'default' | 'custom';
 export type ParameterValue = string | number | boolean;
@@ -63,12 +64,7 @@ export class ParameterSyncService {
 	 * Round floating-point numbers to avoid JavaScript precision issues
 	 */
 	private static roundFloatingPoint(value: ParameterValue): ParameterValue {
-		if (typeof value === 'number') {
-			// Round to 6 decimal places to avoid floating-point precision issues
-			// This handles cases like 0.9499999880790710 -> 0.95
-			return Math.round(value * 1000000) / 1000000;
-		}
-		return value;
+		return normalizeFloatingPoint(value) as ParameterValue;
 	}
 
 	/**
