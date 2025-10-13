@@ -624,6 +624,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             break;
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_RESHAPE:
             // Metadata-only no-ops, accept any type
             supported = true;
             break;
