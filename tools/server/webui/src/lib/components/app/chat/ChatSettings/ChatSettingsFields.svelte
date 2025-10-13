@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { RotateCcw } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -6,7 +7,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { supportsVision } from '$lib/stores/server.svelte';
-	import { getParameterInfo } from '$lib/stores/settings.svelte';
+	import { getParameterInfo, resetParameterToServerDefault } from '$lib/stores/settings.svelte';
 	import { ParameterSyncService } from '$lib/services/parameter-sync';
 	import ParameterSourceIndicator from './ParameterSourceIndicator.svelte';
 	import type { Component } from 'svelte';
@@ -53,9 +54,14 @@
 				return normalizedInput !== normalizedDefault;
 			})()}
 
-			<Label for={field.key} class="block text-sm font-medium">
-				{field.label}
-			</Label>
+			<div class="flex items-center gap-2">
+				<Label for={field.key} class="text-sm font-medium">
+					{field.label}
+				</Label>
+				{#if isCustomRealTime}
+					<ParameterSourceIndicator />
+				{/if}
+			</div>
 
 			<div class="relative w-full md:max-w-md">
 				<Input
@@ -66,12 +72,23 @@
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
 					placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
-					class="w-full {isCustomRealTime ? 'pr-20' : ''}"
+					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 				/>
 				{#if isCustomRealTime}
-					<div class="absolute top-1/2 right-2 -translate-y-1/2">
-						<ParameterSourceIndicator class="pointer-events-none" />
-					</div>
+					<button
+						type="button"
+						onclick={() => {
+							resetParameterToServerDefault(field.key);
+							// Trigger UI update by calling onConfigChange with the default value
+							const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
+							onConfigChange(field.key, String(defaultValue));
+						}}
+						class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+						aria-label="Reset to default"
+						title="Reset to default"
+					>
+						<RotateCcw class="h-3 w-3" />
+					</button>
 				{/if}
 			</div>
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -111,9 +128,14 @@
 				return currentValue !== propsDefault;
 			})()}
 
-			<Label for={field.key} class="block text-sm font-medium">
-				{field.label}
-			</Label>
+			<div class="flex items-center gap-2">
+				<Label for={field.key} class="text-sm font-medium">
+					{field.label}
+				</Label>
+				{#if isCustomRealTime}
+					<ParameterSourceIndicator />
+				{/if}
+			</div>
 
 			<Select.Root
 				type="single"
@@ -126,21 +148,34 @@
 					}
 				}}
 			>
-				<Select.Trigger class="w-full md:w-auto md:max-w-md {isCustomRealTime ? 'pr-20' : ''}">
-					<div class="flex items-center gap-2">
-						{#if selectedOption?.icon}
-							{@const IconComponent = selectedOption.icon}
-							<IconComponent class="h-4 w-4" />
-						{/if}
+				<div class="relative w-full md:w-auto md:max-w-md">
+					<Select.Trigger class="w-full">
+						<div class="flex items-center gap-2">
+							{#if selectedOption?.icon}
+								{@const IconComponent = selectedOption.icon}
+								<IconComponent class="h-4 w-4" />
+							{/if}
 
-						{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
-					</div>
-					{#if isCustomRealTime}
-						<div class="absolute top-1/2 right-8 -translate-y-1/2">
-							<ParameterSourceIndicator class="pointer-events-none" />
+							{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
 						</div>
+					</Select.Trigger>
+					{#if isCustomRealTime}
+						<button
+							type="button"
+							onclick={() => {
+								resetParameterToServerDefault(field.key);
+								// Trigger UI update by calling onConfigChange with the default value
+								const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
+								onConfigChange(field.key, String(defaultValue));
+							}}
+							class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+							aria-label="Reset to default"
+							title="Reset to default"
+						>
+							<RotateCcw class="h-3 w-3" />
+						</button>
 					{/if}
-				</Select.Trigger>
+				</div>
 				<Select.Content>
 					{#if field.options}
 						{#each field.options as option (option.value)}
