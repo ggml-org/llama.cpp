@@ -1122,9 +1122,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return lambdas;
     };
 
-    auto bpw_data = load_bpw_state();
+    const auto bpw_data = load_bpw_state();
 
-    // Significantly reduce compute time by parallelising tensor processing - courtesy of https://github.com/ddh0
+    // Reduce compute time by parallelising tensor processing - courtesy of https://github.com/ddh0
     auto process_tensor = [&](const llama_model_loader::llama_tensor_weight * tw,
         std::vector<no_init<uint8_t>> & thread_local_buffer,
         std::mutex & loader_mutex,
@@ -1330,7 +1330,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> dequantized_buffer(f32_sample.size());
         const float * slice_lambda = lambdas.empty() ? nullptr : lambdas.data();
         for (size_t i = 0; i < compatible_candidates.size(); ++i) {
-            if (bpw_stop.load(std::memory_order_relaxed)) { break; }
+            if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
 
             const ggml_type tensor_types = compatible_candidates[i];
             const auto bpw = (float)tensor_bpw(tensor, tensor_types);
@@ -1383,6 +1383,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (c.bytes == 0) { continue; }
             const double final_err = bias_needed ? c.error : c.mse;
             info.candidate.push_back(candidate_types{ c.type, c.bpw, c.bytes, final_err, c.mse, c.proj });
+            // LLAMA_LOG_INFO("\t%s: %35s \t%10s \t%1.4f bpw \t%10zu bytes \t mse: %1.8e \t err: %1.8e\n",
+            //     func, name.c_str(), ggml_type_name(c.type), c.bpw, c.bytes, c.mse, final_err);
         }
 
         if (info.candidate.empty()) {
@@ -1426,7 +1428,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 };
 
                 while (hull.size() >= 2) {
-                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= -1 * epsilon) { // very small negative tolerance
+                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= epsilon) {
                         hull.pop_back();
                     } else {
                         break;
@@ -1670,7 +1672,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 const auto & ti = all[i];
                 const std::string tensor_name  = ggml_get_name(ti.w->tensor);
                 int j = ti.choice + 1;
-                while (j < (int)ti.candidate.size() && ti.candidate[j].bytes == ti.candidate[ti.choice].bytes) { ++j; }
                 if (j >= (int)ti.candidate.size()) { continue; } // no upgrade available
 
                 size_t delta_bytes = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
