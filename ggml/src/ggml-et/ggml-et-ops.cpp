@@ -963,8 +963,8 @@ bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
         return false;
     }
 
-    if (!node->src[0] || !node->src[1]) {
-        GGML_LOG_ERROR("ET: SET_ROWS operation missing required inputs\n");
+    if (!node->src[0] || !node->src[1] || !node->src[2]) {
+        GGML_LOG_ERROR("ET: SET_ROWS operation missing required inputs (needs src[0]=base, src[1]=indices, src[2]=data)\n");
         return false;
     }
 

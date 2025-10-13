@@ -691,6 +691,7 @@ static const struct ggml_backend_i ggml_backend_et_i = {
     /* .graph_compute           = */ ggml_backend_et_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 static const char * ggml_backend_et_device_get_name(ggml_backend_dev_t dev) {
@@ -722,6 +723,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->description = ggml_backend_et_device_get_description(dev);
     props->type        = ggml_backend_et_device_get_type(dev);
     ggml_backend_et_device_get_memory(dev, &props->memory_free, &props->memory_total);
+    props->device_id   = NULL;  // No PCI device ID available
     props->caps = {
         /* .async                 = */ false,
         /* .host_buffer           = */ false,
@@ -932,3 +934,5 @@ ggml_backend_buffer_type_t ggml_backend_et_host_buffer_type(void) {
     };
     return &host_buffer_type;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_et_reg)
