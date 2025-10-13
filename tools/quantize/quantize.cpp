@@ -501,6 +501,8 @@ static const char * get_ftype(const float bpw) {
         {1.5625, "IQ1_S"},
         {1.7500, "IQ1_M"},
         {2.0625, "IQ2_XXS"},
+        {2.3125, "IQ2_XS"},
+        {2.5625, "IQ2_S"},
         {2.6250, "Q2_K"},
         {3.0625, "IQ3_XXS"},
         {3.4375, "Q3_K"},

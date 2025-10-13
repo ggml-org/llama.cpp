@@ -681,7 +681,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q4_K,
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
-        GGML_TYPE_Q8_0
+        GGML_TYPE_Q8_0,
+        GGML_TYPE_F16
     };
 
     const char * important_tensors[] = {
