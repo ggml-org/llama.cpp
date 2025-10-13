@@ -8806,3 +8806,17 @@ kernel void kernel_opt_step_adamw_f32(
 
     x[gid] = x[gid] * (1.0f - alpha * wd) - alpha * mh / vh;
 }
+
+kernel void kernel_opt_step_sgd_f32(
+        constant    ggml_metal_kargs_opt_step_sgd & args,
+        device       float * x,
+        device const float * g,
+        device const float * pars,
+        uint        gid[[thread_position_in_grid]]) {
+
+    if (gid >= args.np) {
+        return;
+    }
+
+    x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
+}
