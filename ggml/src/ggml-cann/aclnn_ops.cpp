@@ -146,9 +146,7 @@ void ggml_cann_op_unary_gated(
     unary_op(ctx, acl_src0, acl_dst);
     GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, acl_dst, acl_src1);
 
-    ggml_cann_release_resources(ctx, acl_src0, acl_dst);
-    if(src1)
-        ggml_cann_release_resources(ctx, acl_src1);
+    ggml_cann_release_resources(ctx, acl_src0, acl_src1, acl_dst);
 }
 
 /**
@@ -1851,7 +1849,7 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                                    dst->data, dst->ne, dst->nb,
                                    src1, dst->type);
 
-            ggml_cann_release_resources(ctx, dequant_tensor);
+            ggml_cann_release_resources(ctx, acl_weight_tensor, acl_scale_tensor, dequant_tensor);
             break;
         }
         default:
@@ -3290,8 +3288,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         aclTensor* acl_q_tensor = acl_src0_f16_tensor;
         aclTensor* acl_k_tensors[] = {acl_src1_f16_tensor};
         aclTensor* acl_v_tensors[] = {acl_src2_f16_tensor};
-        auto acl_k_tensor_list = aclCreateTensorList(acl_k_tensors, kvTensorNum);
-        auto acl_v_tensor_list = aclCreateTensorList(acl_v_tensors, kvTensorNum);
+        aclTensorList* acl_k_tensor_list = aclCreateTensorList(acl_k_tensors, kvTensorNum);
+        aclTensorList* acl_v_tensor_list = aclCreateTensorList(acl_v_tensors, kvTensorNum);
 
         int64_t numHeads = src0->ne[2]; // N
         int64_t numKeyValueHeads = src1->ne[2];
@@ -3362,8 +3360,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         }
 
         ggml_cann_release_resources(ctx, acl_src0_f16_tensor,
-                                        acl_src1_f16_tensor,
-                                        acl_src2_f16_tensor,
+                                        acl_k_tensor_list,
+                                        acl_v_tensor_list,
                                         fa_dst_tensor,
                                         acl_dst_tensor,
                                         bcast_pse_tensor);
