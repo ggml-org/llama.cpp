@@ -7,38 +7,7 @@
 //
 
 
-let gConsoleStr = ""
-/**
- * @type { {(...data: any[]): void} | null}
- */
-let gOrigConsoleLog = null
-
-
-/**
- * @param {any[]} args
- */
-function console_trapped(...args) {
-    let res = args.map((arg)=>{
-        if (typeof arg == 'object') {
-            return JSON.stringify(arg);
-        } else {
-            return String(arg);
-        }
-    }).join(' ');
-    gConsoleStr += res;
-}
-
-function console_redir() {
-    gOrigConsoleLog = console.log
-    console.log = console_trapped
-    gConsoleStr = ""
-}
-
-function console_revert() {
-    if (gOrigConsoleLog !== null) {
-        console.log = gOrigConsoleLog
-    }
-}
+import * as tconsole from "./toolsconsole.mjs"
 
 
 let js_meta = {
@@ -67,11 +36,11 @@ let js_meta = {
  * @param {any} obj
  */
 function js_run(toolname, obj) {
-    console_redir()
+    tconsole.console_redir()
     let func = new Function(obj["code"])
     func()
-    console_revert()
-    tc_switch[toolname]["result"] = gConsoleStr
+    tconsole.console_revert()
+    tc_switch[toolname]["result"] = tconsole.gConsoleStr
 }
 
 
@@ -101,11 +70,11 @@ let calc_meta = {
  * @param {any} obj
  */
 function calc_run(toolname, obj) {
-    console_redir()
+    tconsole.console_redir()
     let func = new Function(`console.log(${obj["arithexpr"]})`)
     func()
-    console_revert()
-    tc_switch[toolname]["result"] = gConsoleStr
+    tconsole.console_revert()
+    tc_switch[toolname]["result"] = tconsole.gConsoleStr
 }
 
 
