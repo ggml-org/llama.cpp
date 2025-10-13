@@ -694,7 +694,7 @@ static void ggml_init_arm_arch_features(void) {
     ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
 #else
     // TODO: add support of SVE for non-linux systems
-#error message("TODO: to use SVE, sve_cnt needs to be initialized here.")
+#error "TODO: SVE is not supported on this platform. To use SVE, sve_cnt needs to be initialized here."
 #endif
 #endif
 }
