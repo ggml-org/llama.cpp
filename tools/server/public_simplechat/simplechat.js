@@ -539,13 +539,15 @@ class SimpleChat {
     }
 
     /**
-     * Call the requested tool/function and get its response
+     * Call the requested tool/function.
+     * Returns undefined, if the call was placed successfully
+     * Else some appropriate error message will be returned.
      * @param {string} toolname
      * @param {string} toolargs
      */
     async handle_toolcall(toolname, toolargs) {
         if (toolname === "") {
-            return undefined
+            return "Tool/Function call name not specified"
         }
         try {
             return await tools.tool_call(toolname, toolargs)
@@ -675,6 +677,11 @@ class MultiChatUI {
             this.handle_tool_run(this.curChatId);
         })
 
+        tools.setup((name, data)=>{
+            this.elInUser.value = `<tool_response>${data}</tool_response>`
+            this.ui_reset_userinput(false)
+        })
+
         this.elInUser.addEventListener("keyup", (ev)=> {
             // allow user to insert enter into their message using shift+enter.
             // while just pressing enter key will lead to submitting.
@@ -771,17 +778,24 @@ class MultiChatUI {
 
     /**
      * Handle running of specified tool call if any, for the specified chat session.
+     * Also sets up a timeout, so that user gets control back to interact with the ai model.
      * @param {string} chatId
      */
     async handle_tool_run(chatId) {
         let chat = this.simpleChats[chatId];
         this.elInUser.value = "toolcall in progress...";
         this.elInUser.disabled = true;
-        let toolResult = await chat.handle_toolcall(this.elInToolName.value, this.elInToolArgs.value)
+        let toolname = this.elInToolName.value.trim()
+        let toolResult = await chat.handle_toolcall(toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
             this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
+            this.ui_reset_userinput(false)
+        } else {
+            setTimeout(() => {
+                this.elInUser.value = `<tool_response>Tool/Function call ${toolname} taking too much time, aborting...</tool_response>`
+                this.ui_reset_userinput(false)
+            }, 10000)
         }
-        this.ui_reset_userinput(toolResult === undefined);
     }
 
     /**
@@ -1073,7 +1087,7 @@ function startme() {
     document["gMe"] = gMe;
     document["du"] = du;
     document["tools"] = tools;
-    tools.setup()
+    tools.init()
     for (let cid of gMe.defaultChatIds) {
         gMe.multiChat.new_chat_session(cid);
     }
