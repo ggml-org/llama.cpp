@@ -52,6 +52,8 @@ export class ChatService {
 			onChunk,
 			onComplete,
 			onError,
+			onReasoningChunk,
+			onModel,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -195,13 +197,14 @@ export class ChatService {
 					onChunk,
 					onComplete,
 					onError,
-					options.onReasoningChunk,
+					onReasoningChunk,
+					onModel,
 					conversationId,
 					abortController.signal
 				);
 				return;
 			} else {
-				return this.handleNonStreamResponse(response, onComplete, onError);
+				return this.handleNonStreamResponse(response, onComplete, onError, onModel);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -261,6 +264,7 @@ export class ChatService {
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -276,6 +280,7 @@ export class ChatService {
 		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
+		let modelEmitted = false;
 
 		try {
 			let chunk = '';
@@ -303,6 +308,12 @@ export class ChatService {
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+
+							const chunkModel = this.extractModelName(parsed);
+							if (chunkModel && !modelEmitted) {
+								modelEmitted = true;
+								onModel?.(chunkModel);
+							}
 
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
@@ -378,7 +389,8 @@ export class ChatService {
 			reasoningContent?: string,
 			timings?: ChatMessageTimings
 		) => void,
-		onError?: (error: Error) => void
+		onError?: (error: Error) => void,
+		onModel?: (model: string) => void
 	): Promise<string> {
 		try {
 			const responseText = await response.text();
@@ -389,6 +401,11 @@ export class ChatService {
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
+			const responseModel = this.extractModelName(data);
+			if (responseModel) {
+				onModel?.(responseModel);
+			}
+
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 
@@ -629,6 +646,69 @@ export class ChatService {
 			fallback.name = 'HttpError';
 			return fallback;
 		}
+	}
+
+	private extractModelName(data: unknown): string | undefined {
+		if (!data || typeof data !== 'object') {
+			return undefined;
+		}
+
+		const record = data as Record<string, unknown>;
+		const normalize = (value: unknown): string | undefined => {
+			if (typeof value !== 'string') {
+				return undefined;
+			}
+
+			const trimmed = value.trim();
+
+			return trimmed.length > 0 ? trimmed : undefined;
+		};
+
+		const rootModel = normalize(record['model']);
+		if (rootModel) {
+			return rootModel;
+		}
+
+		const choices = record['choices'];
+		if (!Array.isArray(choices) || choices.length === 0) {
+			return undefined;
+		}
+
+		const firstChoice = choices[0] as Record<string, unknown> | undefined;
+		if (!firstChoice) {
+			return undefined;
+		}
+
+		const choiceModel = normalize(firstChoice['model']);
+		if (choiceModel) {
+			return choiceModel;
+		}
+
+		const delta = firstChoice['delta'] as Record<string, unknown> | undefined;
+		if (delta) {
+			const deltaModel = normalize(delta['model']);
+			if (deltaModel) {
+				return deltaModel;
+			}
+		}
+
+		const message = firstChoice['message'] as Record<string, unknown> | undefined;
+		if (message) {
+			const messageModel = normalize(message['model']);
+			if (messageModel) {
+				return messageModel;
+			}
+		}
+
+		const metadata = firstChoice['metadata'] as Record<string, unknown> | undefined;
+		if (metadata) {
+			const metadataModel = normalize(metadata['model']);
+			if (metadataModel) {
+				return metadataModel;
+			}
+		}
+
+		return undefined;
 	}
 
 	private updateProcessingState(

@@ -186,10 +186,14 @@ export interface ApiChatCompletionRequest {
 }
 
 export interface ApiChatCompletionStreamChunk {
+	model?: string;
 	choices: Array<{
+		model?: string;
+		metadata?: { model?: string };
 		delta: {
 			content?: string;
 			reasoning_content?: string;
+			model?: string;
 		};
 	}>;
 	timings?: {
@@ -203,10 +207,14 @@ export interface ApiChatCompletionStreamChunk {
 }
 
 export interface ApiChatCompletionResponse {
+	model?: string;
 	choices: Array<{
+		model?: string;
+		metadata?: { model?: string };
 		message: {
 			content: string;
 			reasoning_content?: string;
+			model?: string;
 		};
 	}>;
 }
