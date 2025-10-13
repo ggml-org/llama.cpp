@@ -3867,7 +3867,6 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 dev_ctx->device = i;
                 dev_ctx->name = GGML_CUDA_NAME + std::to_string(i);
 
-                ggml_cuda_set_device(i);
                 cudaDeviceProp prop;
                 CUDA_CHECK(cudaGetDeviceProperties(&prop, i));
                 dev_ctx->description = prop.name;

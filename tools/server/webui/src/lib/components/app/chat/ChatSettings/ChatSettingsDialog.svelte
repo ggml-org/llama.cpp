@@ -80,6 +80,11 @@
 					key: 'showModelInfo',
 					label: 'Show model information',
 					type: 'checkbox'
+				},
+				{
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
+					type: 'checkbox'
 				}
 			]
 		},
