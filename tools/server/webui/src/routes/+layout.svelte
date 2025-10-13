@@ -148,7 +148,7 @@
 
 <ModeWatcher />
 
-<Toaster richColors />
+<Toaster position="top-center" richColors />
 
 <ConversationTitleUpdateDialog
 	bind:open={titleUpdateDialogOpen}

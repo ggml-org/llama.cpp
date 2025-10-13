@@ -1,6 +1,5 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
-import { serverStore } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
@@ -359,28 +358,29 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
-		let modelCaptured = false;
+		let resolvedModel: string | null = null;
+		let modelPersisted = false;
 
-		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
-			if (!modelCaptured) {
-				const currentModelName = serverStore.modelName;
+		const recordModel = (modelName: string, persistImmediately = true): void => {
+			const trimmedModel = modelName.trim();
 
-				if (currentModelName) {
-					if (updateDbImmediately) {
-						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
-							console.error
-						);
-					}
-
-					const messageIndex = this.findMessageIndex(assistantMessage.id);
-
-					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
-					modelCaptured = true;
-
-					return currentModelName;
-				}
+			if (!trimmedModel || trimmedModel === resolvedModel) {
+				return;
 			}
-			return undefined;
+
+			resolvedModel = trimmedModel;
+
+			const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+			this.updateMessageAtIndex(messageIndex, { model: trimmedModel });
+
+			if (persistImmediately && !modelPersisted) {
+				modelPersisted = true;
+				DatabaseStore.updateMessage(assistantMessage.id, { model: trimmedModel }).catch((error) => {
+					console.error('Failed to persist model name:', error);
+					modelPersisted = false;
+				});
+			}
 		};
 
 		slotsService.startStreaming();
@@ -399,7 +399,6 @@ class ChatStore {
 						assistantMessage.id
 					);
 
-					captureModelIfNeeded();
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 					this.updateMessageAtIndex(messageIndex, {
 						content: streamedContent
@@ -409,11 +408,13 @@ class ChatStore {
 				onReasoningChunk: (reasoningChunk: string) => {
 					streamedReasoningContent += reasoningChunk;
 
-					captureModelIfNeeded();
-
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
 					this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
+				},
+
+				onModel: (modelName: string) => {
+					recordModel(modelName);
 				},
 
 				onComplete: async (
@@ -434,10 +435,9 @@ class ChatStore {
 						timings: timings
 					};
 
-					const capturedModel = captureModelIfNeeded(false);
-
-					if (capturedModel) {
-						updateData.model = capturedModel;
+					if (resolvedModel && !modelPersisted) {
+						updateData.model = resolvedModel;
+						modelPersisted = true;
 					}
 
 					await DatabaseStore.updateMessage(assistantMessage.id, updateData);
