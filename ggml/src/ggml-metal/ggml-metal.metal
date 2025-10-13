@@ -4166,7 +4166,7 @@ kernel void kernel_conv_transpose_2d(
 
             if (in_y >= args.IH) continue;
 
-            for (int64_t kw = 0; kw<args.KW; kw++){
+            for (int64_t kw = 0; kw<args.KW; kw++) {
                 int64_t in_x = out_x - kw;
 
                 if (in_x < 0 || in_x % args.s0) continue;
