@@ -18,10 +18,9 @@
 	}
 
 	function handleConfirmReset() {
-		// Reset all settings to props defaults
 		forceSyncWithServerDefaults();
-		// Trigger the onReset callback if provided
 		onReset?.();
+
 		showResetDialog = false;
 	}
 

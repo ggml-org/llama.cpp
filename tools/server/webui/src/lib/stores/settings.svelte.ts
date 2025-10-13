@@ -35,7 +35,7 @@ import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import { normalizeFloatingPoint } from '$lib/utils/precision';
 import { ParameterSyncService } from '$lib/services/parameter-sync';
-import { getServerDefaultParams } from '$lib/services/settings-sync';
+import { serverStore } from '$lib/stores/server.svelte';
 import { setConfigValue, getConfigValue, configToParameterRecord } from '$lib/utils/config-helpers';
 
 class SettingsStore {
@@ -49,7 +49,7 @@ class SettingsStore {
 	 * Centralizes the pattern of getting and extracting server defaults
 	 */
 	private getServerDefaults(): Record<string, string | number | boolean> {
-		const serverParams = getServerDefaultParams();
+		const serverParams = serverStore.serverDefaultParams;
 		return serverParams ? ParameterSyncService.extractServerDefaults(serverParams) : {};
 	}
 
@@ -81,6 +81,7 @@ class SettingsStore {
 
 		try {
 			const savedVal = JSON.parse(localStorage.getItem('config') || '{}');
+
 			// Merge with defaults to prevent breaking changes
 			this.config = {
 				...SETTING_CONFIG_DEFAULT,
@@ -113,12 +114,10 @@ class SettingsStore {
 	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]): void {
 		this.config[key] = value;
 
-		// Only mark as user override if this is a syncable parameter AND differs from props default
 		if (ParameterSyncService.canSyncParameter(key as string)) {
 			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
 
-			// Compare with props default - apply rounding for numbers to handle precision issues
 			if (propsDefault !== undefined) {
 				const normalizedValue = normalizeFloatingPoint(value);
 				const normalizedDefault = normalizeFloatingPoint(propsDefault);
@@ -141,15 +140,12 @@ class SettingsStore {
 	updateMultipleConfig(updates: Partial<SettingsConfigType>) {
 		Object.assign(this.config, updates);
 
-		// Get props defaults once for efficiency
 		const propsDefaults = this.getServerDefaults();
 
-		// Check each updated parameter against props defaults
 		for (const [key, value] of Object.entries(updates)) {
 			if (ParameterSyncService.canSyncParameter(key)) {
 				const propsDefault = propsDefaults[key];
 
-				// Compare with props default - apply rounding for numbers to handle precision issues
 				if (propsDefault !== undefined) {
 					const normalizedValue = normalizeFloatingPoint(value);
 					const normalizedDefault = normalizeFloatingPoint(propsDefault);
@@ -174,7 +170,7 @@ class SettingsStore {
 
 		try {
 			localStorage.setItem('config', JSON.stringify(this.config));
-			// Also save user overrides to track which parameters are custom
+
 			localStorage.setItem('userOverrides', JSON.stringify(Array.from(this.userOverrides)));
 		} catch (error) {
 			console.error('Failed to save config to localStorage:', error);
@@ -253,7 +249,7 @@ class SettingsStore {
 	 * This sets up the default values from /props endpoint
 	 */
 	syncWithServerDefaults(): void {
-		const serverParams = getServerDefaultParams();
+		const serverParams = serverStore.serverDefaultParams;
 		if (!serverParams) {
 			console.warn('No server parameters available for initialization');
 
@@ -262,24 +258,18 @@ class SettingsStore {
 
 		const propsDefaults = this.getServerDefaults();
 
-		// Clean up user overrides by comparing current values with props defaults
-		// This fixes cases where localStorage has stale override flags
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
 
-			// Apply same rounding logic for comparison
 			const normalizedCurrent = normalizeFloatingPoint(currentValue);
 			const normalizedDefault = normalizeFloatingPoint(propsValue);
 
 			if (normalizedCurrent === normalizedDefault) {
-				// Values match - remove from overrides and ensure we use props value
 				this.userOverrides.delete(key);
 				setConfigValue(this.config, key, propsValue);
 			} else if (!this.userOverrides.has(key)) {
-				// Values differ but not marked as override - use props default
 				setConfigValue(this.config, key, propsValue);
 			}
-			// If values differ and it's marked as override, keep the current value
 		}
 
 		this.saveConfig();
@@ -299,24 +289,29 @@ class SettingsStore {
 	/**
 	 * Reset all parameters to their default values (from props)
 	 * This is used by the "Reset to Default" functionality
+	 * Prioritizes server defaults from /props, falls back to webui defaults
 	 */
 	forceSyncWithServerDefaults(): void {
-		const serverParams = getServerDefaultParams();
-		if (!serverParams) {
-			console.warn('No server parameters available for reset');
-			return;
-		}
-
 		const propsDefaults = this.getServerDefaults();
+		const syncableKeys = ParameterSyncService.getSyncableParameterKeys();
 
-		// Reset all syncable parameters and clear user overrides
-		for (const [key, propsValue] of Object.entries(propsDefaults)) {
-			setConfigValue(this.config, key, propsValue);
-			this.userOverrides.delete(key); // Clear user override since we're resetting
+		for (const key of syncableKeys) {
+			if (propsDefaults[key] !== undefined) {
+				const normalizedValue = normalizeFloatingPoint(propsDefaults[key]);
+
+				setConfigValue(this.config, key, normalizedValue);
+			} else {
+				if (key in SETTING_CONFIG_DEFAULT) {
+					const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
+					setConfigValue(this.config, key, defaultValue);
+				}
+			}
+
+			this.userOverrides.delete(key);
 		}
 
 		this.saveConfig();
-		console.log('Reset all settings to props defaults:', propsDefaults);
 	}
 
 	/**
@@ -324,8 +319,6 @@ class SettingsStore {
 	 */
 	getParameterInfo(key: string) {
 		const propsDefaults = this.getServerDefaults();
-
-		// Get the current value for this specific parameter
 		const currentValue = getConfigValue(this.config, key);
 
 		return ParameterSyncService.getParameterInfo(
@@ -343,19 +336,18 @@ class SettingsStore {
 		const serverDefaults = this.getServerDefaults();
 
 		if (serverDefaults[key] !== undefined) {
-			// Apply the same rounding to ensure consistency
 			const value = normalizeFloatingPoint(serverDefaults[key]);
+
 			this.config[key as keyof SettingsConfigType] =
 				value as SettingsConfigType[keyof SettingsConfigType];
 		} else {
-			// Fallback to webui default
 			if (key in SETTING_CONFIG_DEFAULT) {
 				const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
 				setConfigValue(this.config, key, defaultValue);
 			}
 		}
 
-		// Remove from user overrides
 		this.userOverrides.delete(key);
 		this.saveConfig();
 	}
@@ -366,11 +358,12 @@ class SettingsStore {
 	getParameterDiff() {
 		const serverDefaults = this.getServerDefaults();
 		if (Object.keys(serverDefaults).length === 0) return {};
-		// Convert config to ParameterRecord for diff comparison using shared helper
+
 		const configAsRecord = configToParameterRecord(
 			this.config,
 			ParameterSyncService.getSyncableParameterKeys()
 		);
+
 		return ParameterSyncService.createParameterDiff(configAsRecord, serverDefaults);
 	}
 }
