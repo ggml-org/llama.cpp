@@ -11358,8 +11358,8 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
     }
 };
 
-struct llm_build_gemma_embedding_iswa : public llm_graph_context {
-    llm_build_gemma_embedding_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+struct llm_build_gemma_embedding : public llm_graph_context {
+    llm_build_gemma_embedding(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_k;
 
         ggml_tensor * cur;
@@ -19670,7 +19670,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GEMMA_EMBEDDING:
             {
-                llm = std::make_unique<llm_build_gemma_embedding_iswa>(*this, params);
+                llm = std::make_unique<llm_build_gemma_embedding>(*this, params);
             } break;
         case LLM_ARCH_STARCODER2:
             {
