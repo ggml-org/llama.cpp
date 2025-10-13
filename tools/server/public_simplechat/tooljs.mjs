@@ -14,13 +14,13 @@ let js_meta = {
         "type": "function",
         "function": {
             "name": "run_javascript_function_code",
-            "description": "Runs given code using function constructor mechanism in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
+            "description": "Runs given code using eval within a web worker context in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The code belonging to the dynamic function to run in the browser's javascript interpreter environment."
+                        "description": "The code that will be run using eval within a web worker in the browser's javascript interpreter environment."
                     }
                 },
                 "required": ["code"]
@@ -44,7 +44,7 @@ let calc_meta = {
         "type": "function",
         "function": {
             "name": "simple_calculator",
-            "description": "Calculates the provided arithmatic expression using console.log of a browser's javascript interpreter and returns the output of the execution once it is done in few seconds",
+            "description": "Calculates the provided arithmatic expression using console.log within a web worker of a browser's javascript interpreter environment and returns the output of the execution once it is done in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
