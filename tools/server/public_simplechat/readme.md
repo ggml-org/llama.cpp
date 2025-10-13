@@ -239,10 +239,10 @@ It is attached to the document object. Some of these can also be updated using t
   be set if needed using the settings ui.
 
   iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end.
-  This is disabled by default. However if enabled, then in addition to latest system message, only
-  the last/latest iRecentUserMsgCnt user messages after the latest system prompt and its responses
-  from the ai model will be sent to the ai-model, when querying for a new response. IE if enabled,
-  only user messages after the latest system message/prompt will be considered.
+  This is set to 5 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt
+  user messages after the latest system prompt and its responses from the ai model will be sent
+  to the ai-model, when querying for a new response. Note that if enabled, only user messages after
+  the latest system message/prompt will be considered.
 
     This specified sliding window user message count also includes the latest user query.
     <0 : Send entire chat history to server
@@ -282,9 +282,11 @@ full chat history. This way if there is any response with garbage/repeatation, i
 mess with things beyond the next question/request/query, in some ways. The trim garbage
 option also tries to help avoid issues with garbage in the context to an extent.
 
-Set max_tokens to 1024, so that a relatively large previous reponse doesnt eat up the space
-available wrt next query-response. However dont forget that the server when started should
-also be started with a model context size of 1k or more, to be on safe side.
+Set max_tokens to 2048, so that a relatively large previous reponse doesnt eat up the space
+available wrt next query-response. While parallely allowing a good enough context size for
+some amount of the chat history in the current session to influence future answers. However
+dont forget that the server when started should also be started with a model context size of
+2k or more, to be on safe side.
 
   The /completions endpoint of tools/server doesnt take max_tokens, instead it takes the
   internal n_predict, for now add the same here on the client side, maybe later add max_tokens
@@ -321,9 +323,9 @@ work.
 
 ### Tool Calling
 
-ALERT: Currently the way this is implemented, it is dangerous to use this, unless one verifies
-all the tool calls requested and the responses generated manually to ensure everything is fine,
-during interaction with ai modles with tools support.
+ALERT: The simple minded way in which this is implemented, it can be dangerous in the worst case,
+Always remember to verify all the tool calls requested and the responses generated manually to
+ensure everything is fine, during interaction with ai modles with tools support.
 
 #### Builtin Tools
 
@@ -332,10 +334,10 @@ The following tools/functions are currently provided by default
 * run_javascript_function_code - which can be used to run some javascript code in the browser
   context.
 
-Currently the generated code / expression is run through a simple dynamic function mechanism.
-May update things, in future, so that a WebWorker is used to avoid exposing browser global scope
-to the generated code directly. Either way always remember to cross check the tool requests and
-generated responses when using tool calling.
+Currently the generated code / expression is run through a simple minded eval inside a web worker
+mechanism. Use of WebWorker helps avoid exposing browser global scope to the generated code directly.
+However any shared web worker scope isnt isolated. Either way always remember to cross check the tool
+requests and generated responses when using tool calling.
 
 May add
 * web_fetch along with a corresponding simple local web proxy/caching server logic that can bypass
@@ -343,19 +345,20 @@ May add
   Inturn maybe with a white list of allowed sites to access or so.
 
 
-#### Extending wiht new tools
+#### Extending with new tools
 
 Provide a descriptive meta data explaining the tool / function being provided for tool calling,
 as well as its arguments.
 
-Provide a handler which should implement the specified tool / function call. It should place
-the result to be sent back to the ai model in the result key of the tc_switch entry for the
-corresponding tool.
+Provide a handler which should implement the specified tool / function call or rather constructs
+the code to be run to get the tool / function call job done, and inturn pass the same to the
+provided web worker to get it executed. Remember to use console.log while generating any response
+that should be sent back to the ai model, in your constructed code.
 
-Update the tc_switch to include a object entry for the tool, which inturn icnludes
+Update the tc_switch to include a object entry for the tool, which inturn includes
 * the meta data as well as
 * a reference to the handler and also
-* the result key
+* the result key (was used previously, may use in future, but for now left as is)
 
 #### Mapping tool calls and responses to normal assistant - user chat flow
 
@@ -368,15 +371,15 @@ tagged response in the subsequent user block.
 This allows the GenAi/LLM to be aware of the tool calls it made as well as the responses it got,
 so that it can incorporate the results of the same in the subsequent chat / interactions.
 
-NOTE: This flow tested to be ok enough with Gemma-3N-E4B-it-Q8_0 LLM ai model for now.
+NOTE: This flow tested to be ok enough with Gemma-3N-E4B-it-Q8_0 LLM ai model for now. Logically
+given the way current ai models work, most of them should understand things as needed, but need
+to test this with other ai models later.
 
 TODO: Need to think later, whether to continue this simple flow, or atleast use tool role wrt
-the tool call responses or even go further and have the logically seperate tool_call request
+the tool call responses or even go further and have the logically seperate tool_calls request
 structures also.
 
 #### ToDo
-
-Update to use web worker.
 
 WebFetch and Local web proxy/caching server
 

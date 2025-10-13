@@ -907,8 +907,8 @@ class Me {
         this.apiRequestOptions = {
             "model": "gpt-3.5-turbo",
             "temperature": 0.7,
-            "max_tokens": 1024,
-            "n_predict": 1024,
+            "max_tokens": 2048,
+            "n_predict": 2048,
             "cache_prompt": false,
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
