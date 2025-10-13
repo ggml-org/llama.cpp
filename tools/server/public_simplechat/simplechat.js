@@ -103,7 +103,7 @@ let gUsageMsg = `
         <ul class="ul2">
         <li> submit tool response placed into user query textarea</li>
         </ul>
-    <li> Default ContextWindow = [System, Last Query+Resp, Cur Query].</li>
+    <li> Default ContextWindow = [System, Last4 Query+Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
@@ -886,7 +886,7 @@ class Me {
         this.bCompletionFreshChatAlways = true;
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
-        this.iRecentUserMsgCnt = 2;
+        this.iRecentUserMsgCnt = 5;
         this.sRecentUserMsgCnt = {
             "Full": -1,
             "Last0": 1,
