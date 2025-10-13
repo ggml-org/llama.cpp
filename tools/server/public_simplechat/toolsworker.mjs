@@ -13,9 +13,8 @@
 import * as tconsole from "./toolsconsole.mjs"
 
 
-tconsole.console_redir()
-
 self.onmessage = function (ev) {
+    tconsole.console_redir()
     try {
         eval(ev.data.code)
     } catch (/** @type {any} */error) {

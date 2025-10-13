@@ -678,6 +678,7 @@ class MultiChatUI {
         })
 
         tools.setup((name, data)=>{
+            clearTimeout(this.idTimeOut)
             this.elInUser.value = `<tool_response>${data}</tool_response>`
             this.ui_reset_userinput(false)
         })
@@ -791,7 +792,7 @@ class MultiChatUI {
             this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
             this.ui_reset_userinput(false)
         } else {
-            setTimeout(() => {
+            this.idTimeOut = setTimeout(() => {
                 this.elInUser.value = `<tool_response>Tool/Function call ${toolname} taking too much time, aborting...</tool_response>`
                 this.ui_reset_userinput(false)
             }, 10000)
