@@ -4,14 +4,17 @@
 //
 
 
+/** The redirected console.log's capture-data-space */
 export let gConsoleStr = ""
 /**
+ * Maintain original console.log, when needed
  * @type { {(...data: any[]): void} | null}
  */
-export let gOrigConsoleLog = null
+let gOrigConsoleLog = null
 
 
 /**
+ * The trapping console.log
  * @param {any[]} args
  */
 export function console_trapped(...args) {
@@ -22,17 +25,33 @@ export function console_trapped(...args) {
             return String(arg);
         }
     }).join(' ');
-    gConsoleStr += res;
+    gConsoleStr += `${res}\n`;
 }
 
+/**
+ * Save the original console.log, if needed.
+ * Setup redir of console.log.
+ * Clear the redirected console.log's capture-data-space.
+ */
 export function console_redir() {
-    gOrigConsoleLog = console.log
+    if (gOrigConsoleLog == null) {
+        if (console.log == console_trapped) {
+            throw new Error("ERRR:ToolsConsole:ReDir:Original Console.Log lost???");
+        }
+        gOrigConsoleLog = console.log
+    }
     console.log = console_trapped
     gConsoleStr = ""
 }
 
+/**
+ * Revert the redirected console.log to the original console.log, if possible.
+ */
 export function console_revert() {
     if (gOrigConsoleLog !== null) {
+        if (gOrigConsoleLog == console_trapped) {
+            throw new Error("ERRR:ToolsConsole:Revert:Original Console.Log lost???");
+        }
         console.log = gOrigConsoleLog
     }
 }
