@@ -2633,7 +2633,7 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cgraph * cgraph,
+static bool check_node_graph_compatibility(ggml_cgraph * cgraph,
     bool use_cuda_graph) {
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
@@ -3095,7 +3095,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cgraph, use_cuda_graph);
+        use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
         if (use_cuda_graph && cuda_graph_update_required) {
