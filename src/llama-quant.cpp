@@ -632,6 +632,22 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const llama_model_quantize_params * params,
     int nthread
 ) {
+    // RAII guard for signal handlers
+    bpw_stop.store(false, std::memory_order_relaxed);
+    struct signal_scope_guard {
+        using handler_t = void (*)(int);
+        handler_t prev_int = SIG_DFL;
+        handler_t prev_term = SIG_DFL;
+        signal_scope_guard() {
+            prev_int  = std::signal(SIGINT,  signal_handler);
+            prev_term = std::signal(SIGTERM, signal_handler);
+        }
+        ~signal_scope_guard() {
+            std::signal(SIGINT,  prev_int);
+            std::signal(SIGTERM, prev_term);
+        }
+    } _signal_guard;
+
     struct candidate_types {
         ggml_type type;
         float bpw;
@@ -722,22 +738,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
         if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
         return is_quantizable(ggml_get_name(t), model.arch, params);
-    };
-
-    auto install_signal_handlers = [] {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            std::signal(SIGINT, signal_handler);
-            std::signal(SIGTERM, signal_handler);
-        });
-    };
-
-    auto uninstall_signal_handlers = [] {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            std::signal(SIGINT, SIG_DFL);
-            std::signal(SIGTERM, SIG_DFL);
-        });
     };
 
     // Saved state per tensor
@@ -1121,7 +1121,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return lambdas;
     };
 
-    install_signal_handlers();
     auto bpw_data = load_bpw_state();
 
     // Significantly reduce compute time by parallelising tensor processing - courtesy of https://github.com/ddh0
@@ -1700,7 +1699,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     delete_bpw_state(); // we're done, clear any checkpoint
-    uninstall_signal_handlers();
 
     return emit_overrides();
 }
