@@ -4,16 +4,23 @@
 // by Humans for All
 //
 
+/**
+ * Expects to get a message with identifier name and code to run
+ * Posts message with identifier name and data captured from console.log outputs
+ */
+
+
 import * as tconsole from "./toolsconsole.mjs"
+
 
 tconsole.console_redir()
 
-onmessage = async (ev) => {
+self.onmessage = function (ev) {
     try {
-        eval(ev.data)
+        eval(ev.data.code)
     } catch (/** @type {any} */error) {
-        console.log(`\n\nTool/Function call raised an exception:${error.name}:${error.message}\n\n`)
+        console.log(`\n\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}\n\n`)
     }
     tconsole.console_revert()
-    postMessage(tconsole.gConsoleStr)
+    self.postMessage({ name: ev.data.name, data: tconsole.gConsoleStr})
 }
