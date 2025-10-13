@@ -8,7 +8,7 @@
 import * as tjs from './tooljs.mjs'
 
 
-let gToolsWorker = new Worker('./toolsworker.mjs');
+let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
 /**
  * @type {Object<string,Object<string,any>>}
  */
