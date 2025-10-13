@@ -7,7 +7,7 @@
 //
 
 
-import * as tconsole from "./toolsconsole.mjs"
+let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
 
 
 let js_meta = {
@@ -31,16 +31,12 @@ let js_meta = {
 
 /**
  * Implementation of the javascript interpretor logic. Minimal skeleton for now.
- * ALERT: Has access to the javascript environment and can mess with it and beyond
+ * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
  * @param {string} toolname
  * @param {any} obj
  */
 function js_run(toolname, obj) {
-    tconsole.console_redir()
-    let func = new Function(obj["code"])
-    func()
-    tconsole.console_revert()
-    tc_switch[toolname]["result"] = tconsole.gConsoleStr
+    gToolsWorker.postMessage({ name: toolname, code: obj["code"]})
 }
 
 
@@ -65,16 +61,12 @@ let calc_meta = {
 
 /**
  * Implementation of the simple calculator logic. Minimal skeleton for now.
- * ALERT: Has access to the javascript environment and can mess with it and beyond
+ * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
  * @param {string} toolname
  * @param {any} obj
  */
 function calc_run(toolname, obj) {
-    tconsole.console_redir()
-    let func = new Function(`console.log(${obj["arithexpr"]})`)
-    func()
-    tconsole.console_revert()
-    tc_switch[toolname]["result"] = tconsole.gConsoleStr
+    gToolsWorker.postMessage({ name: toolname, code: `console.log(${obj["arithexpr"]})`})
 }
 
 
@@ -94,3 +86,11 @@ export let tc_switch = {
     }
 }
 
+
+/**
+ * Used to get hold of the web worker to use for running tool/function call related code
+ * @param {Worker} toolsWorker
+ */
+export function init(toolsWorker) {
+    gToolsWorker = toolsWorker
+}
