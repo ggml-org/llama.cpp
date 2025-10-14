@@ -9219,6 +9219,35 @@ class KimiVLModel(MmprojModel):
 
         return [] # skip other tensors
 
+@ModelBase.register("Glm4vMoeForConditionalGeneration")
+class GLM4V_MoE(MmprojModel):
+    #
+    # the HF model's type is `glm4v_moe`. internally, it consists of two models:
+    # - `glm4v_moe_text`
+    # + main text model
+    # + tensor names start with "model.language_model."
+    # + "2D-RoPE" (aKa Roformer) w/ embeddings dynamically adapted via bicubic interpolation
+    # - `glm4v_moe`
+    # + vision adapter (ViT)
+    # + tensor names start with "model.visual."
+    # + "3D-RoPE" (without the interpolation mentioned above)
+    #
+    # other notable quirks include:
+    # - has MTP layer (need to keep these tensors - same as GLM-4.5-Air)
+    # - RoPE theta value (θ): use 10k rather than 100k for GLM-4.5-Air
+    # - the model's vision supports video input, but this is not implemented here
+    #
+    # for more info, refer to:
+    # - reference impl          : https://github.com/huggingface/transformers/tree/main/src/transformers/models/glm4v_moe
+    # - HF model card           : https://huggingface.co/zai-org/GLM-4.5V
+    # - arXiv paper (model)     : https://arxiv.org/abs/2507.01006
+    # - arXiv paper (orig. ViT) : https://arxiv.org/abs/2411.14402
+    #
+    # TODO: the model's tokenizer has video-related special tokens - deal with these (??)
+    #
+    pass
+
+
 ###### CONVERSION LOGIC ######
 
 
