@@ -4268,7 +4268,7 @@ struct test_conv_2d_implicit : public test_case {
         }
 
         ggml_tensor * out =
-            ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+            ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn?0:1);
         ggml_set_name(out, "out");
         return out;
     }
@@ -6786,6 +6786,45 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
             { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
             GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, false));
+    }
+
+    for (auto act_case : cases_sd) {
+        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+        test_cases.emplace_back(new test_conv_2d_implicit(
+            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+            GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, false));
+    }
+
+    for (auto act_case : cases_sd) {
+        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+        test_cases.emplace_back(new test_conv_2d_implicit(
+            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+            GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, true));
+    }
+
+    for (auto act_case : cases_sd) {
+        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+        test_cases.emplace_back(new test_conv_2d_implicit(
+            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+            GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, true));
     }
 
 

@@ -731,15 +731,15 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
   conv_shapes[][2]: ne_input=[192,256,512,1git diff],ne_kernel=[3,3,512,512]
 */
 constexpr static int conv_shapes[][NUM_VARIANTS] = {
-    { 128, 128,  128  }, // BM
-    { 256,  128,  256  }, // BN
-    { 8, 8, 8 }, // BK
-    { 128, 64,  32   }, // WM
-    { 32,  32 ,  256   }, // WN
-    { 2,   2,  1   }, // WNITER
-    { 8,   4,  8   }, // TM
-    { 8,   4,  4   }, // TN
-    { 256,  256, 128}	    //  NUM_THREADS
+    { 128, 128,  128, 256 }, // BM
+    { 256,  128,  256, 128 }, // BN
+    { 8, 8, 8, 8 }, // BK
+    { 128, 64,  32, 128   }, // WM
+    { 32,  32 ,  256, 32   }, // WN
+    { 2,   2,  1, 1   }, // WNITER
+    { 8,   4,  4, 4  }, // TM
+    { 8,   4,  8, 8   }, // TN
+    { 256,  256, 128, 256}	    //  NUM_THREADS
 };
 
 template <typename T, unsigned int CONV_SHAPE>
@@ -763,16 +763,29 @@ static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
     dim3 thblock(NUM_THREADS, thready, threadz);
     dim3 grid(blockx, blocky, blockz);
     // int smem_size = 24 * 1024;
-    conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
-          WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
+    if(P.c % 4 == 0){
+        if(P.layout == 0)
+            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+                WNITER, TM, TN, NUM_THREADS, 0, true, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
+        else if(P.layout == 1)
+            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+                WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
+    } else{
+        if(P.layout == 0)
+            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+                WNITER, TM, TN, NUM_THREADS, 0, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
+        else if(P.layout == 1)
+            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+                WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
+    }
 }
 
 static void conv2d_implicit_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const param_t P, cudaStream_t st) {
-    conv2d_implicit_cuda<half, 0>(X_D, K_D, Y_D, P, st);
+    conv2d_implicit_cuda<half, 3>(X_D, K_D, Y_D, P, st);
 }
 
 static void conv2d_implicit_cuda_f32(const float * X_D, const float * K_D, float * Y_D, const param_t P, cudaStream_t st) {
-    conv2d_implicit_cuda<float, 0>(X_D, K_D, Y_D, P, st);
+    conv2d_implicit_cuda<float, 3>(X_D, K_D, Y_D, P, st);
 }
 
 void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -785,8 +798,6 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
 
-    // same number of input channels
-    GGML_ASSERT(input->ne[2] == kernel->ne[2]);
 
     cudaStream_t st = ctx.stream();
 
@@ -797,17 +808,30 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int       PD_Y = p[3];  // padding_y
     const int       DL_X = p[4];  // dilation_x
     const int       DL_Y = p[5];  // dilation_y
+    const int       LT   = p[6];  // layout
 
+    GGML_ASSERT(LT == 0 || LT == 1);
+    
+    // same number of input channels
+    GGML_ASSERT(LT == 0 ? input->ne[0] == kernel->ne[0] : input->ne[2] == kernel->ne[2]);
     // No cwhn
-    GGML_ASSERT(p[6] == false);
+    GGML_ASSERT(p[7] == false);
 
-    const int IW = input->ne[0];   // input_w
-    const int IH = input->ne[1];   // input_h
+    // const int IW = input->ne[0];   // input_w
+    // const int IH = input->ne[1];   // input_h
+    // const int OW = dst->ne[0];     // output_w
+    // const int OH = dst->ne[1];     // output_h
+    // const int KW = kernel->ne[0];  // kernel_w
+    // const int KH = kernel->ne[1];  // kernel_h
+    // const int IC = input->ne[2];   // input_channels
+    const int IW = input->ne[LT == 0 ? 1 : 0];   // input_w
+    const int IH = input->ne[LT == 0 ? 2 : 1];   // input_h
     const int OW = dst->ne[0];     // output_w
     const int OH = dst->ne[1];     // output_h
-    const int KW = kernel->ne[0];  // kernel_w
-    const int KH = kernel->ne[1];  // kernel_h
-    const int IC = input->ne[2];   // input_channels
+    const int KW = kernel->ne[LT == 0 ? 1 : 0];  // kernel_w
+    const int KH = kernel->ne[LT == 0 ? 2 : 1];  // kernel_h
+    const int IC = input->ne[LT == 0 ? 0: 2];   // input_channels
+
     const int OC = kernel->ne[3];  // ouptut_chanles
     const int B  = input->ne[3];   // n_batches
     
@@ -819,7 +843,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     params.C_fastdiv = init_fastdiv_values(IC);
     params.RS_fastdiv = init_fastdiv_values(KW*KH);
     params.S_fastdiv = init_fastdiv_values(KW);
-    params.nchw = false;
+    params.layout = LT;
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_implicit_cuda_f16(X_D, (half *) K_D, Y_D, params, st);

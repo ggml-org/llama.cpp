@@ -4584,7 +4584,9 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
         int                   p0,  // padding dimension 0
         int                   p1,  // padding dimension 1
         int                   d0,  // dilation dimension 0
-        int                   d1) {// dilation dimension 1
+        int                   d1,
+        // 0: NHWC, 1:NCHW
+        int                   layout) {// dilation dimension 1
 
     GGML_ASSERT(a->ne[2] == b->ne[2]);
     //GGML_ASSERT(a->type == b->type);
@@ -4603,10 +4605,20 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
     ggml_set_op_params_i32(result, 3, p1);
     ggml_set_op_params_i32(result, 4, d0);
     ggml_set_op_params_i32(result, 5, d1);
+    ggml_set_op_params_i32(result, 6, layout);
+
+    struct ggml_tensor *ap, *bp;
+    if(layout == 0){
+        ap = ggml_cont(ctx, ggml_permute(ctx, a, 1, 2, 0, 3));
+        bp = ggml_cont(ctx, ggml_permute(ctx, b, 1, 2, 0, 3));
+    } else{
+        ap = a;
+        bp = b;
+    }
 
     result->op = GGML_OP_CONV_2D_IMPLICIT;
-    result->src[0] = a;
-    result->src[1] = b;
+    result->src[0] = ap;
+    result->src[1] = bp;
 
     return result;
 }

@@ -1992,7 +1992,8 @@ extern "C" {
             int                   p0,  // padding dimension 0
             int                   p1,  // padding dimension 1
             int                   d0,  // dilation dimension 0
-            int                   d1); // dilation dimension 1
+            int                   d1,
+            int                layout); // dilation dimension 1
 
     
     GGML_API struct ggml_tensor * ggml_conv_3d_direct(
