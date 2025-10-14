@@ -385,6 +385,7 @@ class MODEL_ARCH(IntEnum):
     CHATGLM          = auto()
     GLM4             = auto()
     GLM4_MOE         = auto()
+    GLM4V_MOE        = auto()
     BITNET           = auto()
     T5               = auto()
     T5ENCODER        = auto()
@@ -656,10 +657,10 @@ class MODEL_TENSOR(IntEnum):
     A_MM_NORM_PRE        = auto()
     A_MM_NORM_MID        = auto()
     # nextn/mtp
-    NEXTN_EH_PROJ        = auto()
-    NEXTN_EMBED_TOKENS   = auto()
-    NEXTN_ENORM          = auto()
-    NEXTN_HNORM          = auto()
+    NEXTN_EH_PROJ          = auto()
+    NEXTN_EMBED_TOKENS     = auto()
+    NEXTN_ENORM            = auto()
+    NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
 
@@ -729,6 +730,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.GLM4_MOE:         "glm4moe",
+    MODEL_ARCH.GLM4V_MOE:        "glm4v_moe",
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
     MODEL_ARCH.T5ENCODER:        "t5encoder",
@@ -2272,6 +2274,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.GLM4V_MOE: [ # same as GLM4_MOE without MTP tensors
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,
