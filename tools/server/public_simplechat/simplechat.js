@@ -38,23 +38,34 @@ class ApiEP {
 
 }
 
-class AssistantResponse {
+class ChatMessage {
 
-    constructor(content="", toolname="", toolargs="", trimmedContent="") {
-        /** @type {Object<string, string>} */
-        this.response = { content: content, toolname: toolname, toolargs: toolargs, trimmedContent: trimmedContent };
+    /**
+     * Represent a Message in the Chat
+     * @param {string} role
+     * @param {string} content
+     * @param {Array<any>} tool_calls
+     * @param {string} trimmedContent
+     */
+    constructor(role = "", content="", tool_calls=[], trimmedContent="") {
+        /** @type {Object<string, any>} */
+        this.ns = { role: role, content: content, tool_calls: tool_calls }
+        this.trimmedContent = trimmedContent;
     }
 
     /**
      * Create a new instance from an existing instance
-     * @param {AssistantResponse} old
+     * @param {ChatMessage} old
      */
     static newFrom(old) {
-        return new AssistantResponse(old.response.content, old.response.toolname, old.response.toolargs, old.response.trimmedContent)
+        return new ChatMessage(old.ns.role, old.ns.content, old.ns.tool_calls, old.trimmedContent)
     }
 
     clear() {
-        this.response = { content: "", toolname: "", toolargs: "", trimmedContent: "" };
+        this.ns.role = "";
+        this.ns.content = "";
+        this.ns.tool_calls = [];
+        this.trimmedContent = "";
     }
 
     /**
@@ -71,7 +82,7 @@ class AssistantResponse {
     }
 
     has_toolcall() {
-        if (this.response.toolname.trim() == "") {
+        if (this.ns.tool_calls.trim() == "") {
             return false
         }
         return true
