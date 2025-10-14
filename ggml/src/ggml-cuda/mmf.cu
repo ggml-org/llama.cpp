@@ -1,9 +1,7 @@
 #include "ggml.h"
 #include "mmf.cuh"
+#include "mmid.cuh"
 
-void ggml_cuda_launch_mmq_ids_helper(
-        const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
-        int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, cudaStream_t stream);
 
 void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
@@ -79,7 +77,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
 
         GGML_ASSERT(sis1 > 0);
 
-        ggml_cuda_launch_mmq_ids_helper(ids_d, ids_src_compact_dev.get(), ids_dst_compact_dev.get(), expert_bounds_dev.get(),
+        ggml_cuda_launch_mm_ids_helper(ids_d, ids_src_compact_dev.get(), ids_dst_compact_dev.get(), expert_bounds_dev.get(),
             static_cast<int>(n_experts), static_cast<int>(n_tokens), static_cast<int>(n_expert_used), static_cast<int>(ne11), si1, sis1, ctx.stream());
         CUDA_CHECK(cudaGetLastError());
 
@@ -88,7 +86,6 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
         ids_info.expert_bounds_dev = expert_bounds_dev.get();
         ids_info.n_experts         = static_cast<int>(n_experts);
         ids_info.sis1              = sis1;
-        ids_info.cols_per_tile     = 16;
         ids_info_ptr = &ids_info;
     }
 
