@@ -3748,7 +3748,7 @@ kernel void kernel_rope_norm(
 
             const float theta = theta_base * pow(args.freq_base, inv_ndims*i0);
 
-            const float freq_factor = src2 != src0 ? ((device const float *) src2)[ic] : 1.0f;
+            const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
             rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
@@ -3801,7 +3801,7 @@ kernel void kernel_rope_neox(
 
             const float theta = theta_base * pow(args.freq_base, inv_ndims*i0);
 
-            const float freq_factor = src2 != src0 ? ((device const float *) src2)[ic] : 1.0f;
+            const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
             rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
@@ -3872,7 +3872,7 @@ kernel void kernel_rope_multi(
 
             const float theta = theta_base * pow(args.freq_base, inv_ndims*i0);
 
-            const float freq_factor = src2 != src0 ? ((device const float *) src2)[ic] : 1.0f;
+            const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
             rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
@@ -3939,7 +3939,7 @@ kernel void kernel_rope_vision(
             const float theta = theta_base * pow(args.freq_base, 2.0f * inv_ndims * p);
             // end of mrope
 
-            const float freq_factor = src2 != src0 ? ((device const float *) src2)[ic] : 1.0f;
+            const float freq_factor = args.src2 ? ((device const float *) src2)[ic] : 1.0f;
 
             rope_yarn(theta/freq_factor, args.freq_scale, corr_dims, i0, args.ext_factor, args.attn_factor, &cos_theta, &sin_theta);
 
