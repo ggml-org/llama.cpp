@@ -83,6 +83,7 @@ class ChatMessageEx {
      * @param {string} apiEP
      */
     update_stream(nwo, apiEP) {
+        console.debug(nwo, apiEP)
         if (apiEP == ApiEP.Type.Chat) {
             if (nwo["choices"][0]["finish_reason"] === null) {
                 let content = nwo["choices"][0]["delta"]["content"];
@@ -409,43 +410,6 @@ class SimpleChat {
     }
 
     /**
-     * Extract the ai-model/assistant's response from the http response got in streaming mode.
-     * @param {any} respBody
-     * @param {string} apiEP
-     */
-    response_extract_stream(respBody, apiEP) {
-        console.debug(respBody, apiEP)
-        let key = "content"
-        let assistant = "";
-        if (apiEP == ApiEP.Type.Chat) {
-            if (respBody["choices"][0]["finish_reason"] === null) {
-                if (respBody["choices"][0]["delta"]["content"] !== undefined) {
-                    assistant = respBody["choices"][0]["delta"]["content"];
-                } else {
-                    if (respBody["choices"][0]["delta"]["tool_calls"] !== undefined) {
-                        if (respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] !== undefined) {
-                            key = "toolname";
-                            assistant = respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["name"];
-                        } else {
-                            if (respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] !== undefined) {
-                                key = "toolargs";
-                                assistant = respBody["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"];
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            try {
-                assistant = respBody["choices"][0]["text"];
-            } catch {
-                assistant = respBody["content"];
-            }
-        }
-        return { key: key, value: assistant };
-    }
-
-    /**
      * Allow setting of system prompt, but only at begining.
      * @param {string} sysPrompt
      * @param {string} msgTag
@@ -541,7 +505,7 @@ class SimpleChat {
                 }
                 let curJson = JSON.parse(curLine);
                 console.debug("DBUG:SC:PART:Json:", curJson);
-                this.latestResponse.append_response(this.response_extract_stream(curJson, apiEP));
+                this.latestResponse.update_stream(curJson, apiEP);
             }
             elP.innerText = this.latestResponse.content_equiv()
             elP.scrollIntoView(false);
@@ -550,7 +514,7 @@ class SimpleChat {
             }
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
-        return AssistantResponse.newFrom(this.latestResponse);
+        return ChatMessageEx.newFrom(this.latestResponse);
     }
 
     /**
