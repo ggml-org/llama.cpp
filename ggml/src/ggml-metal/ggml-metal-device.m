@@ -7,6 +7,8 @@
 
 #include <Metal/Metal.h>
 
+#include <stdatomic.h>
+
 #ifndef TARGET_OS_VISION
 #define TARGET_OS_VISION 0
 #endif
@@ -21,6 +23,9 @@
 
 // overload of MTLGPUFamilyMetal3 (not available in some environments)
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
+
+// virtual address for GPU memory allocations
+static atomic_uintptr_t g_addr_device = 0x000000400ULL;
 
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
@@ -827,7 +832,7 @@ struct ggml_metal_buffer_wrapper {
 };
 
 struct ggml_metal_buffer {
-    void * all_data; // TODO: https://github.com/ggml-org/llama.cpp/pull/15985
+    void * all_data;
     size_t all_size;
 
     // if false, the Metal buffer data is allocated in private GPU memory and is not shared with the host
@@ -965,13 +970,14 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
     if (shared) {
         res->all_data = ggml_metal_host_malloc(size_aligned);
         res->is_shared = true;
-        res->owned = true;
     } else {
-        // dummy, non-NULL value - we'll populate this after creating the Metal buffer below
-        res->all_data = (void *) 0x000000400ULL;
+        // use virtual address from g_addr_device counter
+        res->all_data = (void *) atomic_fetch_add_explicit(&g_addr_device, size_aligned, memory_order_relaxed);
         res->is_shared = false;
     }
     res->all_size = size_aligned;
+
+    res->owned = true;
 
     res->device = ggml_metal_device_get_obj(dev);
     res->queue  = ggml_metal_device_get_queue(dev);
@@ -983,15 +989,13 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
         res->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (props_dev->use_shared_buffers &&shared) {
+            if (props_dev->use_shared_buffers && shared) {
                 res->buffers[0].metal = [res->device newBufferWithBytesNoCopy:res->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
                                                              deallocator:nil];
             } else {
                 res->buffers[0].metal = [res->device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
-
-                res->all_data = (void *) (res->buffers[0].metal.gpuAddress);
             }
         }
 
@@ -1139,7 +1143,7 @@ bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
 
 void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memset((char *)tensor->data + offset, value, size);
+        memset((char *) tensor->data + offset, value, size);
         return;
     }
 
@@ -1168,7 +1172,7 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
 
 void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memcpy((char *)tensor->data + offset, data, size);
+        memcpy((char *) tensor->data + offset, data, size);
         return;
     }
 
@@ -1223,7 +1227,7 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
 
 void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memcpy(data, (const char *)tensor->data + offset, size);
+        memcpy(data, (const char *) tensor->data + offset, size);
         return;
     }
 
