@@ -78,6 +78,17 @@ class ChatMessageEx {
     }
 
     /**
+     * Create a all in one tool call result string
+     * @param {string} toolCallId
+     * @param {string} toolName
+     * @param {string} toolResult
+     */
+    static createToolCallResultAllInOne(toolCallId, toolName, toolResult) {
+        return `<tool_response> <id>${toolCallId}</id> <name>${toolName}</name> <content>${toolResult}</content> </tool_response>`;
+    }
+
+
+    /**
      * Update based on the drip by drip data got from network in streaming mode.
      * Tries to support both Chat and Completion endpoints
      * @param {any} nwo
@@ -561,15 +572,16 @@ class SimpleChat {
      * Call the requested tool/function.
      * Returns undefined, if the call was placed successfully
      * Else some appropriate error message will be returned.
+     * @param {string} toolcallid
      * @param {string} toolname
      * @param {string} toolargs
      */
-    async handle_toolcall(toolname, toolargs) {
+    async handle_toolcall(toolcallid, toolname, toolargs) {
         if (toolname === "") {
             return "Tool/Function call name not specified"
         }
         try {
-            return await tools.tool_call(toolname, toolargs)
+            return await tools.tool_call(toolcallid, toolname, toolargs)
         } catch (/** @type {any} */error) {
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
@@ -633,11 +645,13 @@ class MultiChatUI {
         if (ar.has_toolcall()) {
             this.elDivTool.hidden = false
             this.elInToolName.value = ar.ns.tool_calls[0].function.name
+            this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
         } else {
             this.elDivTool.hidden = true
             this.elInToolName.value = ""
+            this.elInToolName.dataset.tool_call_id = ""
             this.elInToolArgs.value = ""
             this.elBtnTool.disabled = true
         }
@@ -697,9 +711,9 @@ class MultiChatUI {
             this.handle_tool_run(this.curChatId);
         })
 
-        tools.setup((name, data)=>{
+        tools.setup((id, name, data)=>{
             clearTimeout(this.idTimeOut)
-            this.elInUser.value = `<tool_response>${data}</tool_response>`
+            this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(id, name, data);
             this.ui_reset_userinput(false)
         })
 
@@ -744,6 +758,14 @@ class MultiChatUI {
 
     /**
      * Handle user query submit request, wrt specified chat session.
+     * NOTE: Currently the user query entry area is used for
+     * * showing and allowing edits by user wrt tool call results
+     *   in a predfined simple xml format,
+     *   ie before they submit tool result to ai engine on server
+     * * as well as for user to enter their own queries.
+     * Based on presence of the predefined xml format data at beginning
+     * the logic will treat it has a tool result and if not then as a
+     * normal user query.
      * @param {string} chatId
      * @param {string} apiEP
      */
@@ -768,7 +790,11 @@ class MultiChatUI {
             console.debug(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
             return;
         }
-        chat.add(new ChatMessageEx(Roles.User, content))
+        if (content.startsWith("<tool_response>")) {
+            chat.add(new ChatMessageEx(Roles.Tool, content))
+        } else {
+            chat.add(new ChatMessageEx(Roles.User, content))
+        }
         chat.show(this.elDivChat);
 
         let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
@@ -808,13 +834,17 @@ class MultiChatUI {
         this.elInUser.value = "toolcall in progress...";
         this.elInUser.disabled = true;
         let toolname = this.elInToolName.value.trim()
-        let toolResult = await chat.handle_toolcall(toolname, this.elInToolArgs.value)
+        let toolCallId = this.elInToolName.dataset.tool_call_id;
+        if (toolCallId === undefined) {
+            toolCallId = "??? ToolCallId Missing ???"
+        }
+        let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            this.elInUser.value = `<tool_response>${toolResult}</tool_response>`
+            this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult);
             this.ui_reset_userinput(false)
         } else {
             this.idTimeOut = setTimeout(() => {
-                this.elInUser.value = `<tool_response>Tool/Function call ${toolname} taking too much time, aborting...</tool_response>`
+                this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`);
                 this.ui_reset_userinput(false)
             }, 10000)
         }

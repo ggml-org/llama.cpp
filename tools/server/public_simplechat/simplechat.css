@@ -21,6 +21,9 @@
 .role-user {
     background-color: lightgray;
 }
+.role-tool {
+    background-color: lightyellow;
+}
 .role-trim {
     background-color: lightpink;
 }
