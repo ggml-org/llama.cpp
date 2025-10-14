@@ -38,7 +38,15 @@ class ApiEP {
 
 }
 
-class ChatMessage {
+/**
+ * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCalls
+ */
+
+/**
+ * @typedef {{role: string, content: string, tool_calls: Array<NSToolCalls>}} NSChatMessage
+ */
+
+class ChatMessageEx {
 
     /**
      * Represent a Message in the Chat
@@ -48,17 +56,17 @@ class ChatMessage {
      * @param {string} trimmedContent
      */
     constructor(role = "", content="", tool_calls=[], trimmedContent="") {
-        /** @type {Object<string, any>} */
+        /** @type {NSChatMessage} */
         this.ns = { role: role, content: content, tool_calls: tool_calls }
         this.trimmedContent = trimmedContent;
     }
 
     /**
      * Create a new instance from an existing instance
-     * @param {ChatMessage} old
+     * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessage(old.ns.role, old.ns.content, old.ns.tool_calls, old.trimmedContent)
+        return new ChatMessageEx(old.ns.role, old.ns.content, old.ns.tool_calls, old.trimmedContent)
     }
 
     clear() {
@@ -69,16 +77,53 @@ class ChatMessage {
     }
 
     /**
-     * Helps collate the latest response from the server/ai-model, as it is becoming available.
-     * This is mainly useful for the stream mode.
-     * @param {{key: string, value: string}} resp
+     * Update based on the drip by drip data got from network in streaming mode
+     * @param {any} nwo
+     * @param {string} apiEP
      */
-    append_response(resp) {
-        if (resp.value == null) {
-            return
+    update_stream(nwo, apiEP) {
+        if (apiEP == ApiEP.Type.Chat) {
+            if (nwo["choices"][0]["finish_reason"] === null) {
+                let content = nwo["choices"][0]["delta"]["content"];
+                if (content !== undefined) {
+                    if (content !== null) {
+                        this.ns.content += content;
+                    }
+                } else {
+                    let toolCalls = nwo["choices"][0]["delta"]["tool_calls"];
+                    if ( toolCalls !== undefined) {
+                        if (toolCalls[0]["function"]["name"] !== undefined) {
+                            this.ns.tool_calls.push(toolCalls[0])
+                            /*
+                            this.ns.tool_calls[0].function.name = toolCalls[0]["function"]["name"];
+                            this.ns.tool_calls[0].id = toolCalls[0]["id"];
+                            this.ns.tool_calls[0].type = toolCalls[0]["type"];
+                            this.ns.tool_calls[0].function.arguments = toolCalls[0]["function"]["arguments"]
+                            */
+                        } else {
+                            if (toolCalls[0]["function"]["arguments"] !== undefined) {
+                                this.ns.tool_calls[0].function.arguments += toolCalls[0]["function"]["arguments"];
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            try {
+                this.ns.content += nwo["choices"][0]["text"];
+            } catch {
+                this.ns.content += nwo["content"];
+            }
         }
-        console.debug(resp.key, resp.value)
-        this.response[resp.key] += resp.value;
+    }
+
+    /**
+     * Update based on the data got from network in oneshot mode
+     * @param {any} nwo
+     * @param {string} apiEP
+     */
+    update_oneshot(nwo, apiEP) {
+
     }
 
     has_toolcall() {
