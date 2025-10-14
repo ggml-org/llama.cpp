@@ -201,6 +201,7 @@ struct clip_hparams {
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
+    int minicpmv_max_slice_nums = 9;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 };
 
@@ -3260,16 +3261,67 @@ struct llava_uhd {
         const bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
         const bool has_pinpoints = !ctx->model.hparams.image_res_candidates.empty();
 
-        if (!has_slices) {
-            // skip slicing logic
-            res.overview_size = clip_image_size{slice_size, slice_size};
-            res.refined_size  = clip_image_size{0, 0};
-            res.grid_size     = clip_image_size{0, 0};
+        if (clip_is_minicpmv(ctx)) {
+            auto best_size    = get_best_resize(original_size, slice_size, patch_size, !has_slices);
+            res.overview_size = best_size;
+
+            {
+                const int max_slice_nums = ctx->model.hparams.minicpmv_max_slice_nums;
+                const float log_ratio = log((float)original_width / original_height);
+                const float ratio = (float)original_width * original_height / (slice_size * slice_size);
+                const int multiple = fmin(ceil(ratio), max_slice_nums);
+
+                auto best_grid   = get_best_grid(max_slice_nums, multiple, log_ratio);
+                auto refine_size = get_refine_size(original_size, best_grid, slice_size, patch_size, true);
+                res.grid_size    = best_grid;
+                res.refined_size = refine_size;
+
+                LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d, grid size: %d x %d\n",
+                        __func__, original_width, original_height,
+                        res.overview_size.width, res.overview_size.height,
+                        res.refined_size.width, res.refined_size.height,
+                        res.grid_size.width, res.grid_size.height);
+
+                if (!has_slices || max_slice_nums == 0) {
+                    return res;
+                }
+
+                int width  = refine_size.width;
+                int height = refine_size.height;
+                int grid_x = int(width  / best_grid.width);
+                int grid_y = int(height / best_grid.height);
+                for (int patches_y = 0,                    ic = 0;
+                        patches_y < refine_size.height && ic < best_grid.height;
+                        patches_y += grid_y,              ic += 1) {
+                    for (int patches_x = 0,                   jc = 0;
+                            patches_x < refine_size.width && jc < best_grid.width;
+                            patches_x += grid_x,             jc += 1) {
+                        slice_coordinates slice;
+                        slice.x = patches_x;
+                        slice.y = patches_y;
+                        slice.size.width  = grid_x;
+                        slice.size.height = grid_y;
+                        res.slices.push_back(slice);
+                        LOG_DBG("%s: slice %d: x=%d, y=%d, size=%dx%d\n",
+                                __func__, (int)res.slices.size() - 1,
+                                slice.x, slice.y, slice.size.width, slice.size.height);
+                    }
+                }
+            }
 
             return res;
         }
+        else {
+            if (!has_slices) {
+                // skip slicing logic
+                res.overview_size = clip_image_size{slice_size, slice_size};
+                res.refined_size  = clip_image_size{0, 0};
+                res.grid_size     = clip_image_size{0, 0};
 
-        if (has_pinpoints) {
+                return res;
+            }
+
+            if (has_pinpoints) {
             // has pinpoints, use them to calculate the grid size (e.g. llava-1.6)
             auto refine_size = llava_uhd::select_best_resolution(
                 original_size,
@@ -3305,53 +3357,7 @@ struct llava_uhd {
 
             return res;
         }
-
-        // no pinpoints, dynamically calculate the grid size (e.g. minicpmv)
-
-        auto best_size    = get_best_resize(original_size, slice_size, patch_size, !has_slices);
-        res.overview_size = best_size;
-
-        {
-            const int max_slice_nums = 9; // TODO: this is only used by minicpmv, maybe remove it
-            const float log_ratio = log((float)original_width / original_height);
-            const float ratio = (float)original_width * original_height / (slice_size * slice_size);
-            const int multiple = fmin(ceil(ratio), max_slice_nums);
-
-            auto best_grid   = get_best_grid(max_slice_nums, multiple, log_ratio);
-            auto refine_size = get_refine_size(original_size, best_grid, slice_size, patch_size, true);
-            res.grid_size    = best_grid;
-            res.refined_size = refine_size;
-
-            LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d, grid size: %d x %d\n",
-                    __func__, original_width, original_height,
-                    res.overview_size.width, res.overview_size.height,
-                    res.refined_size.width, res.refined_size.height,
-                    res.grid_size.width, res.grid_size.height);
-
-            int width  = refine_size.width;
-            int height = refine_size.height;
-            int grid_x = int(width  / best_grid.width);
-            int grid_y = int(height / best_grid.height);
-            for (int patches_y = 0,                    ic = 0;
-                    patches_y < refine_size.height && ic < best_grid.height;
-                    patches_y += grid_y,              ic += 1) {
-                for (int patches_x = 0,                   jc = 0;
-                        patches_x < refine_size.width && jc < best_grid.width;
-                        patches_x += grid_x,             jc += 1) {
-                    slice_coordinates slice;
-                    slice.x = patches_x;
-                    slice.y = patches_y;
-                    slice.size.width  = grid_x;
-                    slice.size.height = grid_y;
-                    res.slices.push_back(slice);
-                    LOG_DBG("%s: slice %d: x=%d, y=%d, size=%dx%d\n",
-                            __func__, (int)res.slices.size() - 1,
-                            slice.x, slice.y, slice.size.width, slice.size.height);
-                }
-            }
         }
-
-        return res;
     }
 
     static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
@@ -4388,6 +4394,12 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_ULTRAVOX
         || ctx->proj_type() == PROJECTOR_TYPE_QWEN2A
         || ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL;
+}
+
+void clip_set_minicpmv_max_slice_nums(struct clip_ctx * ctx, int n) {
+    if (!ctx) return;
+    if (n < 0) n = 0;
+    ctx->model.hparams.minicpmv_max_slice_nums = n;
 }
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {

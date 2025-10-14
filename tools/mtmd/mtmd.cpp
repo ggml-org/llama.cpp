@@ -833,6 +833,11 @@ int mtmd_get_audio_bitrate(mtmd_context * ctx) {
     return 16000; // 16kHz
 }
 
+void mtmd_set_minicpmv_max_slice_nums(mtmd_context * ctx, int n) {
+    if (!ctx || !ctx->ctx_v) return;
+    clip_set_minicpmv_max_slice_nums(ctx->ctx_v, n);
+}
+
 //
 // public API functions
 //

@@ -405,6 +405,7 @@ struct common_params {
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
+    std::vector<std::string> video; // path to video file(s) or frame directories
 
     // finetune
     struct lr_opt lr;

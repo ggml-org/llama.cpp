@@ -112,6 +112,10 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_bitrate(mtmd_context * ctx);
 
+// set MiniCPM-V UHD slicing upper bound (used when preprocessing images for MiniCPM-V)
+// values < 1 will be clamped to 1
+MTMD_API void mtmd_set_minicpmv_max_slice_nums(mtmd_context * ctx, int n);
+
 // mtmd_bitmap
 //
 // if bitmap is image:

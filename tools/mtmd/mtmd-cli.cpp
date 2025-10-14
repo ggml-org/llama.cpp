@@ -6,12 +6,15 @@
 #include "ggml.h"
 #include "console.h"
 #include "chat.h"
+#include "clip.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-video.h"
 
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <cstdlib>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -158,6 +161,23 @@ struct mtmd_cli_context {
         bitmaps.entries.push_back(std::move(bmp));
         return true;
     }
+
+    // Load multiple frames from a directory as a "video" (sequence of images)
+    // Returns number of frames appended
+    size_t load_video_dir(const std::string & dir, int max_frames = 32, int stride = 1, bool recursive = false) {
+        mtmd_video::LoadVideoOptions opts;
+        opts.max_frames = max_frames;
+        opts.stride     = stride;
+        opts.recursive  = recursive;
+        return mtmd_video::append_frames_from_dir(ctx_vision.get(), dir, bitmaps, opts);
+    }
+
+    size_t load_video_path(const std::string & path, int max_frames = 32, int stride = 1) {
+        mtmd_video::LoadVideoOptions opts;
+        opts.max_frames = max_frames;
+        opts.stride     = stride;
+        return mtmd_video::append_frames_from_path(ctx_vision.get(), path, bitmaps, opts);
+    }
 };
 
 static int generate_response(mtmd_cli_context & ctx, int n_predict) {
@@ -266,7 +286,7 @@ int main(int argc, char ** argv) {
     mtmd_cli_context ctx(params);
     LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
-    bool is_single_turn = !params.prompt.empty() && !params.image.empty();
+    bool is_single_turn = !params.prompt.empty() && (!params.image.empty() || !params.video.empty());
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
@@ -290,19 +310,38 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
-            for (size_t i = 0; i < params.image.size(); i++) {
-                params.prompt += mtmd_default_marker();
-            }
-        }
-        common_chat_msg msg;
-        msg.role = "user";
-        msg.content = params.prompt;
+
+        // 1) load all media first
+        size_t n_loaded_media = 0;
         for (const auto & image : params.image) {
             if (!ctx.load_media(image)) {
                 return 1; // error is already printed by libmtmd
             }
+            n_loaded_media += 1;
         }
+        for (const auto & vpath : params.video) {
+            // for video understanding: disable UHD slicing (overview only)
+            mtmd_set_minicpmv_max_slice_nums(ctx.ctx_vision.get(), 0);
+            size_t n = ctx.load_video_path(vpath, /*max_frames*/3, /*stride*/1);
+            if (n == 0) {
+                LOG_ERR("Unable to load video frames from %s\n", vpath.c_str());
+                return 1;
+            }
+            n_loaded_media += n;
+        }
+
+        // 2) build prompt content with correct number of markers
+        std::string prompt_content = params.prompt;
+        if (prompt_content.find(mtmd_default_marker()) == std::string::npos) {
+            for (size_t i = 0; i < n_loaded_media; i++) {
+                prompt_content += mtmd_default_marker();
+            }
+        }
+
+        // 3) run
+        common_chat_msg msg;
+        msg.role = "user";
+        msg.content = prompt_content;
         if (eval_message(ctx, msg, true)) {
             return 1;
         }
@@ -317,6 +356,9 @@ int main(int argc, char ** argv) {
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
+        }
+        if (mtmd_support_vision(ctx.ctx_vision.get())) {
+            LOG("\n   /video <dir>     load frames from a directory as a video");
         }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
@@ -349,15 +391,37 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
-            if (is_image || is_audio) {
+            bool is_video = line == "/video" || line.find("/video ") == 0;
+            if (is_image || is_audio || is_video) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing media filename\n");
                     continue;
                 }
                 std::string media_path = line.substr(7);
-                if (ctx.load_media(media_path)) {
-                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                    content += mtmd_default_marker();
+                if (is_video) {
+                    // parse optional args: "/video <dir> [max_frames] [stride]"
+                    // simple split by spaces
+                    std::vector<std::string> parts = string_split(media_path, " ");
+                    std::string dir = parts.size() > 0 ? parts[0] : media_path;
+                    int max_frames = 32;
+                    int stride = 1;
+                    if (parts.size() > 1) max_frames = std::max(1, atoi(parts[1].c_str()));
+                    if (parts.size() > 2) stride     = std::max(1, atoi(parts[2].c_str()));
+                    size_t n = ctx.load_video_path(dir, max_frames, stride);
+                    if (n > 0) {
+                        LOG("%s video loaded with %zu frames\n", dir.c_str(), n);
+                        // add one marker per frame to match mtmd_tokenize expectations
+                        for (size_t i = 0; i < n; ++i) {
+                            content += mtmd_default_marker();
+                        }
+                    } else {
+                        LOG_ERR("ERR: failed to load video frames from %s\n", dir.c_str());
+                    }
+                } else {
+                    if (ctx.load_media(media_path)) {
+                        LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
+                        content += mtmd_default_marker();
+                    }
                 }
                 // else, error is already printed by libmtmd
                 continue;

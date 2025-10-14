@@ -2514,6 +2514,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image.emplace_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD}));
+    add_opt(common_arg(
+        {"--video"}, "PATH",
+        "path to a video file (requires FFmpeg at build time) or a directory of frames; can be repeated.\n",
+        [](common_params & params, const std::string & value) {
+            params.video.emplace_back(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",

@@ -5,12 +5,14 @@ find_package(Threads REQUIRED)
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
+            mtmd-video.cpp
             mtmd.h
             clip.cpp
             clip.h
             clip-impl.h
             mtmd-helper.cpp
             mtmd-helper.h
+            mtmd-video.h
             )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
@@ -19,6 +21,23 @@ target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+# Optional FFmpeg support for video decoding
+option(MTMD_WITH_FFMPEG "Enable FFmpeg-based video decoding in mtmd-video" OFF)
+if (MTMD_WITH_FFMPEG)
+    find_package(PkgConfig QUIET)
+    if (PKG_CONFIG_FOUND)
+        pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET libavformat libavcodec libswscale libavutil)
+        if (FFMPEG_FOUND)
+            target_link_libraries(mtmd PRIVATE PkgConfig::FFMPEG)
+            target_compile_definitions(mtmd PRIVATE MTMD_WITH_FFMPEG)
+        else()
+            message(WARNING "FFmpeg not found via pkg-config; MTMD_WITH_FFMPEG disabled")
+        endif()
+    else()
+        message(WARNING "pkg-config not found; MTMD_WITH_FFMPEG disabled")
+    endif()
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -29,6 +48,7 @@ endif()
 set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-video.h
     )
 
 set_target_properties(mtmd
