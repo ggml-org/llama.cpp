@@ -116,6 +116,15 @@ class ChatMessageEx {
     }
 
     /**
+     * Remove specified key and its value from ns object
+     * @param {string | number} key
+     */
+    ns_delete(key) {
+        // @ts-ignore
+        delete(this.ns[key])
+    }
+
+    /**
      * Update based on the drip by drip data got from network in streaming mode.
      * Tries to support both Chat and Completion endpoints
      * @param {any} nwo
@@ -329,8 +338,7 @@ class SimpleChat {
         for (const msg of xchat) {
             let tmsg = ChatMessageEx.newFrom(msg);
             if (!tmsg.has_toolcall()) {
-                // @ts-ignore
-                delete(tmsg.ns.tool_calls)
+                tmsg.ns_delete("tool_calls")
             }
             if (tmsg.ns.role == Roles.Tool) {
                 let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.content)
