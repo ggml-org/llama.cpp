@@ -77,7 +77,8 @@ class ChatMessageEx {
     }
 
     /**
-     * Update based on the drip by drip data got from network in streaming mode
+     * Update based on the drip by drip data got from network in streaming mode.
+     * Tries to support both Chat and Completion endpoints
      * @param {any} nwo
      * @param {string} apiEP
      */
@@ -88,12 +89,14 @@ class ChatMessageEx {
                 if (content !== undefined) {
                     if (content !== null) {
                         this.ns.content += content;
+                    } else {
+                        this.ns.role = nwo["choices"][0]["delta"]["role"];
                     }
                 } else {
                     let toolCalls = nwo["choices"][0]["delta"]["tool_calls"];
-                    if ( toolCalls !== undefined) {
+                    if (toolCalls !== undefined) {
                         if (toolCalls[0]["function"]["name"] !== undefined) {
-                            this.ns.tool_calls.push(toolCalls[0])
+                            this.ns.tool_calls.push(toolCalls[0]);
                             /*
                             this.ns.tool_calls[0].function.name = toolCalls[0]["function"]["name"];
                             this.ns.tool_calls[0].id = toolCalls[0]["id"];
@@ -127,17 +130,17 @@ class ChatMessageEx {
     }
 
     has_toolcall() {
-        if (this.ns.tool_calls.trim() == "") {
+        if (this.ns.tool_calls.length == 0) {
             return false
         }
         return true
     }
 
     content_equiv() {
-        if (this.response.content !== "") {
-            return this.response.content;
+        if (this.ns.content !== "") {
+            return this.ns.content;
         } else if (this.has_toolcall()) {
-            return `<tool_call>\n<tool_name>${this.response.toolname}</tool_name>\n<tool_args>${this.response.toolargs}</tool_args>\n</tool_call>`;
+            return `<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>`;
         } else {
             return ""
         }
@@ -184,7 +187,7 @@ class SimpleChat {
          */
         this.xchat = [];
         this.iLastSys = -1;
-        this.latestResponse = new AssistantResponse();
+        this.latestResponse = new ChatMessageEx();
     }
 
     clear() {
