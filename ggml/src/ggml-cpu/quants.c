@@ -449,22 +449,23 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         int32_t sum_bc = 0; // imag_weight * real_act
 
         // Process all elements in the block
-        // todo_liweitao fix with qs(decode complex weight)
-        for (size_t j = 0; j < sizeof(x->qs_real); j += 32) {
-            // Each byte contains 4 2-bit values
+        // qs array layout: [0..31] = real part (128 elements), [32..63] = imag part (128 elements)
+        // Each byte contains 4 2-bit values
+        for (size_t j = 0; j < 32; ++j) {
             for (size_t l = 0; l < 4; ++l) {
-                for (size_t k = 0; k < 32; ++k) {
-                    // Extract 2-bit values and convert to signed (-1, 0, 1, 2) then shift to (-1, 0, 1)
-                    const int a = (int)(((x[i].qs_real[j + k] >> (l*2)) & 3)) - 1;
-                    const int b = (int)(((x[i].qs_imag[j + k] >> (l*2)) & 3)) - 1;
-                    const int c = (int)y_real->qs[j*4 + l*32 + k];
-                    const int d = (int)y_imag->qs[j*4 + l*32 + k];
+                // Extract 2-bit value from real part and convert to signed (-1, 0, 1)
+                const int a = (int)(((x[i].qs[j] >> (l*2)) & 3)) - 1;
+                // Extract 2-bit value from imag part (offset by 32 bytes)
+                const int b = (int)(((x[i].qs[j + 32] >> (l*2)) & 3)) - 1;
 
-                    sum_ac += a * c;
-                    sum_bd += b * d;
-                    sum_ad += a * d;
-                    sum_bc += b * c;
-                }
+                // Get corresponding activation values
+                const int c = (int)y_real->qs[j*4 + l];
+                const int d = (int)y_imag->qs[j*4 + l];
+
+                sum_ac += a * c;
+                sum_bd += b * d;
+                sum_ad += a * d;
+                sum_bc += b * c;
             }
         }
 
