@@ -88,6 +88,21 @@ static __global__ void mul_mat_vec_f(
 #endif // FP16_AVAILABLE
         }
     } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+//TODO: add support for ggml_cuda_mad for hip_bfloat162
+#if defined(GGML_USE_HIP)
+        const int * x2 = (const int *) x;
+        for (int col2 = tid; col2 < ncols2; col2 += block_size) {
+            const int tmpx = x2[col2];
+#pragma unroll
+            for (int j = 0; j < ncols_dst; ++j) {
+                const float2 tmpy = y2[j*stride_col_y2 + col2];
+                const float tmpx0 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[0]);
+                const float tmpx1 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[1]);
+                ggml_cuda_mad(sumf[j], tmpx0, tmpy.x);
+                ggml_cuda_mad(sumf[j], tmpx1, tmpy.y);
+            }
+        }
+#else
         const nv_bfloat162 * x2 = (const nv_bfloat162 *) x;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const nv_bfloat162 tmpx = x2[col2];
@@ -98,6 +113,7 @@ static __global__ void mul_mat_vec_f(
                 ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
             }
         }
+#endif
     } else {
         static_assert(std::is_same_v<T, void>, "unsupported type");
     }
