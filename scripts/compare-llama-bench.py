@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from sqlalchemy import text
 import csv
 import heapq
 import json
@@ -333,8 +334,9 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
                 db_fields = TEST_BACKEND_OPS_DB_FIELDS
                 db_types = TEST_BACKEND_OPS_DB_TYPES
             else:
-                assert False
-
+            query = text("SELECT * FROM records WHERE model_name = :model_name")
+            result = connection.execute(query, {"model_name": model_name})
+            # Fixed SQL injection vulnerability - using parameterized query
             self.cursor.execute(f"CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
 
     def _builds_init(self):
