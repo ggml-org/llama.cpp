@@ -274,17 +274,14 @@ class SimpleChat {
     }
 
     /**
-     * Add an entry into xchat
+     * Add an entry into xchat.
+     * NOTE: A new copy is created and added into xchat.
      * Also update iLastSys system prompt index tracker
-     * @param {string} role
-     * @param {string|undefined|null} content
+     * @param {ChatMessageEx} chatMsg
      */
-    add(role, content) {
-        if ((content == undefined) || (content == null) || (content == "")) {
-            return false;
-        }
-        this.xchat.push( {role: role, content: content} );
-        if (role == Roles.System) {
+    add(chatMsg) {
+        this.xchat.push(ChatMessageEx.newFrom(chatMsg));
+        if (chatMsg.ns.role == Roles.System) {
             this.iLastSys = this.xchat.length - 1;
         }
         this.save();
@@ -403,30 +400,6 @@ class SimpleChat {
 
 
     /**
-     * Allow setting of system prompt, but only at begining.
-     * @param {string} sysPrompt
-     * @param {string} msgTag
-     */
-    add_system_begin(sysPrompt, msgTag) {
-        if (this.xchat.length == 0) {
-            if (sysPrompt.length > 0) {
-                return this.add(Roles.System, sysPrompt);
-            }
-        } else {
-            if (sysPrompt.length > 0) {
-                if (this.xchat[0].ns.role !== Roles.System) {
-                    console.error(`ERRR:SimpleChat:SC:${msgTag}:You need to specify system prompt before any user query, ignoring...`);
-                } else {
-                    if (this.xchat[0].ns.content !== sysPrompt) {
-                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You cant change system prompt, mid way through, ignoring...`);
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
      * Allow setting of system prompt, at any time.
      * Updates the system prompt, if one was never set or if the newly passed is different from the last set system prompt.
      * @param {string} sysPrompt
@@ -438,12 +411,12 @@ class SimpleChat {
         }
 
         if (this.iLastSys < 0) {
-            return this.add(Roles.System, sysPrompt);
+            return this.add(new ChatMessageEx(Roles.System, sysPrompt));
         }
 
         let lastSys = this.xchat[this.iLastSys].ns.content;
         if (lastSys !== sysPrompt) {
-            return this.add(Roles.System, sysPrompt);
+            return this.add(new ChatMessageEx(Roles.System, sysPrompt));
         }
         return false;
     }
@@ -473,6 +446,7 @@ class SimpleChat {
         let tdUtf8 = new TextDecoder("utf-8");
         let rr = resp.body.getReader();
         this.latestResponse.clear()
+        this.latestResponse.ns.role = Roles.Assistant
         let xLines = new du.NewLines();
         while(true) {
             let { value: cur,  done: done } = await rr.read();
@@ -517,7 +491,7 @@ class SimpleChat {
     async handle_response_oneshot(resp, apiEP) {
         let respBody = await resp.json();
         console.debug(`DBUG:SimpleChat:SC:${this.chatId}:HandleUserSubmit:RespBody:${JSON.stringify(respBody)}`);
-        let cm = new ChatMessageEx()
+        let cm = new ChatMessageEx(Roles.Assistant)
         cm.update_oneshot(respBody, apiEP)
         return cm
     }
@@ -532,15 +506,16 @@ class SimpleChat {
      * @param {HTMLDivElement} elDiv
      */
     async handle_response(resp, apiEP, elDiv) {
-        let theResp = null
+        let theResp = null;
         if (gMe.bStream) {
             try {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
-                this.latestResponse.clear()
+                this.latestResponse.clear();
             } catch (error) {
                 theResp = this.latestResponse;
-                this.add(Roles.Assistant, theResp.content_equiv());
-                this.latestResponse.clear()
+                theResp.ns.role = Roles.Assistant;
+                this.add(theResp);
+                this.latestResponse.clear();
                 throw error;
             }
         } else {
@@ -551,7 +526,8 @@ class SimpleChat {
             theResp.ns.content = du.trim_garbage_at_end(origMsg);
             theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
         }
-        this.add(Roles.Assistant, theResp.content_equiv());
+        theResp.ns.role = Roles.Assistant;
+        this.add(theResp);
         return theResp;
     }
 
@@ -761,10 +737,11 @@ class MultiChatUI {
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
         let content = this.elInUser.value;
-        if (!chat.add(Roles.User, content)) {
+        if (content.trim() == "") {
             console.debug(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
             return;
         }
+        chat.add(new ChatMessageEx(Roles.User, content))
         chat.show(this.elDivChat);
 
         let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
