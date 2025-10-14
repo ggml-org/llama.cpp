@@ -32,11 +32,11 @@ export function meta() {
 /**
  * Setup the callback that will be called when ever message
  * is recieved from the Tools Web Worker.
- * @param {(name: string, data: string) => void} cb
+ * @param {(id: string, name: string, data: string) => void} cb
  */
 export function setup(cb) {
     gToolsWorker.onmessage = function (ev) {
-        cb(ev.data.name, ev.data.data)
+        cb(ev.data.id, ev.data.name, ev.data.data)
     }
 }
 
@@ -45,14 +45,15 @@ export function setup(cb) {
  * Try call the specified tool/function call.
  * Returns undefined, if the call was placed successfully
  * Else some appropriate error message will be returned.
+ * @param {string} toolcallid
  * @param {string} toolname
  * @param {string} toolargs
  */
-export async function tool_call(toolname, toolargs) {
+export async function tool_call(toolcallid, toolname, toolargs) {
     for (const fn in tc_switch) {
         if (fn == toolname) {
             try {
-                tc_switch[fn]["handler"](fn, JSON.parse(toolargs))
+                tc_switch[fn]["handler"](toolcallid, fn, JSON.parse(toolargs))
                 return undefined
             } catch (/** @type {any} */error) {
                 return `Tool/Function call raised an exception:${error.name}:${error.message}`

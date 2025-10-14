@@ -21,5 +21,5 @@ self.onmessage = function (ev) {
         console.log(`\n\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}\n\n`)
     }
     tconsole.console_revert()
-    self.postMessage({ name: ev.data.name, data: tconsole.gConsoleStr})
+    self.postMessage({ id: ev.data.id, name: ev.data.name, data: tconsole.gConsoleStr})
 }
