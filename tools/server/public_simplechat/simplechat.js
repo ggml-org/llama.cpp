@@ -87,6 +87,33 @@ class ChatMessageEx {
         return `<tool_response> <id>${toolCallId}</id> <name>${toolName}</name> <content>${toolResult}</content> </tool_response>`;
     }
 
+    /**
+     * Extract the elements of the all in one tool call result string
+     * @param {string} allInOne
+     */
+    static extractToolCallResultAllInOne(allInOne) {
+        const regex = /<tool_response>\s*<id>(.*?)<\/id>\s*<name>(.*?)<\/name>\s*<content>([\s\S]*?)<\/content>\s*<\/tool_response>/si;
+        const caught = allInOne.match(regex)
+        let data = { tool_call_id: "Error", name: "Error", content: "Error" }
+        if (caught) {
+            data = {
+                tool_call_id: caught[1].trim(),
+                name: caught[2].trim(),
+                content: caught[3].trim()
+            }
+        }
+        return data
+    }
+
+    /**
+     * Set extra members into the ns object
+     * @param {string | number} key
+     * @param {any} value
+     */
+    ns_set_extra(key, value) {
+        // @ts-ignore
+        this.ns[key] = value
+    }
 
     /**
      * Update based on the drip by drip data got from network in streaming mode.
@@ -304,6 +331,12 @@ class SimpleChat {
             if (!tmsg.has_toolcall()) {
                 // @ts-ignore
                 delete(tmsg.ns.tool_calls)
+            }
+            if (tmsg.ns.role == Roles.Tool) {
+                let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.content)
+                tmsg.ns.content = res.content
+                tmsg.ns_set_extra("tool_call_id", res.tool_call_id)
+                tmsg.ns_set_extra("name", res.name)
             }
             chat.push(tmsg.ns);
         }
