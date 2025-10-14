@@ -1611,6 +1611,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_GLM4V_MOE:
+            {
+                // TODO
+            } break;
         case LLM_ARCH_BITNET:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -4890,6 +4894,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, flags | TENSOR_NOT_REQUIRED);
                         }
                     }
+                }
+                break;
+            case LLM_ARCH_GLM4V_MOE:
+                {
+                    // TODO
                 }
                 break;
             case LLM_ARCH_NEMOTRON:
@@ -14683,6 +14692,12 @@ struct llm_build_glm4_moe : public llm_graph_context {
     }
 };
 
+struct llm_build_glm4v_moe : public llm_graph_context {
+    llm_build_glm4v_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        // TODO
+    }
+};
+
 struct llm_build_nemotron : public llm_graph_context {
     llm_build_nemotron(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -19750,6 +19765,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_glm4_moe>(*this, params);
             } break;
+        case LLM_ARCH_GLM4V_MOE:
+            {
+                llm = std::make_unique<llm_build_glm4_moe>(*this, params);
+            } break;
         case LLM_ARCH_BITNET:
             {
                 llm = std::make_unique<llm_build_bitnet>(*this, params);
@@ -20119,6 +20138,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_GLM4V_MOE:
             return LLAMA_ROPE_TYPE_MROPE;
 
         // all model arches should be listed explicitly here
