@@ -11,6 +11,7 @@ class Roles {
     static System = "system";
     static User = "user";
     static Assistant = "assistant";
+    static Tool = "tool";
 }
 
 class ApiEP {
@@ -286,9 +287,14 @@ class SimpleChat {
      */
     recent_chat_ns(iRecentUserMsgCnt) {
         let xchat = this.recent_chat(iRecentUserMsgCnt);
-        let chat = []
+        let chat = [];
         for (const msg of xchat) {
-            chat.push(msg.ns)
+            let tmsg = ChatMessageEx.newFrom(msg);
+            if (!tmsg.has_toolcall()) {
+                // @ts-ignore
+                delete(tmsg.ns.tool_calls)
+            }
+            chat.push(tmsg.ns);
         }
         return chat
     }
