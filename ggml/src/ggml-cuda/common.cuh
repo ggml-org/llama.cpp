@@ -532,6 +532,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 #endif // defined(GGML_USE_HIP)
 }
 
+
 static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float v, const float u) {
     acc += v*u;
 }
@@ -569,6 +570,16 @@ static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v,
     acc = make_half2(tmpacc.x, tmpacc.y);
 #endif // FAST_FP16_AVAILABLE
 }
+
+
+#if defined(GGML_USE_HIP)
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const __hip_bfloat162 v, const __hip_bfloat162 u) {
+    const float2 tmpv = __bfloat162float2(v);
+    const float2 tmpu = __bfloat162float2(u);
+    acc += tmpv.x * tmpu.x;
+    acc += tmpv.y * tmpu.y;
+}
+#endif
 
 // Aligned memory transfers of 8/16 bytes can be faster than 2 transfers with 4 bytes, especially on AMD.
 template <int nbytes, int alignment = 0>

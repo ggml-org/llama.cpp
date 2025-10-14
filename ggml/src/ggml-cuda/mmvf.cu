@@ -1,4 +1,3 @@
-
 #include "ggml.h"
 #include "common.cuh"
 #include "convert.cuh"
@@ -8,14 +7,14 @@ template <typename T, typename type_acc, int ncols_dst, int block_size>
 static __global__ void mul_mat_vec_f(
         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
         const int ncols2, const int nchannels_y, const int stride_row, const int stride_col_y2, const int stride_col_dst,
-        const uint3 channel_ratio_fd, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
-        const uint3 sample_ratio_fd, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+        const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
+        const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
     const int row         = blockIdx.x;
     const int channel_dst = blockIdx.y;
-    const int channel_x   = ids ? ids[channel_dst]          : fastdiv((uint32_t) channel_dst, channel_ratio_fd);
+    const int channel_x   = ids ? ids[channel_dst]          : fastdiv((uint32_t) channel_dst, channel_ratio);
     const int channel_y   = ids ? channel_dst % nchannels_y : channel_dst;
     const int sample_dst  = blockIdx.z;
-    const int sample_x    = fastdiv((uint32_t) sample_dst, sample_ratio_fd);
+    const int sample_x    = fastdiv((uint32_t) sample_dst, sample_ratio);
     const int sample_y    = sample_dst;
     const int tid         = threadIdx.x;
 
@@ -89,16 +88,14 @@ static __global__ void mul_mat_vec_f(
 #endif // FP16_AVAILABLE
         }
     } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
-        const int * x2 = (const int *) x;
+        const nv_bfloat162 * x2 = (const nv_bfloat162 *) x;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
-            const int tmpx = x2[col2];
+            const nv_bfloat162 tmpx = x2[col2];
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
                 const float2 tmpy = y2[j*stride_col_y2 + col2];
-                const float tmpx0 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[0]);
-                const float tmpx1 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[1]);
-                ggml_cuda_mad(sumf[j], tmpx0, tmpy.x);
-                ggml_cuda_mad(sumf[j], tmpx1, tmpy.y);
+                ggml_cuda_mad(sumf[j], tmpx.x, tmpy.x);
+                ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
             }
         }
     } else {
@@ -143,7 +140,7 @@ static void launch_mul_mat_vec_f_cuda(
     GGML_ASSERT(stride_col_y % 2 == 0);
     GGML_ASSERT(ids || nchannels_dst % nchannels_x == 0);
     GGML_ASSERT(       nsamples_dst  % nsamples_x  == 0);
-    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0)              : init_fastdiv_values(nchannels_dst / nchannels_x);
+    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0) : init_fastdiv_values(nchannels_dst / nchannels_x);
     const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst  / nsamples_x);
 
     const int device = ggml_cuda_get_device();
