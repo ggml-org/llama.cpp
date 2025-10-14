@@ -335,7 +335,7 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
             else:
                 assert False
 
-            self.cursor.execute(f"CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
+            self.cursor.execute("CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
 
     def _builds_init(self):
         if self.connection:
