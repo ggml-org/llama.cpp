@@ -261,10 +261,6 @@ static __global__ void mul_mat_f_ids(
     const int expert_end   = expert_bounds[expert_idx + 1];
     const int ncols_expert = expert_end - expert_start;
 
-    if (ncols_expert <= 0) {
-        return;
-    }
-
     const int tiles_for_expert = (ncols_expert + cols_per_block - 1) / cols_per_block;
     const int tile_idx = blockIdx.z;
     if (tile_idx >= tiles_for_expert) {
@@ -331,9 +327,7 @@ static __global__ void mul_mat_f_ids(
                 }
             };
 
-            if (ntB > 0) {
-                gather_tile(0, vals_buf[0]);
-            }
+            gather_tile(0, vals_buf[0]);
 
             int curr_buf = 0;
             int next_buf = 1;
