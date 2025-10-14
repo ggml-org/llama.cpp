@@ -273,6 +273,21 @@ class SimpleChat {
         return rchat;
     }
 
+
+    /**
+     * Return recent chat messages in the format,
+     * which can be directly sent to the ai server.
+     * @param {number} iRecentUserMsgCnt - look at recent_chat for semantic
+     */
+    recent_chat_ns(iRecentUserMsgCnt) {
+        let xchat = this.recent_chat(iRecentUserMsgCnt);
+        let chat = []
+        for (const msg of xchat) {
+            chat.push(msg.ns)
+        }
+        return chat
+    }
+
     /**
      * Add an entry into xchat.
      * NOTE: A new copy is created and added into xchat.
@@ -299,8 +314,8 @@ class SimpleChat {
         }
         let last = undefined;
         for(const x of this.recent_chat(gMe.iRecentUserMsgCnt)) {
-            let entry = ui.el_create_append_p(`${x.role}: ${x.content}`, div);
-            entry.className = `role-${x.role}`;
+            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
+            entry.className = `role-${x.ns.role}`;
             last = entry;
         }
         if (last !== undefined) {
@@ -338,7 +353,7 @@ class SimpleChat {
      * The needed fields/options are picked from a global object.
      * Add optional stream flag, if required.
      * Convert the json into string.
-     * @param {Object} obj
+     * @param {Object<string, any>} obj
      */
     request_jsonstr_extend(obj) {
         for(let k in gMe.apiRequestOptions) {
@@ -358,7 +373,7 @@ class SimpleChat {
      */
     request_messages_jsonstr() {
         let req = {
-            messages: this.recent_chat(gMe.iRecentUserMsgCnt),
+            messages: this.recent_chat_ns(gMe.iRecentUserMsgCnt),
         }
         return this.request_jsonstr_extend(req);
     }
@@ -370,15 +385,15 @@ class SimpleChat {
     request_prompt_jsonstr(bInsertStandardRolePrefix) {
         let prompt = "";
         let iCnt = 0;
-        for(const chat of this.recent_chat(gMe.iRecentUserMsgCnt)) {
+        for(const msg of this.recent_chat(gMe.iRecentUserMsgCnt)) {
             iCnt += 1;
             if (iCnt > 1) {
                 prompt += "\n";
             }
             if (bInsertStandardRolePrefix) {
-                prompt += `${chat.role}: `;
+                prompt += `${msg.ns.role}: `;
             }
-            prompt += `${chat.content}`;
+            prompt += `${msg.ns.content}`;
         }
         let req = {
             prompt: prompt,
