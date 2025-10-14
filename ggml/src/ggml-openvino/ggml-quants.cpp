@@ -414,6 +414,13 @@ std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType r
     std::shared_ptr<ov::Node> weight_node;
     ov::Shape node_shape = {(uint64_t) (tensor->ne[1]), (uint64_t) (tensor->ne[0])};
 
+    // FIXME hardcoded workaround to fix the case where token_emb.weight is q4_0 (instead of q6_k)
+    // (In some q4_0 models which use two different weight for token_emb and output, token_emb is q4_0)
+    std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
+    if (device == "NPU" && std::string(tensor->name) == "token_embd.weight") {
+        requant_type = ExtraQuantType::F16;
+    }
+
     if (requant_type == ExtraQuantType::F16) {
         ov::Tensor weights(ov::element::f16, node_shape);
         ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), ggml_nelements(tensor));
@@ -473,7 +480,16 @@ void quantize_q4_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_a
         }
 
         const float d = max / -8;
-        const float id = d ? 1.0f / d : 0.0f;
+
+        if (d == 0) {
+            scales[i] = ov::float16(1.0f);
+            biases[i] = ov::float16(-8.0f);
+            uint8_t zp = 8;
+            memset(weights + i * qk / 2, zp | (zp << 4), qk / 2);
+            continue;
+        }
+
+        const float id = 1.0f / d;
         scales[i] = ov::float16(d);
         biases[i] = ov::float16(-8.f * d);
 
