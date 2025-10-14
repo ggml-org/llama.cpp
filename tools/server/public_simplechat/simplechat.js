@@ -179,7 +179,7 @@ let gUsageMsg = `
 `;
 
 
-/** @typedef {{role: string, content: string}[]} ChatMessages */
+/** @typedef {ChatMessageEx[]} ChatMessages */
 
 /** @typedef {{iLastSys: number, xchat: ChatMessages}} SimpleChatODS */
 
@@ -222,7 +222,11 @@ class SimpleChat {
         /** @type {SimpleChatODS} */
         let ods = JSON.parse(sods);
         this.iLastSys = ods.iLastSys;
-        this.xchat = ods.xchat;
+        this.xchat = [];
+        for (const cur of ods.xchat) {
+            // TODO: May have to account for missing fields
+            this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.tool_calls, cur.trimmedContent))
+        }
     }
 
     /**
@@ -410,10 +414,10 @@ class SimpleChat {
             }
         } else {
             if (sysPrompt.length > 0) {
-                if (this.xchat[0].role !== Roles.System) {
+                if (this.xchat[0].ns.role !== Roles.System) {
                     console.error(`ERRR:SimpleChat:SC:${msgTag}:You need to specify system prompt before any user query, ignoring...`);
                 } else {
-                    if (this.xchat[0].content !== sysPrompt) {
+                    if (this.xchat[0].ns.content !== sysPrompt) {
                         console.error(`ERRR:SimpleChat:SC:${msgTag}:You cant change system prompt, mid way through, ignoring...`);
                     }
                 }
@@ -437,7 +441,7 @@ class SimpleChat {
             return this.add(Roles.System, sysPrompt);
         }
 
-        let lastSys = this.xchat[this.iLastSys].content;
+        let lastSys = this.xchat[this.iLastSys].ns.content;
         if (lastSys !== sysPrompt) {
             return this.add(Roles.System, sysPrompt);
         }
@@ -451,7 +455,7 @@ class SimpleChat {
         if (this.iLastSys == -1) {
             return "";
         }
-        let sysPrompt = this.xchat[this.iLastSys].content;
+        let sysPrompt = this.xchat[this.iLastSys].ns.content;
         return sysPrompt;
     }
 
