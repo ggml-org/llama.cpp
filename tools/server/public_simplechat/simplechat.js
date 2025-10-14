@@ -127,7 +127,15 @@ class ChatMessageEx {
      * @param {string} apiEP
      */
     update_oneshot(nwo, apiEP) {
-
+        if (apiEP == ApiEP.Type.Chat) {
+            this.ns.content = nwo["choices"][0]["message"]["content"];
+        } else {
+            try {
+                this.ns.content = nwo["choices"][0]["text"];
+            } catch {
+                this.ns.content = nwo["content"];
+            }
+        }
     }
 
     has_toolcall() {
@@ -389,25 +397,6 @@ class SimpleChat {
         }
     }
 
-    /**
-     * Extract the ai-model/assistant's response from the http response got.
-     * Optionally trim the message wrt any garbage at the end.
-     * @param {any} respBody
-     * @param {string} apiEP
-     */
-    response_extract(respBody, apiEP) {
-        let assistant = new AssistantResponse();
-        if (apiEP == ApiEP.Type.Chat) {
-            assistant.response.content = respBody["choices"][0]["message"]["content"];
-        } else {
-            try {
-                assistant.response.content = respBody["choices"][0]["text"];
-            } catch {
-                assistant.response.content = respBody["content"];
-            }
-        }
-        return assistant;
-    }
 
     /**
      * Allow setting of system prompt, but only at begining.
@@ -525,7 +514,9 @@ class SimpleChat {
     async handle_response_oneshot(resp, apiEP) {
         let respBody = await resp.json();
         console.debug(`DBUG:SimpleChat:SC:${this.chatId}:HandleUserSubmit:RespBody:${JSON.stringify(respBody)}`);
-        return this.response_extract(respBody, apiEP);
+        let cm = new ChatMessageEx()
+        cm.update_oneshot(respBody, apiEP)
+        return cm
     }
 
     /**
@@ -553,9 +544,9 @@ class SimpleChat {
             theResp = await this.handle_response_oneshot(resp, apiEP);
         }
         if (gMe.bTrimGarbage) {
-            let origMsg = theResp.response.content;
-            theResp.response.content = du.trim_garbage_at_end(origMsg);
-            theResp.response.trimmedContent = origMsg.substring(theResp.response.content.length);
+            let origMsg = theResp.ns.content;
+            theResp.ns.content = du.trim_garbage_at_end(origMsg);
+            theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
         }
         this.add(Roles.Assistant, theResp.content_equiv());
         return theResp;
