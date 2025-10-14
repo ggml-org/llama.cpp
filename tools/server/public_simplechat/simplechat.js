@@ -224,8 +224,13 @@ class SimpleChat {
         this.iLastSys = ods.iLastSys;
         this.xchat = [];
         for (const cur of ods.xchat) {
-            // TODO: May have to account for missing fields
-            this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.tool_calls, cur.trimmedContent))
+            if (cur.ns == undefined) {
+                /** @typedef {{role: string, content: string}} OldChatMessage */
+                let tcur = /** @type {OldChatMessage} */(/** @type {unknown} */(cur));
+                this.xchat.push(new ChatMessageEx(tcur.role, tcur.content))
+            } else {
+                this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.tool_calls, cur.trimmedContent))
+            }
         }
     }
 
