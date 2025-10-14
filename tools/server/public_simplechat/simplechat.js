@@ -437,7 +437,7 @@ class SimpleChat {
     }
 
     /**
-     * Retrieve the latest system prompt.
+     * Retrieve the latest system prompt related chat message entry.
      */
     get_system_latest() {
         if (this.iLastSys == -1) {
@@ -609,19 +609,20 @@ class MultiChatUI {
         if (el == null) {
             throw Error(`ERRR:SimpleChat:MCUI:${msgTag} element missing in html...`);
         } else {
+            // @ts-ignore
             console.debug(`INFO:SimpleChat:MCUI:${msgTag} Id[${el.id}] Name[${el["name"]}]`);
         }
     }
 
     /**
      * Reset/Setup Tool Call UI parts as needed
-     * @param {AssistantResponse} ar
+     * @param {ChatMessageEx} ar
      */
     ui_reset_toolcall_as_needed(ar) {
         if (ar.has_toolcall()) {
             this.elDivTool.hidden = false
-            this.elInToolName.value = ar.response.toolname
-            this.elInToolArgs.value = ar.response.toolargs
+            this.elInToolName.value = ar.ns.tool_calls[0].function.name
+            this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
         } else {
             this.elDivTool.hidden = true
@@ -659,7 +660,7 @@ class MultiChatUI {
             this.handle_session_switch(this.curChatId);
         }
 
-        this.ui_reset_toolcall_as_needed(new AssistantResponse());
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
 
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
@@ -747,7 +748,7 @@ class MultiChatUI {
             chat.clear();
         }
 
-        this.ui_reset_toolcall_as_needed(new AssistantResponse());
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
 
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
@@ -775,8 +776,8 @@ class MultiChatUI {
         let theResp = await chat.handle_response(resp, apiEP, this.elDivChat);
         if (chatId == this.curChatId) {
             chat.show(this.elDivChat);
-            if (theResp.response.trimmedContent.length > 0) {
-                let p = ui.el_create_append_p(`TRIMMED:${theResp.response.trimmedContent}`, this.elDivChat);
+            if (theResp.trimmedContent.length > 0) {
+                let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                 p.className="role-trim";
             }
         } else {
@@ -847,6 +848,11 @@ class MultiChatUI {
         }
     }
 
+    /**
+     * Create session button and append to specified Div element.
+     * @param {HTMLDivElement} elDiv
+     * @param {string} cid
+     */
     create_session_btn(elDiv, cid) {
         let btn = ui.el_create_button(cid, (ev)=>{
             let target = /** @type{HTMLButtonElement} */(ev.target);
@@ -896,6 +902,7 @@ class Me {
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
         this.iRecentUserMsgCnt = 5;
+        /** @type {Object<string, number>} */
         this.sRecentUserMsgCnt = {
             "Full": -1,
             "Last0": 1,
@@ -1063,6 +1070,7 @@ class Me {
         this.show_settings_apirequestoptions(elDiv);
 
         let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
+            // @ts-ignore
             this.apiEP = ApiEP.Type[val];
         });
         elDiv.appendChild(sel.div);
@@ -1094,8 +1102,11 @@ function startme() {
     console.log("INFO:SimpleChat:StartMe:Starting...");
     gMe = new Me();
     gMe.debug_disable();
+    // @ts-ignore
     document["gMe"] = gMe;
+    // @ts-ignore
     document["du"] = du;
+    // @ts-ignore
     document["tools"] = tools;
     tools.init()
     for (let cid of gMe.defaultChatIds) {
