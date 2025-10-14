@@ -248,8 +248,8 @@ class SimpleChat {
         /** @type{ChatMessages} */
         let rchat = [];
         let sysMsg = this.get_system_latest();
-        if (sysMsg.length != 0) {
-            rchat.push({role: Roles.System, content: sysMsg});
+        if (sysMsg.ns.content.length != 0) {
+            rchat.push(sysMsg)
         }
         let iUserCnt = 0;
         let iStart = this.xchat.length;
@@ -258,17 +258,17 @@ class SimpleChat {
                 break;
             }
             let msg = this.xchat[i];
-            if (msg.role == Roles.User) {
+            if (msg.ns.role == Roles.User) {
                 iStart = i;
                 iUserCnt += 1;
             }
         }
         for(let i = iStart; i < this.xchat.length; i++) {
             let msg = this.xchat[i];
-            if (msg.role == Roles.System) {
+            if (msg.ns.role == Roles.System) {
                 continue;
             }
-            rchat.push({role: msg.role, content: msg.content});
+            rchat.push(msg)
         }
         return rchat;
     }
@@ -453,10 +453,9 @@ class SimpleChat {
      */
     get_system_latest() {
         if (this.iLastSys == -1) {
-            return "";
+            return new ChatMessageEx(Roles.System);
         }
-        let sysPrompt = this.xchat[this.iLastSys].ns.content;
-        return sysPrompt;
+        return this.xchat[this.iLastSys];
     }
 
 
@@ -882,7 +881,7 @@ class MultiChatUI {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
             return;
         }
-        this.elInSystem.value = chat.get_system_latest();
+        this.elInSystem.value = chat.get_system_latest().ns.content;
         this.elInUser.value = "";
         chat.show(this.elDivChat);
         this.elInUser.focus();
@@ -959,7 +958,7 @@ class Me {
             chat.load();
             queueMicrotask(()=>{
                 chat.show(div);
-                this.multiChat.elInSystem.value = chat.get_system_latest();
+                this.multiChat.elInSystem.value = chat.get_system_latest().ns.content;
             });
         });
         div.appendChild(btn);
