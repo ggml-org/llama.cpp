@@ -2260,13 +2260,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, ggml_cuda
             ggml_cuda_op_set_rows(ctx, dst);
             break;
         case GGML_OP_DUP:
-            ggml_cuda_dup(ctx, cuda_graph, dst);
+            ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_CPY:
-            ggml_cuda_cpy(ctx, cuda_graph, dst->src[0], dst->src[1]);
+            ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
             break;
         case GGML_OP_CONT:
-            ggml_cuda_dup(ctx, cuda_graph, dst);
+            ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
         case GGML_OP_ADD1: // TODO: more efficient implementation
@@ -2633,11 +2633,10 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph * cuda_graph, const ggml_cgraph * cgraph, cudaStream_t stream,
+static bool check_node_graph_compatibility(const ggml_cgraph * cgraph,
     bool use_cuda_graph) {
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
-    cuda_graph->cpy_dest_ptrs.clear();
 
     const std::string gemma3n_per_layer_proj_src0_name = "inp_per_layer_selected";
     const std::string gemma3n_per_layer_proj_src1_name = "per_layer_proj";
@@ -2688,31 +2687,9 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 #endif
         }
 
-        if (node->op == GGML_OP_CPY) {
-
-            // Store the pointers which are updated for each token, such that these can be sent
-            // to the device and accessed using indirection from CUDA graph
-            cuda_graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
-
-            // store a pointer to each copy op CUDA kernel to identify it later
-            void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
-            if (!ptr) {
-                use_cuda_graph = false;
-#ifndef NDEBUG
-                GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
-#endif
-            }
-        }
-
         if (!use_cuda_graph) {
             break;
         }
-    }
-
-    if (use_cuda_graph) {
-        cuda_graph->use_cpy_indirection = true;
-        // copy pointers to GPU so they can be accessed via indirection within CUDA graph
-        ggml_cuda_cpy_dest_ptrs_copy(cuda_graph, cuda_graph->cpy_dest_ptrs.data(), cuda_graph->cpy_dest_ptrs.size(), stream);
     }
 
     return use_cuda_graph;
@@ -2733,7 +2710,6 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
 
 static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
     if (node->data != graph_node_properties->node_address &&
-          node->op != GGML_OP_CPY &&
           node->op != GGML_OP_VIEW) {
         return false;
     }
@@ -2754,7 +2730,6 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (node->src[i] &&
             node->src[i]->data != graph_node_properties->src_address[i] &&
-            node->op != GGML_OP_CPY &&
             node->op != GGML_OP_VIEW
         ) {
             return false;
@@ -2901,7 +2876,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         }
 
         //if rms norm is the B operand, then we don't handle broadcast
-        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm->src[1])) {
+        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm)) {
             return false;
         }
 
@@ -3105,13 +3080,11 @@ static ggml_backend_graph_plan_t ggml_backend_cuda_graph_plan_create(ggml_backen
     }
 
     if (use_cuda_graph) {
-        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_graph, cgraph, cuda_ctx->stream(), use_cuda_graph);
+        use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
     }
 
     if (use_cuda_graph) {
         capture_cuda_graph(cuda_ctx, cuda_graph, cgraph);
-    } else {
-        cuda_graph->use_cpy_indirection = false;
     }
 
     return cuda_graph;
@@ -3138,7 +3111,7 @@ static void ggml_backend_cuda_graph_plan_update(ggml_backend_t backend, ggml_bac
 
     bool use_cuda_graph = true;
 
-    use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_graph, cgraph, cuda_ctx->stream(), use_cuda_graph);
+    use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
 
     if (!use_cuda_graph) {
         if (cuda_graph->instance != nullptr) {
@@ -3149,7 +3122,6 @@ static void ggml_backend_cuda_graph_plan_update(ggml_backend_t backend, ggml_bac
         }
         cuda_graph->instance = nullptr;
         cuda_graph->graph = nullptr;
-        cuda_graph->use_cpy_indirection = false;
     }
 
     if (is_cuda_graph_update_required(cuda_graph, cgraph)) {

@@ -39,7 +39,6 @@ import type { ExportedConversations } from '$lib/types/database';
  * - Conversation branching for exploring different response paths
  * - Streaming AI responses with real-time content updates
  * - File attachment support (images, PDFs, text files, audio)
- * - Context window management with error recovery
  * - Partial response saving when generation is interrupted
  * - Message editing with automatic response regeneration
  */
@@ -48,11 +47,9 @@ class ChatStore {
 	activeMessages = $state<DatabaseMessage[]>([]);
 	conversations = $state<DatabaseConversation[]>([]);
 	currentResponse = $state('');
+	errorDialogState = $state<{ type: 'timeout' | 'server'; message: string } | null>(null);
 	isInitialized = $state(false);
 	isLoading = $state(false);
-	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(
-		null
-	);
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	constructor() {
@@ -68,8 +65,6 @@ class ChatStore {
 	async initialize(): Promise<void> {
 		try {
 			await this.loadConversations();
-
-			this.maxContextError = null;
 
 			this.isInitialized = true;
 		} catch (error) {
@@ -98,8 +93,6 @@ class ChatStore {
 
 		this.activeConversation = conversation;
 		this.activeMessages = [];
-
-		this.maxContextError = null;
 
 		await goto(`#/chat/${conversation.id}`);
 
@@ -132,8 +125,6 @@ class ChatStore {
 				// Load all messages for conversations without currNode (backward compatibility)
 				this.activeMessages = await DatabaseStore.getConversationMessages(convId);
 			}
-
-			this.maxContextError = null;
 
 			return true;
 		} catch (error) {
@@ -418,56 +409,6 @@ class ChatStore {
 					return;
 				}
 
-				if (error.name === 'ContextError') {
-					console.warn('Context error detected:', error.message);
-					this.isLoading = false;
-					this.currentResponse = '';
-
-					const messageIndex = this.activeMessages.findIndex(
-						(m: DatabaseMessage) => m.id === assistantMessage.id
-					);
-
-					if (messageIndex !== -1) {
-						this.activeMessages.splice(messageIndex, 1);
-						DatabaseStore.deleteMessage(assistantMessage.id).catch(console.error);
-					}
-
-					// Use structured context info from new exceed_context_size_error format if available
-					const contextInfo = (
-						error as Error & {
-							contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
-						}
-					).contextInfo;
-					let estimatedTokens = 0;
-					let maxContext = serverStore.serverProps?.default_generation_settings.n_ctx || 8192;
-
-					if (contextInfo) {
-						// Use precise token counts from server response
-						estimatedTokens = contextInfo.promptTokens;
-						maxContext = contextInfo.maxContext;
-					} else {
-						// Fallback to estimation for older error format
-						try {
-							// Rough estimation: ~4 characters per token
-							const messageContent = JSON.stringify(messages);
-							estimatedTokens = Math.ceil(messageContent.length / 4);
-						} catch {
-							estimatedTokens = 0;
-						}
-					}
-
-					this.maxContextError = {
-						message: error.message,
-						estimatedTokens,
-						maxContext
-					};
-
-					if (onError) {
-						onError(error);
-					}
-					return;
-				}
-
 				console.error('Streaming error:', error);
 				this.isLoading = false;
 				this.currentResponse = '';
@@ -477,14 +418,32 @@ class ChatStore {
 				);
 
 				if (messageIndex !== -1) {
-					this.activeMessages[messageIndex].content = `Error: ${error.message}`;
+					const [failedMessage] = this.activeMessages.splice(messageIndex, 1);
+
+					if (failedMessage) {
+						DatabaseStore.deleteMessage(failedMessage.id).catch((cleanupError) => {
+							console.error('Failed to remove assistant message after error:', cleanupError);
+						});
+					}
 				}
+
+				const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+
+				this.showErrorDialog(dialogType, error.message);
 
 				if (onError) {
 					onError(error);
 				}
 			}
 		});
+	}
+
+	private showErrorDialog(type: 'timeout' | 'server', message: string): void {
+		this.errorDialogState = { type, message };
+	}
+
+	dismissErrorDialog(): void {
+		this.errorDialogState = null;
 	}
 
 	/**
@@ -574,6 +533,7 @@ class ChatStore {
 			return;
 		}
 
+		this.errorDialogState = null;
 		this.isLoading = true;
 		this.currentResponse = '';
 
@@ -603,37 +563,23 @@ class ChatStore {
 
 			const conversationContext = this.activeMessages.slice(0, -1);
 
-			await this.streamChatCompletion(
-				conversationContext,
-				assistantMessage,
-				undefined,
-				(error: Error) => {
-					if (error.name === 'ContextError' && userMessage) {
-						const userMessageIndex = this.findMessageIndex(userMessage.id);
-
-						if (userMessageIndex !== -1) {
-							this.activeMessages.splice(userMessageIndex, 1);
-							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
-						}
-					}
-				}
-			);
+			await this.streamChatCompletion(conversationContext, assistantMessage);
 		} catch (error) {
 			if (this.isAbortError(error)) {
 				this.isLoading = false;
 				return;
 			}
 
-			if (error instanceof Error && error.name === 'ContextError' && userMessage) {
-				const userMessageIndex = this.findMessageIndex(userMessage.id);
-				if (userMessageIndex !== -1) {
-					this.activeMessages.splice(userMessageIndex, 1);
-					DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
-				}
-			}
-
 			console.error('Failed to send message:', error);
 			this.isLoading = false;
+			if (!this.errorDialogState) {
+				if (error instanceof Error) {
+					const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+					this.showErrorDialog(dialogType, error.message);
+				} else {
+					this.showErrorDialog('server', 'Unknown error occurred while sending message');
+				}
+			}
 		}
 	}
 
@@ -660,24 +606,6 @@ class ChatStore {
 		await this.savePartialResponseIfNeeded();
 		this.isLoading = false;
 		this.currentResponse = '';
-	}
-
-	/**
-	 * Clears the max context error state
-	 * Removes any displayed context limit warnings
-	 */
-	clearMaxContextError(): void {
-		this.maxContextError = null;
-	}
-
-	/**
-	 * Sets the max context error state
-	 * @param error - The context error details or null to clear
-	 */
-	setMaxContextError(
-		error: { message: string; estimatedTokens: number; maxContext: number } | null
-	): void {
-		this.maxContextError = error;
 	}
 
 	/**
@@ -1250,7 +1178,6 @@ class ChatStore {
 		this.activeMessages = [];
 		this.currentResponse = '';
 		this.isLoading = false;
-		this.maxContextError = null;
 	}
 
 	/** Refreshes active messages based on currNode after branch navigation */
@@ -1538,6 +1465,7 @@ class ChatStore {
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
 		if (!this.activeConversation) return;
 
+		this.errorDialogState = null;
 		this.isLoading = true;
 		this.currentResponse = '';
 
@@ -1584,7 +1512,7 @@ export const activeMessages = () => chatStore.activeMessages;
 export const isLoading = () => chatStore.isLoading;
 export const currentResponse = () => chatStore.currentResponse;
 export const isInitialized = () => chatStore.isInitialized;
-export const maxContextError = () => chatStore.maxContextError;
+export const errorDialog = () => chatStore.errorDialogState;
 
 export const createConversation = chatStore.createConversation.bind(chatStore);
 export const downloadConversation = chatStore.downloadConversation.bind(chatStore);
@@ -1592,9 +1520,9 @@ export const exportAllConversations = chatStore.exportAllConversations.bind(chat
 export const importConversations = chatStore.importConversations.bind(chatStore);
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
+export const dismissErrorDialog = chatStore.dismissErrorDialog.bind(chatStore);
+
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
-export const clearMaxContextError = chatStore.clearMaxContextError.bind(chatStore);
-export const setMaxContextError = chatStore.setMaxContextError.bind(chatStore);
 
 // Branching operations
 export const refreshActiveMessages = chatStore.refreshActiveMessages.bind(chatStore);

@@ -14,6 +14,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
+	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 
 	interface Props {
 		content: string;
@@ -50,36 +51,59 @@
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkMath) // Parse $inline$ and $$block$$ math
 			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkRehype) // Convert to rehype (HTML AST)
+			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+			.use(remarkRehype) // Convert Markdown AST to rehype
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
 	function enhanceLinks(html: string): string {
+		if (!html.includes('<a')) {
+			return html;
+		}
+
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
 
 		// Make all links open in new tabs
 		const linkElements = tempDiv.querySelectorAll('a[href]');
+		let mutated = false;
+
 		for (const link of linkElements) {
+			const target = link.getAttribute('target');
+			const rel = link.getAttribute('rel');
+
+			if (target !== '_blank' || rel !== 'noopener noreferrer') {
+				mutated = true;
+			}
+
 			link.setAttribute('target', '_blank');
 			link.setAttribute('rel', 'noopener noreferrer');
 		}
 
-		return tempDiv.innerHTML;
+		return mutated ? tempDiv.innerHTML : html;
 	}
 
 	function enhanceCodeBlocks(html: string): string {
+		if (!html.includes('<pre')) {
+			return html;
+		}
+
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
 
 		const preElements = tempDiv.querySelectorAll('pre');
+		let mutated = false;
 
 		for (const [index, pre] of Array.from(preElements).entries()) {
 			const codeElement = pre.querySelector('code');
 
-			if (!codeElement) continue;
+			if (!codeElement) {
+				continue;
+			}
+
+			mutated = true;
 
 			let language = 'text';
 			const classList = Array.from(codeElement.classList);
@@ -127,7 +151,7 @@
 			pre.parentNode?.replaceChild(wrapper, pre);
 		}
 
-		return tempDiv.innerHTML;
+		return mutated ? tempDiv.innerHTML : html;
 	}
 
 	async function processMarkdown(text: string): Promise<string> {
