@@ -15,6 +15,7 @@ import * as xpromise from "./xpromise.mjs"
 
 
 self.onmessage = async function (ev) {
+    console.info("DBUG:WW:OnMessage started...")
     tconsole.console_redir()
     try {
         await xpromise.evalWithPromiseTracking(ev.data.code);
@@ -23,4 +24,5 @@ self.onmessage = async function (ev) {
     }
     tconsole.console_revert()
     self.postMessage({ id: ev.data.id, name: ev.data.name, data: tconsole.gConsoleStr})
+    console.info("DBUG:WW:OnMessage done")
 }
