@@ -230,6 +230,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
 
+        is_cc121 |= prop.major == 12 && prop.minor == 1;
+
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
         info.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)
@@ -275,8 +277,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
             turing_devices_without_mma.push_back({ id, device_name });
         }
 
-        is_cc121 |= info.devices[id].cc == 1210;
-
 #endif  // defined(GGML_USE_HIP)
     }
 
@@ -298,6 +298,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
 
     // Setting device scheduling strategy for iGPUs to "spinning" to avoid delays in cuda synchronize calls.
+    // This fix is temporary, as the strategy will be the default in later drivers.    
     if (is_cc121) {
         CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
     }
