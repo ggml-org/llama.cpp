@@ -131,6 +131,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
     for (int i = 0; i < n; ++i) {
         sumf += (ggml_float)(x[i]*y[i]);
     }
+
 #endif
 
     *s = sumf;
