@@ -124,6 +124,9 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
+        if (model.arch == LLM_ARCH_CLIP) {
+            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
+        }
         try {
             model.load_vocab(ml);
         } catch(const std::exception & e) {
