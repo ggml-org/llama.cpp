@@ -5,10 +5,10 @@ inputs:
     description: "Installation path"
     required: true
   version_major:
-    description: "OpenVINO major version (e.g., 2025.2)"
+    description: "OpenVINO major version (e.g., 2025.3)"
     required: true
   version_full:
-    description: "OpenVINO full version (e.g., 2025.2.0.19140.c01cd93e24d)"
+    description: "OpenVINO full version (e.g., 2025.3.0.19807.44526285f24)"
     required: true
 
 runs:
@@ -20,7 +20,7 @@ runs:
       with:
         url: https://storage.openvinotoolkit.org/repositories/openvino/packages/${{ inputs.version_major }}/linux/openvino_toolkit_ubuntu24_${{ inputs.version_full }}_x86_64.tgz
         path: ${{ inputs.path }}
-        type: "z"
+        type: z
         strip: 1
 
     - name: Install OpenVINO dependencies
