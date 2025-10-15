@@ -5,16 +5,16 @@
 
 #define BM 64
 #define BN 64
-#define BK 16
+#define BK 32
 #define TM 4
 #define TN 8
 
-kernel void kernel_mul_mm_f16_f32_l4_lm(
-    global half4 * src0,
-    ulong offset0,
+kernel void kernel_mul_mm_q8_0_f32_l4_lm(
+    global char4  * src0_q,
+    global half   * src0_d,
     global float4 * src1,
     ulong offset1,
-    global float * dst,
+    global float  * dst,
     ulong offsetd,
 
     int ne00,
@@ -34,11 +34,10 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
     int r2,
     int r3
 ) {
-    src0 = (global half4*)((global char*)src0 + offset0);
     src1 = (global float4*)((global char*)src1 + offset1);
-    dst = (global float*)((global char*)dst + offsetd);
+    dst  = (global float *)((global char*)dst  + offsetd);
 
-    local half  buf_a[BM * BK];
+    local float buf_a[BM * BK];
     local float buf_b[BN * BK];
 
     const int batch_idx = get_global_id(2);
@@ -70,7 +69,7 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
     int pos_b = (batch_idx   * batch_stride_b + ic * BN * stride_b) / LOAD_VEC_B;
 
     float sums[TM * TN];
-    half  cache_a[TM];
+    float cache_a[TM];
     float cache_b[TN];
 
     for (int i = 0; i < TM * TN; i++) {
@@ -80,31 +79,39 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
     for (int block = 0; block < ne00; block += BK) {
         for (int l = 0; l < BM; l += loadstride_a) {
             if (loadc_a + l < ne01) {
-            const int idx = pos_a + (loadc_a + l) * stride_a / LOAD_VEC_A + loadr_a;
-                buf_a[(loadr_a * LOAD_VEC_A + 0) * BM + loadc_a + l] = src0[idx].s0;
-                buf_a[(loadr_a * LOAD_VEC_A + 1) * BM + loadc_a + l] = src0[idx].s1;
-                buf_a[(loadr_a * LOAD_VEC_A + 2) * BM + loadc_a + l] = src0[idx].s2;
-                buf_a[(loadr_a * LOAD_VEC_A + 3) * BM + loadc_a + l] = src0[idx].s3;
+                int idx = pos_a + (loadc_a + l) * stride_a / LOAD_VEC_A + loadr_a;
+                int ib  = idx / 8;
+                int iqs = idx % 8;
+
+                float d = (float)src0_d[ib];
+                global char4 * qs = src0_q + ib*8 + iqs;
+                char4 q = *qs;
+                float4 v = convert_float4(q)*d;
+
+                buf_a[(loadr_a * LOAD_VEC_A + 0) * BM + loadc_a + l] = v.s0;
+                buf_a[(loadr_a * LOAD_VEC_A + 1) * BM + loadc_a + l] = v.s1;
+                buf_a[(loadr_a * LOAD_VEC_A + 2) * BM + loadc_a + l] = v.s2;
+                buf_a[(loadr_a * LOAD_VEC_A + 3) * BM + loadc_a + l] = v.s3;
             } else {
-                buf_a[(loadr_a * LOAD_VEC_A + 0) * BM + loadc_a + l] = 0.0h;
-                buf_a[(loadr_a * LOAD_VEC_A + 1) * BM + loadc_a + l] = 0.0h;
-                buf_a[(loadr_a * LOAD_VEC_A + 2) * BM + loadc_a + l] = 0.0h;
-                buf_a[(loadr_a * LOAD_VEC_A + 3) * BM + loadc_a + l] = 0.0h;
+                buf_a[(loadr_a * LOAD_VEC_A + 0) * BM + loadc_a + l] = 0.0f;
+                buf_a[(loadr_a * LOAD_VEC_A + 1) * BM + loadc_a + l] = 0.0f;
+                buf_a[(loadr_a * LOAD_VEC_A + 2) * BM + loadc_a + l] = 0.0f;
+                buf_a[(loadr_a * LOAD_VEC_A + 3) * BM + loadc_a + l] = 0.0f;
             }
         }
 
         for (int l = 0; l < BN; l += loadstride_b) {
             if (loadc_b + l < ne11) {
-                const int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
+                int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
                 buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = src1[idx].s0;
                 buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = src1[idx].s1;
                 buf_b[(loadr_b * LOAD_VEC_B + 2) * BN + loadc_b + l] = src1[idx].s2;
                 buf_b[(loadr_b * LOAD_VEC_B + 3) * BN + loadc_b + l] = src1[idx].s3;
             } else {
-                buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = 0.0h;
-                buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = 0.0h;
-                buf_b[(loadr_b * LOAD_VEC_B + 2) * BN + loadc_b + l] = 0.0h;
-                buf_b[(loadr_b * LOAD_VEC_B + 3) * BN + loadc_b + l] = 0.0h;
+                buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = 0.0f;
+                buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = 0.0f;
+                buf_b[(loadr_b * LOAD_VEC_B + 2) * BN + loadc_b + l] = 0.0f;
+                buf_b[(loadr_b * LOAD_VEC_B + 3) * BN + loadc_b + l] = 0.0f;
             }
         }
 
@@ -117,6 +124,7 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
             for (int j = 0; j < TM; j++) {
                 cache_a[j] = buf_a[(i) * BM + th_r * TM + j];
             }
+
             for (int j = 0; j < TN; j++) {
                 cache_b[j] = buf_b[(i) * BN + th_c * TN + j];
             }
@@ -124,7 +132,7 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
             for (int cc = 0; cc < TN; cc++) {
                 for (int cr = 0; cr < TM; cr++) {
                     const int sums_idx = cc*TM + cr;
-                    sums[sums_idx] = mad(convert_float(cache_a[cr]), cache_b[cc], sums[sums_idx]);
+                    sums[sums_idx] = mad(cache_a[cr], cache_b[cc], sums[sums_idx]);
                 }
             }
         }
