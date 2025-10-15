@@ -427,6 +427,7 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
 
     struct ggml_tensor * tok_embd   = nullptr;
+    struct ggml_tensor * tok_embd_imag = nullptr; // ifairy imaginary part
 
     // for ifairy
     struct ggml_tensor * tok_embd_img = nullptr;
@@ -436,6 +437,7 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
+    struct ggml_tensor * output_norm_imag     = nullptr; // ifairy imaginary norm
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
