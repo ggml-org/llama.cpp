@@ -5,18 +5,19 @@
 //
 
 /**
- * Expects to get a message with identifier name and code to run
- * Posts message with identifier name and data captured from console.log outputs
+ * Expects to get a message with id, name and code to run
+ * Posts message with id, name and data captured from console.log outputs
  */
 
 
 import * as tconsole from "./toolsconsole.mjs"
+import * as xpromise from "./xpromise.mjs"
 
 
-self.onmessage = function (ev) {
+self.onmessage = async function (ev) {
     tconsole.console_redir()
     try {
-        eval(ev.data.code)
+        await xpromise.evalWithPromiseTracking(ev.data.code);
     } catch (/** @type {any} */error) {
         console.log(`\n\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}\n\n`)
     }
