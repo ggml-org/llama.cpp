@@ -207,6 +207,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
 
+    bool is_cc121 = false;
     std::vector<std::pair<int, std::string>> turing_devices_without_mma;
     for (int id = 0; id < info.device_count; ++id) {
         int device_vmm = 0;
@@ -273,6 +274,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         } else if (device_name.substr(0, 21) == "NVIDIA GeForce GTX 16") {
             turing_devices_without_mma.push_back({ id, device_name });
         }
+
+        is_cc121 |= info.devices[id].cc == 1210;
+
 #endif  // defined(GGML_USE_HIP)
     }
 
@@ -292,6 +296,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
+
+    // Setting device scheduling strategy for iGPUs to "spinning" to avoid delays in cuda synchronize calls.
+    if (is_cc121) {
+        CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+    }
 
     return info;
 }
