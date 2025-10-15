@@ -312,6 +312,7 @@ struct llama_model * llama_model_load_from_splits(
         LLAMA_LOG_ERROR("%s: list of splits is empty\n", __func__);
         return nullptr;
     }
+    splits.reserve(n_paths);
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
