@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { maskInlineLaTeX } from './latex-protection';
+/* eslint-disable no-irregular-whitespace */
+import { describe, it, expect, test } from 'vitest';
+import { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
 
 describe('maskInlineLaTeX', () => {
 	it('should protect LaTeX $x + y$ but not money $3.99', () => {
@@ -99,5 +100,124 @@ describe('maskInlineLaTeX', () => {
 
 		expect(output).toBe('$\n$$\n');
 		expect(latexExpressions).toEqual([]);
+	});
+});
+
+describe('preprocessLaTeX', () => {
+	test('converts inline \\( ... \\) to $...$', () => {
+		const input =
+			'\\( \\mathrm{GL}_2(\\mathbb{F}_7) \\): Group of invertible matrices with entries in \\(\\mathbb{F}_7\\).';
+		const output = preprocessLaTeX(input);
+		expect(output).toBe(
+			'$ \\mathrm{GL}_2(\\mathbb{F}_7) $: Group of invertible matrices with entries in $\\mathbb{F}_7$.'
+		);
+	});
+
+	test('preserves display math \\[ ... \\] and protects adjacent text', () => {
+		const input = `Some kernel of \\(\\mathrm{SL}_2(\\mathbb{F}_7)\\):
+  \\[
+  \\left\\{ \\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix}, \\begin{pmatrix} -1 & 0 \\\\ 0 & -1 \\end{pmatrix} \\right\\} = \\{\\pm I\\}
+  \\]`;
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(`Some kernel of $\\mathrm{SL}_2(\\mathbb{F}_7)$:
+  $$
+  \\left\\{ \\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix}, \\begin{pmatrix} -1 & 0 \\\\ 0 & -1 \\end{pmatrix} \\right\\} = \\{\\pm I\\}
+  $$`);
+	});
+
+	test('handles standalone display math equation', () => {
+		const input = `Algebra:
+\\[
+x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}
+\\]`;
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(`Algebra:
+$$
+x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}
+$$`);
+	});
+
+	test('does not interpret currency values as LaTeX', () => {
+		const input = 'I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe('I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.');
+	});
+
+	test('ignores dollar signs followed by digits (money), but keeps valid math $x + y$', () => {
+		const input = 'I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe('I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.');
+	});
+
+	test('handles real-world word problems with amounts and no math delimiters', () => {
+		const input =
+			'Emma buys 2 cupcakes for $3 each and 1 cookie for $1.50. How much money does she spend in total?';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(
+			'Emma buys 2 cupcakes for \\$3 each and 1 cookie for \\$1.50. How much money does she spend in total?'
+		);
+	});
+
+	test('handles decimal amounts in word problem correctly', () => {
+		const input =
+			'Maria has $20. She buys a notebook for $4.75 and a pack of pencils for $3.25. How much change does she receive?';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(
+			'Maria has \\$20. She buys a notebook for \\$4.75 and a pack of pencils for \\$3.25. How much change does she receive?'
+		);
+	});
+
+	test('preserves display math with surrounding non-ASCII text', () => {
+		const input = `1 kg の質量は
+  \\[
+  E = (1\\ \\text{kg}) \\times (3.0 \\times 10^8\\ \\text{m/s})^2 \\approx 9.0 \\times 10^{16}\\ \\text{J}
+  \\]
+  というエネルギーに相当します。これは約 21 百万トンの TNT が爆発したときのエネルギーに匹敵します。`;
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(
+			`1 kg の質量は
+  $$
+  E = (1\\ \\text{kg}) \\times (3.0 \\times 10^8\\ \\text{m/s})^2 \\approx 9.0 \\times 10^{16}\\ \\text{J}
+  $$
+  というエネルギーに相当します。これは約 21 百万トンの TNT が爆発したときのエネルギーに匹敵します。`
+		);
+	});
+
+	test('converts \\[ ... \\] even when preceded by text without space', () => {
+		const input = 'Algebra: \\[x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}\\]';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe('Algebra: $$x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}$$');
+	});
+
+	test('escapes isolated $ before digits ($5 → \\$5), but not valid math', () => {
+		const input = 'This costs $5 and this is math $x^2$. $100 is money.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe('This costs \\$5 and this is math $x^2$. \\$100 is money.');
+		// Note: Since $x^2$ is detected as valid LaTeX, it's preserved.
+		// $5 becomes \$5 only *after* real math is masked — but here it's correct because the masking logic avoids treating $5 as math.
+	});
+
+	test('handles mhchem notation safely if present', () => {
+		const input = 'Chemical reaction: \\( \\ce{H2O} \\) and $\\ce{CO2}$';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe('Chemical reaction: $ \\ce{H2O} $ and $\\\\ce{CO2}$');
+		// Note: \\ce{...} remains, but $\\ce{...} → $\\\\ce{...} via escapeMhchem
+	});
+
+	test('preserves code blocks', () => {
+		const input = 'Inline code: `sum $total` and block:\n```\ndollar $amount\n```\nEnd.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input); // Code blocks prevent misinterpretation
 	});
 });

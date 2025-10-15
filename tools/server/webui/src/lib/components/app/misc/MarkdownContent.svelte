@@ -8,7 +8,7 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
-	import { maskInlineLaTeX } from '$lib/utils/latex-protection';
+	import { preprocessLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
 	import 'katex/dist/katex.min.css';
 
@@ -187,94 +187,19 @@
 			});
 	}
 
-	// See also:
-	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
-
-	// Protect code blocks: ```...``` and `...`
-	const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
-
-	export function preprocessLaTeX(content: string): string {
-		// Step 1: Protect code blocks
-		const codeBlocks: string[] = [];
-		content = content.replace(codeBlockRegex, (match) => {
-			codeBlocks.push(match);
-			return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
-		});
-
-		// Step 2: Protect existing LaTeX expressions
-		const latexExpressions: string[] = [];
-
-		// Match \(...\), \[...\], $$...$$ and protect them
-		content = content.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
-			latexExpressions.push(match);
-			return `<<LATEX_${latexExpressions.length - 1}>>`;
-		});
-
-		// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
-		content = maskInlineLaTeX(content, latexExpressions);
-
-		// Step 3: Escape standalone $ before digits (currency like $5 → \$5)
-		// (Now that inline math is protected, this will only escape dollars not already protected)
-		content = content.replace(/\$(?=\d)/g, '\\$');
-
-		// Step 4: Restore protected LaTeX expressions (they are valid)
-		content = content.replace(/<<LATEX_(\d+)>>/g, (_, index) => {
-			return latexExpressions[parseInt(index)];
-		});
-
-		// Step 5: Restore code blocks
-		content = content.replace(/<<CODE_BLOCK_(\d+)>>/g, (_, index) => {
-			return codeBlocks[parseInt(index)];
-		});
-
-		// Step 6: Apply additional escaping functions (brackets and mhchem)
-		content = escapeBrackets(content);
-		if (content.includes('\\ce{') || content.includes('\\pu{')) {
-			content = escapeMhchem(content);
-		}
-
-		// Final pass: Convert \(...\) → $...$, \[...\] → $$...$$
-		content = content
-			.replace(/\\\((.+?)\\\)/g, '$$$1$') // inline
-			.replace(/\\\[(.+?)\\\]/g, '$$$$1$$'); // display
-
-		return content;
-	}
-
-	function escapeBrackets(text: string): string {
-		const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
-		return text.replace(
-			pattern,
-			(
-				match: string,
-				codeBlock: string | undefined,
-				squareBracket: string | undefined,
-				roundBracket: string | undefined
-			): string => {
-				if (codeBlock != null) {
-					return codeBlock;
-				} else if (squareBracket != null) {
-					return `$$${squareBracket}$$`;
-				} else if (roundBracket != null) {
-					return `$${roundBracket}$`;
-				}
-				return match;
-			}
-		);
-	}
-
-	// Escape $\\ce{...} → $\\ce{...} but with proper handling
-	function escapeMhchem(text: string): string {
-		return text.replaceAll('$\\ce{', '$\\\\ce{').replaceAll('$\\pu{', '$\\\\pu{');
-	}
+	// change to true to use the PR16599,
+	// "fix: added a normalization step for MathJax-style \[\] and \(\) delimiters"
+	const usePR16599 = false;
 
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			// const normalized = normalizeMathDelimiters(text);
-			// const result = await processor().process(normalized);
-			const processedText = preprocessLaTeX(text);
-
-			const result = await processor().process(processedText);
+			let normalized: string;
+			if (usePR16599) {
+				normalized = normalizeMathDelimiters(text);
+			} else {
+				normalized = preprocessLaTeX(text);
+			}
+			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
 
