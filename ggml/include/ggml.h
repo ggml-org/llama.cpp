@@ -576,12 +576,11 @@ extern "C" {
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
+        GGML_UNARY_OP_XIELU,
         GGML_UNARY_OP_FLOOR,
         GGML_UNARY_OP_CEIL,
         GGML_UNARY_OP_ROUND,
         GGML_UNARY_OP_TRUNC,
-        GGML_UNARY_OP_XIELU,
-
 
         GGML_UNARY_OP_COUNT,
     };

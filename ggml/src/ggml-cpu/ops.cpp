@@ -9008,11 +9008,10 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_TRUNC:
             {
                 ggml_compute_forward_trunc(params, dst);
-
+            } break;
         case GGML_UNARY_OP_XIELU:
             {
                 ggml_compute_forward_xielu(params, dst);
-
             } break;
         default:
             {
