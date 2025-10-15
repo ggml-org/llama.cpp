@@ -277,7 +277,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         
         // Temporary performance fix:
         // Setting device scheduling strategy for iGPUs with cc121 to "spinning" to avoid delays in cuda synchronize calls.
-        // TODO: Check for future drivers the default scheduling strategy and 
+        // TODO: Check for future drivers the default scheduling strategy and
         // remove this call again when cudaDeviceScheduleSpin is default.
         if (prop.major == 12 && prop.minor == 1) {
             CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
