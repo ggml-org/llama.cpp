@@ -220,14 +220,6 @@ static const char * cu_get_error_str(CUresult err) {
 #define FAST_FP16_AVAILABLE
 #endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
 
-#if (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA) || defined(GGML_USE_MUSA)
-#define FP16_MMA_AVAILABLE
-#endif // (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA) || defined(GGML_USE_MUSA)
-
-#if defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
-#define FP16_MMA_AVAILABLE
-#endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
-
 #if defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
@@ -253,34 +245,14 @@ static bool fp16_available(const int cc) {
 }
 
 static bool fast_fp16_available(const int cc) {
-    return (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) && cc != 610) || GGML_CUDA_CC_IS_AMD(cc);
+    return GGML_CUDA_CC_IS_AMD(cc) ||
+        (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) && ggml_cuda_highest_compiled_arch(cc) != 610);
 }
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fast_fp16_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_PASCAL && cc != 610) || GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
-}
-
-// Any FP16 tensor core instructions are available for ggml code.
-static bool fp16_mma_available(const int cc) {
-#if defined(GGML_USE_HIP) && !defined(GGML_HIP_ROCWMMA_FATTN)
-    return false;
-#else
-    if ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) ||
-        GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) ||
-        GGML_CUDA_CC_IS_MTHREADS(cc)) {
-        return true;
-    } else if (GGML_CUDA_CC_IS_RDNA4(cc)) {
-#if defined(GGML_HIP_ROCWMMA_FATTN) && defined(GGML_HIP_ROCWMMA_FATTN_GFX12)
-        return true;
-#else
-        return false;
-#endif // defined(GGML_HIP_ROCWMMA_FATTN) && defined(GGML_HIP_ROCWMMA_FATTN_GFX12)
-    } else {
-        return false;
-    }
-#endif // defined(GGML_USE_HIP) && !defined(GGML_HIP_ROCWMMA_FATTN)
 }
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
@@ -586,17 +558,46 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v,
 #endif // defined(GGML_USE_HIP) && (defined(RDNA2)  || defined(RDNA3) || defined(RDNA4) || defined(GCN5) || defined(CDNA))
 }
 
+static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
+#ifdef FAST_FP16_AVAILABLE
+    acc += v*u;
+#else
+    const float2 tmpv = __half22float2(v);
+    const float2 tmpu = __half22float2(u);
+    float2 tmpacc = __half22float2(acc);
+    tmpacc.x += tmpv.x * tmpu.x;
+    tmpacc.y += tmpv.y * tmpu.y;
+    acc = make_half2(tmpacc.x, tmpacc.y);
+#endif // FAST_FP16_AVAILABLE
+}
+
 // Aligned memory transfers of 8/16 bytes can be faster than 2 transfers with 4 bytes, especially on AMD.
-template <int nbytes>
+// Important: do not use this function if dst and src both point at registers.
+//     Due to the strict aliasing rule the compiler can do incorrect optimizations if src and dst have different types.
+//     The function is intended for copies between registers and SRAM/VRAM to make the compiler emit the right instructions.
+//     If dst and src point at different address spaces then they are guaranteed to not be aliased.
+template <int nbytes, int alignment = 0>
 static __device__ __forceinline__ void ggml_cuda_memcpy_1(void * __restrict__ dst, const void * __restrict__ src) {
-    if constexpr (nbytes == 4) {
-        *(int *) dst = *(const int *) src;
-    } else if constexpr (nbytes == 8) {
-        *(int2 *) dst = *(const int2 *) src;
-    } else if constexpr (nbytes == 16) {
-        *(int4 *) dst = *(const int4 *) src;
-    } else {
-        static_assert(nbytes == 0 && nbytes == -1, "bad nbytes");
+    if constexpr (alignment != 0) {
+        static_assert(nbytes % alignment == 0, "bad alignment");
+    }
+    constexpr int nb_per_cpy = alignment == 0 ? nbytes : alignment;
+
+#pragma unroll
+    for (int i = 0; i < nbytes/nb_per_cpy; ++i) {
+        if constexpr (nb_per_cpy == 1) {
+            ((char *) dst)[i] = ((const char *) src)[i];
+        } else if constexpr (nb_per_cpy == 2) {
+            ((short *) dst)[i] = ((const short *) src)[i];
+        } else if constexpr (nb_per_cpy == 4) {
+            ((int *) dst)[i] = ((const int *) src)[i];
+        } else if constexpr (nb_per_cpy == 8) {
+            ((int2 *) dst)[i] = ((const int2 *) src)[i];
+        } else if constexpr (nb_per_cpy == 16) {
+            ((int4 *) dst)[i] = ((const int4 *) src)[i];
+        } else {
+            static_assert(nbytes == 0 && nbytes == -1, "bad nbytes");
+        }
     }
 }
 
@@ -650,6 +651,14 @@ static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 fastd
 static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 fastdiv_values) {
     // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
     return n - fastdiv(n, fastdiv_values) * fastdiv_values.z;
+}
+
+// Calculate both division and modulo at once, returns <n/divisor, n%divisor>
+static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 fastdiv_values) {
+    // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    const uint32_t div_val = fastdiv(n, fastdiv_values);
+    const uint32_t mod_val = n - div_val * fastdiv_values.z;
+    return make_uint2(div_val, mod_val);
 }
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
@@ -935,13 +944,6 @@ struct ggml_cuda_graph {
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
-    bool use_cpy_indirection = false;
-    std::vector<char *> cpy_dest_ptrs;
-    char ** dest_ptrs_d;
-    int dest_ptrs_size = 0;
-    // Index to allow each cpy kernel to be aware of it's position within the graph
-    // relative to other cpy nodes.
-    int graph_cpynode_index = -1;
 #endif
 };
 

@@ -54,7 +54,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3);
     const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3.z);
 
-    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3.z) {
+    if (i0s >= (uint32_t)ne0 || i1 >= (uint32_t)ne1 || i2 >= (uint32_t)ne2 || i3 >= ne3.z) {
         return;
     }
 

@@ -3,9 +3,12 @@
 	import {
 		ChatForm,
 		ChatScreenHeader,
+		ChatScreenWarning,
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
+		ChatErrorDialog,
+		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
 		ConfirmationDialog
@@ -20,18 +23,19 @@
 		activeMessages,
 		activeConversation,
 		deleteConversation,
+		dismissErrorDialog,
+		errorDialog,
 		isLoading,
 		sendMessage,
-		stopGeneration,
-		setMaxContextError
+		stopGeneration
 	} from '$lib/stores/chat.svelte';
 	import {
 		supportsVision,
 		supportsAudio,
 		serverLoading,
+		serverWarning,
 		serverStore
 	} from '$lib/stores/server.svelte';
-	import { contextService } from '$lib/services';
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 	import { isFileTypeSupported } from '$lib/utils/file-type';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
@@ -76,6 +80,7 @@
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
+	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 
 	async function handleDeleteConfirm() {
@@ -99,6 +104,12 @@
 		dragCounter--;
 		if (dragCounter === 0) {
 			isDragOver = false;
+		}
+	}
+
+	function handleErrorDialogOpenChange(open: boolean) {
+		if (!open) {
+			dismissErrorDialog();
 		}
 	}
 
@@ -179,21 +190,6 @@
 		}
 
 		const extras = result?.extras;
-
-		// Check context limit using real-time slots data
-		const contextCheck = await contextService.checkContextLimit();
-
-		if (contextCheck && contextCheck.wouldExceed) {
-			const errorMessage = contextService.getContextErrorMessage(contextCheck);
-
-			setMaxContextError({
-				message: errorMessage,
-				estimatedTokens: contextCheck.currentUsage,
-				maxContext: contextCheck.maxContext
-			});
-
-			return false;
-		}
 
 		// Enable autoscroll for user-initiated message sending
 		userScrolledUp = false;
@@ -303,6 +299,10 @@
 		>
 			<ChatProcessingInfo />
 
+			{#if serverWarning()}
+				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
+			{/if}
+
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
@@ -319,6 +319,8 @@
 {:else if isServerLoading}
 	<!-- Server Loading State -->
 	<ServerLoadingSplash />
+{:else if serverStore.error && !serverStore.modelName}
+	<ServerErrorSplash error={serverStore.error} />
 {:else if serverStore.modelName}
 	<div
 		aria-label="Welcome screen with file drop zone"
@@ -339,6 +341,10 @@
 			<div class="mb-6 flex justify-center" in:fly={{ y: 10, duration: 300, delay: 200 }}>
 				<ServerInfo />
 			</div>
+
+			{#if serverWarning()}
+				<ChatScreenWarning />
+			{/if}
 
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
@@ -446,6 +452,13 @@
 			emptyFileNames = [];
 		}
 	}}
+/>
+
+<ChatErrorDialog
+	message={activeErrorDialog?.message ?? ''}
+	onOpenChange={handleErrorDialogOpenChange}
+	open={Boolean(activeErrorDialog)}
+	type={activeErrorDialog?.type ?? 'server'}
 />
 
 <style>

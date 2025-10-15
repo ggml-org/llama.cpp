@@ -204,7 +204,10 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         std::vector<int> target_pos(n_seqs_unq, -1);
         std::vector<int> target_row(n_seqs_unq, -1);
 
-        bool last = cparams.pooling_type == LLAMA_POOLING_TYPE_LAST;
+        const bool last = (
+             cparams.pooling_type == LLAMA_POOLING_TYPE_LAST ||
+            (cparams.pooling_type == LLAMA_POOLING_TYPE_RANK && arch == LLM_ARCH_QWEN3) // qwen3 reranking & embedding models use last token
+        );
 
         for (int i = 0; i < n_tokens; ++i) {
             const llama_pos pos = ubatch->pos[i];
@@ -258,12 +261,17 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-static void print_mask(float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
+static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
-    const char * swa_type_str = (swa_type == LLAMA_SWA_TYPE_NONE) ? "LLAMA_SWA_TYPE_NONE" :
-                          (swa_type == LLAMA_SWA_TYPE_STANDARD) ? "LLAMA_SWA_TYPE_STANDARD" :
-                          (swa_type == LLAMA_SWA_TYPE_CHUNKED) ? "LLAMA_SWA_TYPE_CHUNKED" :
-                          (swa_type == LLAMA_SWA_TYPE_SYMMETRIC) ? "LLAMA_SWA_TYPE_SYMMETRIC" : "unknown";
+    const char * swa_type_str = "unknown";
+
+    switch (swa_type) {
+        case LLAMA_SWA_TYPE_NONE:      swa_type_str = "LLAMA_SWA_TYPE_NONE"; break;
+        case LLAMA_SWA_TYPE_STANDARD:  swa_type_str = "LLAMA_SWA_TYPE_STANDARD"; break;
+        case LLAMA_SWA_TYPE_CHUNKED:   swa_type_str = "LLAMA_SWA_TYPE_CHUNKED"; break;
+        case LLAMA_SWA_TYPE_SYMMETRIC: swa_type_str = "LLAMA_SWA_TYPE_SYMMETRIC"; break;
+    };
+
     LLAMA_LOG_DEBUG("%s: n_swa : %d, n_kv: %d, swq_type: %s\n", __func__, (int)n_swa, (int)n_kv, swa_type_str);
     LLAMA_LOG_DEBUG("%s: '0' = can attend, '∞' = masked\n", __func__);
     LLAMA_LOG_DEBUG("%s: Rows = query tokens, Columns = key/value tokens\n\n", __func__);
@@ -292,50 +300,67 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
 
-    GGML_ASSERT(kq_mask);
-    GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
+    const auto fill_mask = [&](float * data, int n_swa, llama_swa_type swa_type) {
+        for (int h = 0; h < 1; ++h) {
+            for (int i1 = 0; i1 < n_tokens; ++i1) {
+                const llama_seq_id s1 = ubatch->seq_id[i1][0];
+                const llama_pos    p1 = ubatch->pos[i1];
 
-    float * data = (float *) kq_mask->data;
+                const uint64_t idst = h*(n_kv*n_tokens) + i1*n_kv;
 
-    // [TAG_NO_CACHE_ISWA]
-    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "TODO: implement");
-
-    for (int h = 0; h < 1; ++h) {
-        for (int i1 = 0; i1 < n_tokens; ++i1) {
-            const llama_seq_id s1 = ubatch->seq_id[i1][0];
-
-            for (int i0 = 0; i0 < n_tokens; ++i0) {
-                float f = -INFINITY;
-
-                for (int s = 0; s < ubatch->n_seq_id[i0]; ++s) {
+                for (int i0 = 0; i0 < n_tokens; ++i0) {
                     const llama_seq_id s0 = ubatch->seq_id[i0][0];
+                    const llama_pos p0    = ubatch->pos[i0];
 
+                    // mask different sequences
                     if (s0 != s1) {
-                        continue; // skip different sequences
+                        continue;
                     }
 
-                    if (cparams.causal_attn && ubatch->pos[i0] > ubatch->pos[i1]) {
-                        continue; // skip future tokens for causal attention
+                    // mask future tokens
+                    if (cparams.causal_attn && p0 > p1) {
+                        continue;
                     }
 
-                    // TODO: this does not take into account that some layers are SWA and others are note (i.e. iSWA) [TAG_NO_CACHE_ISWA]
-                    //if (hparams.is_masked_swa(ubatch->pos[i0], ubatch->pos[i1])) {
-                    //    continue; // skip masked tokens for SWA
-                    //}
-
-                    // TODO: reimplement this like in llama_kv_cache_unified
-                    if (hparams.use_alibi) {
-                        f = -std::abs(ubatch->pos[i0] - ubatch->pos[i1]);
-                    } else {
-                        f = 0.0f;
+                    // apply SWA if any
+                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
+                        continue;
                     }
+
+                    data[idst + i0] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
                 }
-                data[h*(n_kv*n_tokens) + i1*n_kv + i0] = f;
             }
         }
+    };
+
+    {
+        GGML_ASSERT(self_kq_mask);
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+
+        float * data = (float *) self_kq_mask->data;
+
+        std::fill(data, data + ggml_nelements(self_kq_mask), -INFINITY);
+
+        fill_mask(data, 0, LLAMA_SWA_TYPE_NONE);
+
+        if (debug) {
+            print_mask(data, n_tokens, n_kv, 0, LLAMA_SWA_TYPE_NONE);
+        }
     }
-    if (debug) {
-        print_mask(data, n_tokens, n_kv, hparams.n_swa, hparams.swa_type);
+
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        GGML_ASSERT(self_kq_mask_swa);
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
+
+        float * data = (float *) self_kq_mask_swa->data;
+
+        std::fill(data, data + ggml_nelements(self_kq_mask_swa), -INFINITY);
+
+        fill_mask(data, hparams.n_swa, hparams.swa_type);
+
+        if (debug) {
+            print_mask(data, n_tokens, n_kv, hparams.n_swa, hparams.swa_type);
+        }
     }
 }
 
@@ -920,14 +945,28 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         selection_probs = logits;
     }
 
+    if (arch == LLM_ARCH_GROVEMOE) {
+        selection_probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
+        cb(selection_probs, "ffn_moe_probs_biased", il);
+    }
+
     // select experts
     ggml_tensor * selected_experts = ggml_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
-    ggml_tensor * weights = ggml_get_rows(ctx0,
-            ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
+    if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
+        // TODO: Use scalar div instead when/if implemented
+        ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
+        selected_experts = ggml_cast(ctx0, ggml_scale(ctx0, f_sel, 1.0f / float(hparams.n_group_experts)), GGML_TYPE_I32);
+        probs = ggml_reshape_3d(ctx0, probs, 1, hparams.n_expert, n_tokens);
+    } else {
+        probs = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
+    }
+
+    ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
+
 
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
@@ -951,6 +990,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         weights = ggml_scale(ctx0, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
     }
+
+    //call early so that topk-moe can be used
+    ggml_build_forward_expand(gf, weights);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
@@ -1177,7 +1219,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_cls() const {
-    auto inp = std::make_unique<llm_graph_input_cls>(cparams);
+    auto inp = std::make_unique<llm_graph_input_cls>(cparams, arch);
 
     auto & cur = inp->cls;
 
@@ -1279,12 +1321,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
-    const auto n_kv = k->ne[1];
-
     ggml_tensor * cur;
 
-    // TODO: replace hardcoded padding with ggml-provided padding
-    if (cparams.flash_attn && (n_kv % 256 == 0) && kq_b == nullptr) {
+    if (cparams.flash_attn && kq_b == nullptr) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
         if (v_trans) {
@@ -1399,10 +1438,20 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
 
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
-    inp->kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD), 1, 1);
-    ggml_set_input(inp->kq_mask);
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD), 1, 1);
+    ggml_set_input(inp->self_kq_mask);
 
-    inp->kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->kq_mask, GGML_TYPE_F16) : inp->kq_mask;
+    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD), 1, 1);
+        ggml_set_input(inp->self_kq_mask_swa);
+
+        inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
+    } else {
+        inp->self_kq_mask_swa     = nullptr;
+        inp->self_kq_mask_swa_cnv = nullptr;
+    }
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
 }
@@ -1427,7 +1476,9 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto & kq_mask = inp->get_kq_mask();
+    const bool is_swa = hparams.is_swa(il);
+
+    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
@@ -1833,6 +1884,23 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
 }
 
+void llm_graph_context::build_dense_out(
+    ggml_tensor * dense_2,
+    ggml_tensor * dense_3) const {
+    if (!cparams.embeddings || dense_2 == nullptr || dense_3 == nullptr) {
+        return;
+    }
+    ggml_tensor * cur = res->t_embd_pooled != nullptr ? res->t_embd_pooled : res->t_embd;
+    GGML_ASSERT(cur != nullptr && "missing t_embd_pooled/t_embd");
+
+    cur = ggml_mul_mat(ctx0, dense_2, cur);
+    cur = ggml_mul_mat(ctx0, dense_3, cur);
+    cb(cur, "result_embd_pooled", -1);
+    res->t_embd_pooled = cur;
+    ggml_build_forward_expand(gf, cur);
+}
+
+
 void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
@@ -1877,34 +1945,32 @@ void llm_graph_context::build_pooling(
         case LLAMA_POOLING_TYPE_RANK:
             {
                 ggml_tensor * inp_cls = build_inp_cls();
-                inp = ggml_get_rows(ctx0, inp, inp_cls);
+                cur = ggml_get_rows(ctx0, inp, inp_cls);
 
+                // classification head
+                // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
                 if (cls) {
-                    // classification head
-                    // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
-                    cur = ggml_mul_mat(ctx0, cls, inp);
+                    cur = ggml_mul_mat(ctx0, cls, cur);
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
                     cur = ggml_tanh(ctx0, cur);
+                }
 
-                    // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
-                    // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
-                    if (cls_out) {
-                        cur = ggml_mul_mat(ctx0, cls_out, cur);
-                        if (cls_out_b) {
-                            cur = ggml_add(ctx0, cur, cls_out_b);
-                        }
-                    }
-                } else if (cls_out) {
-                    // Single layer classification head (direct projection)
-                    // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
-                    cur = ggml_mul_mat(ctx0, cls_out, inp);
+                // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
+                // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
+                // Single layer classification head (direct projection)
+                // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
+                if (cls_out) {
+                    cur = ggml_mul_mat(ctx0, cls_out, cur);
                     if (cls_out_b) {
                         cur = ggml_add(ctx0, cur, cls_out_b);
                     }
-                } else {
-                    GGML_ABORT("RANK pooling requires either cls+cls_b or cls_out+cls_out_b");
+                }
+
+                // softmax for qwen3 reranker
+                if (arch == LLM_ARCH_QWEN3) {
+                    cur = ggml_soft_max(ctx0, cur);
                 }
             } break;
         default:
