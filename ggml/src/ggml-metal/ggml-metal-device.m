@@ -145,7 +145,8 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     X(UPSCALE,         upscale)        \
     X(ARGSORT,         argsort)        \
     X(POOL,            pool)           \
-    X(MISC,            misc)
+    X(MISC,            misc)           \
+    X(OUT_PROD,        out_prod)
 
 enum ggml_metal_lib_kind {
 #define X(e, s) GGML_METAL_LIB_##e,
@@ -1667,6 +1668,31 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) && (op->src[0]->type == op->src[1]->type);
         case GGML_OP_ACC:
             return ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]) && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_OUT_PROD:
+            if (op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            {
+                const enum ggml_type src0_type = op->src[0]->type;
+                const enum ggml_type src1_type = op->src[1]->type;
+
+                if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F32 && (src1_type == GGML_TYPE_F32 || src1_type == GGML_TYPE_F16)) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_Q8_0 && (src1_type == GGML_TYPE_F32 || src1_type == GGML_TYPE_F16)) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_Q4_0 && (src1_type == GGML_TYPE_F32 || src1_type == GGML_TYPE_F16)) {
+                    return true;
+                }
+            }
+            return false;
         case GGML_OP_REPEAT:
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;

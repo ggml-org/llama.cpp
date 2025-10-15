@@ -2743,6 +2743,42 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_timestep_embeddi
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_out_prod(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_OUT_PROD);
+    assert(op->type == GGML_TYPE_F32);
+
+    char base[256];
+    char name[256];
+
+    const ggml_type src0t = op->src[0]->type;
+    const ggml_type src1t = op->src[1]->type;
+
+    if (src0t == GGML_TYPE_Q8_0) {
+        snprintf(base, 256, "kernel_out_prod_q8_0_%s", ggml_type_name(src1t));
+    } else if (src0t == GGML_TYPE_Q4_0) {
+        snprintf(base, 256, "kernel_out_prod_q4_0_%s", ggml_type_name(src1t));
+    } else if (src0t == GGML_TYPE_F16 && src1t == GGML_TYPE_F32) {
+        snprintf(base, 256, "kernel_out_prod_f16_f32");
+    } else if (src0t == GGML_TYPE_F32 && src1t == GGML_TYPE_F32) {
+        snprintf(base, 256, "kernel_out_prod_f32");
+    } else if (src0t == GGML_TYPE_F32 && src1t == GGML_TYPE_F16) {
+        snprintf(base, 256, "kernel_out_prod_f32_f16");
+    } else if (src0t == GGML_TYPE_F16 && src1t == GGML_TYPE_F16) {
+        snprintf(base, 256, "kernel_out_prod_f16");
+    } else {
+        GGML_ABORT("fatal error");
+    }
+
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_adamw(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_OPT_STEP_ADAMW);
 
