@@ -1,5 +1,6 @@
 //@ts-check
 // Helpers for a tracked promise land
+// Traps regular promise as well as promise by fetch
 // by Humans for All
 //
 
@@ -51,14 +52,36 @@ export async function evalWithPromiseTracking(codeToEval) {
         // @ts-ignore
         const fpromise = _fetch(args);
         trackedPromises.push(fpromise)
+
+        // @ts-ignore
+        fpromise.then = function (...args) {
+            console.info("WW:PT:FThen")
+            const newPromise = _Promise.prototype.then.apply(this, args);
+            trackedPromises.push(newPromise);
+            return newPromise;
+        };
+
+        fpromise.catch = function (...args) {
+            console.info("WW:PT:FCatch")
+            const newPromise = _Promise.prototype.catch.apply(this, args);
+            trackedPromises.push(newPromise);
+            return newPromise;
+        };
+
         return fpromise;
     }
+
+    fetch.prototype = _fetch.prototype;
+    Object.assign(fetch, _fetch);
 
     //let tf = new Function(codeToEval);
     //await tf()
     await eval(`(async () => { ${codeToEval} })()`);
 
+    // Should I allow things to go back to related event loop once
     //await Promise(resolve=>setTimeout(resolve, 0));
-    //return _Promise.allSettled(trackedPromises);
+
+    // Need and prefer promise failures to be trapped using reject/catch logic
+    // so using all instead of allSettled.
     return _Promise.all(trackedPromises);
 }
