@@ -309,10 +309,12 @@ struct ggml_backend_webgpu_context {
 struct ggml_backend_webgpu_buffer_context {
     webgpu_context webgpu_ctx;
     wgpu::Buffer   buffer;
+    std::string    label;
 
-    ggml_backend_webgpu_buffer_context(webgpu_context ctx, wgpu::Buffer buf) :
+    ggml_backend_webgpu_buffer_context(webgpu_context ctx, wgpu::Buffer buf, std::string lbl) :
         webgpu_ctx(std::move(ctx)),
-        buffer(std::move(buf)) {}
+        buffer(std::move(buf)),
+        label(std::move(lbl)) {}
 };
 
 /* End struct definitions */
@@ -1336,10 +1338,10 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
 
     WEBGPU_CPU_PROFILE_TOTAL_START(memset_tensor);
 
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_memset_tensor(" << buffer << ", " << tensor << ", " << value << ", "
-                                                                 << offset << ", " << size << ")");
-
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_memset_tensor(" << buf_ctx->label << ", " << tensor << ", " << value
+                                                                 << ", " << offset << ", " << size << ")");
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
@@ -1354,11 +1356,12 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                   const void *          data,
                                                   size_t                offset,
                                                   size_t                size) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", "
-                                                              << offset << ", " << size << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(set_tensor);
     ggml_backend_webgpu_buffer_context * buf_ctx    = (ggml_backend_webgpu_buffer_context *) buffer->context;
     webgpu_context                       webgpu_ctx = buf_ctx->webgpu_ctx;
+
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_set_tensor(" << buf_ctx->label << ", " << tensor << ", " << data
+                                                              << ", " << offset << ", " << size << ")");
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
@@ -1397,12 +1400,12 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                   void *                data,
                                                   size_t                offset,
                                                   size_t                size) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", "
-                                                              << offset << ", " << size << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(get_tensor);
-    ggml_backend_webgpu_buffer_context * buf_ctx    = (ggml_backend_webgpu_buffer_context *) buffer->context;
-    webgpu_context                       webgpu_ctx = buf_ctx->webgpu_ctx;
-    wgpu::Device                         device     = webgpu_ctx->device;
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buf_ctx->label << ", " << tensor << ", " << data
+                                                              << ", " << offset << ", " << size << ")");
+    webgpu_context webgpu_ctx = buf_ctx->webgpu_ctx;
+    wgpu::Device   device     = webgpu_ctx->device;
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
@@ -1473,16 +1476,20 @@ static const char * ggml_backend_webgpu_buffer_type_get_name(ggml_backend_buffer
 
 static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                                                           size_t                     size) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_type_alloc_buffer(" << size << ")");
+    static std::atomic<int> buffer_count;
+    int                     buffer_id = buffer_count++;
+    std::string             buf_name  = "tensor_buf" + std::to_string(buffer_id);
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_type_alloc_buffer_" << buffer_id << ": " << size << " bytes");
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
 
     wgpu::Buffer buf;
     ggml_webgpu_create_buffer(ctx->webgpu_ctx->device, buf,
                               (size + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) & ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1),
                               wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst,
-                              "allocated_buffer");
+                              buf_name.c_str());
 
-    ggml_backend_webgpu_buffer_context * buf_ctx = new ggml_backend_webgpu_buffer_context(ctx->webgpu_ctx, buf);
+    ggml_backend_webgpu_buffer_context * buf_ctx =
+        new ggml_backend_webgpu_buffer_context(ctx->webgpu_ctx, buf, buf_name);
 
     return ggml_backend_buffer_init(buft, ggml_backend_webgpu_buffer_interface, buf_ctx, size);
 }
@@ -2129,6 +2136,15 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     required_features.push_back(wgpu::FeatureName::TimestampQuery);
 #endif
 
+    const char * const deviceEnabledToggles[]  = { "skip_validation", "disable_robustness", "disable_workgroup_init",
+                                                   "disable_polyfills_on_integer_div_and_mod" };
+    const char * const deviceDisabledToggles[] = { "timestamp_quantization" };
+    wgpu::DawnTogglesDescriptor deviceTogglesDesc;
+    deviceTogglesDesc.enabledToggles      = deviceEnabledToggles;
+    deviceTogglesDesc.enabledToggleCount  = 4;
+    deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
+    deviceTogglesDesc.disabledToggleCount = 1;
+
     wgpu::DeviceDescriptor dev_desc;
     dev_desc.requiredLimits       = &ctx->limits;
     dev_desc.requiredFeatures     = required_features.data();
@@ -2146,6 +2162,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
             GGML_ABORT("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason),
                        std::string(message).c_str());
         });
+    dev_desc.nextInChain = &deviceTogglesDesc;
     ctx->instance.WaitAny(ctx->adapter.RequestDevice(
                               &dev_desc, wgpu::CallbackMode::AllowSpontaneous,
                               [ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
@@ -2243,11 +2260,18 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.name         = GGML_WEBGPU_NAME;
     ctx.device_count = 1;
 
+    const char * const instanceEnabledToggles[] = { "allow_unsafe_apis" };
+
+    wgpu::DawnTogglesDescriptor instanceTogglesDesc;
+    instanceTogglesDesc.enabledToggles     = instanceEnabledToggles;
+    instanceTogglesDesc.enabledToggleCount = 1;
     wgpu::InstanceDescriptor               instance_descriptor{};
     std::vector<wgpu::InstanceFeatureName> instance_features = { wgpu::InstanceFeatureName::TimedWaitAny };
     instance_descriptor.requiredFeatures                     = instance_features.data();
     instance_descriptor.requiredFeatureCount                 = instance_features.size();
-    webgpu_ctx->instance                                     = wgpu::CreateInstance(&instance_descriptor);
+    instance_descriptor.nextInChain                          = &instanceTogglesDesc;
+
+    webgpu_ctx->instance = wgpu::CreateInstance(&instance_descriptor);
     GGML_ASSERT(webgpu_ctx->instance != nullptr);
 
     static ggml_backend_reg reg = {
