@@ -1154,10 +1154,13 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "SOFTPLUS",
     "GELU_ERF",
     "XIELU",
+    "FLOOR",
+    "CEIL",
+    "ROUND",
+    "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 18, "GGML_UNARY_OP_COUNT != 18");
-
+static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2796,6 +2799,62 @@ static struct ggml_tensor * ggml_glu_impl(
     result->src[1] = b;
 
     return result;
+}
+
+// ggml_floor
+
+struct ggml_tensor * ggml_floor(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_FLOOR);
+}
+
+struct ggml_tensor * ggml_floor_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_FLOOR);
+}
+
+// ggml_ceil
+
+struct ggml_tensor * ggml_ceil(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_CEIL);
+}
+
+struct ggml_tensor * ggml_ceil_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_CEIL);
+}
+
+//ggml_round
+
+struct ggml_tensor * ggml_round(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_ROUND);
+}
+
+struct ggml_tensor * ggml_round_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ROUND);
+}
+
+//ggml_trunc
+
+struct ggml_tensor * ggml_trunc(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_TRUNC);
+}
+
+struct ggml_tensor * ggml_trunc_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_TRUNC);
 }
 
 struct ggml_tensor * ggml_glu(
