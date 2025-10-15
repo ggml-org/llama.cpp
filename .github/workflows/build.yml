@@ -742,8 +742,8 @@ jobs:
 
       env:
         # Make sure this is in sync with build-cache.yml
-        OPENVINO_VERSION_MAJOR: "2025.2"
-        OPENVINO_VERSION_FULL: "2025.2.0.19140.c01cd93e24d"
+        OPENVINO_VERSION_MAJOR: "2025.3"
+        OPENVINO_VERSION_FULL: "2025.3.0.19807.44526285f24"
 
       steps:
         - name: Clone
@@ -751,7 +751,7 @@ jobs:
           uses: actions/checkout@v4
 
         - name: ccache
-          uses: hendrikmuhs/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.16
           with:
             key: ubuntu-24-cmake-openvino-no-preset-v1
             evict-old-files: 1d
@@ -1764,12 +1764,12 @@ jobs:
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-arm64-cpu-kleidiai:
-     runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-22.04-arm
 
-     steps:
-       - name: Clone
-         id: checkout
-         uses: actions/checkout@v4
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
 
        - name: ccache
          uses: ggml-org/ccache-action@v1.2.16
@@ -1784,10 +1784,10 @@ jobs:
            sudo apt-get update
            sudo apt-get install -y build-essential
 
-       - name: Test
-         id: ggml-ci
-         run: |
-           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ubuntu-cpu-cmake-riscv64-native:
     runs-on: RISCV64
