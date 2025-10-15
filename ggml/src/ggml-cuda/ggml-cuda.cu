@@ -207,7 +207,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
 
-    bool is_cc121 = false;
     std::vector<std::pair<int, std::string>> turing_devices_without_mma;
     for (int id = 0; id < info.device_count; ++id) {
         int device_vmm = 0;
@@ -229,8 +228,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
-
-        is_cc121 |= prop.major == 12 && prop.minor == 1;
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
@@ -277,6 +274,15 @@ static ggml_cuda_device_info ggml_cuda_init() {
             turing_devices_without_mma.push_back({ id, device_name });
         }
 
+        
+        // Temporary performance fix:
+        // Setting device scheduling strategy for iGPUs with cc121 to "spinning" to avoid delays in cuda synchronize calls.
+        // TODO: Check for future drivers the default scheduling strategy and 
+        // remove this call again when cudaDeviceScheduleSpin is default.
+        if (prop.major == 12 && prop.minor == 1) {
+            CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+        }
+
 #endif  // defined(GGML_USE_HIP)
     }
 
@@ -296,12 +302,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
-
-    // Setting device scheduling strategy for iGPUs to "spinning" to avoid delays in cuda synchronize calls.
-    // This fix is temporary, as the strategy will be the default in later drivers.    
-    if (is_cc121) {
-        CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
-    }
 
     return info;
 }
