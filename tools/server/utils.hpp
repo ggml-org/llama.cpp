@@ -1237,9 +1237,10 @@ public:
             // allowed to resize      ^                    ^
             // disallowed to resize          ^      ^             ^
             if (n > 0) {
-                llama_token last_token = tokens[n - 1];
                 // make sure we never remove tokens in the middle of an image
-                if (last_token == LLAMA_TOKEN_NULL) {
+                // note that the case where we keep a full image at the end is allowed:
+                //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
+                if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
                     find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
                 }
             }
