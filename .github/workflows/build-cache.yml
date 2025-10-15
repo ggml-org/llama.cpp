@@ -63,6 +63,39 @@ jobs:
           path: ./spacemit_toolchain
           version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
+  ubuntu-24-openvino-cache:
+    runs-on: ubuntu-24.04
+
+    env:
+      # Make sure this is in sync with build.yml
+      OPENVINO_VERSION_MAJOR: "2025.2"
+      OPENVINO_VERSION_FULL: "2025.2.0.19140.c01cd93e24d"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libtbb12
+
+      - name: Setup Cache
+        uses: actions/cache@v4
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
   windows-2022-rocm-cache:
     runs-on: windows-2022
 
