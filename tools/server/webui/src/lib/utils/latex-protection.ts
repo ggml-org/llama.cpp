@@ -74,3 +74,103 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 		})
 		.join('\n');
 }
+
+function escapeBrackets(text: string): string {
+	const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
+	return text.replace(
+		pattern,
+		(
+			match: string,
+			codeBlock: string | undefined,
+			squareBracket: string | undefined,
+			roundBracket: string | undefined
+		): string => {
+			if (codeBlock != null) {
+				return codeBlock;
+			} else if (squareBracket != null) {
+				return `$$${squareBracket}$$`;
+			} else if (roundBracket != null) {
+				return `$${roundBracket}$`;
+			}
+			return match;
+		}
+	);
+}
+
+// Escape $\\ce{...} → $\\ce{...} but with proper handling
+function escapeMhchem(text: string): string {
+	return text.replaceAll('$\\ce{', '$\\\\ce{').replaceAll('$\\pu{', '$\\\\pu{');
+}
+
+// See also:
+// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
+
+// Protect code blocks: ```...``` and `...`
+const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
+
+/**
+ * Preprocesses markdown content to safely handle LaTeX math expressions while protecting
+ * against false positives (e.g., dollar amounts like $5.99) and ensuring proper rendering.
+ *
+ * This function:
+ * - Protects code blocks (```) and inline code (`...`)
+ * - Safeguards block and inline LaTeX: \(...\), \[...\], $$...$$, and selective $...$
+ * - Escapes standalone dollar signs before numbers (e.g., $5 → \$5) to prevent misinterpretation
+ * - Restores protected LaTeX and code blocks after processing
+ * - Converts \(...\) → $...$ and \[...\] → $$...$$ for compatibility with math renderers
+ * - Applies additional escaping for brackets and mhchem syntax if needed
+ *
+ * @param content - The raw text (e.g., markdown) that may contain LaTeX or code blocks.
+ * @returns The preprocessed string with properly escaped and normalized LaTeX.
+ *
+ * @example
+ * preprocessLaTeX("Price: $10. The equation is \\(x^2\\).")
+ * // → "Price: $10. The equation is $x^2$."
+ */
+export function preprocessLaTeX(content: string): string {
+	// Step 1: Protect code blocks
+	const codeBlocks: string[] = [];
+	content = content.replace(codeBlockRegex, (match) => {
+		codeBlocks.push(match);
+		return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
+	});
+
+	// Step 2: Protect existing LaTeX expressions
+	const latexExpressions: string[] = [];
+
+	// Match \(...\), \[...\], $$...$$ and protect them
+	content = content.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
+		latexExpressions.push(match);
+		return `<<LATEX_${latexExpressions.length - 1}>>`;
+	});
+
+	// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
+	content = maskInlineLaTeX(content, latexExpressions);
+
+	// Step 3: Escape standalone $ before digits (currency like $5 → \$5)
+	// (Now that inline math is protected, this will only escape dollars not already protected)
+	content = content.replace(/\$(?=\d)/g, '\\$');
+
+	// Step 4: Restore protected LaTeX expressions (they are valid)
+	content = content.replace(/<<LATEX_(\d+)>>/g, (_, index) => {
+		return latexExpressions[parseInt(index)];
+	});
+
+	// Step 5: Restore code blocks
+	content = content.replace(/<<CODE_BLOCK_(\d+)>>/g, (_, index) => {
+		return codeBlocks[parseInt(index)];
+	});
+
+	// Step 6: Apply additional escaping functions (brackets and mhchem)
+	content = escapeBrackets(content);
+	if (content.includes('\\ce{') || content.includes('\\pu{')) {
+		content = escapeMhchem(content);
+	}
+
+	// Final pass: Convert \(...\) → $...$, \[...\] → $$...$$
+	content = content
+		.replace(/\\\((.+?)\\\)/g, '$$$1$') // inline
+		.replace(/\\\[(.+?)\\\]/g, '$$$$1$$'); // display
+
+	return content;
+}
