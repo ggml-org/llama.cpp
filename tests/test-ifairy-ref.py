@@ -59,6 +59,7 @@ def quantize_ifairy_ref(w_real: np.ndarray, w_imag: np.ndarray):
     qw_imag[imag_neg] = -1.0
 
     # 应用缩放因子
+    # todo_liweitao  ???
     qw_real = qw_real / real_scale
     qw_imag = qw_imag / imag_scale
 
@@ -83,8 +84,8 @@ def dequantize_ifairy_ref(q_bits: np.ndarray, scale_real: float, scale_imag: flo
     # 2 -> real=0, imag=-1
     # 3 -> real=0, imag=1
 
-    dq_real = np.where(q_bits == 1, 1.0, np.where(q_bits == 0, -1.0, 0.0)) * scale_real
-    dq_imag = np.where(q_bits == 3, 1.0, np.where(q_bits == 2, -1.0, 0.0)) * scale_imag
+    dq_real = np.where(q_bits == 1, 1.0, np.where(q_bits == 0, -1.0, 0.0)) / scale_real
+    dq_imag = np.where(q_bits == 3, 1.0, np.where(q_bits == 2, -1.0, 0.0)) / scale_imag
 
     return dq_real, dq_imag
 
@@ -174,10 +175,10 @@ def rope_ifairy_ref(x_real: np.ndarray, x_imag: np.ndarray, positions: np.ndarra
 def complex_matmul_ref(a_real: np.ndarray, a_imag: np.ndarray,
                        b_real: np.ndarray, b_imag: np.ndarray):
     """
-    复数矩阵乘法的参考实现
+    复数矩阵共轭乘法的参考实现
 
     (a_real + j*a_imag) @ (b_real + j*b_imag)
-    = (a_real @ b_real - a_imag @ b_imag) + j*(a_real @ b_imag + a_imag @ b_real)
+    = (a_real @ b_real + a_imag @ b_imag) + j*(a_real @ b_imag - a_imag @ b_real)
 
     Args:
         a_real, a_imag: 矩阵 A 的实部和虚部
@@ -186,8 +187,8 @@ def complex_matmul_ref(a_real: np.ndarray, a_imag: np.ndarray,
     Returns:
         (c_real, c_imag): 结果矩阵 C 的实部和虚部
     """
-    c_real = np.matmul(a_real, b_real) - np.matmul(a_imag, b_imag)
-    c_imag = np.matmul(a_real, b_imag) + np.matmul(a_imag, b_real)
+    c_real = np.matmul(a_real, b_real) + np.matmul(a_imag, b_imag)
+    c_imag = np.matmul(a_real, b_imag) - np.matmul(a_imag, b_real)
 
     return c_real, c_imag
 

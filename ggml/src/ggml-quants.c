@@ -2279,12 +2279,9 @@ void quantize_row_ifairy_ref(const float * GGML_RESTRICT x_real, const float * G
     float d_imag = 0;
 
     for (int64_t i = 0; i < k; i++) {
-        d_real = MAX(d_real, (int)fabsf(x_real[i]));
-        d_imag = MAX(d_imag, (int)fabsf(x_imag[i]));
+        d_real = MAX(d_real, fabsf(x_real[i]));
+        d_imag = MAX(d_imag, fabsf(x_imag[i]));
     }
-
-    const float id_real = d_real ? 1.0f/d_real : 0.0f;
-    const float id_imag = d_imag ? 1.0f/d_imag : 0.0f;
 
     for (int64_t i = 0; i < nb; i++) {
         y[i].d_real = GGML_FP32_TO_FP16(d_real);
