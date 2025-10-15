@@ -428,6 +428,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GLM_EDGE  = auto()
     MERGER    = auto()
     GEMMA3    = auto()
+    GLM4V     = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -3055,6 +3056,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
+    GLM4V = "glm4v_moe"
 
 
 # Items here are (block size, type size)

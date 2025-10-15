@@ -9219,33 +9219,55 @@ class KimiVLModel(MmprojModel):
 
         return [] # skip other tensors
 
+
+@ModelBase.register("Glm4vMoeForConditionalGeneration")
+class GLM4V_Text_MoE(Glm4MoeModel):
+    """Text model from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
+    model_arch = gguf.MODEL_ARCH.GLM4_MOE
+
+    def set_gguf_parameters(self):
+        # parameters specific to GLM-4.5V like rope_theta=10000 and context_length=65536
+        # should be correctly picked up from the text_config by the base classes
+        super().set_gguf_parameters()
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        # skip vision tensors for the text model
+        if name.startswith("model.visual."):
+            return []
+
+        # the Glm4MoeModel class expects tensor names to start with 'model.',
+        # so we strip the we strip the 'language_model.' part
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.", 1)
+
+        # let the parent class handle the MoE logic and tensor mapping
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Glm4vMoeForConditionalGeneration")
 class GLM4V_MoE(MmprojModel):
+    """Multimodal projector from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V).
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
     #
-    # the HF model's type is `glm4v_moe`. internally, it consists of two models:
-    # - `glm4v_moe_text`
-    # + main text model
-    # + tensor names start with "model.language_model."
-    # + "2D-RoPE" (aKa Roformer) w/ embeddings dynamically adapted via bicubic interpolation
-    # - `glm4v_moe`
-    # + vision adapter (ViT)
-    # + tensor names start with "model.visual."
-    # + "3D-RoPE" (without the interpolation mentioned above)
+    # TODO: this is not complete yet! need to handle custom RoPE nonsense.
     #
-    # other notable quirks include:
-    # - has MTP layer (need to keep these tensors - same as GLM-4.5-Air)
-    # - RoPE theta value (θ): use 10k rather than 100k for GLM-4.5-Air
-    # - the model's vision supports video input, but this is not implemented here
-    #
-    # for more info, refer to:
-    # - reference impl          : https://github.com/huggingface/transformers/tree/main/src/transformers/models/glm4v_moe
-    # - HF model card           : https://huggingface.co/zai-org/GLM-4.5V
-    # - arXiv paper (model)     : https://arxiv.org/abs/2507.01006
-    # - arXiv paper (orig. ViT) : https://arxiv.org/abs/2411.14402
-    #
-    # TODO: the model's tokenizer has video-related special tokens - deal with these (??)
-    #
-    pass
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)        
+        self.gguf_writer.add_vision_use_gelu(True)
+        if (ln_eps := self.find_vparam(["layer_norm_eps"], optional=True)) is not None:
+            self.gguf_writer.add_vision_attention_layernorm_eps(ln_eps)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.visual."):
+            yield self.map_tensor_name(name), data_torch
+        else:
+            return
 
 
 ###### CONVERSION LOGIC ######
