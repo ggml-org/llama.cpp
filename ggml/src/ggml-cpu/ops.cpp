@@ -8993,7 +8993,6 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_exp(params, dst);
             } break;
-<<<<<<< HEAD
         case GGML_UNARY_OP_FLOOR:
             {
                 ggml_compute_forward_floor(params, dst);

@@ -1156,7 +1156,6 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-<<<<<<< HEAD
     GGML_API struct ggml_tensor * ggml_floor(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
