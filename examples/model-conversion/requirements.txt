@@ -4,3 +4,4 @@ torchvision
 transformers
 huggingface-hub
 accelerate
+sentence-transformers

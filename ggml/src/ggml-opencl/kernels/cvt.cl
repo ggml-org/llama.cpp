@@ -116,3 +116,87 @@ kernel void kernel_convert_block_q4_0_noshuffle(
 #endif
     }
 }
+
+//------------------------------------------------------------------------------
+// block_mxfp4
+//------------------------------------------------------------------------------
+#define QK_MXFP4 32
+struct block_mxfp4 {
+    uchar e; // E8M0
+    uchar qs[QK_MXFP4 / 2];
+};
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_mxfp4
+// Convert the block_mxfp4 format to 2 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_mxfp4(
+    global struct block_mxfp4 * src0,
+    global uchar * dst_q,
+    global uchar * dst_e
+) {
+    global struct block_mxfp4 * b = (global struct block_mxfp4 *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK_MXFP4 / 2 * get_global_id(0);
+    global uchar * e = (global uchar *) dst_e + get_global_id(0);
+
+    *e = b->e;
+
+    for (int i = 0; i < QK_MXFP4 / 2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_mxfp4(
+    global uchar * src_q,
+    global half  * src_e,
+    global struct block_mxfp4 * dst
+) {
+    global struct block_mxfp4 * b = (global struct block_mxfp4 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK_MXFP4 / 2 * get_global_id(0);
+    global uchar * e = (global uchar *) src_e + get_global_id(0);
+
+    b->e = *e;
+    for (int i = 0; i < QK_MXFP4 / 2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// block_q8_0
+//------------------------------------------------------------------------------
+typedef struct {
+    half d;       // delta
+    char qs[QK8_0]; // quants
+} block_q8_0;
+
+kernel void kernel_convert_block_q8_0(
+    global block_q8_0 * src0,
+    global uchar * dst_q,
+    global half  * dst_d
+) {
+    global block_q8_0 * b = (global block_q8_0 *) src0 + get_global_id(0);
+    global uchar      * q = (global uchar *) dst_q + QK8_0*get_global_id(0);
+    global half       * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q8_0(
+    global uchar * src_q,
+    global half  * src_d,
+    global block_q8_0 * dst
+) {
+    global block_q8_0 * b = (global block_q8_0 *) dst + get_global_id(0);
+    global uchar      * q = (global uchar *) src_q + QK8_0*get_global_id(0);
+    global half       * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK8_0; ++i) {
+        b->qs[i] = q[i];
+    }
+}
