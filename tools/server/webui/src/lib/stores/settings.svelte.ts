@@ -33,11 +33,25 @@
 
 import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+import { normalizeFloatingPoint } from '$lib/utils/precision';
+import { ParameterSyncService } from '$lib/services/parameter-sync';
+import { serverStore } from '$lib/stores/server.svelte';
+import { setConfigValue, getConfigValue, configToParameterRecord } from '$lib/utils/config-helpers';
 
 class SettingsStore {
 	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
 	theme = $state<string>('auto');
 	isInitialized = $state(false);
+	userOverrides = $state<Set<string>>(new Set());
+
+	/**
+	 * Helper method to get server defaults with null safety
+	 * Centralizes the pattern of getting and extracting server defaults
+	 */
+	private getServerDefaults(): Record<string, string | number | boolean> {
+		const serverParams = serverStore.serverDefaultParams;
+		return serverParams ? ParameterSyncService.extractServerDefaults(serverParams) : {};
+	}
 
 	constructor() {
 		if (browser) {
@@ -67,14 +81,20 @@ class SettingsStore {
 
 		try {
 			const savedVal = JSON.parse(localStorage.getItem('config') || '{}');
+
 			// Merge with defaults to prevent breaking changes
 			this.config = {
 				...SETTING_CONFIG_DEFAULT,
 				...savedVal
 			};
+
+			// Load user overrides
+			const savedOverrides = JSON.parse(localStorage.getItem('userOverrides') || '[]');
+			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {
 			console.warn('Failed to parse config from localStorage, using defaults:', error);
 			this.config = { ...SETTING_CONFIG_DEFAULT };
+			this.userOverrides = new Set();
 		}
 	}
 
@@ -86,14 +106,30 @@ class SettingsStore {
 
 		this.theme = localStorage.getItem('theme') || 'auto';
 	}
-
 	/**
 	 * Update a specific configuration setting
 	 * @param key - The configuration key to update
 	 * @param value - The new value for the configuration key
 	 */
-	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]) {
+	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]): void {
 		this.config[key] = value;
+
+		if (ParameterSyncService.canSyncParameter(key as string)) {
+			const propsDefaults = this.getServerDefaults();
+			const propsDefault = propsDefaults[key as string];
+
+			if (propsDefault !== undefined) {
+				const normalizedValue = normalizeFloatingPoint(value);
+				const normalizedDefault = normalizeFloatingPoint(propsDefault);
+
+				if (normalizedValue === normalizedDefault) {
+					this.userOverrides.delete(key as string);
+				} else {
+					this.userOverrides.add(key as string);
+				}
+			}
+		}
+
 		this.saveConfig();
 	}
 
@@ -103,6 +139,26 @@ class SettingsStore {
 	 */
 	updateMultipleConfig(updates: Partial<SettingsConfigType>) {
 		Object.assign(this.config, updates);
+
+		const propsDefaults = this.getServerDefaults();
+
+		for (const [key, value] of Object.entries(updates)) {
+			if (ParameterSyncService.canSyncParameter(key)) {
+				const propsDefault = propsDefaults[key];
+
+				if (propsDefault !== undefined) {
+					const normalizedValue = normalizeFloatingPoint(value);
+					const normalizedDefault = normalizeFloatingPoint(propsDefault);
+
+					if (normalizedValue === normalizedDefault) {
+						this.userOverrides.delete(key);
+					} else {
+						this.userOverrides.add(key);
+					}
+				}
+			}
+		}
+
 		this.saveConfig();
 	}
 
@@ -114,6 +170,8 @@ class SettingsStore {
 
 		try {
 			localStorage.setItem('config', JSON.stringify(this.config));
+
+			localStorage.setItem('userOverrides', JSON.stringify(Array.from(this.userOverrides)));
 		} catch (error) {
 			console.error('Failed to save config to localStorage:', error);
 		}
@@ -185,6 +243,129 @@ class SettingsStore {
 	getAllConfig(): SettingsConfigType {
 		return { ...this.config };
 	}
+
+	/**
+	 * Initialize settings with props defaults when server properties are first loaded
+	 * This sets up the default values from /props endpoint
+	 */
+	syncWithServerDefaults(): void {
+		const serverParams = serverStore.serverDefaultParams;
+		if (!serverParams) {
+			console.warn('No server parameters available for initialization');
+
+			return;
+		}
+
+		const propsDefaults = this.getServerDefaults();
+
+		for (const [key, propsValue] of Object.entries(propsDefaults)) {
+			const currentValue = getConfigValue(this.config, key);
+
+			const normalizedCurrent = normalizeFloatingPoint(currentValue);
+			const normalizedDefault = normalizeFloatingPoint(propsValue);
+
+			if (normalizedCurrent === normalizedDefault) {
+				this.userOverrides.delete(key);
+				setConfigValue(this.config, key, propsValue);
+			} else if (!this.userOverrides.has(key)) {
+				setConfigValue(this.config, key, propsValue);
+			}
+		}
+
+		this.saveConfig();
+		console.log('Settings initialized with props defaults:', propsDefaults);
+		console.log('Current user overrides after sync:', Array.from(this.userOverrides));
+	}
+
+	/**
+	 * Clear all user overrides (for debugging)
+	 */
+	clearAllUserOverrides(): void {
+		this.userOverrides.clear();
+		this.saveConfig();
+		console.log('Cleared all user overrides');
+	}
+
+	/**
+	 * Reset all parameters to their default values (from props)
+	 * This is used by the "Reset to Default" functionality
+	 * Prioritizes server defaults from /props, falls back to webui defaults
+	 */
+	forceSyncWithServerDefaults(): void {
+		const propsDefaults = this.getServerDefaults();
+		const syncableKeys = ParameterSyncService.getSyncableParameterKeys();
+
+		for (const key of syncableKeys) {
+			if (propsDefaults[key] !== undefined) {
+				const normalizedValue = normalizeFloatingPoint(propsDefaults[key]);
+
+				setConfigValue(this.config, key, normalizedValue);
+			} else {
+				if (key in SETTING_CONFIG_DEFAULT) {
+					const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
+					setConfigValue(this.config, key, defaultValue);
+				}
+			}
+
+			this.userOverrides.delete(key);
+		}
+
+		this.saveConfig();
+	}
+
+	/**
+	 * Get parameter information including source for a specific parameter
+	 */
+	getParameterInfo(key: string) {
+		const propsDefaults = this.getServerDefaults();
+		const currentValue = getConfigValue(this.config, key);
+
+		return ParameterSyncService.getParameterInfo(
+			key,
+			currentValue ?? '',
+			propsDefaults,
+			this.userOverrides
+		);
+	}
+
+	/**
+	 * Reset a parameter to server default (or webui default if no server default)
+	 */
+	resetParameterToServerDefault(key: string): void {
+		const serverDefaults = this.getServerDefaults();
+
+		if (serverDefaults[key] !== undefined) {
+			const value = normalizeFloatingPoint(serverDefaults[key]);
+
+			this.config[key as keyof SettingsConfigType] =
+				value as SettingsConfigType[keyof SettingsConfigType];
+		} else {
+			if (key in SETTING_CONFIG_DEFAULT) {
+				const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
+				setConfigValue(this.config, key, defaultValue);
+			}
+		}
+
+		this.userOverrides.delete(key);
+		this.saveConfig();
+	}
+
+	/**
+	 * Get diff between current settings and server defaults
+	 */
+	getParameterDiff() {
+		const serverDefaults = this.getServerDefaults();
+		if (Object.keys(serverDefaults).length === 0) return {};
+
+		const configAsRecord = configToParameterRecord(
+			this.config,
+			ParameterSyncService.getSyncableParameterKeys()
+		);
+
+		return ParameterSyncService.createParameterDiff(configAsRecord, serverDefaults);
+	}
 }
 
 // Create and export the settings store instance
@@ -204,3 +385,11 @@ export const resetTheme = settingsStore.resetTheme.bind(settingsStore);
 export const resetAll = settingsStore.resetAll.bind(settingsStore);
 export const getConfig = settingsStore.getConfig.bind(settingsStore);
 export const getAllConfig = settingsStore.getAllConfig.bind(settingsStore);
+export const syncWithServerDefaults = settingsStore.syncWithServerDefaults.bind(settingsStore);
+export const forceSyncWithServerDefaults =
+	settingsStore.forceSyncWithServerDefaults.bind(settingsStore);
+export const getParameterInfo = settingsStore.getParameterInfo.bind(settingsStore);
+export const resetParameterToServerDefault =
+	settingsStore.resetParameterToServerDefault.bind(settingsStore);
+export const getParameterDiff = settingsStore.getParameterDiff.bind(settingsStore);
+export const clearAllUserOverrides = settingsStore.clearAllUserOverrides.bind(settingsStore);

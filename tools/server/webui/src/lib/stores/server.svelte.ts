@@ -125,6 +125,12 @@ class ServerStore {
 		return this._slotsEndpointAvailable;
 	}
 
+	get serverDefaultParams():
+		| ApiLlamaCppServerProps['default_generation_settings']['params']
+		| null {
+		return this._serverProps?.default_generation_settings?.params || null;
+	}
+
 	/**
 	 * Check if slots endpoint is available based on server properties and endpoint support
 	 */
@@ -273,3 +279,4 @@ export const supportedModalities = () => serverStore.supportedModalities;
 export const supportsVision = () => serverStore.supportsVision;
 export const supportsAudio = () => serverStore.supportsAudio;
 export const slotsEndpointAvailable = () => serverStore.slotsEndpointAvailable;
+export const serverDefaultParams = () => serverStore.serverDefaultParams;

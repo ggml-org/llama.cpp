@@ -1,0 +1,2 @@
+export const PRECISION_MULTIPLIER = 1000000;
+export const PRECISION_DECIMAL_PLACES = 6;
