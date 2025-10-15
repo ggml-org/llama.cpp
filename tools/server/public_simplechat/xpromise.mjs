@@ -15,6 +15,8 @@
  */
 export async function evalWithPromiseTracking(codeToEval) {
     const _Promise = globalThis.Promise;
+    const _fetch = globalThis.fetch
+
     /** @type {any[]} */
     const trackedPromises = [];
 
@@ -42,6 +44,13 @@ export async function evalWithPromiseTracking(codeToEval) {
 
     Promise.prototype = _Promise.prototype;
     Object.assign(Promise, _Promise);
+
+    const fetch = function(/** @type {any[]} */ ...args) {
+        console.info("WW:PT:Fetch")
+        const fpromise = _fetch(args);
+        trackedPromises.push(fpromise)
+        return fpromise;
+    }
 
     eval(codeToEval);
 
