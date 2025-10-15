@@ -718,23 +718,13 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 - Follow the guide to install OpenVINO Runtime from an archive file: [Linux](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html) | [Windows](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-windows.html)
 
 <details>
-<summary>📦 Click to expand OpenVINO 2025.2 installation commands on Linux</summary>
+<summary>📦 Click to expand OpenVINO 2025.3 installation on Ubuntu</summary>
 <br>
 
 ```bash
-export OPENVINO_VERSION_MAJOR=2025.2
-export OPENVINO_VERSION_FULL=2025.2.0.19140.c01cd93e24d
-sudo apt-get update
-sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
-sudo mkdir -p /opt/intel
-wget -O openvino_${OPENVINO_VERSION_MAJOR}.tgz https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz
-tar -xf openvino_${OPENVINO_VERSION_MAJOR}.tgz
-sudo mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR}
-rm openvino_${OPENVINO_VERSION_MAJOR}.tgz
-cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR}
-echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh && cd -
-sudo ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
-source /opt/intel/openvino/setupvars.sh
+wget https://raw.githubusercontent.com/ravi9/misc-scripts/main/openvino/ov-archive-install/install-openvino-from-archive.sh
+chmod +x install-openvino-from-archive.sh
+./install-openvino-from-archive.sh
 ```
 </details>
 
