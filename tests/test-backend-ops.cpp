@@ -6365,6 +6365,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+#if 0
+    {
+        // Test paths in OpenCL
+        std::vector<int> ns = {32, 64, 128, 256, 512, 1024, 4096};
+        std::vector<int> ks = {896, 1536, 4096};
+        for (auto n : ns) {
+            for (auto k : ks) {
+                test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1024, n, k, {1, 1}, {1, 1}));
+            }
+        }
+    }
+#endif
+
 #if 1
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
