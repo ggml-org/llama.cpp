@@ -1023,7 +1023,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
     "OPT_STEP_SGD",
-    "IFAIRY_ROPE"
+    "IFAIRY_ROPE",
+    "IFAIRY_SPLIT",
 
     "GLU",
 };
@@ -1130,7 +1131,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
-    "ifairy_rope(x)"
+    "ifairy_rope(x)",
+    "ifairy_split(x)",
 };
 
 // static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
@@ -3952,6 +3954,24 @@ static struct ggml_tensor * ggml_rope_impl(
     return result;
 }
 
+static struct ggml_tensor * ggml_ifairy_split_impl(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    int                   n_dims
+){
+    a->ne[0] = a->ne[0] * 2;
+    struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    a->ne[0] = a->ne[0] / 2;
+
+    int32_t params[1] = { n_dims };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_IFAIRY_SPLIT;
+    result->src[0] = a;
+
+    return result;
+}
+
 static struct ggml_tensor * ggml_ifairy_rope_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -4020,6 +4040,14 @@ struct ggml_tensor * ggml_ifairy_rope(
     return ggml_ifairy_rope_impl(
         ctx, a, b, NULL, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, false
     );
+}
+
+struct ggml_tensor * ggml_ifairy_split(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    int                   n_dims
+){
+    return ggml_ifairy_split_impl(ctx, a, n_dims);
 }
 
 struct ggml_tensor * ggml_rope(
