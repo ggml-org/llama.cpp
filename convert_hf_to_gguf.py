@@ -9221,7 +9221,7 @@ class KimiVLModel(MmprojModel):
 
 
 @ModelBase.register("Glm4vMoeForConditionalGeneration")
-class GLM4V_Text_MoE(Glm4MoeModel):
+class GLM4VMoEModel(Glm4MoeModel):
     """Text model from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
 
     ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
@@ -9249,7 +9249,7 @@ class GLM4V_Text_MoE(Glm4MoeModel):
 
 
 @ModelBase.register("Glm4vMoeForConditionalGeneration")
-class GLM4V_MoE(MmprojModel):
+class GLM4VMoEVisionModel(MmprojModel):
     """Multimodal projector from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V).
 
     ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
