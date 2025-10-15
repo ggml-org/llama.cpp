@@ -25,7 +25,7 @@ static __global__ void reduce_f32(const float * __restrict__ x, float * __restri
 template<typename T, const int BM, const int BN, const int BK, const int WM, const int WN,
           const int WNITER, const int TM, const int TN, const int NUM_THREADS,
           // layout: 0, NHWC; 1, NCHW
-          const int layout, const bool vec_load, const int ksplit, const int PAD=1>
+          const int layout, const bool vec_load, const int ksplit, const int PAD=4>
 static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
                                               const T * __restrict__ kernel,
                                               float * __restrict__ output,
