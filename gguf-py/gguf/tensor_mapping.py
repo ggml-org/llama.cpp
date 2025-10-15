@@ -35,6 +35,7 @@ class TensorNameMap:
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
+            "token_embeddings.weight",                   # ifairy
         ),
 
         # Token type embeddings
@@ -75,6 +76,7 @@ class TensorNameMap:
             "head.out",                  # wavtokenizer
             "lm_head",                   # llama4
             "model.transformer.ff_out",  # llada
+            "lm_head.weight",            # ifairy
         ),
 
         # Output norm
@@ -196,6 +198,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
+            "layer.{bid}.self_attn.q_proj.weight",                       # ifairy
         ),
 
         # Attention key
@@ -216,6 +219,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
+            "layer.{bid}.self_attn.k_proj.weight",                     # ifairy
         ),
 
         # Attention value
@@ -235,6 +239,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
+            "layer.{bid}.self_attn.v_proj.weight",                       # ifairy
         ),
 
         # Attention output
@@ -271,6 +276,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.attn_out",                      # llada
             "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
+            "layer.{bid}.self_attn.o_proj.weight",                          # ifairy
         ),
 
         # Attention output norm
@@ -406,6 +412,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.up_proj",                 # llada
             "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
             "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
+            "layer.{bid}.mlp.up_proj.weight",                         # ifairy
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -449,6 +456,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
             "model.transformer.blocks.{bid}.ff_proj",     # llada
             "layers.{bid}.mlp.gate_proj",                 # qwen3-embedding
+            "layer.{bid}.mlp.gate_proj.weight",           # ifairy
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -502,6 +510,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_out",                  # llada
             "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
+            "layer.{bid}.mlp.down_proj.weight",                       # ifairy
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -906,6 +915,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
+            "layer.{bid}.mlp.ffn_layernorm.weight",  # ifairy
         ),
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
@@ -1465,88 +1475,18 @@ class TensorNameMap:
         ),
 
         # ifairy newly added
-        MODEL_TENSOR.TOKEN_EMBD_IMAG: (
-            "token_embeddings_imag.weight",
+        MODEL_TENSOR.FINAL_NORM:(
+            "final_norm.weight",
         ),
-        MODEL_TENSOR.TOKEN_EMBD_REAL: (
-            "token_embeddings_real.weight",
+        MODEL_TENSOR.POST_NORM:(
+            "layer.{bid}.post_layernorm.weight",
         ),
-        MODEL_TENSOR.FINAL_NORM_IMAG:(
-            "final_norm.weight_imag",
+        MODEL_TENSOR.PRE_NORM: (
+            "layer.{bid}.pre_layernorm.weight",
         ),
-        MODEL_TENSOR.FINAL_NORM_REAL:(
-            "final_norm.weight_real",
+        MODEL_TENSOR.ATTN_LAYERNORM: (
+            "layer.{bid}.self_attn.attn_layernorm.weight",
         ),
-        MODEL_TENSOR.FINAL_NORM:(),
-        MODEL_TENSOR.FFN_DOWN_IMAG: (
-            "layer.{bid}.mlp.down_proj.weight_imag",
-        ),
-        MODEL_TENSOR.FFN_DOWN_REAL: (
-            "layer.{bid}.mlp.down_proj.weight_real",
-        ),
-        MODEL_TENSOR.FFN_UP_IMAG: (
-            "layer.{bid}.mlp.up_proj.weight_imag",
-        ),
-        MODEL_TENSOR.FFN_UP_REAL: (
-            "layer.{bid}.mlp.up_proj.weight_real",
-        ),
-        MODEL_TENSOR.FFN_SUB_NORM_IMAG: (
-            "layer.{bid}.mlp.ffn_layernorm.weight_imag",
-        ),
-        MODEL_TENSOR.FFN_SUB_NORM_REAL: (
-            "layer.{bid}.mlp.ffn_layernorm.weight_real",
-        ),
-        MODEL_TENSOR.FFN_GATE_IMAG: (
-            "layer.{bid}.mlp.gate_proj.weight_imag",
-        ),
-        MODEL_TENSOR.FFN_GATE_REAL: (
-            "layer.{bid}.mlp.gate_proj.weight_real",
-        ),
-        MODEL_TENSOR.ATTN_Q_IMAG: (
-            "layer.{bid}.self_attn.q_proj.weight_imag",
-        ),
-        MODEL_TENSOR.ATTN_Q_REAL: (
-            "layer.{bid}.self_attn.q_proj.weight_real",
-        ),
-        MODEL_TENSOR.ATTN_K_IMAG: (
-            "layer.{bid}.self_attn.k_proj.weight_imag",
-        ),
-        MODEL_TENSOR.ATTN_K_REAL: (
-            "layer.{bid}.self_attn.k_proj.weight_real",
-        ),
-        MODEL_TENSOR.ATTN_V_IMAG: (
-            "layer.{bid}.self_attn.v_proj.weight_imag",
-        ),
-        MODEL_TENSOR.ATTN_V_REAL: (
-            "layer.{bid}.self_attn.v_proj.weight_real",
-        ),
-        MODEL_TENSOR.ATTN_OUT_IMAG: (
-            "layer.{bid}.self_attn.o_proj.weight_imag",
-        ),
-        MODEL_TENSOR.ATTN_OUT_REAL: (
-            "layer.{bid}.self_attn.o_proj.weight_real",
-        ),
-        MODEL_TENSOR.POST_NORM_IMAG: (
-            "layer.{bid}.post_layernorm.weight_imag",
-        ),
-        MODEL_TENSOR.POST_NORM_REAL: (
-            "layer.{bid}.post_layernorm.weight_real",
-        ),
-        MODEL_TENSOR.POST_NORM:(),
-        MODEL_TENSOR.PRE_NORM_IMAG: (
-            "layer.{bid}.pre_layernorm.weight_imag",
-        ),
-        MODEL_TENSOR.PRE_NORM_REAL: (
-            "layer.{bid}.pre_layernorm.weight_real",
-        ),
-        MODEL_TENSOR.PRE_NORM:(),
-        MODEL_TENSOR.ATTN_LAYERNORM_IMAG: (
-            "layer.{bid}.self_attn.attn_layernorm.weight_imag",
-        ),
-        MODEL_TENSOR.ATTN_LAYERNORM_REAL: (
-            "layer.{bid}.self_attn.attn_layernorm.weight_real",
-        ),
-        MODEL_TENSOR.ATTN_LAYERNORM:(),
     }
 
     # architecture-specific block mappings

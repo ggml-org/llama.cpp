@@ -42,8 +42,58 @@ def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
 
     return qw_real, qw_imag
 
+def combine_complex_tensors(imag_part, real_part):
+    """
+    将虚部和实部合并为一个float32张量
+    前16位存储虚部，后16位存储实部
+    
+    参数:
+        imag_part: float16虚部张量
+        real_part: float16实部张量
+    返回:
+        merged_tensor: float32合并张量
+    """
+    # 将float16转换为16位整数表示
+    imag_int = imag_part.view(torch.int16)
+    real_int = real_part.view(torch.int16)
+    
+    # 将16位整数扩展为32位整数（高位补零）
+    imag_32 = imag_int.to(torch.int32)
+    real_32 = real_int.to(torch.int32)
+    
+    # 将虚部移到高16位，实部在低16位
+    merged_int = (imag_32 << 16) | (real_32 & 0xFFFF)
+    
+    # 将合并后的整数重新解释为float32
+    merged_tensor = merged_int.view(torch.float32)
+    
+    return merged_tensor
+
+def split_complex_tensors(merged_tensor):
+    """
+    将合并的float32张量拆分为虚部和实部
+    
+    参数:
+        merged_tensor: float32合并张量
+    返回:
+        (imag_part, real_part): 元组，包含float16虚部和实部
+    """
+    # 将float32转换为32位整数表示
+    merged_int = merged_tensor.view(torch.int32)
+    
+    # 提取高16位（虚部）
+    imag_int = (merged_int >> 16).to(torch.int16)
+    # 提取低16位（实部）
+    real_int = (merged_int & 0xFFFF).to(torch.int16)
+    
+    # 将整数重新解释为float16
+    imag_part = imag_int.view(torch.float16)
+    real_part = real_int.view(torch.float16)
+    
+    return imag_part, real_part
+
 # 接收key和对应的tensor，返回量化后的tensor
-def quant(key, tensor, f, weight_map):
+def quant_and_merge(key, tensor, f, weight_map):
     if 'real' in key:
         imag_key = key.replace('real', 'imag')
         f_name = weight_map.get(imag_key)
@@ -53,7 +103,7 @@ def quant(key, tensor, f, weight_map):
         else:
             imag_tensor = f.get_tensor(imag_key).to(torch.float16)
         q_real, q_imag = forward(tensor, imag_tensor)
-        return q_real
+        return combine_complex_tensors(q_imag, q_real)
     elif 'imag' in key:
         real_key = key.replace('imag', 'real')
         f_name = weight_map.get(real_key)
@@ -62,8 +112,8 @@ def quant(key, tensor, f, weight_map):
                 real_tensor = f1.get_tensor(real_key).to(torch.float16)
         else:
             real_tensor = f.get_tensor(real_key).to(torch.float16)
-        q_real, q_imag = forward(real_tensor, tensor)
-        return q_imag
+        q_real, q_imag = forward(real_tensor, tensor)   
+        return combine_complex_tensors(q_imag, q_real)
     else:
         return tensor
 
@@ -92,7 +142,7 @@ def main():
 
     # 2. 创建 GGUFWriter 并设置基本模型信息
     model_name = config.get("_name_or_path", "complexnet_model")
-    writer = gguf.GGUFWriter(output_file, model_name)
+    writer = gguf.GGUFWriter(output_file, arch=gguf.MODEL_ARCH_NAMES[gguf.MODEL_ARCH.IFAIRY])
 
     # 3. 根据 config.json 添加关键元数据
     # 模型架构和基本信息
@@ -141,28 +191,32 @@ def main():
                     print(f"找到 {len(tensor_keys)} 个张量")
 
                 for key in tensor_keys:
+                    if '_imag' in key:  # 只处理实部，虚部会在量化时一起处理
+                        continue
                     tensor_data = f.get_tensor(key).to(torch.float16)
-                    tensor_data = quant(key, tensor_data, f, weight_map)
-                    numpy_array = tensor_data.cpu().numpy().astype(np.float16)
+                    tensor_data = quant_and_merge(key, tensor_data, f, weight_map)
+                    numpy_array = tensor_data.cpu().numpy().astype(np.float32)
 
                     model_arch = gguf.MODEL_ARCH.IFAIRY
 
                     mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
 
                     try:
-                        if "lm_head" in key:
-                            key = "lm_head"
+                        if '_real' in key or '_imag' in key:
+                            key = key.replace('_real', '').replace('_imag', '')
                         mapped_name = mapper.get_name(key)
                         if mapped_name is None:
-                            # 如果没有找到映射，可以跳过或按原名称处理（不推荐）
-                            print(f"Warning: No mapping found for tensor '{key}'. Skipping or using original name.")
-                            continue
+                            # 直接报错
+                            raise Exception(f"No mapping found for tensor '{key}'")
                     except Exception as e:
                         print(f"Error mapping tensor name '{key}': {e}")
                         continue
 
-                    # 添加张量，指定自定义的 I2 类型
-                    writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
+                    # 添加张量，指定自定义的类型
+                    if 'lm_head' in key:
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16)
+                    else:
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
 
                     if verbose:
                         print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
