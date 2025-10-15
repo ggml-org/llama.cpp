@@ -91,7 +91,7 @@ class ChatMessageEx {
      * Extract the elements of the all in one tool call result string
      * @param {string} allInOne
      */
-    static extractToolCallResultAllInOne(allInOne) {
+    static extractToolCallResultAllInOneSimpleMinded(allInOne) {
         const regex = /<tool_response>\s*<id>(.*?)<\/id>\s*<name>(.*?)<\/name>\s*<content>([\s\S]*?)<\/content>\s*<\/tool_response>/si;
         const caught = allInOne.match(regex)
         let data = { tool_call_id: "Error", name: "Error", content: "Error" }
@@ -101,6 +101,29 @@ class ChatMessageEx {
                 name: caught[2].trim(),
                 content: caught[3].trim()
             }
+        }
+        return data
+    }
+
+    /**
+     * Extract the elements of the all in one tool call result string
+     * This should potentially account for content tag having xml content within to an extent.
+     * @param {string} allInOne
+     */
+    static extractToolCallResultAllInOne(allInOne) {
+        const dParser = new DOMParser();
+        const got = dParser.parseFromString(allInOne, 'text/xml');
+        const parseErrors = got.querySelector('parseerror')
+        if (parseErrors) {
+            console.debug("WARN:ChatMessageEx:ExtractToolCallResultAllInOne:", parseErrors.textContent.trim())
+        }
+        const id = got.querySelector('id')?.textContent.trim();
+        const name = got.querySelector('name')?.textContent.trim();
+        const content = got.querySelector('content')?.textContent.trim();
+        let data = {
+            tool_call_id: id? id : "Error",
+            name: name? name : "Error",
+            content: content? content : "Error"
         }
         return data
     }
