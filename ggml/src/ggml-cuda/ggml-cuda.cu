@@ -274,7 +274,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
             turing_devices_without_mma.push_back({ id, device_name });
         }
 
-        
         // Temporary performance fix:
         // Setting device scheduling strategy for iGPUs with cc121 to "spinning" to avoid delays in cuda synchronize calls.
         // TODO: Check for future drivers the default scheduling strategy and
