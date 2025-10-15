@@ -6037,7 +6037,7 @@ static void ggml_compute_forward_rope_ifairy(
                         }
                     }
                 } else {
-                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                    for (int64_t i0 = 0; i0 < n_dims * 2; i0 += 2) {
                         const float cos_theta = cache[i0 + 0];
                         const float sin_theta = cache[i0 + 1];
 
@@ -6048,7 +6048,7 @@ static void ggml_compute_forward_rope_ifairy(
                         const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[0]); //imag
 
                         dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                        dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
+                        dst_data[1]      = x0*sin_theta + x1*cos_theta;
                     }
                 }
 
@@ -6070,7 +6070,7 @@ static void ggml_compute_forward_rope_ifairy(
                     }
                 } else {
                     // fill the remain channels with data from src tensor
-                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
+                    for (int64_t i0 = n_dims * 2; i0 < ne0 * 2; i0 += 2) {
                         const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
                         float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -6083,12 +6083,69 @@ static void ggml_compute_forward_rope_ifairy(
     }
 }
 
-void ggml_compute_forward_ifairy_rope(
+static void ggml_compute_forward_ifairy_split_impl(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
 
+    const int n_dims     = ((int32_t *) dst->op_params)[0];
+
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr = ggml_nrows(dst);
+
+    GGML_ASSERT(n_dims == ne0 / 2);
+    GGML_ASSERT(n_dims % 2 == 0);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    // row index used to determine which thread to use
+    int ir = 0;
+
+
+    for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
+        for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
+            for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
+                if (ir++ < ir0) continue;
+                if (ir   > ir1) break;
+                
+                for (int64_t i0 = 0; i0 < n_dims * 2; i0 += 2) {
+                    const float cos_theta = cache[i0 + 0];
+                    const float sin_theta = cache[i0 + 1];
+
+                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
+                    float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[1]); //real
+                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[0]); //imag
+
+                    dst_data[0]      = x0;
+                    dst_data[1]      = x1;
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    ggml_compute_forward_ifairy_split_impl(params, dst);
+}
+
+void ggml_compute_forward_ifairy_rope(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
     ggml_compute_forward_rope_ifairy(params, dst, true);
 }
 

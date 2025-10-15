@@ -557,6 +557,7 @@ extern "C" {
         GGML_OP_GLU,
 
         GGML_OP_IFAIRY_ROPE,
+        GGML_OP_IFAIRY_SPLIT,
 
         GGML_OP_COUNT,
     };
@@ -1655,6 +1656,12 @@ extern "C" {
             struct ggml_tensor  * b,
             int                   n_dims,
             int                   mode);
+
+    GGML_API struct ggml_tensor * ggml_ifairy_split(
+        struct ggml_context * ctx,
+        struct ggml_tensor * v,
+        int n_dim
+    );
 
     // in-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_rope_inplace(
