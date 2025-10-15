@@ -3839,14 +3839,14 @@ struct server_context {
 
                                         {
                                             const auto token = slot.prompt.tokens[i];
-                                            const auto piece = common_token_to_piece(ctx, token);
+                                            const auto piece = token != LLAMA_TOKEN_NULL ? common_token_to_piece(ctx, token) : "[mtmd]";
                                             ss0 << piece;
                                             st0 << std::setw(8) << token;
                                         }
 
                                         {
                                             const auto token = slot.task->tokens[i];
-                                            const auto piece = common_token_to_piece(ctx, token);
+                                            const auto piece = token != LLAMA_TOKEN_NULL ? common_token_to_piece(ctx, token) : "[mtmd]";
                                             ss1 << piece;
                                             st1 << std::setw(8) << token;
                                         }
