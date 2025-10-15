@@ -25,6 +25,7 @@ export async function evalWithPromiseTracking(codeToEval) {
         const promise = new _Promise(executor);
         trackedPromises.push(promise);
 
+        // @ts-ignore
         promise.then = function (...args) {
             console.info("WW:PT:Then")
             const newPromise = _Promise.prototype.then.apply(this, args);
@@ -47,12 +48,15 @@ export async function evalWithPromiseTracking(codeToEval) {
 
     const fetch = function(/** @type {any[]} */ ...args) {
         console.info("WW:PT:Fetch")
+        // @ts-ignore
         const fpromise = _fetch(args);
         trackedPromises.push(fpromise)
         return fpromise;
     }
 
-    eval(codeToEval);
+    //let tf = new Function(codeToEval);
+    //await tf()
+    await eval(`(async () => { ${codeToEval} })()`);
 
     //await Promise(resolve=>setTimeout(resolve, 0));
     //return _Promise.allSettled(trackedPromises);
