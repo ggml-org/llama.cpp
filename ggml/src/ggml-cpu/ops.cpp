@@ -6122,9 +6122,6 @@ static void ggml_compute_forward_ifairy_split_impl(
                 if (ir   > ir1) break;
                 
                 for (int64_t i0 = 0; i0 < n_dims * 2; i0 += 2) {
-                    const float cos_theta = cache[i0 + 0];
-                    const float sin_theta = cache[i0 + 1];
-
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
                     float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
