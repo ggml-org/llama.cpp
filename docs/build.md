@@ -718,7 +718,7 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 - Follow the guide to install OpenVINO Runtime from an archive file: [Linux](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html) | [Windows](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-windows.html)
 
 <details>
-<summary>📦 Click to expand OpenVINO 2025.3 installation on Ubuntu</summary>
+<summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
 <br>
 
 ```bash
@@ -804,9 +804,68 @@ Control OpenVINO behavior using these environment variables:
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
 
-./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
+GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
 ```
 
+### Docker build Llama.cpp with OpenVINO Backend
+You can build and run llama.cpp with OpenVINO backend using Docker.
+
+```bash
+# Build the base runtime image with compiled shared libraries and minimal dependencies.
+docker build -t llama-openvino:base -f .devops/openvino.Dockerfile .
+
+# Build the complete image with all binaries, Python tools, gguf-py library, and model conversion utilities.
+docker build --target=full -t llama-openvino:full -f .devops/openvino.Dockerfile .
+
+# Build a minimal CLI-only image containing just the llama-cli executable.
+docker build --target=light -t llama-openvino:light -f .devops/openvino.Dockerfile .
+
+# Builds a server-only image with llama-server executable, health check endpoint, and REST API support. 
+docker build --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
+
+# If you are behind a proxy:
+docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy --target=light --t llama-openvino:light -f .devops/openvino.Dockerfile .
+```
+
+Run llama.cpp with OpenVINO backend Docker container.
+Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
+
+```bash
+#  Run Docker container
+docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+
+# With Intel GPU access (iGPU or dGPU)
+docker run --rm -it -v ~/models:/models \
+--device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
+llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+
+# With Intel NPU access
+docker run --rm -it --env GGML_OPENVINO_DEVICE=NPU -v ~/models:/models \
+--device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
+llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+``` 
+
+Run Llama.cpp Server with OpenVINO Backend
+```bash
+# Run the Server Docker container server
+docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf 
+
+# In a NEW terminal, test the server with curl
+
+# If you are behind a proxy, make sure to set NO_PROXY to avoid proxy for localhost
+export NO_PROXY=localhost,127.0.0.1  
+
+# Test health endpoint
+curl -f http://localhost:8080/health
+
+# Test with a simple prompt
+curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: application/json" \
+ -d '{"messages":[{"role":"user","content":"Write a poem about OpenVINO"}],"max_tokens":100}' | jq .
+
+```
+
+
+---
 ## Notes about GPU-accelerated backends
 
 The GPU may still be used to accelerate some parts of the computation even when using the `-ngl 0` option. You can fully disable GPU acceleration by using `--device none`.
