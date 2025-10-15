@@ -272,6 +272,12 @@ jobs:
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
+      - name: Install OpenVINO dependencies
+        run: |
+          cd ./openvino_toolkit
+          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+          
       - name: Build
         id: cmake_build
         run: |

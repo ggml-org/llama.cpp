@@ -23,8 +23,3 @@ runs:
         type: z
         strip: 1
 
-    - name: Install OpenVINO dependencies
-      shell: bash
-      run: |
-        cd ${{ inputs.path }}
-        echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
