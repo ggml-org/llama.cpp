@@ -3960,13 +3960,13 @@ static struct ggml_tensor * ggml_ifairy_split_impl(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     int                   n_dims,
-    bool                  cat_at_end
+    bool                  want_real
 ){
-    a->ne[0] = a->ne[0] * 2;
-    struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
     a->ne[0] = a->ne[0] / 2;
+    struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    a->ne[0] = a->ne[0] * 2;
 
-    int32_t params[2] = { n_dims, cat_at_end ? 1 : 0 };
+    int32_t params[2] = { n_dims, want_real ? 1 : 0 };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_IFAIRY_SPLIT;
@@ -4056,9 +4056,9 @@ struct ggml_tensor * ggml_ifairy_split(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     int                   n_dims,
-    bool                  cat_at_end
+    bool                  want_real
 ){
-    return ggml_ifairy_split_impl(ctx, a, n_dims, cat_at_end);
+    return ggml_ifairy_split_impl(ctx, a, n_dims, want_real);
 }
 
 struct ggml_tensor * ggml_ifairy_merge(
