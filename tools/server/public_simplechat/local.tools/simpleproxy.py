@@ -23,18 +23,28 @@ gMe = {
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
+    # Handle GET requests
     def do_GET(self):
-        print(f"DBUG:ProxyHandler:{self.path}")
+        print(f"DBUG:ProxyHandler:GET:{self.path}")
         pr = urllib.parse.urlparse(self.path)
-        print(f"DBUG:ProxyHandler:{pr}")
+        print(f"DBUG:ProxyHandler:GET:{pr}")
         match pr.path:
             case '/urlraw':
                 handle_urlraw(self, pr)
             case '/urltext':
                 handle_urltext(self, pr)
             case _:
-                print(f"WARN:ProxyHandler:UnknownPath{pr.path}")
+                print(f"WARN:ProxyHandler:GET:UnknownPath{pr.path}")
                 self.send_error(400, f"WARN:UnknownPath:{pr.path}")
+
+    # Handle OPTIONS for CORS preflights (just in case from browser)
+    def do_OPTIONS(self):
+        print(f"DBUG:ProxyHandler:OPTIONS:{self.path}")
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', '*')
+        self.end_headers()
 
 
 @dataclass(frozen=True)
