@@ -90,6 +90,7 @@ class TextHtmlParser(html.parser.HTMLParser):
         self.bBody = False
         self.bCapture = False
         self.text = ""
+        self.textStripped = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
         if tag == 'body':
@@ -111,15 +112,33 @@ class TextHtmlParser(html.parser.HTMLParser):
         if self.bCapture:
             self.text += f"{data}\n"
 
-    def get_stripped_text(self):
+    def syncup(self):
+        self.textStripped = self.text
+
+    def strip_adjacent_newlines(self):
         oldLen = -99
-        newLen = len(self.text)
-        aStripped = self.text;
+        newLen = len(self.textStripped)
+        aStripped = self.textStripped;
         while oldLen != newLen:
             oldLen = newLen
             aStripped = aStripped.replace("\n\n\n","\n")
             newLen = len(aStripped)
-        return aStripped
+        self.textStripped = aStripped
+
+    def strip_whitespace_lines(self):
+        aLines = self.textStripped.splitlines()
+        self.textStripped = ""
+        for line in aLines:
+            if (len(line.strip())==0):
+                self.textStripped += "\n"
+                continue
+            self.textStripped += f"{line}\n"
+
+    def get_stripped_text(self):
+        self.syncup()
+        self.strip_whitespace_lines()
+        self.strip_adjacent_newlines()
+        return self.textStripped
 
 
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
