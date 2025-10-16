@@ -276,6 +276,21 @@ class Keys:
         USE_SILU            = "clip.use_silu"
         N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
 
+        class Rope:
+            DIMENSION_COUNT          = "clip.vision.rope.dimension_count"
+            DIMENSION_SECTIONS       = "clip.vision.rope.dimension_sections"
+            FREQ_BASE                = "clip.vision.rope.freq_base"
+            SCALING_TYPE             = "clip.vision.rope.scaling.type"
+            SCALING_FACTOR           = "clip.vision.rope.scaling.factor"
+            SCALING_ATTN_FACTOR      = "clip.vision.rope.scaling.attn_factor"
+            SCALING_ORIG_CTX_LEN     = "clip.vision.rope.scaling.original_context_length"
+            SCALING_FINETUNED        = "clip.vision.rope.scaling.finetuned"
+            SCALING_YARN_LOG_MUL     = "clip.vision.rope.scaling.yarn_log_multiplier"
+            SCALING_YARN_EXT_FACTOR  = "clip.vision.rope.scaling.yarn_ext_factor"
+            SCALING_YARN_ATTN_FACTOR = "clip.vision.rope.scaling.yarn_attn_factor"
+            SCALING_YARN_BETA_FAST   = "clip.vision.rope.scaling.yarn_beta_fast"
+            SCALING_YARN_BETA_SLOW   = "clip.vision.rope.scaling.yarn_beta_slow"
+
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
