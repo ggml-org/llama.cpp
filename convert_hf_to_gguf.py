@@ -9254,16 +9254,27 @@ class GLM4VMoEVisionModel(MmprojModel):
 
     ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
     #
-    # TODO: this is not complete yet! need to handle custom RoPE nonsense.
+    # TODO: this is not complete yet!
     #
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)        
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
         self.gguf_writer.add_vision_use_gelu(True)
+
         if (ln_eps := self.find_vparam(["layer_norm_eps"], optional=True)) is not None:
             self.gguf_writer.add_vision_attention_layernorm_eps(ln_eps)
 
+        # the ViT in GLM-4.5V applies its own RoPE inside its attention blocks
+        if (rope_theta := self.find_vparam(["rope_theta"], optional=True)) is not None:
+            self.gguf_writer.add_vision_rope_freq_base(rope_theta)
+            logger.info(f"gguf: vision rope theta = {rope_theta}")
+        else:
+            logger.warning('gguf: -------------------------------------------------------------')
+            logger.warning('gguf: missing vision rope theta! the conversion might be incorrect!')
+            logger.warning('gguf: -------------------------------------------------------------')
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
         if name.startswith("model.visual."):
             yield self.map_tensor_name(name), data_torch
         else:
