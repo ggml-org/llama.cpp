@@ -9,9 +9,11 @@
 		Sun,
 		Moon,
 		ChevronLeft,
-		ChevronRight
+		ChevronRight,
+		Database
 	} from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
+	import ImportExportTab from './ImportExportTab.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
@@ -221,6 +223,11 @@
 					type: 'textarea'
 				}
 			]
+		},
+		{
+			title: 'Import/Export',
+			icon: Database,
+			fields: []
 		}
 		// TODO: Experimental features section will be implemented after initial release
 		// This includes Python interpreter (Pyodide integration) and other experimental features
@@ -456,21 +463,27 @@
 
 			<ScrollArea class="max-h-[calc(100dvh-13.5rem)] flex-1 md:max-h-[calc(100vh-13.5rem)]">
 				<div class="space-y-6 p-4 md:p-6">
-					<div>
+					<div class="grid">
 						<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
 							<currentSection.icon class="h-5 w-5" />
 
 							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 						</div>
 
-						<div class="space-y-6">
-							<ChatSettingsFields
-								fields={currentSection.fields}
-								{localConfig}
-								onConfigChange={handleConfigChange}
-								onThemeChange={handleThemeChange}
-							/>
-						</div>
+						{#if currentSection.title === 'Import/Export'}
+							<!-- Import/Export Section -->
+							<ImportExportTab />
+						{:else}
+							<!-- Regular Settings Fields -->
+							<div class="space-y-6">
+								<ChatSettingsFields
+									fields={currentSection.fields}
+									{localConfig}
+									onConfigChange={handleConfigChange}
+									onThemeChange={handleThemeChange}
+								/>
+							</div>
+						{/if}
 					</div>
 
 					<div class="mt-8 border-t pt-6">
