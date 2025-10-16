@@ -88,18 +88,25 @@ class TextHtmlParser(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self.bBody = False
+        self.bCapture = False
         self.text = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
         if tag == 'body':
             self.bBody = True
+            self.bCapture = True
+        if tag == 'script':
+            self.bCapture = False
 
     def handle_endtag(self, tag: str):
         if tag == 'body':
             self.bBody = False
+        if tag == 'script':
+            if self.bBody:
+                self.bCapture = True
 
     def handle_data(self, data: str):
-        if self.bBody:
+        if self.bCapture:
             self.text += f"{data}\n"
 
 
