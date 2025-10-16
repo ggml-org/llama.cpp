@@ -104,7 +104,7 @@ let weburlfetch_meta = {
  */
 function weburlfetch_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `http://127.0.0.1:3128/?path=${obj.url}`
+        let newUrl = `http://127.0.0.1:3128/urlraw?url=${obj.url}`
         fetch(newUrl).then(resp=>resp.text()).then(data => {
             gToolsWorker.onmessage(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
