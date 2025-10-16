@@ -170,6 +170,7 @@ public:
     }
 
     partial_formatter * get_partial_formatter() { return partial_formatter_ptr_.get(); }
+    const std::string & get_full_prompt() const { return formatted_cumulative_; }
 
 private:
     std::vector<common_chat_msg> & chat_msgs_;
@@ -379,13 +380,9 @@ int main(int argc, char ** argv) {
             }
 
             if (!params.system_prompt.empty() || !params.prompt.empty()) {
-                common_chat_templates_inputs inputs;
-                inputs.use_jinja = g_params->use_jinja;
-                inputs.messages = chat_msgs;
-                inputs.add_generation_prompt = !params.prompt.empty();
-
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                prompt = chat_add_and_format.get_full_prompt();
             }
+
         } else {
             // otherwise use the prompt as is
             prompt = params.prompt;
