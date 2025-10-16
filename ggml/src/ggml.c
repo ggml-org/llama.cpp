@@ -1025,6 +1025,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
     "IFAIRY_ROPE",
     "IFAIRY_SPLIT",
+    "IFAIRY_MERGE",
 
     "GLU",
 };
@@ -1133,6 +1134,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
     "ifairy_rope(x)",
     "ifairy_split(x)",
+    "ifairy_merge(x)",
 };
 
 // static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
@@ -3972,6 +3974,22 @@ static struct ggml_tensor * ggml_ifairy_split_impl(
     return result;
 }
 
+static struct ggml_tensor * ggml_ifairy_merge_impl(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a
+){
+    GGML_ASSERT(a -> ne[0] % 2 == 0);
+
+    a->ne[0] = a->ne[0] / 2;
+    struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    a->ne[0] = a->ne[0] * 2;
+
+    result->op     = GGML_OP_IFAIRY_MERGE;
+    result->src[0] = a;
+
+    return result;
+}
+
 static struct ggml_tensor * ggml_ifairy_rope_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -4048,6 +4066,13 @@ struct ggml_tensor * ggml_ifairy_split(
     int                   n_dims
 ){
     return ggml_ifairy_split_impl(ctx, a, n_dims);
+}
+
+struct ggml_tensor * ggml_ifairy_merge(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a
+){
+    return ggml_ifairy_merge_impl(ctx, a);
 }
 
 struct ggml_tensor * ggml_rope(

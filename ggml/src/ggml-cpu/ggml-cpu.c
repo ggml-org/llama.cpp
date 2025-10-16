@@ -1873,6 +1873,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_ifairy_split(params, tensor);
             } break;
+        case GGML_OP_IFAIRY_MERGE:
+            {
+                ggml_compute_forward_ifairy_merge(params, tensor);
+            }break;
         case GGML_OP_ROPE:
             {
                 ggml_compute_forward_rope(params, tensor);
@@ -2266,6 +2270,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_IFAIRY_SPLIT:
         case GGML_OP_IFAIRY_ROPE:
+        case GGML_OP_IFAIRY_MERGE:
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
         case GGML_OP_ADD_REL_POS:
@@ -2778,9 +2783,10 @@ struct ggml_cplan ggml_graph_plan(
                         }
                     } break;
                 case GGML_OP_IFAIRY_SPLIT:
+                case GGML_OP_IFAIRY_MERGE:
                 case GGML_OP_IFAIRY_ROPE:
                     {
-                        cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * 2 * n_tasks;
+                        cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                     } break;
                 case GGML_OP_SOFT_MAX:
                 case GGML_OP_ROPE:
