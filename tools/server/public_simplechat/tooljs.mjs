@@ -127,14 +127,14 @@ function weburlfetch_run(toolcallid, toolname, obj) {
 let weburlfetchstrip_meta = {
         "type": "function",
         "function": {
-            "name": "web_url_fetch_strip",
-            "description": "Fetch the requested web url through a proxy server and strip away head, script, styles blocks before sending remaining body in few seconds",
+            "name": "web_url_fetch_strip_htmltags_and_some_useless",
+            "description": "Fetch the requested web url through a proxy server and strip away html tags as well as head, script, styles blocks before returning the remaining body in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"the url of the page that will be fetched from the internet and inturn contents stripped to some extent"
+                        "description":"the url of the page that will be fetched from the internet and inturn unwanted stuff stripped from its contents to some extent"
                     }
                 },
                 "required": ["url"]
@@ -187,7 +187,7 @@ export let tc_switch = {
         "meta": weburlfetch_meta,
         "result": ""
     },
-    "web_url_fetch_strip": {
+    "web_url_fetch_strip_htmltags_and_some_useless": {
         "handler": weburlfetchstrip_run,
         "meta": weburlfetchstrip_meta,
         "result": ""
