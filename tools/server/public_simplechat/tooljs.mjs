@@ -114,7 +114,7 @@ let weburlfetch_meta = {
  */
 function weburlfetch_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `http://127.0.0.1:3128/urlraw?url=${obj.url}`
+        let newUrl = `http://127.0.0.1:3128/urlraw?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp=>resp.text()).then(data => {
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
@@ -158,7 +158,7 @@ let weburlfetchstrip_meta = {
  */
 function weburlfetchstrip_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `http://127.0.0.1:3128/urltext?url=${obj.url}`
+        let newUrl = `http://127.0.0.1:3128/urltext?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp=>resp.text()).then(data => {
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
