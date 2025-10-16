@@ -365,6 +365,8 @@ int main(int argc, char ** argv) {
     chat_formatter chat_add_and_format(chat_msgs, chat_templates, params);
 
     std::string prompt;
+    std::string system_remaining;
+    std::string prompt_remaining;
     {
         if (params.conversation_mode && params.enable_chat_template) {
             if (!params.system_prompt.empty()) {
@@ -398,6 +400,19 @@ int main(int argc, char ** argv) {
 
         LOG_DBG("prompt: \"%s\"\n", prompt.c_str());
         LOG_DBG("tokens: %s\n", string_from(ctx, embd_inp).c_str());
+    }
+
+    // Set up content tracking to skip template markup during display
+    bool skip_template_markup = false;
+    if (params.conversation_mode && params.enable_chat_template) {
+        for (const auto & msg : chat_msgs) {
+            if (msg.role == "system") {
+                system_remaining = msg.content;
+            } else if (msg.role == "user") {
+                prompt_remaining = msg.content;
+            }
+        }
+        skip_template_markup = !system_remaining.empty() || !prompt_remaining.empty();
     }
 
     // Should not run without any tokens
@@ -833,7 +848,29 @@ int main(int argc, char ** argv) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                 if (!chat_add_and_format.get_partial_formatter() || assistant_ss.str().empty()) {
-                    LOG("%s", token_str.c_str());
+                    if (skip_template_markup) {
+                        if (!token_str.empty() && !system_remaining.empty() &&
+                            system_remaining.compare(0, token_str.length(), token_str) == 0) {
+
+                            system_remaining.erase(0, token_str.length());
+                            LOG("%s", token_str.c_str());
+                            if (system_remaining.empty()) {
+                                LOG("\n");
+                            }
+
+                        } else if (!token_str.empty() && !prompt_remaining.empty() &&
+                                   prompt_remaining.compare(0, token_str.length(), token_str) == 0) {
+
+                            prompt_remaining.erase(0, token_str.length());
+                            LOG("%s", token_str.c_str());
+                            if (prompt_remaining.empty()) {
+                                LOG("\n");
+                            }
+                        }
+
+                    } else {
+                        LOG("%s", token_str.c_str());
+                    }
                 }
 
                 // Record Displayed Tokens To Log
@@ -853,6 +890,7 @@ int main(int argc, char ** argv) {
         if (input_echo && (int) embd_inp.size() == n_consumed) {
             console::set_display(console::reset);
             display = true;
+            skip_template_markup = false; // system & prompt processing complete
         }
 
         // if not currently processing queued inputs;
