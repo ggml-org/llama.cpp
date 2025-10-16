@@ -53,7 +53,7 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         # Send back to client
         ph.send_response(statusCode)
         ph.send_header('Content-Type', contentType)
-        # Add CORS for browser fetch, just inc ase
+        # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
         ph.wfile.write(contentData)
@@ -91,7 +91,9 @@ def process_args(args: list[str]):
 
 def run():
     try:
-        gMe['server'] = http.server.HTTPServer(('',gMe['--port']), ProxyHandler)
+        gMe['serverAddr'] = ('', gMe['--port'])
+        gMe['server'] = http.server.HTTPServer(gMe['serverAddr'], ProxyHandler)
+        print(f"INFO:Run:Starting on {gMe['serverAddr']}")
         gMe['server'].serve_forever()
     except KeyboardInterrupt:
         print("INFO:Run:Shuting down...")
@@ -99,7 +101,7 @@ def run():
             gMe['server'].server_close()
         sys.exit(0)
     except Exception as exc:
-        print(f"ERRR:Run:Exception:{exc}")
+        print(f"ERRR:Run:Exiting:Exception:{exc}")
         if (gMe['server']):
             gMe['server'].server_close()
         sys.exit(1)
