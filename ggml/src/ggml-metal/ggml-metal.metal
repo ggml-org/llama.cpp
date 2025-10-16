@@ -4146,6 +4146,7 @@ kernel void kernel_conv_transpose_2d(
         device const T * src0,
         device const float * src1,
         device        char * dst,
+        threadgroup float * shared_sum [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3     ntg[[threads_per_threadgroup]]) {
@@ -4182,7 +4183,6 @@ kernel void kernel_conv_transpose_2d(
         v += (float)src0[kernel_idx] * src1[input_idx];
     }
 
-    threadgroup float shared_sum[64];
     const uint tid = tpitg.y * ntg.x + tpitg.x;
     shared_sum[tid] = v;
 
@@ -4206,6 +4206,7 @@ kernel void kernel_conv_transpose_2d<float>(
     device const float * src0,
     device const float * src1,
     device        char * dst,
+    threadgroup float * shared_sum [[threadgroup(0)]],
     uint3   tgpig[[threadgroup_position_in_grid]],
     uint3   tpitg[[thread_position_in_threadgroup]],
     uint3     ntg[[threads_per_threadgroup]]);
@@ -4216,6 +4217,7 @@ kernel void kernel_conv_transpose_2d<half>(
     device const half  * src0,
     device const float * src1,
     device        char * dst,
+    threadgroup float * shared_sum [[threadgroup(0)]],
     uint3   tgpig[[threadgroup_position_in_grid]],
     uint3   tpitg[[thread_position_in_threadgroup]],
     uint3     ntg[[threads_per_threadgroup]]);

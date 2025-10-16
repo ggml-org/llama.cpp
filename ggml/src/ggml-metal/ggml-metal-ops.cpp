@@ -3094,8 +3094,6 @@ int ggml_metal_op_conv_transpose_2d(ggml_metal_op_t ctx, int idx) {
     const int32_t KH = op->src[0]->ne[1];
     const int32_t KW = op->src[0]->ne[0];
 
-    GGML_ASSERT(KW * KH <= 64 && "conv_transpose_2d kernel size exceeds threadgroup memory limit");
-
     const int32_t OW = op->ne[0];
     const int32_t OH = op->ne[1];
     const int32_t OC = op->ne[2];
@@ -3120,6 +3118,10 @@ int ggml_metal_op_conv_transpose_2d(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+    // Metal requires buffer size to be multiple of 16 bytes
+    const size_t smem = GGML_PAD(KW * KH * sizeof(float), 16);
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, OW, OH, OC, KW, KH, 1);
 
