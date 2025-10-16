@@ -293,15 +293,13 @@ int main(int argc, char * argv[]) {
         return 1;
     }
     std::string endpoint = params.host + ":" + std::to_string(params.port);
-    std::vector<size_t> free_mem, total_mem;
+    std::vector<size_t> total_mem;
     for (size_t i = 0; i < devices.size(); i++) {
         if (i < params.dev_mem.size()) {
-            free_mem.push_back(params.dev_mem[i]);
             total_mem.push_back(params.dev_mem[i]);
         } else {
             size_t free, total;
             ggml_backend_dev_memory(devices[i], &free, &total);
-            free_mem.push_back(free);
             total_mem.push_back(total);
         }
     }
@@ -329,6 +327,6 @@ int main(int argc, char * argv[]) {
     }
 
     start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(),
-        devices.data(), free_mem.data(), total_mem.data());
+        devices.data(), total_mem.data());
     return 0;
 }
