@@ -1,3 +1,4 @@
+/* eslint-disable no-irregular-whitespace */
 // Math Formulas Content
 export const MATH_FORMULAS_MD = String.raw`
 # Mathematical Formulas and Expressions
@@ -157,10 +158,35 @@ $$\lim_{n \to \infty} \left(1 + \frac{x}{n}\right)^n = e^x$$
   \[
   \left\{ \begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}, \begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix} \right\} = \{\pm I\}
   \]
+- Algebra:
+\[
+x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
+\]
 - $100 and $12.99 are amounts, not LaTeX.
 - I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.
 - Emma buys 2 cupcakes for $3 each and 1 cookie for $1.50. How much money does she spend in total?
 - Maria has $20. She buys a notebook for $4.75 and a pack of pencils for $3.25. How much change does she receive?
+- 1 kg の質量は
+  \[
+  E = (1\ \text{kg}) \times (3.0 \times 10^8\ \text{m/s})^2 \approx 9.0 \times 10^{16}\ \text{J}
+  \]
+  というエネルギーに相当します。これは約 21 百万トンの TNT が爆発したときのエネルギーに匹敵します。
+- Algebra: \[
+x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
+\]
+
+## Formulas in a Table
+
+| Area | Expression | Comment |
+|------|------------|---------|
+| **Algebra** | \[
+x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
+\] | Quadratic formula |
+| | \[
+(a+b)^{n} = \sum_{k=0}^{n}\binom{n}{k}\,a^{\,n-k}\,b^{\,k}
+\] | Binomial theorem |
+| | \(\displaystyle \prod_{k=1}^{n}k = n! \) | Factorial definition |
+| **Geometry** | \( \mathbf{a}\cdot \mathbf{b} = \|\mathbf{a}\|\,\|\mathbf{b}\|\,\cos\theta \) | Dot product & angle |
 
 ---
 

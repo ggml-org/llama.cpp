@@ -191,10 +191,23 @@ $$`);
 	});
 
 	test('converts \\[ ... \\] even when preceded by text without space', () => {
-		const input = 'Algebra: \\[x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}\\]';
+		const input = 'Some line ...\nAlgebra: \\[x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}\\]';
 		const output = preprocessLaTeX(input);
 
-		expect(output).toBe('Algebra: $$x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}$$');
+		expect(output).toBe(
+			'Some line ...\nAlgebra: \n$$x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}$$\n'
+		);
+	});
+
+	test('converts \\[ ... \\] in table-cells', () => {
+		const input = `| ID | Expression |\n| #1 | \\[
+			x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}
+\\] |`;
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(
+			'| ID | Expression |\n| #1 | $x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}$ |'
+		);
 	});
 
 	test('escapes isolated $ before digits ($5 → \\$5), but not valid math', () => {

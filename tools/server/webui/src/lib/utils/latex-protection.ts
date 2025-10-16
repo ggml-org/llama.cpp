@@ -138,6 +138,21 @@ export function preprocessLaTeX(content: string): string {
 	// Step 2: Protect existing LaTeX expressions
 	const latexExpressions: string[] = [];
 
+	// Match \S...\[...\] and protect them and insert a line-break.
+	content = content.replace(/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g, (match, group1, group2, group3) => {
+		// Check if there are characters following the formula (display-formula in a table-cell?)
+		const hasSuffix = /\S/.test(group3);
+		let optBreak;
+		if (hasSuffix) {
+			latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
+			optBreak = '';
+		} else {
+			latexExpressions.push(`\\[${group2}\\]`);
+			optBreak = '\n';
+		}
+		return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
+	});
+
 	// Match \(...\), \[...\], $$...$$ and protect them
 	content = content.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
 		latexExpressions.push(match);
