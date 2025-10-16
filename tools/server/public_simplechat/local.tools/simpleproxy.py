@@ -11,6 +11,7 @@ import sys
 import http.server
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 
 gMe = {
@@ -35,35 +36,69 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(400, f"WARN:UnknownPath:{pr.path}")
 
 
-def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
-    print(f"DBUG:HandleUrlRaw:{pr}")
+@dataclass(frozen=True)
+class UrlReqResp:
+    callOk: bool
+    httpStatus: int
+    httpStatusMsg: str = ""
+    contentType: str = ""
+    contentData: urllib.request._UrlopenRet = ""
+
+
+def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
+    print(f"DBUG:{tag}:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url']
-    print(f"DBUG:HandleUrlRaw:Url:{url}")
+    print(f"DBUG:{tag}:Url:{url}")
     url = url[0]
     if (not url) or (len(url) == 0):
-        ph.send_error(400, "WARN:UrlRaw:MissingUrl")
-        return
+        return UrlReqResp(False, 400, f"WARN:{tag}:MissingUrl")
     try:
         # Get requested url
         with urllib.request.urlopen(url, timeout=10) as response:
             contentData = response.read()
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
+        return UrlReqResp(True, statusCode, "", contentType, contentData)
+    except Exception as exc:
+        return UrlReqResp(False, 502, f"WARN:UrlFetchFailed:{exc}")
+
+
+def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    try:
+        # Get requested url
+        got = handle_urlreq(pr, "HandleUrlRaw")
+        if not got.callOk:
+            ph.send_error(got.httpStatus, got.httpStatusMsg)
+            return
         # Send back to client
-        ph.send_response(statusCode)
-        ph.send_header('Content-Type', contentType)
+        ph.send_response(got.httpStatus)
+        ph.send_header('Content-Type', got.contentType)
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(contentData)
+        ph.wfile.write(got.contentData)
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
 
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
-    print(f"DBUG:HandleUrlText:{pr}")
-    ph.send_error(400, "WARN:UrlText:Not implemented")
+    try:
+        # Get requested url
+        got = handle_urlreq(pr, "HandleUrlText")
+        if not got.callOk:
+            ph.send_error(got.httpStatus, got.httpStatusMsg)
+            return
+        # Extract Text
+        # Send back to client
+        ph.send_response(got.httpStatus)
+        ph.send_header('Content-Type', got.contentType)
+        # Add CORS for browser fetch, just in case
+        ph.send_header('Access-Control-Allow-Origin', '*')
+        ph.end_headers()
+        ph.wfile.write(got.contentData)
+    except Exception as exc:
+        ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
 
 def process_args(args: list[str]):
