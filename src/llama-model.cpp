@@ -227,12 +227,13 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 );
 
             } break;
+            /*
         case GGML_OP_IFAIRY_SPLIT:
             {
                 op_tensor = ggml_ifairy_split(ctx, w, hparams.n_embd_head_v);
 
             } break;
-        /*
+        
         case GGML_OP_IFAIRY_ROPE:
             {
                 int n_embd_head = hparams.n_embd_head_v;
