@@ -14,8 +14,7 @@
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
+	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
@@ -79,6 +78,11 @@
 				{
 					key: 'showModelInfo',
 					label: 'Show model information',
+					type: 'checkbox'
+				},
+				{
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
 					type: 'checkbox'
 				}
 			]
@@ -147,6 +151,12 @@
 				{
 					key: 'showThoughtInProgress',
 					label: 'Show thought in progress',
+					type: 'checkbox'
+				},
+				{
+					key: 'disableReasoningFormat',
+					label:
+						'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 					type: 'checkbox'
 				}
 			]
@@ -256,16 +266,13 @@
 	}
 
 	function handleReset() {
-		resetConfig();
+		localConfig = { ...config() };
 
-		localConfig = { ...SETTING_CONFIG_DEFAULT };
-
-		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
-		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
+		setMode(localConfig.theme as 'light' | 'dark' | 'system');
+		originalTheme = localConfig.theme as string;
 	}
 
 	function handleSave() {
-		// Validate custom JSON if provided
 		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
 			try {
 				JSON.parse(localConfig.custom);

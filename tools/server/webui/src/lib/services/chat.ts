@@ -13,7 +13,7 @@ import { slotsService } from './slots';
  *   - Manages streaming and non-streaming response parsing
  *   - Provides request abortion capabilities
  *   - Converts database messages to API format
- *   - Handles error translation and context detection
+ *   - Handles error translation for server responses
  *
  * - **ChatStore**: Stateful orchestration and UI state management
  *   - Uses ChatService for all AI model communication
@@ -26,7 +26,6 @@ import { slotsService } from './slots';
  * - Streaming response handling with real-time callbacks
  * - Reasoning content extraction and processing
  * - File attachment processing (images, PDFs, audio, text)
- * - Context error detection and reporting
  * - Request lifecycle management (abort, cleanup)
  */
 export class ChatService {
@@ -78,6 +77,8 @@ export class ChatService {
 			timings_per_token
 		} = options;
 
+		const currentConfig = config();
+
 		// Cancel any ongoing request and create a new abort controller
 		this.abort();
 		this.abortController = new AbortController();
@@ -117,12 +118,13 @@ export class ChatService {
 			stream
 		};
 
-		requestBody.reasoning_format = 'auto';
+		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
-		// Set max_tokens to -1 (infinite) if not provided or empty
-		requestBody.max_tokens =
-			max_tokens !== undefined && max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		if (max_tokens !== undefined) {
+			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
+			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
@@ -161,7 +163,6 @@ export class ChatService {
 		}
 
 		try {
-			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
 			const response = await fetch(`./v1/chat/completions`, {
@@ -207,10 +208,13 @@ export class ChatService {
 					userFriendlyError = new Error(
 						'Unable to connect to server - please check if the server is running'
 					);
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ECONNREFUSED')) {
 					userFriendlyError = new Error('Connection refused - server may be offline');
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ETIMEDOUT')) {
-					userFriendlyError = new Error('Request timeout - server may be overloaded');
+					userFriendlyError = new Error('Request timed out - the server took too long to respond');
+					userFriendlyError.name = 'TimeoutError';
 				} else {
 					userFriendlyError = error;
 				}
@@ -256,12 +260,11 @@ export class ChatService {
 		}
 
 		const decoder = new TextDecoder();
-		let fullResponse = '';
+		let aggregatedContent = '';
 		let fullReasoningContent = '';
-		let regularContent = '';
-		let insideThinkTag = false;
 		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
+		let streamFinished = false;
 
 		try {
 			let chunk = '';
@@ -277,18 +280,8 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
-							if (!hasReceivedData && fullResponse.length === 0) {
-								const contextError = new Error(
-									'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-								);
-								contextError.name = 'ContextError';
-								onError?.(contextError);
-								return;
-							}
-
-							onComplete?.(regularContent, fullReasoningContent || undefined, lastTimings);
-
-							return;
+							streamFinished = true;
+							continue;
 						}
 
 						try {
@@ -310,27 +303,8 @@ export class ChatService {
 
 							if (content) {
 								hasReceivedData = true;
-								fullResponse += content;
-
-								// Track the regular content before processing this chunk
-								const regularContentBefore = regularContent;
-
-								// Process content character by character to handle think tags
-								insideThinkTag = this.processContentForThinkTags(
-									content,
-									insideThinkTag,
-									() => {
-										// Think content is ignored - we don't include it in API requests
-									},
-									(regularChunk) => {
-										regularContent += regularChunk;
-									}
-								);
-
-								const newRegularContent = regularContent.slice(regularContentBefore.length);
-								if (newRegularContent) {
-									onChunk?.(newRegularContent);
-								}
+								aggregatedContent += content;
+								onChunk?.(content);
 							}
 
 							if (reasoningContent) {
@@ -345,13 +319,13 @@ export class ChatService {
 				}
 			}
 
-			if (!hasReceivedData && fullResponse.length === 0) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				return;
+			if (streamFinished) {
+				if (!hasReceivedData && aggregatedContent.length === 0) {
+					const noResponseError = new Error('No response received from server. Please try again.');
+					throw noResponseError;
+				}
+
+				onComplete?.(aggregatedContent, fullReasoningContent || undefined, lastTimings);
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
@@ -387,12 +361,8 @@ export class ChatService {
 			const responseText = await response.text();
 
 			if (!responseText.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
@@ -404,22 +374,14 @@ export class ChatService {
 			}
 
 			if (!content.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			onComplete?.(content, reasoningContent);
 
 			return content;
 		} catch (error) {
-			if (error instanceof Error && error.name === 'ContextError') {
-				throw error;
-			}
-
 			const err = error instanceof Error ? error : new Error('Parse error');
 
 			onError?.(err);
@@ -553,51 +515,6 @@ export class ChatService {
 	}
 
 	/**
-	 * Processes content to separate thinking tags from regular content.
-	 * Parses <think> and </think> tags to route content to appropriate handlers.
-	 *
-	 * @param content - The content string to process
-	 * @param currentInsideThinkTag - Current state of whether we're inside a think tag
-	 * @param addThinkContent - Callback to handle content inside think tags
-	 * @param addRegularContent - Callback to handle regular content outside think tags
-	 * @returns Boolean indicating if we're still inside a think tag after processing
-	 * @private
-	 */
-	private processContentForThinkTags(
-		content: string,
-		currentInsideThinkTag: boolean,
-		addThinkContent: (chunk: string) => void,
-		addRegularContent: (chunk: string) => void
-	): boolean {
-		let i = 0;
-		let insideThinkTag = currentInsideThinkTag;
-
-		while (i < content.length) {
-			if (!insideThinkTag && content.substring(i, i + 7) === '<think>') {
-				insideThinkTag = true;
-				i += 7; // Skip the <think> tag
-				continue;
-			}
-
-			if (insideThinkTag && content.substring(i, i + 8) === '</think>') {
-				insideThinkTag = false;
-				i += 8; // Skip the </think> tag
-				continue;
-			}
-
-			if (insideThinkTag) {
-				addThinkContent(content[i]);
-			} else {
-				addRegularContent(content[i]);
-			}
-
-			i++;
-		}
-
-		return insideThinkTag;
-	}
-
-	/**
 	 * Aborts any ongoing chat completion request.
 	 * Cancels the current request and cleans up the abort controller.
 	 *
@@ -658,37 +575,19 @@ export class ChatService {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
 
-			if (errorData.error?.type === 'exceed_context_size_error') {
-				const contextError = errorData.error as ApiContextSizeError;
-				const error = new Error(contextError.message);
-				error.name = 'ContextError';
-				// Attach structured context information
-				(
-					error as Error & {
-						contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
-					}
-				).contextInfo = {
-					promptTokens: contextError.n_prompt_tokens,
-					maxContext: contextError.n_ctx,
-					estimatedTokens: contextError.n_prompt_tokens
-				};
-				return error;
-			}
-
-			// Fallback for other error types
 			const message = errorData.error?.message || 'Unknown server error';
-			return new Error(message);
+			const error = new Error(message);
+			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
+
+			return error;
 		} catch {
 			// If we can't parse the error response, return a generic error
-			return new Error(`Server error (${response.status}): ${response.statusText}`);
+			const fallback = new Error(`Server error (${response.status}): ${response.statusText}`);
+			fallback.name = 'HttpError';
+			return fallback;
 		}
 	}
 
-	/**
-	 * Updates the processing state with timing information from the server response
-	 * @param timings - Timing data from the API response
-	 * @param promptProgress - Progress data from the API response
-	 */
 	private updateProcessingState(
 		timings?: ChatMessageTimings,
 		promptProgress?: ChatMessagePromptProgress

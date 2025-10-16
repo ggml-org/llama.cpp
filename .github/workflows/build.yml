@@ -387,6 +387,39 @@ jobs:
           cd build
           ctest -L main --verbose
 
+  ubuntu-24-cmake-vulkan-deb:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-24-cmake-vulkan-deb
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get install -y glslc libvulkan-dev libcurl4-openssl-dev
+
+      - name: Configure
+        id: cmake_configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_VULKAN=ON
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake --build build -j $(nproc)
+
   ubuntu-24-cmake-vulkan:
     runs-on: ubuntu-24.04
 
@@ -413,20 +446,19 @@ jobs:
         run: |
           echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
 
-      - name: Cache Vulkan SDK
-        id: cache_vulkan_sdk
+      - name: Use Vulkan SDK Cache
         uses: actions/cache@v4
+        id: cache-sdk
         with:
           path: ./vulkan_sdk
           key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
 
-      - name: Install Vulkan SDK
-        if: steps.cache_vulkan_sdk.outputs.cache-hit != 'true'
-        id: vulkan_sdk_install
-        run: |
-          mkdir -p vulkan_sdk
-          cd vulkan_sdk
-          curl --no-progress-meter https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz | tar -Jx --strip-components=1
+      - name: Setup Vulkan SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-vulkan
+        with:
+          path: ./vulkan_sdk
+          version: ${{ env.VULKAN_SDK_VERSION }}
 
       - name: Build
         id: cmake_build
@@ -445,8 +477,8 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
-  ubuntu-22-cmake-webgpu:
-    runs-on: ubuntu-22.04
+  ubuntu-24-cmake-webgpu:
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Clone
@@ -456,16 +488,34 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: ubuntu-22-cmake-webgpu
+          key: ubuntu-24-cmake-webgpu
           evict-old-files: 1d
 
-      - name: Vulkan SDK Dependencies
-        id: vulkan-depends
+      - name: Dependencies
+        id: depends
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+
+      - name: Get latest Vulkan SDK version
+        id: vulkan_sdk_version
+        run: |
+          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+
+      - name: Use Vulkan SDK Cache
+        uses: actions/cache@v4
+        id: cache-sdk
+        with:
+          path: ./vulkan_sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Setup Vulkan SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-vulkan
+        with:
+          path: ./vulkan_sdk
+          version: ${{ env.VULKAN_SDK_VERSION }}
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -1111,6 +1161,7 @@ jobs:
     env:
       # The ROCm version must correspond to the version used in the HIP SDK.
       ROCM_VERSION: "6.4.2"
+      # Make sure this is in sync with build-cache.yml
       HIPSDK_INSTALLER_VERSION: "25.Q3"
 
     steps:
@@ -1125,33 +1176,18 @@ jobs:
           7z x rocwmma.deb
           7z x data.tar
 
-      - name: Cache ROCm Installation
-        id: cache-rocm
+      - name: Use ROCm Installation Cache
         uses: actions/cache@v4
+        id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
-      - name: Install ROCm
+      - name: Setup ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
-        id: depends
-        run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
-          write-host "Installing AMD HIP SDK"
-          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(600000)
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
-              $proc.Kill()
-              exit 1
-          }
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          write-host "Completed AMD HIP SDK installation"
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
 
       - name: Verify ROCm
         id: verify
@@ -1512,3 +1548,29 @@ jobs:
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-kleidiai:
+     runs-on: ubuntu-22.04-arm
+
+     steps:
+       - name: Clone
+         id: checkout
+         uses: actions/checkout@v4
+
+       - name: ccache
+         uses: ggml-org/ccache-action@v1.2.16
+         with:
+           key: ggml-ci-arm64-cpu-kleidiai
+           evict-old-files: 1d
+
+       - name: Dependencies
+         id: depends
+         run: |
+           sudo apt-get update
+           sudo apt-get install -y build-essential libcurl4-openssl-dev
+
+       - name: Test
+         id: ggml-ci
+         run: |
+           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+

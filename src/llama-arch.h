@@ -9,6 +9,7 @@
 //
 
 enum llm_arch {
+    LLM_ARCH_CLIP,
     LLM_ARCH_LLAMA,
     LLM_ARCH_LLAMA4,
     LLM_ARCH_DECI,
@@ -97,6 +98,7 @@ enum llm_arch {
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_OPENAI_MOE,
     LLM_ARCH_LFM2,
+    LLM_ARCH_LFM2MOE,
     LLM_ARCH_DREAM,
     LLM_ARCH_SMALLTHINKER,
     LLM_ARCH_LLADA,
@@ -270,6 +272,12 @@ enum llm_kv {
     LLM_KV_TOKENIZER_PREFIX_ID,
     LLM_KV_TOKENIZER_SUFFIX_ID,
     LLM_KV_TOKENIZER_MIDDLE_ID,
+
+    // sentence-transformers dense layers in and out features
+    LLM_KV_DENSE_2_FEAT_IN,
+    LLM_KV_DENSE_2_FEAT_OUT,
+    LLM_KV_DENSE_3_FEAT_IN,
+    LLM_KV_DENSE_3_FEAT_OUT,
 };
 
 enum llm_tensor {
@@ -277,6 +285,8 @@ enum llm_tensor {
     LLM_TENSOR_TOKEN_EMBD_NORM,
     LLM_TENSOR_TOKEN_TYPES,
     LLM_TENSOR_POS_EMBD,
+    LLM_TENSOR_DENSE_2_OUT,
+    LLM_TENSOR_DENSE_3_OUT,
     LLM_TENSOR_OUTPUT,
     LLM_TENSOR_OUTPUT_NORM,
     LLM_TENSOR_ROPE_FREQS,
