@@ -1,12 +1,13 @@
 
-#include <memory>
-#include <string>
-
 #include "buffer.hpp"
 #include "common.hpp"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "host_device.hpp"
+#include "profiler.hpp"
+
+#include <memory>
+#include <string>
 
 namespace {
 
@@ -42,7 +43,9 @@ void backend_dev_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * tota
 
 enum ggml_backend_dev_type backend_dev_get_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
+
+    // TODO: figure out why the GGML_BACKEND_DEVICE_TYPE_ACCEL type will miss some ops
+    return GGML_BACKEND_DEVICE_TYPE_IGPU;
 }
 
 void backend_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
@@ -62,6 +65,7 @@ ggml_backend_t backend_dev_init_backend(ggml_backend_dev_t dev, const char * par
         return nullptr;
     }
 
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_dev_init_backend", (void *) dev_obj);
     return new hexagon::npu_backend(dev);
 }
 
@@ -71,8 +75,10 @@ ggml_backend_buffer_type_t backend_dev_get_buffer_type(ggml_backend_dev_t dev) {
     return dev_obj->get_default_buffer_type(dev);
 }
 
-ggml_backend_buffer_t backend_dev_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size,
-                                                       size_t max_tensor_size) {
+ggml_backend_buffer_t backend_dev_buffer_from_host_ptr(ggml_backend_dev_t dev,
+                                                       void *             ptr,
+                                                       size_t             size,
+                                                       size_t             max_tensor_size) {
     // TODO: should we use the device memory here?
     GGML_UNUSED(dev);
     GGML_UNUSED(max_tensor_size);
@@ -86,6 +92,8 @@ bool backend_dev_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * 
 
     auto * dev_obj = get_device_object(dev);
     GGML_ASSERT(dev_obj != nullptr);
+
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_dev_supports_op", (void *) dev_obj);
     return dev_obj->supports_op(op);
 }
 
@@ -96,6 +104,7 @@ bool backend_dev_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_
 
     auto * dev_obj = get_device_object(dev);
     GGML_ASSERT(dev_obj != nullptr);
+
     return dev_obj->supports_buft(buft);
 }
 
@@ -106,6 +115,8 @@ bool backend_dev_offload_op(ggml_backend_dev_t dev, const struct ggml_tensor * o
 
     auto * dev_obj = get_device_object(dev);
     GGML_ASSERT(dev_obj != nullptr);
+
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_dev_offload_op", (void *) dev_obj);
     return dev_obj->offload_op(op);
 }
 

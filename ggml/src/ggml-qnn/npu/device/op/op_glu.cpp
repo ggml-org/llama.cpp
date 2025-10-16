@@ -48,8 +48,8 @@ inline void glu_vec_op_f32_f32(const float *              src0,
                                size_t                     count,
                                hexagon::HVX_VectorPair_x4 coeff) {
     using namespace hexagon::vec;
-    vec_trans_with_param_impl<float, hexagon::HVX_VectorPair_x4, hexagon::vec_swiglu_f32_f32>(
-        src0, src1, dst, count, coeff);
+    vec_trans_with_param_impl<float, hexagon::HVX_VectorPair_x4, hexagon::vec_swiglu_f32_f32>(src0, src1, dst, count,
+                                                                                              coeff);
 }
 
 template <auto _GluRowFunc, auto _CoeffLoadFunc>
@@ -73,8 +73,8 @@ bool glu_impl(hexagon::tensor * out, hexagon::compute_params * params) {
 
     const auto total_cols = has_src1 ? src0->get_ne(0) : src0->get_ne(0) / 2;
     if (out->get_ne(0) != total_cols) {
-        DEVICE_LOG_ERROR(
-            "[hexagon-npu][GLU]out.ne[0] (%ld) != total_cols (%d)\n", (long) out->get_ne(0), (int) total_cols);
+        DEVICE_LOG_ERROR("[hexagon-npu][GLU]out.ne[0] (%ld) != total_cols (%d)\n", (long) out->get_ne(0),
+                         (int) total_cols);
         return false;
     }
 
@@ -87,8 +87,7 @@ bool glu_impl(hexagon::tensor * out, hexagon::compute_params * params) {
 
     uint8_t * dst_ptr = out->get_write_buffer();
     if (!dst_ptr) {
-        DEVICE_LOG_ERROR("[hexagon-npu][GLU]glu_impl: dst_ptr is not writable, tensor: %p, type: %s\n",
-                         (void *) out,
+        DEVICE_LOG_ERROR("[hexagon-npu][GLU]glu_impl: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
                          hexagon::get_type_name(out->get_type()));
         return false;
     }
@@ -121,11 +120,8 @@ bool glu_impl(hexagon::tensor * out, hexagon::compute_params * params) {
             hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row_bytes);
         }
 
-        _GluRowFunc(reinterpret_cast<const data_type *>(src0_row),
-                    reinterpret_cast<const data_type *>(src1_row),
-                    reinterpret_cast<data_type *>(dst_row),
-                    static_cast<size_t>(total_cols),
-                    coeff);
+        _GluRowFunc(reinterpret_cast<const data_type *>(src0_row), reinterpret_cast<const data_type *>(src1_row),
+                    reinterpret_cast<data_type *>(dst_row), static_cast<size_t>(total_cols), coeff);
     }
 
     out->release_write_buffer();  // mark the output tensor as modified
@@ -142,8 +138,7 @@ bool glu_compute(hexagon::tensor * out, hexagon::compute_params * params) {
     }
 
     if (out->get_type() != _DataType) {
-        DEVICE_LOG_ERROR("GLU op type mismatch: %s vs %s\n",
-                         hexagon::get_type_name(out->get_type()),
+        DEVICE_LOG_ERROR("GLU op type mismatch: %s vs %s\n", hexagon::get_type_name(out->get_type()),
                          hexagon::get_type_name(_DataType));
         return false;
     }
@@ -192,16 +187,14 @@ bool is_glu_op_supported(const npu_device_tensor_op_spec * op_spec,
 
     const auto & src0 = srcs[0];
     if (dst->type != src0.type) {
-        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n",
-                         hexagon::op_get_name(op),
-                         hexagon::get_type_name(src0.type),
-                         hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
         return false;
     }
 
     if (dst->type != NPU_DATA_TYPE_F32 && dst->type != NPU_DATA_TYPE_F16) {
-        DEVICE_LOG_DEBUG(
-            "[%s]unsupported data type: %s\n", hexagon::op_get_name(op), hexagon::get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(dst->type));
         return false;
     }
 
@@ -215,9 +208,7 @@ bool is_glu_op_supported(const npu_device_tensor_op_spec * op_spec,
         if (src0.ne[0] / 2 != dst->ne[0] || src0.ne[1] != dst->ne[1] || src0.ne[2] != dst->ne[2] ||
             src0.ne[3] != dst->ne[3]) {
             DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape: src0.ne[0]: %ld, dst.ne[0]: %ld\n",
-                             hexagon::op_get_name(op),
-                             (long) src0.ne[0],
-                             (long) dst->ne[0]);
+                             hexagon::op_get_name(op), (long) src0.ne[0], (long) dst->ne[0]);
             return false;
         }
     }
@@ -225,9 +216,14 @@ bool is_glu_op_supported(const npu_device_tensor_op_spec * op_spec,
     return true;
 }
 
-bool is_glu_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+bool is_glu_required_sync(npu_device_tensor_op       prev_op,
+                          const npu_device_ne_type & prev_ne,
+                          npu_device_tensor_op       op,
+                          const npu_device_ne_type & ne) {
+    NPU_UNUSED(prev_ne);
     NPU_UNUSED(op);
-    return next_op == NPU_OP_MUL_MAT;
+    NPU_UNUSED(ne);
+    return prev_op == NPU_OP_MUL_MAT;
 }
 
 }  // namespace hexagon

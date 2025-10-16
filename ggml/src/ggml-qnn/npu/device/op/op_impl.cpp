@@ -227,9 +227,15 @@ bool is_element_wise_op_supported(const npu_device_tensor_op_spec * op_spec,
     return true;
 }
 
-bool is_element_wise_op_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+bool is_element_wise_op_required_sync(npu_device_tensor_op       prev_op,
+                                      const npu_device_ne_type & prev_ne,
+                                      npu_device_tensor_op       op,
+                                      const npu_device_ne_type & ne) {
+    NPU_UNUSED(prev_ne);
     NPU_UNUSED(op);
-    return next_op == NPU_OP_MUL_MAT;
+    NPU_UNUSED(ne);
+    return prev_op != NPU_OP_ADD && prev_op != NPU_OP_SUB && prev_op != NPU_OP_MUL && prev_op != NPU_OP_RMS_NORM &&
+           prev_op != NPU_OP_COUNT;
 }
 
 void rms_norm_vec_f32(const float * src, float * dst, size_t count, float eps) {
@@ -361,9 +367,15 @@ bool is_unary_op_supported(const npu_device_tensor_op_spec * op_spec,
     return true;
 }
 
-bool is_unary_op_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+bool is_unary_op_required_sync(npu_device_tensor_op       prev_op,
+                               const npu_device_ne_type & prev_ne,
+                               npu_device_tensor_op       op,
+                               const npu_device_ne_type & ne) {
+    NPU_UNUSED(prev_ne);
     NPU_UNUSED(op);
-    return next_op == NPU_OP_MUL_MAT;
+    NPU_UNUSED(ne);
+    return prev_op != NPU_OP_ADD && prev_op != NPU_OP_SUB && prev_op != NPU_OP_MUL && prev_op != NPU_OP_RMS_NORM &&
+           prev_op != NPU_OP_COUNT;
 }
 
 struct op_capabilities {
@@ -457,13 +469,16 @@ compute_func_type get_compute_func(tensor * dst) {
     return get_compute_func_impl(dst->get_op(), dst->get_type());
 }
 
-bool requires_thread_barrier(npu_device_tensor_op op, npu_device_tensor_op next_op) {
+bool requires_thread_barrier(npu_device_tensor_op       prev_op,
+                             const npu_device_ne_type & prev_ne,
+                             npu_device_tensor_op       op,
+                             const npu_device_ne_type & ne) {
     if (op >= NPU_OP_COUNT) {
         return false;
     }
 
     auto requires_thread_barrier_func = kOpCapabilities[op].requires_thread_barrier_func;
-    return requires_thread_barrier_func && requires_thread_barrier_func(op, next_op);
+    return requires_thread_barrier_func && requires_thread_barrier_func(prev_op, prev_ne, op, ne);
 }
 
 bool support_op(const npu_device_tensor_op_spec * op_spec,

@@ -19,6 +19,7 @@ using HVX_Vector_x2     = HEXAGON_pack<HVX_Vector, 2>;
 using HVX_Vector_x3     = HEXAGON_pack<HVX_Vector, 3>;
 using HVX_Vector_x4     = HEXAGON_pack<HVX_Vector, 4>;
 using HVX_Vector_x5     = HEXAGON_pack<HVX_Vector, 5>;
+using HVX_VectorPair_x2 = HEXAGON_pack<HVX_VectorPair, 2>;
 using HVX_VectorPair_x4 = HEXAGON_pack<HVX_VectorPair, 4>;
 using HVX_VectorPred_x3 = HEXAGON_pack<HVX_VectorPred, 3>;
 
@@ -203,6 +204,7 @@ inline HVX_Vector hvx_passthru(HVX_Vector src, HVX_UVector *, HVX_Vector) {
 
 #include "vec_math.inl"
 #include "vec_ops.inl"
+#include "vec_quant.inl"
 
 namespace hexagon {
 
@@ -268,8 +270,8 @@ inline HVX_Vector vec_dot_product_vqf32_f32_f32(const float * src0, const float 
 
 inline HVX_Vector vec_dot_product_aligned_vqf32_f32_f32(const float * src0, const float * src1, size_t count) {
     using namespace hexagon::vec;
-    return vec_dot_product_aligned_impl<float, HVX_Vector, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32>(
-        src0, src1, count);
+    return vec_dot_product_aligned_impl<float, HVX_Vector, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32>(src0, src1,
+                                                                                                           count);
 }
 
 inline float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
@@ -279,8 +281,8 @@ inline float vec_dot_product_f32_f32(const float * src0, const float * src1, siz
 
 inline float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count) {
     using namespace hexagon::vec;
-    return vec_dot_product_aligned_impl<float, float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(
-        src0, src1, count);
+    return vec_dot_product_aligned_impl<float, float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(src0, src1,
+                                                                                                          count);
 }
 
 inline bool is_f32_f32_dot_product_aligned(const float * src0, const float * src1, size_t count) {
@@ -326,13 +328,8 @@ inline bool is_f16_f16_dot_product_aligned(const npu_device_fp16_t * src0,
 inline HVX_Vector vec_dot_product_vqf32_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     using namespace hexagon::vec;
     using namespace hexagon::vec::math;
-    return vec_dot_product_mixed_impl<npu_device_fp16_t,
-                                      float,
-                                      HVX_Vector,
-                                      hvx_vsf_convert_vhf,
-                                      vec_mpy_qf32,
-                                      vec_add_qf32,
-                                      vec_reduction_qf32>(src0, src1, count);
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, HVX_Vector, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                      vec_add_qf32, vec_reduction_qf32>(src0, src1, count);
 }
 
 inline HVX_Vector vec_dot_product_aligned_vqf32_f16_f32(const npu_device_fp16_t * src0,
@@ -340,37 +337,39 @@ inline HVX_Vector vec_dot_product_aligned_vqf32_f16_f32(const npu_device_fp16_t 
                                                         size_t                    count) {
     using namespace hexagon::vec;
     using namespace hexagon::vec::math;
-    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t,
-                                            float,
-                                            HVX_Vector,
-                                            hvx_vsf_convert_vhf,
-                                            vec_mpy_qf32,
-                                            vec_add_qf32,
-                                            vec_reduction_qf32>(src0, src1, count);
+    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t, float, HVX_Vector, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                            vec_add_qf32, vec_reduction_qf32>(src0, src1, count);
 }
 
 inline float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     using namespace hexagon::vec;
     using namespace hexagon::vec::math;
-    return vec_dot_product_mixed_impl<npu_device_fp16_t,
-                                      float,
-                                      float,
-                                      hvx_vsf_convert_vhf,
-                                      vec_mpy_qf32,
-                                      vec_add_qf32,
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, float, hvx_vsf_convert_vhf, vec_mpy_qf32, vec_add_qf32,
                                       vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 inline float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     using namespace hexagon::vec;
     using namespace hexagon::vec::math;
-    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t,
-                                            float,
-                                            float,
-                                            hvx_vsf_convert_vhf,
-                                            vec_mpy_qf32,
-                                            vec_add_qf32,
-                                            vec_reduction_f32_qf32>(src0, src1, count);
+    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t, float, float, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                            vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
+}
+
+inline HVX_Vector vec_dot_product_vqf32_q40_f32(const npu_device_block_q4_0 * src0,
+                                                const float *                 src1,
+                                                size_t                        count,
+                                                const HVX_Vector              table) {
+    using namespace hexagon::vec;
+    using namespace hexagon::vec::math;
+    using namespace hexagon::vec::quant;
+
+    alignas(hexagon::kBytesPerVector) static const HVX_Vector qs_indices = make_qs_load_mask<npu_device_block_q4_0>();
+    alignas(hexagon::kBytesPerVector) static const HVX_Vector scale_indices =
+        make_scale_load_mask<npu_device_block_q4_0>();
+
+    return vec_dot_product_quant_impl<npu_device_block_q4_0, float, HVX_Vector, load_dequant_vec_q40_qf32_4blocks,
+                                      load_dequant_vec_q40_qf32_2blocks, load_dequant_vec_q40_qf32_1block,
+                                      vec_reduction_qf32>(src0, src1, count, qs_indices, scale_indices, table);
 }
 
 inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const float * src1, size_t count) {

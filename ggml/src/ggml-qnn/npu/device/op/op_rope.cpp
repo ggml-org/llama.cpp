@@ -392,9 +392,14 @@ bool is_rope_supported(const npu_device_tensor_op_spec * op_spec,
     return true;  // ROPE operation is not supported yet
 }
 
-bool is_rope_required_sync(const npu_device_tensor_op op, const npu_device_tensor_op next_op) {
+bool is_rope_required_sync(npu_device_tensor_op       prev_op,
+                           const npu_device_ne_type & prev_ne,
+                           npu_device_tensor_op       op,
+                           const npu_device_ne_type & ne) {
+    NPU_UNUSED(prev_op);
+    NPU_UNUSED(prev_ne);
     NPU_UNUSED(op);
-    NPU_UNUSED(next_op);
+    NPU_UNUSED(ne);
     return false;
 }
 

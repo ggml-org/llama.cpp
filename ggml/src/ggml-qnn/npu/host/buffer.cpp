@@ -20,6 +20,7 @@ static hexagon::host_buffer_type * get_buffer_type_object(ggml_backend_buffer_ty
 }
 
 void backend_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_free_buffer", (void *) get_buffer_object(buffer));
     delete get_buffer_object(buffer);
 }
 
@@ -39,6 +40,7 @@ ggml_status backend_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor
     auto * buffer_obj = get_buffer_object(buffer);
     GGML_ASSERT(buffer_obj != nullptr);
 
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_init_tensor", (void *) buffer_obj);
     auto tensor_object = buffer_obj->init_tensor(tensor, device_object->get_device_handle());
     if (!tensor_object) {
         LOG_ERROR("Failed to init tensor\n");
@@ -48,12 +50,23 @@ ggml_status backend_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor
     return GGML_STATUS_SUCCESS;
 }
 
+void backend_buffer_memset_tensor(ggml_backend_buffer_t buffer,
+                                  ggml_tensor *         tensor,
+                                  uint8_t               value,
+                                  size_t                offset,
+                                  size_t                size) {
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_memset_tensor.size.%zu",
+                               (void *) get_buffer_object(buffer), size);
+    memset((char *) tensor->data + offset, value, size);
+}
+
 void backend_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                ggml_tensor *         tensor,
                                const void *          data,
                                size_t                offset,
                                size_t                size) {
-    GGML_UNUSED(buffer);
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_set_tensor.size.%zu",
+                               (void *) get_buffer_object(buffer), size);
     memcpy((char *) tensor->data + offset, data, size);
 }
 
@@ -62,23 +75,27 @@ void backend_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                void *                data,
                                size_t                offset,
                                size_t                size) {
-    GGML_UNUSED(buffer);
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_get_tensor", (void *) get_buffer_object(buffer));
     memcpy(data, (const char *) tensor->data + offset, size);
 }
 
 bool backend_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
-    GGML_UNUSED(buffer);
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_cpy_tensor", (void *) get_buffer_object(buffer));
     if (ggml_backend_buffer_is_host(src->buffer)) {
         memcpy(dst->data, src->data, ggml_nbytes(src));
         return true;
     }
 
+    LOG_DEBUG("[hexagon-npu][%p]backend_buffer_cpy_tensor: copy from non-host buffer not supported\n",
+              (void *) get_buffer_object(buffer));
     return false;
 }
 
 void backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * buffer_obj = get_buffer_object(buffer);
     GGML_ASSERT(buffer_obj != nullptr);
+
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_clear", (void *) buffer_obj);
     memset(buffer_obj->get_buffer(), value, buffer_obj->get_size());
 }
 
@@ -94,7 +111,7 @@ constexpr const ggml_backend_buffer_i backend_buffer_interface = {
     /* .free_buffer     = */ backend_buffer_free_buffer,
     /* .get_base        = */ backend_buffer_get_base,
     /* .init_tensor     = */ backend_buffer_init_tensor,
-    /* .memset_tensor   = */ nullptr,
+    /* .memset_tensor   = */ backend_buffer_memset_tensor,
     /* .set_tensor      = */ backend_buffer_set_tensor,
     /* .get_tensor      = */ backend_buffer_get_tensor,
     /* .cpy_tensor      = */ backend_buffer_cpy_tensor,
@@ -146,8 +163,8 @@ host_buffer::host_buffer(common::rpc_mem_ptr allocator, size_t size, uint32_t do
     }
 
     if (size > _allocator->get_max_alloc_size()) {
-        LOG_ERROR(
-            "[hexagon-npu]rpc memory size %zu exceeds max alloc size %zu\n", size, _allocator->get_max_alloc_size());
+        LOG_ERROR("[hexagon-npu]rpc memory size %zu exceeds max alloc size %zu\n", size,
+                  _allocator->get_max_alloc_size());
         return;
     }
 
@@ -161,8 +178,8 @@ host_buffer::host_buffer(common::rpc_mem_ptr allocator, size_t size, uint32_t do
 }
 
 host_buffer::~host_buffer() {
-    LOG_DEBUG(
-        "[hexagon-npu]destroy host_buffer(%p), size: %zu, domain_id: %d\n", (void *) _data, _size, (int) _domain_id);
+    LOG_DEBUG("[hexagon-npu]destroy host_buffer(%p), size: %zu, domain_id: %d\n", (void *) _data, _size,
+              (int) _domain_id);
     _tensors.clear();
     if (_buffer_fd != -1) {
         auto ret = _allocator->fastrpc_munmap((int) _domain_id, _buffer_fd, nullptr, 0);
@@ -194,17 +211,12 @@ std::shared_ptr<host_tensor> host_buffer::init_tensor(ggml_tensor * tensor, remo
             return std::shared_ptr<host_tensor>();
         }
 
-        LOG_DEBUG("[hexagon-npu]mmap rpc memory(%p), fd: %d, addr: %p, size: %zu\n",
-                  (void *) _data,
-                  _buffer_fd,
-                  _data,
+        LOG_DEBUG("[hexagon-npu]mmap rpc memory(%p), fd: %d, addr: %p, size: %zu\n", (void *) _data, _buffer_fd, _data,
                   _size);
     }
 
     auto tensor_object = std::make_shared<host_tensor>(
-        tensor,
-        _buffer_fd,
-        (uint64_t) (reinterpret_cast<uint8_t *>(tensor->data) - reinterpret_cast<uint8_t *>(_data)),
+        tensor, _buffer_fd, (uint64_t) (reinterpret_cast<uint8_t *>(tensor->data) - reinterpret_cast<uint8_t *>(_data)),
         device_handle);
     if (!tensor_object->is_valid()) {
         LOG_ERROR("[hexagon-npu]failed to init tensor, device handle: %p\n", (void *) device_handle);

@@ -74,27 +74,32 @@ void graph::compute_impl(default_thread_pool * pool, default_thread_pool::thread
     hexagon::compute_params params = { thread_params, _f16_to_f32_table };
 
     npu_device_tensor_op prev_op = NPU_OP_COUNT;
+    npu_device_ne_type   prev_ne = {};
 
     for (size_t i = 0; i < _tensor_count; ++i) {
-        auto * dst  = _tensors[i];
-        auto   op   = dst->get_op();
-        auto * func = get_compute_func(dst);
+        auto *       dst     = _tensors[i];
+        auto         op      = dst->get_op();
+        const auto & ne      = dst->get_info().ne;
+        const auto * op_name = op_get_name(op);
+        auto *       func    = get_compute_func(dst);
         if (!func) {
-            DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d not supported\n", (void *) this, i, op);
+            DEVICE_LOG_ERROR("[%p][%s]graph tensor[%zu] op not supported\n", (void *) this, op_name, i);
             return;
         }
 
-        const bool should_sync = requires_thread_barrier(prev_op, op);
+        const bool should_sync = requires_thread_barrier(prev_op, prev_ne, op, ne);
         if (pool && should_sync) {
             // For the last tensor, the thread pool will handle synchronization
-            DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]sync_thread, tidx: %zu, tensor[%zu/%zu]", (void *) this,
-                                              params.get_thread_index(), i, _tensor_count);
+            DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p][%s]sync_thread, tidx: %zu, tensor[%zu/%zu]", (void *) this, op_name,
+                                              params.get_thread_index(), i + 1, _tensor_count);
             pool->sync_thread();
         }
 
         prev_op = op;
+        memcpy(&prev_ne, &ne, sizeof(prev_ne));
+
         if (!func(dst, &params)) {
-            DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d compute failed\n", (void *) this, i, op);
+            DEVICE_LOG_ERROR("[%p][%s]graph tensor[%zu] op %d compute failed\n", (void *) this, op_name, i, op);
         }
     }
 }
