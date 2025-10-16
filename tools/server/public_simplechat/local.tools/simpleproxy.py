@@ -97,11 +97,13 @@ class TextHtmlParser(html.parser.HTMLParser):
             self.bCapture = True
         if tag == 'script':
             self.bCapture = False
+        if tag == 'style':
+            self.bCapture = False
 
     def handle_endtag(self, tag: str):
         if tag == 'body':
             self.bBody = False
-        if tag == 'script':
+        if tag == 'script' or tag == 'style':
             if self.bBody:
                 self.bCapture = True
 
