@@ -9,6 +9,7 @@
 
 import sys
 import http.server
+import urllib.parse
 
 
 gMe = {
@@ -19,8 +20,29 @@ gMe = {
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        print(self.path)
+        print(f"DBUG:ProxyHandler:{self.path}")
+        pr = urllib.parse.urlparse(self.path)
+        print(f"DBUG:ProxyHandler:{pr}")
+        match pr.path:
+            case '/urlraw':
+                handle_urlraw(self, pr)
+            case '/urltext':
+                handle_urltext(self, pr)
+            case _:
+                print(f"WARN:ProxyHandler:UnknownPath{pr.path}")
+                self.send_response(400)
+                self.send_header('Content-Type', 'plain/text')
+                self.end_headers()
+                self.wfile.write(f"WARN:UnknownPath:{pr.path}")
 
+
+def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    print(f"DBUG:HandleUrlRaw:{pr}")
+    queryParams = urllib.parse.parse_qs(pr.query)
+
+
+def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    print(f"DBUG:HandleUrlText:{pr}")
 
 
 def process_args(args: list[str]):
