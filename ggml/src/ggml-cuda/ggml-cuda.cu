@@ -3357,6 +3357,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_FLOOR:
+                case GGML_UNARY_OP_CEIL:
+                case GGML_UNARY_OP_ROUND:
+                case GGML_UNARY_OP_TRUNC:
                     return ggml_is_contiguous(op->src[0]);
                 default:
                     return false;

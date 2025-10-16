@@ -1943,6 +1943,7 @@ extern "C" {
             int                   d1); // dilation dimension 1
 
     GGML_API struct ggml_tensor * ggml_im2col_3d(
+<<<<<<< HEAD
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
