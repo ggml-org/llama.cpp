@@ -12,7 +12,7 @@ inline void set_f32(const float* src, float* dst,
                     const int64_t ne2, const int64_t ne3,
                     const int64_t nb[3], const int64_t src_nb[3],
                     const int64_t offset_elem,
-                    const nd_item<1>& item) 
+                    const nd_item<1>& item)
 {
     const size_t idx = item.get_global_id(0);
     const size_t total = ne0 * ne1 * ne2 * ne3;
@@ -61,13 +61,13 @@ void ggml_sycl_op_set(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     const size_t total_threads = ne[0]*ne[1]*ne[2]*ne[3];
     const size_t grid_size = ((total_threads + SYCL_SET_BLOCK_SIZE - 1) / SYCL_SET_BLOCK_SIZE) * SYCL_SET_BLOCK_SIZE;
-    
+
     // Copy src0 to dst if not inplace
     stream->parallel_for(
         nd_range<1>(range<1>(grid_size), range<1>(SYCL_SET_BLOCK_SIZE)),
-        [=](nd_item<1> item) { 
-            set_f32(src1_ptr, dst_ptr, 
-                ne[0], ne[1], ne[2], ne[3], 
+        [=](nd_item<1> item) {
+            set_f32(src1_ptr, dst_ptr,
+                ne[0], ne[1], ne[2], ne[3],
                 nb, src_nb, offset_elem, item); }
     );
 }
