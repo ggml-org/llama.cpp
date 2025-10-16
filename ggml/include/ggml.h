@@ -581,7 +581,7 @@ extern "C" {
         GGML_UNARY_OP_CEIL,
         GGML_UNARY_OP_ROUND,
         GGML_UNARY_OP_TRUNC,
-        
+
         GGML_UNARY_OP_COUNT,
     };
 
@@ -2187,10 +2187,11 @@ extern "C" {
             int                  p1,
             int                  p2,
             int                  p3);
-    
+         
     GGML_API struct ggml_tensor * ggml_pad_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+    
             int                  lp0,
             int                  rp0,
             int                  lp1,
