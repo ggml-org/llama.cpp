@@ -251,6 +251,7 @@ typedef struct {
     int32_t  sect_1;
     int32_t  sect_2;
     int32_t  sect_3;
+    bool     src2;
 } ggml_metal_kargs_rope;
 
 typedef struct {
