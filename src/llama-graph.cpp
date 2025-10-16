@@ -810,6 +810,9 @@ ggml_tensor * llm_graph_context::build_ffn(
             GGML_ABORT("fatal error");
     }
 
+    //expand here so that we can fuse ffn gate
+    ggml_build_forward_expand(gf, cur);
+
     if (gate && type_gate == LLM_FFN_PAR) {
         cur = ggml_mul(ctx0, cur, tmp);
         cb(cur, "ffn_gate_par", il);
@@ -1090,6 +1093,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         default:
             GGML_ABORT("fatal error");
     }
+
+    //expand here so that we can fuse ffn gate
+    ggml_build_forward_expand(gf, cur);
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
