@@ -11,7 +11,10 @@ import sys
 import http.server
 
 
-gMe = {}
+gMe = {
+    '--port': 3128,
+    'server': None
+}
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -35,7 +38,7 @@ def process_args(args: list[str]):
         match cArg:
             case '--port':
                 iArg += 1
-                gMe[cArg] = args[iArg]
+                gMe[cArg] = int(args[iArg])
                 iArg += 1
             case _:
                 gMe['INTERNAL.ProcessArgs.Unknown'].append(cArg)
@@ -44,13 +47,20 @@ def process_args(args: list[str]):
 
 
 def run():
-    gMe['server'] = http.server.HTTPServer(('',gMe['--port']), ProxyHandler)
     try:
+        gMe['server'] = http.server.HTTPServer(('',gMe['--port']), ProxyHandler)
         gMe['server'].serve_forever()
     except KeyboardInterrupt:
         print("INFO:Run:Shuting down...")
-        gMe['server'].server_close()
+        if (gMe['server']):
+            gMe['server'].server_close()
         sys.exit(0)
+    except Exception as exc:
+        print(f"ERRR:Run:Exception:{exc}")
+        if (gMe['server']):
+            gMe['server'].server_close()
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     process_args(sys.argv)
