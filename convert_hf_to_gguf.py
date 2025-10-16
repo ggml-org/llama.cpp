@@ -8093,7 +8093,7 @@ class BailingMoeV2Model(TextModel):
         self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_shared_feed_forward_length(hparams["moe_shared_expert_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(hparams.get("moe_shared_expert_intermediate_size", hparams["moe_intermediate_size"] * hparams["num_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_count(hparams["num_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
