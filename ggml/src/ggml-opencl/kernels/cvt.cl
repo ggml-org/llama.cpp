@@ -183,6 +183,27 @@ kernel void kernel_restore_block_mxfp4(
     }
 }
 
+kernel void kernel_restore_block_mxfp4_trans(
+    __global uint4 * src_q,
+    __global uchar * src_e,
+    global struct block_mxfp4 * dst,
+    uint ne00,
+    uint ne01
+) {
+    int i00 = get_global_id(1);
+    uint i01 = get_global_id(0);
+    uint i02 = get_global_id(2);
+    
+    uint ne00_blk = ne00 / QK_MXFP4;
+    uint src_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
+    uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+
+    global struct block_mxfp4 * b = dst + dst_blk_offset;
+
+    ((global uint4 *)(&(b->qs[0])))[0] = src_q[src_blk_offset];
+    b->e = src_e[src_blk_offset];
+}
+
 //------------------------------------------------------------------------------
 // block_q8_0
 //------------------------------------------------------------------------------

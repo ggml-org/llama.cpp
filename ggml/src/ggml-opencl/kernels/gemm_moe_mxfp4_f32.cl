@@ -5,7 +5,6 @@
 #define QK_MXFP4 32
 #define N_SIMDGROUP 2
 #define SIMDGROUP_WIDTH 64
-#define TILE_SIZE 320
 
 static inline half8 mxfp4_to_fp16_packed8(ushort2 fp4x8) { //, ushort 0x0E00, ushort 0x8000) {
     ushort2 fp16_packed_a_0, fp16_packed_b_0, bias_a, bias_b, sign_a, sign_b;
@@ -76,7 +75,7 @@ __kernel void kernel_gemm_moe_mxfp4_f32(
     ulong         offsetd,
     int           ne00,
     int           ne01,
-    int           ne02
+    int           tile_size
 ) {
     uint i01  = get_global_id(0);
     uint i20  = get_global_id(2);
@@ -89,12 +88,12 @@ __kernel void kernel_gemm_moe_mxfp4_f32(
     ushort i1 = router.z;
     ushort tile_id = router.w;
     
-    if (tile_id * TILE_SIZE + i01 > ne01) { // handle edge case when ne01 is not multiple of TILE_SIZE
+    if (tile_id * tile_size + i01 >= ne01) { // handle edge case when ne01 is not multiple of tile_size
         return;
     }
 
     uint expert_offset = expert_id * ne00 * ne01 / 32;
-    uint tile_offset = expert_offset + tile_id * TILE_SIZE + i01;
+    uint tile_offset = expert_offset + tile_id * tile_size + i01;
 
     __private float sum = 0.0f; // each thread calculate partial sum of one output
 
@@ -157,7 +156,7 @@ __kernel void kernel_gemm_moe_mxfp4_f32(
     // 1 outputs per thread in subgroup 0
     if (sgid == 0) {
         dst = dst + (offsetd >> 2);
-        dst[i01 + tile_id * TILE_SIZE + i1 * ne01] = sum;
+        dst[i01 + tile_id * tile_size + i1 * ne01] = sum;
     }
 
 }
