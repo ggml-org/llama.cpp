@@ -12,6 +12,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	showModelInfo: false,
+	renderUserContentAsMarkdown: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	temperature: 0.8,
@@ -84,6 +85,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	showModelInfo: 'Display the model name used to generate each message below the message content.',
+	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'
 };

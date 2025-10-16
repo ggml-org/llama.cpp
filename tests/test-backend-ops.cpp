@@ -4588,19 +4588,30 @@ struct test_topk_moe: public test_case {
 struct test_sum : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const std::array<int64_t, 4> permute;
+    bool _use_permute;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        std::string v = VARS_TO_STR2(type, ne);
+        if (_use_permute) v += "," + VAR_TO_STR(permute);
+        return v;
     }
 
     test_sum(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            std::array<int64_t, 4> permute = {0, 0, 0, 0})
+        : type(type), ne(ne), permute(permute),
+            _use_permute(permute[0] + permute[1] + permute[2] + permute[3] > 0) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
+
+        if (_use_permute) {
+            a = ggml_permute(ctx, a, permute[0], permute[1], permute[2], permute[3]);
+            ggml_set_name(a, "a_permuted");
+        }
 
         ggml_tensor * out = ggml_sum(ctx, a);
         ggml_set_name(out, "out");
@@ -6354,6 +6365,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+#if 0
+    {
+        // Test paths in OpenCL
+        std::vector<int> ns = {32, 64, 128, 256, 512, 1024, 4096};
+        std::vector<int> ks = {896, 1536, 4096};
+        for (auto n : ns) {
+            for (auto k : ks) {
+                test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1024, n, k, {1, 1}, {1, 1}));
+            }
+        }
+    }
+#endif
+
 #if 1
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
@@ -6724,6 +6748,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_sum());
     test_cases.emplace_back(new test_sum_rows());
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 2, 1, 3}));  // row-contiguous but non-contiguous
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 3, 2, 1}));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 1, 3, 2}));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, false));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, false, true));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, true));
@@ -6734,6 +6761,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
@@ -6779,7 +6807,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                             for (int nb : { 1, 3, 32, 35, }) {
                                                 for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_DEFAULT}) {
                                                     if (hsk != 128 && prec == GGML_PREC_DEFAULT) continue;
-                                                    for (ggml_type type_KV : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+                                                    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
                                                         test_cases.emplace_back(new test_flash_attn_ext(
                                                                     hsk, hsv, nh, {nr2, nr3}, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_KV));
                                                         // run fewer test cases permuted
@@ -6911,13 +6939,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     }
 
     // qwen3-30b-a3b
-    for (int bs : {1, 4, 8, 32, 64, 128, 512}) {
+    for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 128, 8, false, 768, bs, 2048, 1));
             }
         }
     }
+
+    for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
+        for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 1792, bs, 2048, 1));
+            }
+        }
+    }
+
 
     // gpt-oss-20b
     for (int bs : {1, 4, 8, 512}) {

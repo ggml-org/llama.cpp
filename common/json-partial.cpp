@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
+#include <regex>
 
 using json = nlohmann::ordered_json;
 
@@ -168,6 +169,47 @@ bool common_json_parse(
                 }
             }
 
+            // Matches a potentially partial unicode escape sequence, e.g. \u, \uX, \uXX, \uXXX, \uXXXX
+            static const std::regex partial_unicode_regex(R"(\\u(?:[0-9a-fA-F](?:[0-9a-fA-F](?:[0-9a-fA-F](?:[0-9a-fA-F])?)?)?)?$)");
+
+            auto is_high_surrogate = [&](const std::string & s) {
+                // Check if a partial of a high surrogate (U+D800-U+DBFF)
+                return s.length() >= 4 &&
+                    s[0] == '\\' && s[1] == 'u' &&
+                    std::tolower(s[2]) == 'd' &&
+                    (s[3] == '8' || s[3] == '9' || std::tolower(s[3]) == 'a' || std::tolower(s[3]) == 'b');
+            };
+
+            // Initialize the unicode marker to a low surrogate to handle the edge case
+            // where a high surrogate (U+D800-U+DBFF) is immediately followed by a
+            // backslash (\)
+            std::string unicode_marker_padding = "udc00";
+            std::smatch last_unicode_seq;
+
+            if (std::regex_search(str, last_unicode_seq, partial_unicode_regex)) {
+                std::smatch second_last_seq;
+                std::string prelude = str.substr(0, last_unicode_seq.position());
+
+                // Pad the escape sequence with 0s until it forms a complete sequence of 6 characters
+                unicode_marker_padding = std::string(6 - last_unicode_seq.length(), '0');
+
+                if (is_high_surrogate(last_unicode_seq.str())) {
+                    // If the sequence is a partial match for a high surrogate, add a low surrogate (U+DC00-U+UDFF)
+                    unicode_marker_padding += "\\udc00";
+                } else if (std::regex_search(prelude, second_last_seq, partial_unicode_regex)) {
+                    if (is_high_surrogate(second_last_seq.str())) {
+                        // If this follows a high surrogate, pad it to be a low surrogate
+                        if (last_unicode_seq.length() == 2) {
+                            unicode_marker_padding = "dc00";
+                        } else if (last_unicode_seq.length() == 3) {
+                            unicode_marker_padding = "c00";
+                        } else {
+                            // The original unicode_marker_padding is already padded with 0s
+                        }
+                    }
+                }
+            }
+
             const auto & magic_seed = out.healing_marker.marker = healing_marker;//"$llama.cpp.json$";
 
             if (err_loc.stack.back().type == COMMON_JSON_STACK_ELEMENT_KEY) {
@@ -186,6 +228,9 @@ bool common_json_parse(
                 } else if (str[str.length() - 1] == '\\' && can_parse(str + "\\\"" + closing)) {
                     // Was inside an object value string after an escape
                     str += (out.healing_marker.json_dump_marker = "\\" + magic_seed) + "\"" + closing;
+                } else if (can_parse(str + unicode_marker_padding + "\"" + closing)) {
+                    // Was inside an object value string after a partial unicode escape
+                    str += (out.healing_marker.json_dump_marker = unicode_marker_padding + magic_seed) + "\"" + closing;
                 } else {
                     // find last :
                     auto last_pos = str.find_last_of(':');
@@ -205,6 +250,9 @@ bool common_json_parse(
                 } else if (str[str.length() - 1] == '\\' && can_parse(str + "\\\"" + closing)) {
                     // Was inside an array value string after an escape
                     str += (out.healing_marker.json_dump_marker = "\\" + magic_seed) + "\"" + closing;
+                } else if (can_parse(str + unicode_marker_padding + "\"" + closing)) {
+                    // Was inside an array value string after a partial unicode escape
+                    str += (out.healing_marker.json_dump_marker = unicode_marker_padding + magic_seed) + "\"" + closing;
                 } else if (!was_maybe_number() && can_parse(str + ", 1" + closing)) {
                     // Had just finished a value
                     str += (out.healing_marker.json_dump_marker = ",\"" + magic_seed) + "\"" + closing;
@@ -230,6 +278,9 @@ bool common_json_parse(
                 } else if (str[str.length() - 1] == '\\' && can_parse(str + "\\\": 1" + closing)) {
                     // Was inside an object key string after an escape
                     str += (out.healing_marker.json_dump_marker = "\\" + magic_seed) + "\": 1" + closing;
+                } else if (can_parse(str + unicode_marker_padding + "\": 1" + closing)) {
+                    // Was inside an object key string after a partial unicode escape
+                    str += (out.healing_marker.json_dump_marker = unicode_marker_padding + magic_seed) + "\": 1" + closing;
                 } else {
                     auto last_pos = str.find_last_of(':');
                     if (last_pos == std::string::npos) {
