@@ -19,6 +19,7 @@ gMe = {
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
+
     def do_GET(self):
         print(f"DBUG:ProxyHandler:{self.path}")
         pr = urllib.parse.urlparse(self.path)
@@ -30,19 +31,36 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 handle_urltext(self, pr)
             case _:
                 print(f"WARN:ProxyHandler:UnknownPath{pr.path}")
-                self.send_response(400)
-                self.send_header('Content-Type', 'plain/text')
-                self.end_headers()
-                self.wfile.write(f"WARN:UnknownPath:{pr.path}")
+                self.send_error(400, f"WARN:UnknownPath:{pr.path}")
 
 
 def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     print(f"DBUG:HandleUrlRaw:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
+    url = queryParams['url']
+    if (not url) or (len(url) == 0):
+        ph.send_error(400, "WARN:UrlRaw:MissingUrl")
+        return
+    try:
+        # Get requested url
+        with urllib.request.urlopen(url, timeout=10) as response:
+            contentData = response.read()
+            statusCode = response.status or 200
+            contentType = response.getheader('Content-Type') or 'text/html'
+        # Send back to client
+        ph.send_response(statusCode)
+        ph.send_header('Content-Type', contentType)
+        # Add CORS for browser fetch, just inc ase
+        ph.send_header('Access-Control-Allow-Origin', '*')
+        ph.end_headers()
+        ph.wfile.write(contentData)
+    except Exception as exc:
+        ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
 
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     print(f"DBUG:HandleUrlText:{pr}")
+    ph.send_error(400, "WARN:UrlText:Not implemented")
 
 
 def process_args(args: list[str]):
