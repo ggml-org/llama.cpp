@@ -940,6 +940,7 @@ struct ggml_cuda_graph {
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
     std::vector<cudaKernelNodeParams> params;
+    int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 #endif
 };
@@ -954,7 +955,9 @@ struct ggml_backend_cuda_context {
 
 #ifdef USE_CUDA_GRAPH
     bool cuda_graph_initialized = false;
-    bool disable_due_to_gpu_arch = false;
+    bool disable_graph_due_to_env = false;
+    bool disable_graph_due_to_gpu_arch = false;
+    bool disable_graph_due_to_too_many_updates = false;
 #endif
 
     explicit ggml_backend_cuda_context(int device) :

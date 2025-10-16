@@ -34,11 +34,11 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_cuda_graph * cuda_g
             // CUDA_GRAPHS_DISABLED
             ((ncols > 65536) &&
              ((cuda_graph && cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-              ctx.disable_due_to_gpu_arch)) ||
+              ctx.disable_graph_due_to_env || ctx.disable_graph_due_to_gpu_arch || ctx.disable_graph_due_to_too_many_updates)) ||
         // CUDA_GRAPHS ENABLED
         ((ncols > 32768) &&
          !((cuda_graph && cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-           ctx.disable_due_to_gpu_arch))) {
+           ctx.disable_graph_due_to_env || ctx.disable_graph_due_to_gpu_arch || ctx.disable_graph_due_to_too_many_updates))) {
 #else
         (ncols > 65536)) {
 #endif // USE_CUDA_GRAPH
