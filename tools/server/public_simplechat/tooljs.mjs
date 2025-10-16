@@ -72,6 +72,48 @@ function calc_run(toolcallid, toolname, obj) {
 }
 
 
+let weburlfetch_meta = {
+        "type": "function",
+        "function": {
+            "name": "web_url_fetch",
+            "description": "Fetch the requested web url through a proxy server in few seconds",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url":{
+                        "type":"string",
+                        "description":"the url of the page / content to fetch from the internet"
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the web url logic. Dumb initial go.
+ * Expects a simple minded proxy server to be running locally
+ * * listening on port 3128
+ * * expecting http requests
+ *   * with a query token named path which gives the actual url to fetch
+ * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function weburlfetch_run(toolcallid, toolname, obj) {
+    if (gToolsWorker.onmessage != null) {
+        let newUrl = `http://127.0.0.1:3128/?path=${obj.url}`
+        fetch(newUrl).then(resp=>resp.text()).then(data => {
+            gToolsWorker.onmessage(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
+        }).catch((err)=>{
+            gToolsWorker.onmessage(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
+        })
+    }
+}
+
+
 /**
  * @type {Object<string, Object<string, any>>}
  */
@@ -84,6 +126,11 @@ export let tc_switch = {
     "simple_calculator": {
         "handler": calc_run,
         "meta": calc_meta,
+        "result": ""
+    },
+    "web_url_fetch": {
+        "handler": weburlfetch_run,
+        "meta": weburlfetch_meta,
         "result": ""
     }
 }
