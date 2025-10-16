@@ -1103,7 +1103,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_gelu_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
-            
+
     GGML_API struct ggml_tensor * ggml_floor(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1130,13 +1130,13 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_trunc(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a);  
+            struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_trunc_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-            
+
     // GELU using erf (error function) when possible
     // some backends may fallback to approximation based on Abramowitz and Stegun formula
     GGML_API struct ggml_tensor * ggml_gelu_erf(
