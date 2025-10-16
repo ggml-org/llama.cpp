@@ -10,6 +10,7 @@
 import sys
 import http.server
 import urllib.parse
+import urllib.request
 
 
 gMe = {
@@ -38,6 +39,8 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     print(f"DBUG:HandleUrlRaw:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url']
+    print(f"DBUG:HandleUrlRaw:Url:{url}")
+    url = url[0]
     if (not url) or (len(url) == 0):
         ph.send_error(400, "WARN:UrlRaw:MissingUrl")
         return
