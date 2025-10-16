@@ -83,6 +83,102 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+class partial_formatter {
+public:
+    enum output_type {
+        CONTENT,
+        REASONING,
+    };
+
+    struct output {
+        std::string formatted;
+        output_type type;
+    };
+
+    partial_formatter(const common_chat_syntax & syntax) : syntax_(syntax), had_reasoning_(false) {}
+
+    std::vector<output> operator()(const std::string & accumulated) {
+        common_chat_msg next = common_chat_parse(accumulated, true, syntax_);
+
+        auto diffs = common_chat_msg_diff::compute_diffs(previous_, next);
+        std::vector<output> result;
+        for (const auto & diff : diffs) {
+            if (!diff.reasoning_content_delta.empty()) {
+                result.push_back({diff.reasoning_content_delta, REASONING});
+                had_reasoning_ = true;
+            }
+            if (!diff.content_delta.empty()) {
+                if (had_reasoning_) {
+                    result.push_back({"\n", REASONING});
+                    had_reasoning_ = false;
+                }
+                result.push_back({diff.content_delta, CONTENT});
+            }
+        }
+        previous_ = next;
+        return result;
+    }
+
+private:
+    common_chat_syntax syntax_;
+    common_chat_msg previous_;
+    bool had_reasoning_;
+};
+
+class chat_formatter {
+public:
+    chat_formatter(
+        std::vector<common_chat_msg> & chat_msgs,
+        const common_chat_templates_ptr & chat_templates,
+        const common_params & params)
+        : chat_msgs_(chat_msgs),
+          chat_templates_(chat_templates),
+          params_(params) {}
+
+    std::string operator()(const std::string & role, const std::string & content) {
+        common_chat_msg new_msg;
+        new_msg.role = role;
+        new_msg.content = content;
+        chat_msgs_.push_back(new_msg);
+
+        common_chat_templates_inputs cinputs;
+        cinputs.use_jinja = params_.use_jinja;
+        cinputs.messages = chat_msgs_;
+        cinputs.add_generation_prompt = (role == "user");
+        cinputs.reasoning_format = params_.reasoning_format;
+
+        cinputs.enable_thinking =
+            params_.use_jinja && params_.reasoning_budget != 0 &&
+            common_chat_templates_support_enable_thinking(chat_templates_.get());
+
+        common_chat_params cparams = common_chat_templates_apply(chat_templates_.get(), cinputs);
+
+        if (!partial_formatter_ptr_ && params_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
+            common_chat_syntax chat_syntax;
+            chat_syntax.format = cparams.format;
+            chat_syntax.reasoning_format = params_.reasoning_format;
+            chat_syntax.thinking_forced_open = cparams.thinking_forced_open;
+            chat_syntax.parse_tool_calls = false;
+            partial_formatter_ptr_ = std::make_unique<partial_formatter>(chat_syntax);
+        }
+
+        std::string formatted = cparams.prompt.substr(formatted_cumulative_.size());
+        formatted_cumulative_ = cparams.prompt;
+
+        LOG_DBG("formatted: '%s'\n", formatted.c_str());
+        return formatted;
+    }
+
+    partial_formatter * get_partial_formatter() { return partial_formatter_ptr_.get(); }
+
+private:
+    std::vector<common_chat_msg> & chat_msgs_;
+    const common_chat_templates_ptr & chat_templates_;
+    const common_params & params_;
+    std::unique_ptr<partial_formatter> partial_formatter_ptr_;
+    std::string formatted_cumulative_;
+};
+
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
@@ -265,15 +361,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     bool waiting_for_first_input = false;
-    auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
-        common_chat_msg new_msg;
-        new_msg.role = role;
-        new_msg.content = content;
-        auto formatted = common_chat_format_single(chat_templates.get(), chat_msgs, new_msg, role == "user", g_params->use_jinja);
-        chat_msgs.push_back(new_msg);
-        LOG_DBG("formatted: '%s'\n", formatted.c_str());
-        return formatted;
-    };
+    chat_formatter chat_add_and_format(chat_msgs, chat_templates, params);
 
     std::string prompt;
     {
@@ -709,6 +797,13 @@ int main(int argc, char ** argv) {
 
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
+
+                if (auto * formatter = chat_add_and_format.get_partial_formatter()) {
+                    auto outputs = (*formatter)(assistant_ss.str());
+                    for (const auto & out : outputs) {
+                        LOG("%s", out.formatted.c_str());
+                    }
+                }
             }
 
             // echo this to console
@@ -740,8 +835,9 @@ int main(int argc, char ** argv) {
             for (auto id : embd) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
-                // Console/Stream Output
-                LOG("%s", token_str.c_str());
+                if (!chat_add_and_format.get_partial_formatter() || assistant_ss.str().empty()) {
+                    LOG("%s", token_str.c_str());
+                }
 
                 // Record Displayed Tokens To Log
                 // Note: Generated tokens are created one by one hence this check
