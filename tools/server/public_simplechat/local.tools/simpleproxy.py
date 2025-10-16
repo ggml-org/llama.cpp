@@ -6,9 +6,19 @@
 #   fetches the contents of the specified url and returns the same to the requester
 #
 
+
 import sys
+import http.server
+
 
 gMe = {}
+
+
+class ProxyHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(self.path)
+
+
 
 def process_args(args: list[str]):
     global gMe
@@ -33,5 +43,15 @@ def process_args(args: list[str]):
                 iArg += 1
 
 
+def run():
+    gMe['server'] = http.server.HTTPServer(('',gMe['--port']), ProxyHandler)
+    try:
+        gMe['server'].serve_forever()
+    except KeyboardInterrupt:
+        print("INFO:Run:Shuting down...")
+        gMe['server'].server_close()
+        sys.exit(0)
+
 if __name__ == "__main__":
     process_args(sys.argv)
+    run()
