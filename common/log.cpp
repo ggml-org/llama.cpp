@@ -92,7 +92,14 @@ struct common_log_entry {
     // signals the worker thread to stop
     bool is_end;
 
-    void print(FILE * file = nullptr) const {
+    void print(FILE * file = nullptr, ggml_log_callback callback = nullptr, void * callback_user_data = nullptr) const {
+        // if callback is provided, use it instead of printing
+        if (callback != nullptr) {
+            callback(level, msg.data(), callback_user_data);
+            return;
+        }
+        
+
         FILE * fcur = file;
         if (!fcur) {
             // stderr displays DBG messages only when their verbosity level is not higher than the threshold
@@ -150,6 +157,8 @@ struct common_log {
         timestamps = false;
         running = false;
         t_start = t_us();
+        callback = nullptr;
+        callback_user_data = nullptr;
 
         // initial message size - will be expanded if longer messages arrive
         entries.resize(capacity);
@@ -190,6 +199,10 @@ private:
 
     // worker thread copies into this
     common_log_entry cur;
+
+    // custom callback for log messages
+    ggml_log_callback callback;
+    void * callback_user_data;
 
 public:
     void add(enum ggml_log_level level, const char * fmt, va_list args) {
@@ -281,11 +294,15 @@ public:
 
         thrd = std::thread([this]() {
             while (true) {
+                ggml_log_callback cb = nullptr;
+                void * cb_user_data = nullptr;
                 {
                     std::unique_lock<std::mutex> lock(mtx);
                     cv.wait(lock, [this]() { return head != tail; });
 
                     cur = entries[head];
+                    cb = callback;
+                    cb_user_data = callback_user_data;
 
                     head = (head + 1) % entries.size();
                 }
@@ -294,7 +311,7 @@ public:
                     break;
                 }
 
-                cur.print(); // stdout and stderr
+                cur.print(nullptr, cb, cb_user_data); // stdout and stderr or callback
 
                 if (file) {
                     cur.print(file);
@@ -376,6 +393,15 @@ public:
 
         this->timestamps = timestamps;
     }
+
+    void set_callback(ggml_log_callback cb, void * user_data) {
+        pause();
+
+        this->callback = cb;
+        this->callback_user_data = user_data;
+
+        resume();
+    }
 };
 
 //
@@ -441,4 +467,8 @@ void common_log_set_prefix(struct common_log * log, bool prefix) {
 
 void common_log_set_timestamps(struct common_log * log, bool timestamps) {
     log->set_timestamps(timestamps);
+}
+
+void common_log_set_callback(struct common_log * log, ggml_log_callback callback, void * user_data) {
+    log->set_callback(callback, user_data);
 }
