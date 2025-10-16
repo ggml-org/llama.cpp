@@ -1011,6 +1011,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up_biased", il);
     }
 
+
     ggml_tensor * experts = nullptr;
     if (gate_exps) {
         cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
@@ -1023,6 +1024,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
         cb(cur, "ffn_moe_gate_biased", il);
     }
+
 
     switch (type_op) {
         case LLM_FFN_SILU:
@@ -1060,6 +1062,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         default:
             GGML_ABORT("fatal error");
     }
+
+    ggml_build_forward_expand(gf, cur);
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);

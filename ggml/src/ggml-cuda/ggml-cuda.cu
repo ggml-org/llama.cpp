@@ -2007,6 +2007,58 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 }
 
+static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * op1, const ggml_tensor * op2, const ggml_tensor * glu) {
+
+    bool is_mul_mat = op1->op == GGML_OP_MUL_MAT && op2->op == GGML_OP_MUL_MAT && glu->op == GGML_OP_GLU;
+    bool is_mul_mat_id = op1->op == GGML_OP_MUL_MAT_ID && op2->op == GGML_OP_MUL_MAT_ID && glu->op == GGML_OP_GLU;
+
+    GGML_ASSERT(op1 && op2 && glu);
+
+    if (!is_mul_mat && !is_mul_mat_id) {
+        return false;
+    }
+
+    if (op1->src[0]->type != op2->src[0]->type || !ggml_are_same_shape(op1->src[0], op2->src[0]) ) {
+        return false;
+    }
+
+    if (op1->src[1] != op2->src[1]) {
+        return false;
+    }
+
+    if (op1->src[2] && (op1->src[2] != op2->src[2])) {
+        return false;
+    }
+
+    if (glu->src[0] != op1 && glu->src[1] != op2) {
+        return false;
+    }
+
+    const bool split = ggml_backend_buft_is_cuda_split(op1->src[0]->buffer->buft) || ggml_backend_buft_is_cuda_split(op2->src[0]->buffer->buft);
+
+    //TODO: add support for fusion for split buffers
+    if (split) {
+        return false;
+    }
+
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    ggml_tensor * src0 = op1->src[0];
+    ggml_tensor * src1 = op1->src[1];
+    const ggml_tensor * dst  = op1;
+
+    bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)
+        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+
+    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src1->ne[1]);
+
+    if (op1->op == GGML_OP_MUL_MAT_ID) {
+        use_mul_mat_vec_f = use_mul_mat_vec_f && dst->ne[2] == 1;
+    }
+
+    return use_mul_mat_vec_f;
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
 
@@ -2855,10 +2907,28 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         }
     }
 
+    std::initializer_list<enum ggml_op> mul_mat_id_glu_ops = {GGML_OP_MUL_MAT_ID, GGML_OP_MUL_MAT_ID, GGML_OP_GLU};
+    std::initializer_list<enum ggml_op> mul_mat_glu_ops = {GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU};
+
+    if (ops.size() == 3 && (std::equal(ops.begin(), ops.end(), mul_mat_id_glu_ops.begin()) || std::equal(ops.begin(), ops.end(), mul_mat_glu_ops.begin()))) {
+
+        if (node_idx + 2 >= cgraph->n_nodes) {
+            return false;
+        }
+
+        const ggml_tensor * op1 = cgraph->nodes[node_idx];
+        const ggml_tensor * op2 = cgraph->nodes[node_idx+1];
+        const ggml_tensor * glu = cgraph->nodes[node_idx+2];
+
+       if (ggml_cuda_should_fuse_mul_mat(op1, op2, glu)) {
+            printf("Should fuse mul mat id!");
+        }
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
-
+    
     if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
         const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
@@ -2992,6 +3062,13 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         }
                     }
 
+                    if (ggml_cuda_can_fuse(cgraph, i, {GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU}, {})) {
+                        printf("Can fuse mul mat!");
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, {GGML_OP_MUL_MAT_ID, GGML_OP_MUL_MAT_ID, GGML_OP_GLU}, {})) {
+                        printf("Can fuse mul_mat id!");
+                    }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
                         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);

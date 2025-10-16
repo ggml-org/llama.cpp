@@ -4584,6 +4584,60 @@ struct test_topk_moe: public test_case {
     }
 };
 
+struct test_fused_ffn_gate : public test_case {
+    const ggml_type type;
+    const ggml_glu_op glu_op;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    test_fused_ffn_gate(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k)
+    : type(type), glu_op(op), m(m), n(n), k(k) {
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, glu_op, m, n, k);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "FUSED_FFN_GATE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        std::array<int64_t, 4> ne = {k, m, 1, 1};
+        std::array<int64_t, 4> ne0 = {k, n, 1, 1};
+
+        ggml_tensor * cur = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * gate = ggml_new_tensor(ctx, type, 4, ne0.data());
+        ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
+
+        ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
+        ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
+
+        printf("GGML_TYPES: %s %s %s\n", ggml_type_name(ffn_gate->type), ggml_type_name(cur->type), ggml_type_name(ffn_up->type));
+
+        ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
+
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    /*
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // test extended range of values to check for NaNs in GELU
+            init_tensor_uniform(t, -1.f, 1.f);
+        }
+    }
+    */
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+};
+
 // GGML_OP_SUM
 struct test_sum : public test_case {
     const ggml_type type;
@@ -6841,6 +6895,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4, with_norm));
         test_cases.emplace_back(new test_topk_moe({32, 22, 1, 1}, 8, with_norm));
         test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 128, with_norm));
+    }
+
+    for (ggml_type type : {GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 100, 30));
     }
 
 #if 0
