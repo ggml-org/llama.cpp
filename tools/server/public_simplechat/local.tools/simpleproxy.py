@@ -111,6 +111,16 @@ class TextHtmlParser(html.parser.HTMLParser):
         if self.bCapture:
             self.text += f"{data}\n"
 
+    def get_stripped_text(self):
+        oldLen = -99
+        newLen = len(self.text)
+        aStripped = self.text;
+        while oldLen != newLen:
+            oldLen = newLen
+            aStripped = aStripped.replace("\n\n\n","\n")
+            newLen = len(aStripped)
+        return aStripped
+
 
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     try:
@@ -128,7 +138,7 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(textHtml.text.encode('utf-8'))
+        ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
