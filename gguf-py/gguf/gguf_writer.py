@@ -1038,6 +1038,9 @@ class GGUFWriter:
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 
+    def add_vision_rope_freq_base(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.Rope.FREQ_BASE, value)
+
     def add_vision_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
 
