@@ -2022,7 +2022,11 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
         return false;
     }
 
-    if (ffn_up->src[1] != ffn_gate->src[1] || ffn_up->src[2] != ffn_gate->src[2]) {
+    if (ffn_up->src[1] != ffn_gate->src[1]) {
+        return false;
+    }
+
+    if (ffn_up->src[2] && (ffn_up->src[2] != ffn_gate->src[2])) {
         return false;
     }
 
@@ -2031,11 +2035,6 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
     }
 
     const bool split = ggml_backend_buft_is_cuda_split(ffn_up->src[0]->buffer->buft) || ggml_backend_buft_is_cuda_split(ffn_gate->src[0]->buffer->buft);
-
-    //TODO: add support for other glu ops
-    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU) {
-        return false;
-    }
 
     //TODO: add support for fusion for split buffers
     if (split) {
@@ -3085,6 +3084,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         }
                     }
 
+                    bool fused_mul_mat_vec = false;
+
                     for (ggml_op op : {GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID}) {
                         if (ggml_cuda_can_fuse(cgraph, i, {op, op, GGML_OP_GLU}, {})) {
                             const ggml_tensor * up   = cgraph->nodes[i];
@@ -3097,17 +3098,21 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                             if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
                                 ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, gate, glu);
-                                i += 2;
-                                continue;
+                                fused_mul_mat_vec = true;
+                                break;
                             }
 
                             if (ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
-                                //printf("Should fuse mul mat q!");
                                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, gate, glu);
-                                i += 2;
-                                continue;
+                                fused_mul_mat_vec = true;
+                                break;
                             }
                         }
+                    }
+
+                    if (fused_mul_mat_vec) {
+                        i += 2;
+                        continue;
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
