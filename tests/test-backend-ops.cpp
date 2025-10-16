@@ -4616,8 +4616,6 @@ struct test_fused_ffn_gate : public test_case {
         ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
         ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
 
-        printf("GGML_TYPES: %s %s %s\n", ggml_type_name(ffn_gate->type), ggml_type_name(cur->type), ggml_type_name(ffn_up->type));
-
         ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
 
         ggml_set_name(out, "out");
@@ -6891,15 +6889,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
     test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, {10, 5, 4, 3}));
 
+    for (ggml_type type : {GGML_TYPE_BF16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16}) {
+        test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 32, 64));
+    }
+
     for (bool with_norm : {false, true}) {
         test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4, with_norm));
         test_cases.emplace_back(new test_topk_moe({32, 22, 1, 1}, 8, with_norm));
         test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 128, with_norm));
     }
 
-    for (ggml_type type : {GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_F32}) {
-        test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 100, 30));
-    }
+
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging

@@ -75,3 +75,8 @@ void ggml_cuda_op_geglu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+
+__device__ __forceinline__ float ggml_cuda_op_silu_single(float x) {
+    return x / (1.0f + expf(-x));
+}
