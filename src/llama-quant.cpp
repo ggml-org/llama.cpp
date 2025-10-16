@@ -762,7 +762,23 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     char hex[17];
     const uint64_t model_id = metadata_id(ml.meta.get());
     std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
-    const std::string checkpoint_file = ml.arch_name + "-" + std::string(hex) + ".bpw_state";
+    std::string checkpoint_file = ml.arch_name + "-" + std::string(hex) + ".bpw_state";
+    if (params->keep_bpw_state && params->bpw_state) {
+        const auto * filename = static_cast<const char*>(params->bpw_state);
+        std::ifstream ifs(filename, std::ios::binary);
+        if (ifs.good()) {
+            checkpoint_file = std::string(filename);
+        } else {
+            std::ofstream ofs(filename, std::ios::binary | std::ios::app);
+            if (ofs.is_open()) {
+                checkpoint_file = std::string(filename);
+                ofs.close();
+                std::remove(checkpoint_file.c_str());
+            } else {
+                LLAMA_LOG_WARN("%s: %s is not a valid file name. Using %s instead\n", func, filename, checkpoint_file.c_str());
+            }
+        }
+    }
 
     auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
         const std::string tmp = checkpoint_file + ".tmp";
@@ -2306,7 +2322,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
-        /*.keep_bpw_state              =*/ false
+        /*.keep_bpw_state              =*/ false,
+        /*.bpw_state                   =*/ nullptr
     };
 
     return result;

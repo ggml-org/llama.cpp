@@ -367,6 +367,7 @@ extern "C" {
         void * prune_layers;                  // pointer to vector containing layer indices to prune
         float target_bpw;                     // target bits per weight (bpw)
         bool keep_bpw_state;                  // keep bpw state file
+        void * bpw_state;                     // pointer to bpw state file
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
