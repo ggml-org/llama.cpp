@@ -13,7 +13,7 @@ import { slotsService } from './slots';
  *   - Manages streaming and non-streaming response parsing
  *   - Provides request abortion capabilities
  *   - Converts database messages to API format
- *   - Handles error translation and context detection
+ *   - Handles error translation for server responses
  *
  * - **ChatStore**: Stateful orchestration and UI state management
  *   - Uses ChatService for all AI model communication
@@ -26,7 +26,6 @@ import { slotsService } from './slots';
  * - Streaming response handling with real-time callbacks
  * - Reasoning content extraction and processing
  * - File attachment processing (images, PDFs, audio, text)
- * - Context error detection and reporting
  * - Request lifecycle management (abort, cleanup)
  */
 export class ChatService {
@@ -209,10 +208,13 @@ export class ChatService {
 					userFriendlyError = new Error(
 						'Unable to connect to server - please check if the server is running'
 					);
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ECONNREFUSED')) {
 					userFriendlyError = new Error('Connection refused - server may be offline');
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ETIMEDOUT')) {
-					userFriendlyError = new Error('Request timeout - server may be overloaded');
+					userFriendlyError = new Error('Request timed out - the server took too long to respond');
+					userFriendlyError.name = 'TimeoutError';
 				} else {
 					userFriendlyError = error;
 				}
@@ -262,6 +264,7 @@ export class ChatService {
 		let fullReasoningContent = '';
 		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
+		let streamFinished = false;
 
 		try {
 			let chunk = '';
@@ -277,18 +280,8 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
-							if (!hasReceivedData && aggregatedContent.length === 0) {
-								const contextError = new Error(
-									'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-								);
-								contextError.name = 'ContextError';
-								onError?.(contextError);
-								return;
-							}
-
-							onComplete?.(aggregatedContent, fullReasoningContent || undefined, lastTimings);
-
-							return;
+							streamFinished = true;
+							continue;
 						}
 
 						try {
@@ -326,13 +319,13 @@ export class ChatService {
 				}
 			}
 
-			if (!hasReceivedData && aggregatedContent.length === 0) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				return;
+			if (streamFinished) {
+				if (!hasReceivedData && aggregatedContent.length === 0) {
+					const noResponseError = new Error('No response received from server. Please try again.');
+					throw noResponseError;
+				}
+
+				onComplete?.(aggregatedContent, fullReasoningContent || undefined, lastTimings);
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
@@ -368,12 +361,8 @@ export class ChatService {
 			const responseText = await response.text();
 
 			if (!responseText.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
@@ -385,22 +374,14 @@ export class ChatService {
 			}
 
 			if (!content.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			onComplete?.(content, reasoningContent);
 
 			return content;
 		} catch (error) {
-			if (error instanceof Error && error.name === 'ContextError') {
-				throw error;
-			}
-
 			const err = error instanceof Error ? error : new Error('Parse error');
 
 			onError?.(err);
@@ -594,37 +575,19 @@ export class ChatService {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
 
-			if (errorData.error?.type === 'exceed_context_size_error') {
-				const contextError = errorData.error as ApiContextSizeError;
-				const error = new Error(contextError.message);
-				error.name = 'ContextError';
-				// Attach structured context information
-				(
-					error as Error & {
-						contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
-					}
-				).contextInfo = {
-					promptTokens: contextError.n_prompt_tokens,
-					maxContext: contextError.n_ctx,
-					estimatedTokens: contextError.n_prompt_tokens
-				};
-				return error;
-			}
-
-			// Fallback for other error types
 			const message = errorData.error?.message || 'Unknown server error';
-			return new Error(message);
+			const error = new Error(message);
+			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
+
+			return error;
 		} catch {
 			// If we can't parse the error response, return a generic error
-			return new Error(`Server error (${response.status}): ${response.statusText}`);
+			const fallback = new Error(`Server error (${response.status}): ${response.statusText}`);
+			fallback.name = 'HttpError';
+			return fallback;
 		}
 	}
 
-	/**
-	 * Updates the processing state with timing information from the server response
-	 * @param timings - Timing data from the API response
-	 * @param promptProgress - Progress data from the API response
-	 */
 	private updateProcessingState(
 		timings?: ChatMessageTimings,
 		promptProgress?: ChatMessagePromptProgress

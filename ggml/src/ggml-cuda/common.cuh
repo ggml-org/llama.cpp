@@ -245,7 +245,8 @@ static bool fp16_available(const int cc) {
 }
 
 static bool fast_fp16_available(const int cc) {
-    return (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) && cc != 610) || GGML_CUDA_CC_IS_AMD(cc);
+    return GGML_CUDA_CC_IS_AMD(cc) ||
+        (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc) && ggml_cuda_highest_compiled_arch(cc) != 610);
 }
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
@@ -571,6 +572,10 @@ static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v,
 }
 
 // Aligned memory transfers of 8/16 bytes can be faster than 2 transfers with 4 bytes, especially on AMD.
+// Important: do not use this function if dst and src both point at registers.
+//     Due to the strict aliasing rule the compiler can do incorrect optimizations if src and dst have different types.
+//     The function is intended for copies between registers and SRAM/VRAM to make the compiler emit the right instructions.
+//     If dst and src point at different address spaces then they are guaranteed to not be aliased.
 template <int nbytes, int alignment = 0>
 static __device__ __forceinline__ void ggml_cuda_memcpy_1(void * __restrict__ dst, const void * __restrict__ src) {
     if constexpr (alignment != 0) {
@@ -939,13 +944,6 @@ struct ggml_cuda_graph {
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
-    bool use_cpy_indirection = false;
-    std::vector<char *> cpy_dest_ptrs;
-    char ** dest_ptrs_d;
-    int dest_ptrs_size = 0;
-    // Index to allow each cpy kernel to be aware of it's position within the graph
-    // relative to other cpy nodes.
-    int graph_cpynode_index = -1;
 #endif
 };
 

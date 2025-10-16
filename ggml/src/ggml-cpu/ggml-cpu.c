@@ -689,8 +689,13 @@ bool ggml_is_numa(void) {
 #endif
 
 static void ggml_init_arm_arch_features(void) {
-#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+#if defined(__linux__)
     ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
+#else
+    // TODO: add support of SVE for non-linux systems
+#error "TODO: SVE is not supported on this platform. To use SVE, sve_cnt needs to be initialized here."
+#endif
 #endif
 }
 
@@ -2179,6 +2184,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_FLOOR:
+                case GGML_UNARY_OP_CEIL:
+                case GGML_UNARY_OP_ROUND:
+                case GGML_UNARY_OP_TRUNC:
                     {
                         n_tasks = 1;
                     } break;
@@ -3558,13 +3567,17 @@ void ggml_cpu_init(void) {
 #ifdef GGML_USE_OPENMP
             //if (!getenv("OMP_WAIT_POLICY")) {
             //    // set the wait policy to active, so that OpenMP threads don't sleep
-            //    putenv("OMP_WAIT_POLICY=active");
+            //    setenv("OMP_WAIT_POLICY", "active", 0)
             //}
 
             if (!getenv("KMP_BLOCKTIME")) {
                 // set the time to wait before sleeping a thread
                 // this is less aggressive than setting the wait policy to active, but should achieve similar results in most cases
-                putenv("KMP_BLOCKTIME=200"); // 200ms
+#ifdef _WIN32
+                _putenv_s("KMP_BLOCKTIME", "200"); // 200ms
+#else
+                setenv("KMP_BLOCKTIME", "200", 0); // 200ms
+#endif
             }
 #endif
         }

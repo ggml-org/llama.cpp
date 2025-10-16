@@ -432,7 +432,7 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
         if (is_arguments_path({})) {
             // Entire JSON is the arguments and was parsed fully.
             return consume_json_result {
-                partial->json.dump(),
+                partial->json.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true),
                 /* .is_partial = */ false,
             };
         }
@@ -444,7 +444,7 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
     std::vector<std::string> path;
     std::function<json(const json &)> remove_unsupported_healings_and_dump_args = [&](const json & j) -> json {
         if (is_arguments_path(path)) {
-            auto arguments = j.dump();
+            auto arguments = j.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true);
             if (is_partial() && !partial->healing_marker.marker.empty()) {
                 auto idx = arguments.find(partial->healing_marker.json_dump_marker);
                 if (idx != std::string::npos) {
