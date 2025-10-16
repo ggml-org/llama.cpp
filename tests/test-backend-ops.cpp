@@ -4590,11 +4590,23 @@ struct test_fused_ffn_gate : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
-    test_fused_ffn_gate(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k)
-    : type(type), glu_op(op), m(m), n(n), k(k) {
+    const bool use_id;
+    const int n_mats;
+    const int n_used;
+    const bool b; // broadcast b matrix (only for use_id)
+
+    test_fused_ffn_gate(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
+                        bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false)
+    : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b) {
+        if (use_id) {
+            GGML_ASSERT(n_used <= n_mats);
+        }
     }
 
     std::string vars() override {
+        if (use_id) {
+            return VARS_TO_STR9(type, glu_op, m, n, k, use_id, n_mats, n_used, b);
+        }
         return VARS_TO_STR5(type, glu_op, m, n, k);
     }
 
@@ -4606,33 +4618,79 @@ struct test_fused_ffn_gate : public test_case {
     bool run_whole_graph() override { return true; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        std::array<int64_t, 4> ne = {k, m, 1, 1};
-        std::array<int64_t, 4> ne0 = {k, n, 1, 1};
+        if (!use_id) {
+            // Original implementation
+            std::array<int64_t, 4> ne = {k, m, 1, 1};
+            std::array<int64_t, 4> ne0 = {k, n, 1, 1};
 
-        ggml_tensor * cur = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
-        ggml_tensor * gate = ggml_new_tensor(ctx, type, 4, ne0.data());
-        ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
+            ggml_tensor * cur = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_tensor * gate = ggml_new_tensor(ctx, type, 4, ne0.data());
+            ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
 
-        ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
-        ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
+            ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
+            ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
 
-        ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
+            ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
 
-        ggml_set_name(out, "out");
-        return out;
-    }
+            ggml_set_name(out, "out");
+            return out;
+        } else {
+            // mul_mat_id implementation
+            ggml_tensor * gates = ggml_new_tensor_3d(ctx, type, k, n, n_mats);
+            ggml_set_name(gates, "gates");
 
-    /*
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            // test extended range of values to check for NaNs in GELU
-            init_tensor_uniform(t, -1.f, 1.f);
+            ggml_tensor * ups = ggml_new_tensor_3d(ctx, type, k, n, n_mats);
+            ggml_set_name(ups, "ups");
+
+            ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+            ggml_set_name(ids, "ids");
+            if (n_used != n_mats) {
+                ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+                ggml_set_name(ids, "view_of_ids");
+            }
+
+            ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, m);
+            ggml_set_name(cur, "cur");
+
+            ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
+            ggml_tensor * ffn_up   = ggml_mul_mat_id(ctx, ups, cur, ids);
+
+            ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
+
+            ggml_set_name(out, "out");
+            return out;
         }
     }
-    */
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (!use_id) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                init_tensor_uniform(t);
+            }
+        } else {
+            std::random_device rd;
+            std::default_random_engine rng(rd());
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                if (t->type == GGML_TYPE_I32) {
+                    if (ggml_is_view_op(t->op)) { continue; }
+                    // ids
+                    for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                        std::vector<int32_t> data(t->ne[0]);
+                        for (int i = 0; i < t->ne[0]; i++) {
+                            data[i] = i % n_mats;
+                        }
+                        std::shuffle(data.begin(), data.end(), rng);
+                        ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                    }
+                } else {
+                    init_tensor_uniform(t);
+                }
+            }
+        }
+    }
 
     double max_nmse_err() override {
-        return 5e-4;
+        return 1e-3;
     }
 };
 
@@ -6889,8 +6947,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
     test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, {10, 5, 4, 3}));
 
-    for (ggml_type type : {GGML_TYPE_BF16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16}) {
-        test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 32, 64));
+    for (ggml_type type : base_types) {
+        for (bool use_id : {false, true}) {
+            for (bool b : {false, true}) {
+                if (!use_id && b) {
+                    continue;
+                }
+                test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 32, 256, use_id, 16, 8, b));
+            }
+        }
     }
 
     for (bool with_norm : {false, true}) {

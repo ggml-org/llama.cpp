@@ -2022,11 +2022,7 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
         return false;
     }
 
-    if (ffn_up->src[1] != ffn_gate->src[1]) {
-        return false;
-    }
-
-    if (ffn_up->src[2] && (ffn_up->src[2] != ffn_gate->src[2])) {
+    if (ffn_up->src[1] != ffn_gate->src[1] || ffn_up->src[2] != ffn_gate->src[2]) {
         return false;
     }
 
@@ -2036,6 +2032,11 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
 
     const bool split = ggml_backend_buft_is_cuda_split(ffn_up->src[0]->buffer->buft) || ggml_backend_buft_is_cuda_split(ffn_gate->src[0]->buffer->buft);
 
+    //TODO: add support for other glu ops
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU) {
+        return false;
+    }
+
     //TODO: add support for fusion for split buffers
     if (split) {
         return false;
@@ -2044,7 +2045,7 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
     return true;
 }
 
-static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) { 
+static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     ggml_tensor * src0 = tensor->src[0];
     ggml_tensor * src1 = tensor->src[1];
     const ggml_tensor * dst = tensor;
@@ -2950,7 +2951,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
-    
+
     if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
         const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
