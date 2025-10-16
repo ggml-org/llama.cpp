@@ -12,7 +12,7 @@ import http.server
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-import xml.etree.ElementTree as xmlET
+import html.parser
 
 
 gMe = {
@@ -83,6 +83,26 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
 
+class TextHtmlParser(html.parser.HTMLParser):
+
+    def __init__(self):
+        super().__init__()
+        self.bBody = False
+        self.text = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        if tag == 'body':
+            self.bBody = True
+
+    def handle_endtag(self, tag: str):
+        if tag == 'body':
+            self.bBody = False
+
+    def handle_data(self, data: str):
+        if self.bBody:
+            self.text += f"{data}\n"
+
+
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     try:
         # Get requested url
@@ -91,16 +111,15 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
         # Extract Text
-        html = xmlET.fromstring(got.contentData)
-        for el in html.iter():
-            print(el)
+        textHtml = TextHtmlParser()
+        textHtml.feed(got.contentData)
         # Send back to client
         ph.send_response(got.httpStatus)
         ph.send_header('Content-Type', got.contentType)
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(got.contentData.encode('utf-8'))
+        ph.wfile.write(textHtml.text.encode('utf-8'))
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
