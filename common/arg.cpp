@@ -874,13 +874,13 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 }
 
 #ifdef _WIN32
-struct Utf8Argv {
+struct utf8_argv {
     std::vector<std::string> buf;
     std::vector<char*> ptrs;
 };
 
-static Utf8Argv make_utf8_argv_from_winapi() {
-    Utf8Argv out;
+static utf8_argv make_utf8_argv() {
+    utf8_argv out;
     int wargc = 0;
     LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
     if (!wargv) return out;
@@ -904,7 +904,7 @@ static Utf8Argv make_utf8_argv_from_winapi() {
 
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
 #ifdef _WIN32
-    auto utf8 = make_utf8_argv_from_winapi();
+    auto utf8 = make_utf8_argv();
     if (!utf8.ptrs.empty()) {
         argc = static_cast<int>(utf8.buf.size());
         argv = utf8.ptrs.data();
