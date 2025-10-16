@@ -398,6 +398,14 @@ static void acc_f32_sycl(const float *x, const float *y, float *dst,
 }
 
 template<typename T>
+static void arange_kernel(T * dst, const int k, T start, T step,
+                         const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = start + static_cast<T>(i) * step;
+    }
+}
+
+template<typename T>
 static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
                              const int nb02, const int nb03, const int ne10, const int ne11,
                              const int ne12, const int ne13, const float sf0, const float sf1,
@@ -564,6 +572,25 @@ static inline void dispatch_ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx
     }
 }
 
+
+static inline void ggml_sycl_op_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    float start, stop, step;
+    memcpy(&start, dst->op_params, sizeof(float));
+    memcpy(&stop, (float *) dst->op_params + 1, sizeof(float));
+    memcpy(&step, (float *) dst->op_params + 2, sizeof(float));
+    dpct::queue_ptr stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    float * dst_ptr = (float *)dst->data;
+    const int k = (int)ggml_nelements(dst);
+    const int num_blocks = ceil_div(k, SYCL_ARANGE_BLOCK_SIZE);
+    stream->parallel_for(
+        sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE),
+                          sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE)),
+        [=](sycl::nd_item<1> item_ct1) {
+            arange_kernel(dst_ptr, k, start, step, item_ct1);
+        });
+}
 
 } // namespace ggml_sycl_detail
 
@@ -1089,4 +1116,9 @@ void ggml_sycl_geglu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_geglu_quick(ctx, dst);
+}
+
+void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/0);
+    ggml_sycl_detail::ggml_sycl_op_arange(ctx, dst);
 }
