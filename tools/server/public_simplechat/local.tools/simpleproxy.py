@@ -12,6 +12,7 @@ import http.server
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+import xml.etree.ElementTree as xmlET
 
 
 gMe = {
@@ -42,7 +43,7 @@ class UrlReqResp:
     httpStatus: int
     httpStatusMsg: str = ""
     contentType: str = ""
-    contentData: urllib.request._UrlopenRet = ""
+    contentData: str = ""
 
 
 def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
@@ -56,7 +57,7 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
     try:
         # Get requested url
         with urllib.request.urlopen(url, timeout=10) as response:
-            contentData = response.read()
+            contentData = response.read().decode('utf-8')
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
         return UrlReqResp(True, statusCode, "", contentType, contentData)
@@ -77,7 +78,7 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(got.contentData)
+        ph.wfile.write(got.contentData.encode('utf-8'))
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
@@ -90,13 +91,16 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
         # Extract Text
+        html = xmlET.fromstring(got.contentData)
+        for el in html.iter():
+            print(el)
         # Send back to client
         ph.send_response(got.httpStatus)
         ph.send_header('Content-Type', got.contentType)
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(got.contentData)
+        ph.wfile.write(got.contentData.encode('utf-8'))
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
