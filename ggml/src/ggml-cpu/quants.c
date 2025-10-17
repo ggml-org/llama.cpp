@@ -104,6 +104,34 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+// ====================== Fairy±i complex 2-bit quantization
+
+void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    // This function is intended to be called with complex number pairs
+    // For now, we provide a placeholder that calls the reference implementation
+    // In practice, this should not be used directly as ifairy requires separate real/imag inputs
+    // Use quantize_row_ifairy_ref from ggml-quants.c instead
+    assert(k % QK_K == 0);
+    block_ifairy * GGML_RESTRICT y = vy;
+
+    // Since this function signature doesn't support complex inputs,
+    // we treat x as interleaved [real0, imag0, real1, imag1, ...]
+    // and split it for the reference function
+    const int64_t n = k / 2;  // Number of complex elements
+    float * x_real = (float *)malloc(n * sizeof(float));
+    float * x_imag = (float *)malloc(n * sizeof(float));
+
+    for (int64_t i = 0; i < n; ++i) {
+        x_real[i] = x[2*i];
+        x_imag[i] = x[2*i + 1];
+    }
+
+    quantize_row_ifairy_ref(x_real, x_imag, y, n);
+
+    free(x_real);
+    free(x_imag);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {

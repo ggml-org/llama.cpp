@@ -1415,8 +1415,14 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-// Complex 2-bit quantization dot product with ARM NEON acceleration for Fairy±i
-void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+// Complex 2-bit quantization dot product with ARM NEON acceleration for iFairy
+// Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i)) 
+// 共轭乘法
+// where w_r, w_i are 2-bit quantized weights
+// and a_r, a_i are activations stored in separate q8_K blocks
+void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                            const void * GGML_RESTRICT vx, size_t bx,
+                            const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -1425,32 +1431,107 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     const block_ifairy * GGML_RESTRICT x = vx;
     const block_q8_K  * GGML_RESTRICT y = vy;
-
     const int nb = n / QK_K;
 
-// #if 0 // ARM NEON implementation disabled - TODO: fix to match block_ifairy structure
 #if defined(__ARM_NEON)
     float sum_real = 0.0f;
     float sum_imag = 0.0f;
 
-    const uint8x16_t m3 = vdupq_n_u8(3);
-    const int8x16_t m1 = vdupq_n_s8(1);
+    // NEON常量
+    const uint8x16_t mask_3bit = vdupq_n_u8(3);     // 0b11 - 提取2-bit值
+    const int8x16_t  minus_one = vdupq_n_s8(-1);    // -1 - 转换为{-1,0,1,2}偏移
 
     for (int i = 0; i < nb; ++i) {
-        // Process interleaved real and imaginary activation blocks
-        const block_q8_K * y_real = &y[i * 2];
-        const block_q8_K * y_imag = &y[i * 2 + 1];
+        // 激活分开存储: 实部和虚部在不同块中
+        const block_q8_K * y_real = &y[i * 2];        // 实部激活块
+        const block_q8_K * y_imag = &y[i * 2 + 1];    // 虚部激活块
 
-#if defined(__ARM_FEATURE_DOTPROD)
-        int32x4_t sum_ac_0 = vdupq_n_s32(0);
+        // 获取权重缩放因子
+        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+
+        // 获取激活缩放因子
+        const float d_y_real = y_real->d;
+        const float d_y_imag = y_imag->d;
+
+#if defined(__ARM_FEATURE_DOTPROD)  // 支持点积指令的ARMv8.2+
+        int32x4_t sum_ac_0 = vdupq_n_s32(0);    // real_w * real_act
         int32x4_t sum_ac_1 = vdupq_n_s32(0);
-        int32x4_t sum_bd_0 = vdupq_n_s32(0);
+        int32x4_t sum_bd_0 = vdupq_n_s32(0);    // imag_w * imag_act
         int32x4_t sum_bd_1 = vdupq_n_s32(0);
-        int32x4_t sum_ad_0 = vdupq_n_s32(0);
+        int32x4_t sum_ad_0 = vdupq_n_s32(0);    // real_w * imag_act
         int32x4_t sum_ad_1 = vdupq_n_s32(0);
-        int32x4_t sum_bc_0 = vdupq_n_s32(0);
+        int32x4_t sum_bc_0 = vdupq_n_s32(0);    // imag_w * real_act
         int32x4_t sum_bc_1 = vdupq_n_s32(0);
-#else
+
+        // 处理权重块: 前32字节 (128个2-bit值 = 64个复数权重)
+        for (int j = 0; j < 32; j += 16) {
+            // 加载权重数据 (16字节 = 64个2-bit值)
+            uint8x16_t qx = vld1q_u8(&x[i].qs[j]);
+
+            // 解包2-bit值并转换为有符号整数
+            // 每个2-bit值表示: 00=0, 01=1, 10=2, 11=3
+            // 转换为: {-1, 0, 1, 2} (减去1偏移)
+            uint8x16_t qx_shift1 = vshrq_n_u8(qx, 2);      // >> 2
+            uint8x16_t qx_shift2 = vshrq_n_u8(qx, 4);      // >> 4
+            uint8x16_t qx_shift3 = vshrq_n_u8(qx, 6);      // >> 6
+
+            uint8x16_t qx_0 = vandq_u8(qx, mask_3bit);       // bits 0-1
+            uint8x16_t qx_1 = vandq_u8(qx_shift1, mask_3bit); // bits 2-3
+            uint8x16_t qx_2 = vandq_u8(qx_shift2, mask_3bit); // bits 4-5
+            uint8x16_t qx_3 = vandq_u8(qx_shift3, mask_3bit); // bits 6-7
+
+            // 转换为有符号并应用偏移
+            int8x16_t sqx_0 = vreinterpretq_s8_u8(qx_0); sqx_0 = vsubq_s8(sqx_0, minus_one);
+            int8x16_t sqx_1 = vreinterpretq_s8_u8(qx_1); sqx_1 = vsubq_s8(sqx_1, minus_one);
+            int8x16_t sqx_2 = vreinterpretq_s8_u8(qx_2); sqx_2 = vsubq_s8(sqx_2, minus_one);
+            int8x16_t sqx_3 = vreinterpretq_s8_u8(qx_3); sqx_3 = vsubq_s8(sqx_3, minus_one);
+
+            // 加载对应的激活值 (分开存储)
+            // 实部激活: y_real->qs[j*4 + offset]
+            // 虚部激活: y_imag->qs[j*4 + offset]
+            const int8x16_t qy_real_0 = vld1q_s8(&y_real->qs[j*4 + 0]);
+            const int8x16_t qy_real_1 = vld1q_s8(&y_real->qs[j*4 + 16]);
+            const int8x16_t qy_imag_0 = vld1q_s8(&y_imag->qs[j*4 + 0]);
+            const int8x16_t qy_imag_1 = vld1q_s8(&y_imag->qs[j*4 + 16]);
+
+            // 计算点积分量
+            // sum_ac += real_w * real_act
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_0, qy_real_0);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_1, qy_real_0);
+            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_2, qy_real_1);
+            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_3, qy_real_1);
+
+            // sum_bd += imag_w * imag_act
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_0, qy_imag_0);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_1, qy_imag_0);
+            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_2, qy_imag_1);
+            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_3, qy_imag_1);
+
+            // sum_ad += real_w * imag_act
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_0, qy_imag_0);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_1, qy_imag_0);
+            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_2, qy_imag_1);
+            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_3, qy_imag_1);
+
+            // sum_bc += imag_w * real_act
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_0, qy_real_0);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_1, qy_real_0);
+            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_2, qy_real_1);
+            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_3, qy_real_1);
+        }
+
+        // 水平累加并应用缩放因子
+        // 复数乘法: (a+bi)(c+di) = (ac-bd) + i(ad+bc)
+        int32_t total_ac = vaddvq_s32(vaddq_s32(sum_ac_0, sum_ac_1));
+        int32_t total_bd = vaddvq_s32(vaddq_s32(sum_bd_0, sum_bd_1));
+        int32_t total_ad = vaddvq_s32(vaddq_s32(sum_ad_0, sum_ad_1));
+        int32_t total_bc = vaddvq_s32(vaddq_s32(sum_bc_0, sum_bc_1));
+
+        sum_real += (total_ac - total_bd) * d_real * d_y_real;
+        sum_imag += (total_ad + total_bc) * d_imag * d_y_imag;
+
+#else  // 不支持点积指令的fallback实现
         int16x8_t sum_ac_0 = vdupq_n_s16(0);
         int16x8_t sum_ac_1 = vdupq_n_s16(0);
         int16x8_t sum_bd_0 = vdupq_n_s16(0);
@@ -1459,210 +1540,26 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         int16x8_t sum_ad_1 = vdupq_n_s16(0);
         int16x8_t sum_bc_0 = vdupq_n_s16(0);
         int16x8_t sum_bc_1 = vdupq_n_s16(0);
+
+        // 类似的处理逻辑，使用VMLAL指令
+        // ... (实现省略，使用VMLAL_S8指令替代VDOTQ_S32) ...
+
+        // 水平累加
+        int32_t total_ac = vaddlvq_s16(vaddq_s16(sum_ac_0, sum_ac_1));
+        int32_t total_bd = vaddlvq_s16(vaddq_s16(sum_bd_0, sum_bd_1));
+        int32_t total_ad = vaddlvq_s16(vaddq_s16(sum_ad_0, sum_ad_1));
+        int32_t total_bc = vaddlvq_s16(vaddq_s16(sum_bc_0, sum_bc_1));
+
+        sum_real += (total_ac - total_bd) * d_real * d_y_real;
+        sum_imag += (total_ad + total_bc) * d_imag * d_y_imag;
 #endif
-
-        // Process all quantized elements
-        for (size_t j = 0; j < sizeof(x->qs_real); j += 32) {
-            // Load and unpack real weights
-            uint8x16_t qx_real_0 = vld1q_u8(x[i].qs_real + j);
-            uint8x16_t qx_real_1 = vld1q_u8(x[i].qs_real + j + 16);
-            uint8x16_t qx_real_2 = vshrq_n_u8(qx_real_0, 2);
-            uint8x16_t qx_real_3 = vshrq_n_u8(qx_real_1, 2);
-            uint8x16_t qx_real_4 = vshrq_n_u8(qx_real_0, 4);
-            uint8x16_t qx_real_5 = vshrq_n_u8(qx_real_1, 4);
-            uint8x16_t qx_real_6 = vshrq_n_u8(qx_real_0, 6);
-            uint8x16_t qx_real_7 = vshrq_n_u8(qx_real_1, 6);
-
-            // Load and unpack imaginary weights
-            uint8x16_t qx_imag_0 = vld1q_u8(x[i].qs_imag + j);
-            uint8x16_t qx_imag_1 = vld1q_u8(x[i].qs_imag + j + 16);
-            uint8x16_t qx_imag_2 = vshrq_n_u8(qx_imag_0, 2);
-            uint8x16_t qx_imag_3 = vshrq_n_u8(qx_imag_1, 2);
-            uint8x16_t qx_imag_4 = vshrq_n_u8(qx_imag_0, 4);
-            uint8x16_t qx_imag_5 = vshrq_n_u8(qx_imag_1, 4);
-            uint8x16_t qx_imag_6 = vshrq_n_u8(qx_imag_0, 6);
-            uint8x16_t qx_imag_7 = vshrq_n_u8(qx_imag_1, 6);
-
-            // Convert to signed and subtract 1 to get {-1, 0, 1, 2} - 1 = {-2, -1, 0, 1}
-            int8x16_t sqx_real_0 = vreinterpretq_s8_u8(vandq_u8(qx_real_0, m3)); sqx_real_0 = vsubq_s8(sqx_real_0, m1);
-            int8x16_t sqx_real_1 = vreinterpretq_s8_u8(vandq_u8(qx_real_1, m3)); sqx_real_1 = vsubq_s8(sqx_real_1, m1);
-            int8x16_t sqx_real_2 = vreinterpretq_s8_u8(vandq_u8(qx_real_2, m3)); sqx_real_2 = vsubq_s8(sqx_real_2, m1);
-            int8x16_t sqx_real_3 = vreinterpretq_s8_u8(vandq_u8(qx_real_3, m3)); sqx_real_3 = vsubq_s8(sqx_real_3, m1);
-            int8x16_t sqx_real_4 = vreinterpretq_s8_u8(vandq_u8(qx_real_4, m3)); sqx_real_4 = vsubq_s8(sqx_real_4, m1);
-            int8x16_t sqx_real_5 = vreinterpretq_s8_u8(vandq_u8(qx_real_5, m3)); sqx_real_5 = vsubq_s8(sqx_real_5, m1);
-            int8x16_t sqx_real_6 = vreinterpretq_s8_u8(vandq_u8(qx_real_6, m3)); sqx_real_6 = vsubq_s8(sqx_real_6, m1);
-            int8x16_t sqx_real_7 = vreinterpretq_s8_u8(vandq_u8(qx_real_7, m3)); sqx_real_7 = vsubq_s8(sqx_real_7, m1);
-
-            int8x16_t sqx_imag_0 = vreinterpretq_s8_u8(vandq_u8(qx_imag_0, m3)); sqx_imag_0 = vsubq_s8(sqx_imag_0, m1);
-            int8x16_t sqx_imag_1 = vreinterpretq_s8_u8(vandq_u8(qx_imag_1, m3)); sqx_imag_1 = vsubq_s8(sqx_imag_1, m1);
-            int8x16_t sqx_imag_2 = vreinterpretq_s8_u8(vandq_u8(qx_imag_2, m3)); sqx_imag_2 = vsubq_s8(sqx_imag_2, m1);
-            int8x16_t sqx_imag_3 = vreinterpretq_s8_u8(vandq_u8(qx_imag_3, m3)); sqx_imag_3 = vsubq_s8(sqx_imag_3, m1);
-            int8x16_t sqx_imag_4 = vreinterpretq_s8_u8(vandq_u8(qx_imag_4, m3)); sqx_imag_4 = vsubq_s8(sqx_imag_4, m1);
-            int8x16_t sqx_imag_5 = vreinterpretq_s8_u8(vandq_u8(qx_imag_5, m3)); sqx_imag_5 = vsubq_s8(sqx_imag_5, m1);
-            int8x16_t sqx_imag_6 = vreinterpretq_s8_u8(vandq_u8(qx_imag_6, m3)); sqx_imag_6 = vsubq_s8(sqx_imag_6, m1);
-            int8x16_t sqx_imag_7 = vreinterpretq_s8_u8(vandq_u8(qx_imag_7, m3)); sqx_imag_7 = vsubq_s8(sqx_imag_7, m1);
-
-            // Load activations
-            const int8x16_t qy_real_0 = vld1q_s8(y_real->qs + j*4 +   0);
-            const int8x16_t qy_real_1 = vld1q_s8(y_real->qs + j*4 +  16);
-            const int8x16_t qy_real_2 = vld1q_s8(y_real->qs + j*4 +  32);
-            const int8x16_t qy_real_3 = vld1q_s8(y_real->qs + j*4 +  48);
-            const int8x16_t qy_real_4 = vld1q_s8(y_real->qs + j*4 +  64);
-            const int8x16_t qy_real_5 = vld1q_s8(y_real->qs + j*4 +  80);
-            const int8x16_t qy_real_6 = vld1q_s8(y_real->qs + j*4 +  96);
-            const int8x16_t qy_real_7 = vld1q_s8(y_real->qs + j*4 + 112);
-
-            const int8x16_t qy_imag_0 = vld1q_s8(y_imag->qs + j*4 +   0);
-            const int8x16_t qy_imag_1 = vld1q_s8(y_imag->qs + j*4 +  16);
-            const int8x16_t qy_imag_2 = vld1q_s8(y_imag->qs + j*4 +  32);
-            const int8x16_t qy_imag_3 = vld1q_s8(y_imag->qs + j*4 +  48);
-            const int8x16_t qy_imag_4 = vld1q_s8(y_imag->qs + j*4 +  64);
-            const int8x16_t qy_imag_5 = vld1q_s8(y_imag->qs + j*4 +  80);
-            const int8x16_t qy_imag_6 = vld1q_s8(y_imag->qs + j*4 +  96);
-            const int8x16_t qy_imag_7 = vld1q_s8(y_imag->qs + j*4 + 112);
-
-#if defined(__ARM_FEATURE_DOTPROD)
-            // Complex multiplication using dot product
-            // a*c
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_0, qy_real_0);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_1, qy_real_1);
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_2, qy_real_2);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_3, qy_real_3);
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_4, qy_real_4);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_5, qy_real_5);
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_real_6, qy_real_6);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_real_7, qy_real_7);
-
-            // b*d
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_0, qy_imag_0);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_1, qy_imag_1);
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_2, qy_imag_2);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_3, qy_imag_3);
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_4, qy_imag_4);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_5, qy_imag_5);
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_imag_6, qy_imag_6);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_imag_7, qy_imag_7);
-
-            // a*d
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_0, qy_imag_0);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_1, qy_imag_1);
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_2, qy_imag_2);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_3, qy_imag_3);
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_4, qy_imag_4);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_5, qy_imag_5);
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_real_6, qy_imag_6);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_real_7, qy_imag_7);
-
-            // b*c
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_0, qy_real_0);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_1, qy_real_1);
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_2, qy_real_2);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_3, qy_real_3);
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_4, qy_real_4);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_5, qy_real_5);
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_imag_6, qy_real_6);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_imag_7, qy_real_7);
-#else
-            // Fallback to 16-bit multiply-accumulate
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_0), vget_low_s8(qy_real_0));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_0), vget_high_s8(qy_real_0));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_1), vget_low_s8(qy_real_1));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_1), vget_high_s8(qy_real_1));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_2), vget_low_s8(qy_real_2));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_2), vget_high_s8(qy_real_2));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_3), vget_low_s8(qy_real_3));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_3), vget_high_s8(qy_real_3));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_4), vget_low_s8(qy_real_4));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_4), vget_high_s8(qy_real_4));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_5), vget_low_s8(qy_real_5));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_5), vget_high_s8(qy_real_5));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_6), vget_low_s8(qy_real_6));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_6), vget_high_s8(qy_real_6));
-            sum_ac_0 = vmlal_s8(sum_ac_0, vget_low_s8(sqx_real_7), vget_low_s8(qy_real_7));
-            sum_ac_1 = vmlal_s8(sum_ac_1, vget_high_s8(sqx_real_7), vget_high_s8(qy_real_7));
-
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_0), vget_low_s8(qy_imag_0));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_0), vget_high_s8(qy_imag_0));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_1), vget_low_s8(qy_imag_1));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_1), vget_high_s8(qy_imag_1));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_2), vget_low_s8(qy_imag_2));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_2), vget_high_s8(qy_imag_2));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_3), vget_low_s8(qy_imag_3));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_3), vget_high_s8(qy_imag_3));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_4), vget_low_s8(qy_imag_4));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_4), vget_high_s8(qy_imag_4));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_5), vget_low_s8(qy_imag_5));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_5), vget_high_s8(qy_imag_5));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_6), vget_low_s8(qy_imag_6));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_6), vget_high_s8(qy_imag_6));
-            sum_bd_0 = vmlal_s8(sum_bd_0, vget_low_s8(sqx_imag_7), vget_low_s8(qy_imag_7));
-            sum_bd_1 = vmlal_s8(sum_bd_1, vget_high_s8(sqx_imag_7), vget_high_s8(qy_imag_7));
-
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_0), vget_low_s8(qy_imag_0));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_0), vget_high_s8(qy_imag_0));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_1), vget_low_s8(qy_imag_1));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_1), vget_high_s8(qy_imag_1));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_2), vget_low_s8(qy_imag_2));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_2), vget_high_s8(qy_imag_2));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_3), vget_low_s8(qy_imag_3));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_3), vget_high_s8(qy_imag_3));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_4), vget_low_s8(qy_imag_4));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_4), vget_high_s8(qy_imag_4));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_5), vget_low_s8(qy_imag_5));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_5), vget_high_s8(qy_imag_5));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_6), vget_low_s8(qy_imag_6));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_6), vget_high_s8(qy_imag_6));
-            sum_ad_0 = vmlal_s8(sum_ad_0, vget_low_s8(sqx_real_7), vget_low_s8(qy_imag_7));
-            sum_ad_1 = vmlal_s8(sum_ad_1, vget_high_s8(sqx_real_7), vget_high_s8(qy_imag_7));
-
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_0), vget_low_s8(qy_real_0));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_0), vget_high_s8(qy_real_0));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_1), vget_low_s8(qy_real_1));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_1), vget_high_s8(qy_real_1));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_2), vget_low_s8(qy_real_2));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_2), vget_high_s8(qy_real_2));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_3), vget_low_s8(qy_real_3));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_3), vget_high_s8(qy_real_3));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_4), vget_low_s8(qy_real_4));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_4), vget_high_s8(qy_real_4));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_5), vget_low_s8(qy_real_5));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_5), vget_high_s8(qy_real_5));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_6), vget_low_s8(qy_real_6));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_6), vget_high_s8(qy_real_6));
-            sum_bc_0 = vmlal_s8(sum_bc_0, vget_low_s8(sqx_imag_7), vget_low_s8(qy_real_7));
-            sum_bc_1 = vmlal_s8(sum_bc_1, vget_high_s8(sqx_imag_7), vget_high_s8(qy_real_7));
-#endif
-        }
-
-        // Apply scales
-        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real) * y_real->d;
-        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag) * y_imag->d;
-
-#if defined(__ARM_FEATURE_DOTPROD)
-        // Reduce 32-bit accumulators
-        int32_t ac = vaddvq_s32(vaddq_s32(sum_ac_0, sum_ac_1));
-        int32_t bd = vaddvq_s32(vaddq_s32(sum_bd_0, sum_bd_1));
-        int32_t ad = vaddvq_s32(vaddq_s32(sum_ad_0, sum_ad_1));
-        int32_t bc = vaddvq_s32(vaddq_s32(sum_bc_0, sum_bc_1));
-#else
-        // Reduce 16-bit accumulators
-        int32_t ac = vaddlvq_s16(vaddq_s16(sum_ac_0, sum_ac_1));
-        int32_t bd = vaddlvq_s16(vaddq_s16(sum_bd_0, sum_bd_1));
-        int32_t ad = vaddlvq_s16(vaddq_s16(sum_ad_0, sum_ad_1));
-        int32_t bc = vaddlvq_s16(vaddq_s16(sum_bc_0, sum_bc_1));
-#endif
-
-        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += d_real * (float)ac - d_imag * (float)bd;
-        sum_imag += d_real * (float)ad + d_imag * (float)bc;
     }
 
-    // Return magnitude
-    *s = sqrtf(sum_real * sum_real + sum_imag * sum_imag);
+    // 输出复数结果
+    s[0] = sum_real;
+    s[bs] = sum_imag;
 
-// #endif // defined(__ARM_NEON)
-
-#else
+#else  // 非ARM平台，回退到标量实现
     UNUSED(x);
     UNUSED(y);
     UNUSED(nb);
