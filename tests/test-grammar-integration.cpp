@@ -302,6 +302,30 @@ static void test_simple_grammar() {
         }
     );
     test_schema(
+        "min 1 max 900719925474091",
+        // Schema
+        R"""({
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 900719925474091
+        })""",
+        // Passing strings
+        {
+            "1",
+            "2",
+            "10",
+            "900719925474090",
+            "900719925474091",
+        },
+        // Failing strings
+        {
+            "0",
+            "01",
+            "900719925474092",
+            "9007199254740910",
+        }
+    );
+    test_schema(
         "min -1 max 1",
         R"""({
             "type": "integer",
