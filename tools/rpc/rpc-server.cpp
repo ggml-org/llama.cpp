@@ -137,7 +137,6 @@ struct rpc_server_params {
     bool                     use_cache   = false;
     int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
     std::vector<std::string> devices;
-    std::vector<size_t>      dev_mem;
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
@@ -148,7 +147,6 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -d, --device <dev1,dev2,...>     comma-separated list of devices\n");
     fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
-    fprintf(stderr, "  -m, --mem <M1,M2,...>            memory size for each device (in MB)\n");
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
 }
@@ -197,23 +195,6 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             }
         } else if (arg == "-c" || arg == "--cache") {
             params.use_cache = true;
-        } else if (arg == "-m" || arg == "--mem") {
-            if (++i >= argc) {
-                return false;
-            }
-            const std::regex regex{ R"([,/]+)" };
-            std::string mem_str = argv[i];
-            std::sregex_token_iterator iter(mem_str.begin(), mem_str.end(), regex, -1);
-            std::sregex_token_iterator end;
-            for ( ; iter != end; ++iter) {
-                try {
-                    size_t mem = std::stoul(*iter) * 1024 * 1024;
-                    params.dev_mem.push_back(mem);
-                } catch (const std::exception & ) {
-                    fprintf(stderr, "error: invalid memory size: %s\n", iter->str().c_str());
-                    return false;
-                }
-            }
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -293,18 +274,6 @@ int main(int argc, char * argv[]) {
         return 1;
     }
     std::string endpoint = params.host + ":" + std::to_string(params.port);
-    std::vector<size_t> free_mem, total_mem;
-    for (size_t i = 0; i < devices.size(); i++) {
-        if (i < params.dev_mem.size()) {
-            free_mem.push_back(params.dev_mem[i]);
-            total_mem.push_back(params.dev_mem[i]);
-        } else {
-            size_t free, total;
-            ggml_backend_dev_memory(devices[i], &free, &total);
-            free_mem.push_back(free);
-            total_mem.push_back(total);
-        }
-    }
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
@@ -328,7 +297,6 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(),
-        devices.data(), free_mem.data(), total_mem.data());
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
     return 0;
 }
