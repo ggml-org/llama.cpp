@@ -52,6 +52,38 @@ typedef struct _txe_command_buffer_t *txe_command_buffer_s;
 #endif /* USE_COMMAND_BUFFERS */
 typedef struct ggml_backend_tsavorite_buffer ggml_backend_tsavorite_buffer_s;
 
+const int Rank = MEM_REF_DESCRIPTOR_RANK;
+MemRefDescriptor<Rank>* glob_buf;
+
+template<int Rank>
+// Assumes tsi_alloc is available and returns a pointer to allocated memory
+static MemRefDescriptor<Rank>* create_mlir_buf(int K) {
+    // TVU load size (e.g., 32 for 1024-bit vector with 32-bit elements)
+    const int32_t mem_align = TSI_TVU_MEM_ALIGN;
+    // we are supporting only float or F32
+    int data_type_len = 4;
+    // MemRef Header also added
+    int total_bytes = (sizeof(MemRefDescriptor<Rank>) + 4*K);
+
+    // Round up K to the next multiple of tvu_size
+    int32_t total_align_bytes = ((total_bytes % mem_align) != 0) ? ((total_bytes / mem_align) + 1) * mem_align : total_bytes;
+
+    // Allocate memory dynamically: space for header + data
+    MemRefDescriptor<Rank>* header = (MemRefDescriptor<Rank>*) tsi_alloc(total_align_bytes);
+
+    if (!header) {
+        return header;
+    }
+    // Advance pointer to skip header and get to data
+    int32_t* data = (int32_t*)(header + 1);
+
+    for (int32_t i = 0; i < K; ++i) {
+        data[i] = 0;
+    }
+    return header;
+}
+
+
 struct _txe_device_t {
   char name[100];
   uint32_t max_buf_len;
@@ -343,7 +375,6 @@ static void _mlir_ciface_txe_add_test (void *src0, void *src1, void *res)
     if (!src0 || !src1 || !res)
         return;
 
-    const int Rank = MEM_REF_DESCRIPTOR_RANK;
     MemRefDescriptor<Rank> *srcP0, *srcP1, *nodeP;
     srcP0 = (MemRefDescriptor<Rank> *)src0;
     srcP1 = (MemRefDescriptor<Rank> *)src1;
@@ -368,7 +399,6 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
     if (!src0 || !src1 || !res)
         return;
 
-    const int Rank = MEM_REF_DESCRIPTOR_RANK;
     MemRefDescriptor<Rank> *srcP0, *srcP1, *nodeP;
     srcP0 = (MemRefDescriptor<Rank> *)src0;
     srcP1 = (MemRefDescriptor<Rank> *)src1;
@@ -489,6 +519,7 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
       case GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX:
 	  {
           kernel_pipeline->_mlir_fptr_3_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_soft_max_host;
+          //kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_soft_max_16_host;
           kernel_pipeline->kernel_name = "TXE_SOFTMAX";
           flag = true;
           break;
@@ -553,7 +584,11 @@ static void *ggml_tsavorite_host_malloc(size_t n) {
   void *data = NULL;
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   GGML_TSAVORITE_LOG_INFO("\n Allocating memory from tsi_alloc with size  %ld \n", n);
-  data = tsi_alloc(n);
+
+  const int32_t mem_align = TSI_TVU_MEM_ALIGN;
+  int total_align_bytes = (n/mem_align +1)*mem_align;
+  data = tsi_alloc(total_align_bytes);
+
   GGML_TSAVORITE_LOG_CONT("\n Allocating memory from tsi_alloc with size  %ld starting memory %p\n",
                           n, data);
 
@@ -643,6 +678,12 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM,           true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SWIGLU,             true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX,           true);
+  }
+  glob_buf = create_mlir_buf<Rank>(96);
+  if (!glob_buf) {
+      GGML_TSAVORITE_LOG_ERROR("tsi_alloc failied for creating memory for buf \n");
+      free(ctx);
+      return NULL;
   }
 
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
@@ -755,7 +796,9 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_SQR:
   case GGML_OP_SIN:
   case GGML_OP_RMS_NORM:
-  case GGML_OP_SOFT_MAX:
+  #ifdef GGML_TARGET_POSIX
+      case GGML_OP_SOFT_MAX:
+  #endif /* GGML_TARGET_POSIX */
     break;
   case GGML_OP_GLU:
     {
@@ -811,31 +854,6 @@ static void ggml_tsavorite_decompose_unary_kernel(uint32_t num_elem, ggml_tensor
   return;
 }
 
-template<int Rank>
-// Assumes tsi_alloc is available and returns a pointer to allocated memory
-static MemRefDescriptor<Rank>* create_mlir_buf(int K) {
-    // TVU load size (e.g., 32 for 1024-bit vector with 32-bit elements)
-    const int32_t tvu_size = TSI_TVU_LOAD_SIZE;
-
-    // Round up K to the next multiple of tvu_size
-    int32_t num_of_elem = ((K % tvu_size) != 0) ? ((K / tvu_size) + 1) * tvu_size : K;
-
-    // Allocate memory dynamically: space for header + data
-    MemRefDescriptor<Rank>* header = (MemRefDescriptor<Rank>*) tsi_alloc(
-        sizeof(MemRefDescriptor<Rank>) + num_of_elem * sizeof(float)
-    );
-
-    if (!header) {
-        return header;
-    }
-    // Advance pointer to skip header and get to data
-    int32_t* data = (int32_t*)(header + 1);
-
-    for (int32_t i = 0; i < num_of_elem; ++i) {
-        data[i] = 0;
-    }
-    return header;
-}
 
 static enum ggml_tsavorite_kernel_type tsi_glu_kernel_type(struct ggml_tensor *node) {
     const ggml_glu_op op = ggml_get_glu_op(node);
@@ -926,7 +944,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
     return GGML_STATUS_FAILED;
   }
   // MemRefDescriptor
-  const int Rank = MEM_REF_DESCRIPTOR_RANK;
   MemRefDescriptor<Rank> *srcP0, *srcP1, *nodeP;
   struct ggml_tensor *src0, *src1, *node;
   uint32_t num_elem_src0, num_elem_src1, num_elem_node;
@@ -937,14 +954,6 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
   enum ggml_tsavorite_input_tensors_count num_of_input_tensors;
   tensor_log log_data;
 
-  MemRefDescriptor<Rank>* buf = create_mlir_buf<Rank>(96);
-
-  if (!buf) {
-      GGML_TSAVORITE_LOG_ERROR("tsi_alloc failied for creating memory for buf \n");
-      return GGML_STATUS_ABORTED;
-  }
-  buf->offset = 0;
-  buf->data   = buf->base = (void *)(buf+1);
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
      int32_t kernel_sub_type=-1;
@@ -968,6 +977,21 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         printf("\n kernel_sub_type not suppored\n");
         return GGML_STATUS_ABORTED;
     }
+
+    if (node->op == GGML_OP_RMS_NORM ||  node->op == GGML_OP_SOFT_MAX) {
+        if (!glob_buf) {
+            GGML_TSAVORITE_LOG_ERROR("tsi_alloc failied for creating memory for buf \n");
+            return GGML_STATUS_ABORTED;
+        }
+        glob_buf->offset = 0;
+        glob_buf->data   = glob_buf->base = (void *)(glob_buf+1);
+
+        float *vall = (float *)glob_buf->data;
+        int ii;
+        for(ii=0; ii <= 95; ++ii)
+               vall[ii] = 0;
+    }
+
     switch (node->op) {
     case GGML_OP_ADD:
       kernel_type = GGML_TSAVORITE_KERNEL_TYPE_ADD;
@@ -1115,6 +1139,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           log_data.node_len = num_elem_node;
           log_data.log_file = tsi_op_log_file;
           log_data.num_of_op = num_of_op;
+          //log_data.kernel_type = kernel_type;
           log_data.kernel_type = node->op;
 
           log_data.data_type = GGML_TSAVORITE_TENSOR_HEADER;
@@ -1169,7 +1194,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
             const float * sk = src2 ? (float *)((char *) src2->data) : nullptr;
 	    //here src2 is NULL for particular model hence u can ignore this for now
 	    if (src2) {
-		    printf("\n ANOOP src2 is not null\n");
+		    printf("\n  src2 is not null for SOFT_MAX\n");
 	    }
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
@@ -1196,9 +1221,10 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
                         srcP0->data =  srcP0->base = (void *)(sp);
                         nodeP->data =  nodeP->base = (void *)(dp);
 
-                        float *val = (float *)buf->data;
+                        float *val = (float *)glob_buf->data;
                         val[0] = scale;
-                        ctx->kernels[kernel_type].pipeline->_mlir_fptr_3_input[kernel_sub_type](srcP0, srcP1, nodeP, buf);
+                        ctx->kernels[kernel_type].pipeline->_mlir_fptr_3_input[kernel_sub_type](srcP0, srcP1, nodeP, glob_buf);
+                        ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
 	            }
 	        }
 	    }
@@ -1280,6 +1306,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           log_data.node_len = num_elem_src0;
           log_data.log_file = tsi_op_log_file;
           log_data.num_of_op = num_of_op;
+          //log_data.kernel_type = kernel_type;
           log_data.kernel_type = node->op;
 
           log_data.data_type = GGML_TSAVORITE_TENSOR_HEADER;
@@ -1310,7 +1337,8 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         // Although only 32 elements are strictly necessary, reducing this would require changes to the RMS kernel.
         // The remaining 32 elements are used to store src0->ne[0], replicated across each of the last 32 entries.
 
-            float *val = (float *)buf->data;
+
+            float *val = (float *)glob_buf->data;
             int i;
             for(i=64; i <= 95; ++i)
                     val[i] = node->ne[0];
@@ -1336,7 +1364,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 			strides = strides * src0->ne[i];
 	    }
 
-            ctx->kernels[kernel_type].pipeline->_mlir_fptr_2_input[kernel_sub_type](srcP0, nodeP, buf);
+            ctx->kernels[kernel_type].pipeline->_mlir_fptr_2_input[kernel_sub_type](srcP0, nodeP, glob_buf);
 
         }
         else {
@@ -1442,7 +1470,6 @@ static void *ggml_backend_tsavorite_buffer_get_base(ggml_backend_buffer_t buffer
 static ggml_status ggml_backend_tsavorite_buffer_init_tensor(ggml_backend_buffer_t buffer,
                                                       struct ggml_tensor *tensor) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-  const int Rank = MEM_REF_DESCRIPTOR_RANK;
   MemRefDescriptor<Rank> tensor_data_header;
   tensor->data = (void *)(sizeof(tensor_data_header) + (char *)tensor->data);
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
@@ -1633,7 +1660,6 @@ static size_t ggml_backend_tsavorite_buffer_type_get_alloc_size(ggml_backend_buf
     GGML_TSAVORITE_LOG_ERROR("\n tsavorite device is NULL \n");
     return 0;
   }
-  const int Rank = MEM_REF_DESCRIPTOR_RANK;
   MemRefDescriptor<Rank> tensor_data_header;
   ggml_backend_tsavorite_device_rel(
       (struct ggml_backend_tsavorite_device_context *)buft->device->context);
@@ -1645,7 +1671,10 @@ static size_t ggml_backend_tsavorite_buffer_type_get_alloc_size(ggml_backend_buf
 
   // Add 128-byte buffer to avoid crossing memory boundaries during TVU 1024-bit operations.
   // TVU processes data in 1024-bit chunks, so the last elements may exceed allocated space without this padding.
-  return (sizeof(tensor_data_header) + ggml_nbytes(tensor) + 128);
+  const int32_t mem_align = TSI_TVU_MEM_ALIGN;
+  // I also added extra Padding buffer
+  size_t n =  (((sizeof(tensor_data_header) + ggml_nbytes(tensor))/mem_align +1)*mem_align + mem_align);
+  return (n);
 
   TSI_UNUSED(buft);
 }
@@ -2073,7 +2102,9 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_SQR:
   case GGML_OP_SIN:
   case GGML_OP_RMS_NORM:
-  case GGML_OP_SOFT_MAX:
+  #ifdef GGML_TARGET_POSIX
+      case GGML_OP_SOFT_MAX:
+  #endif /* GGML_TARGET_POSIX */
     break;
   case GGML_OP_GLU:
     {

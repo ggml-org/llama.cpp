@@ -213,7 +213,7 @@ extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 // GGML supports tensors with a maximum rank of 4
 #define MEM_REF_DESCRIPTOR_RANK 4
-#define TSI_TVU_LOAD_SIZE 32
+#define TSI_TVU_MEM_ALIGN 128
 
 //
 // backend API
