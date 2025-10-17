@@ -920,8 +920,8 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, 
 
 class rpc_server {
 public:
-    rpc_server(std::vector<ggml_backend_t> backends, std::vector<size_t> max_mem, const char * cache_dir)
-        : backends(std::move(backends)), max_mem(std::move(max_mem)), cache_dir(cache_dir) {
+    rpc_server(std::vector<ggml_backend_t> backends, const char * cache_dir)
+        : backends(std::move(backends)), cache_dir(cache_dir) {
     }
     ~rpc_server();
 
@@ -951,7 +951,6 @@ private:
 
 
     std::vector<ggml_backend_t> backends;
-    std::vector<size_t> max_mem;
     const char * cache_dir;
     std::unordered_set<ggml_backend_buffer_t> buffers;
 };
@@ -1460,16 +1459,6 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
     return true;
 }
 
-static void rpc_dev_memory(ggml_backend_dev_t dev, size_t max_mem, size_t * free, size_t * total) {
-    // cap total and free memory to the user-specified max memory
-    size_t free_dev, total_dev;
-    ggml_backend_dev_memory(dev, &free_dev, &total_dev);
-    total_dev = (total_dev > max_mem) ? max_mem : total_dev;
-    free_dev = (free_dev > max_mem) ? max_mem : free_dev;
-    *free = free_dev;
-    *total = total_dev;
-}
-
 bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response) {
     uint32_t dev_id = request.device;
     if (dev_id >= backends.size()) {
@@ -1477,7 +1466,7 @@ bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request
     }
     size_t free, total;
     ggml_backend_dev_t dev = ggml_backend_get_device(backends[dev_id]);
-    rpc_dev_memory(dev, max_mem[dev_id], &free, &total);
+    ggml_backend_dev_memory(dev, &free, &total);
     response.free_mem = free;
     response.total_mem = total;
     LOG_DBG("[%s] device: %u, free_mem: %" PRIu64 ", total_mem: %" PRIu64 "\n", __func__, dev_id, response.free_mem, response.total_mem);
@@ -1491,8 +1480,8 @@ rpc_server::~rpc_server() {
 }
 
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
-                             sockfd_t sockfd, const std::vector<size_t> & max_mem) {
-    rpc_server server(backends, max_mem, cache_dir);
+                             sockfd_t sockfd) {
+    rpc_server server(backends, cache_dir);
     uint8_t cmd;
     if (!recv_data(sockfd, &cmd, 1)) {
         return;
@@ -1733,14 +1722,12 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                   size_t n_threads, size_t n_devices,
-                                   ggml_backend_dev_t * devices, size_t * max_mem) {
-    if (n_devices == 0 || devices == nullptr || max_mem == nullptr) {
+                                   size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices) {
+    if (n_devices == 0 || devices == nullptr) {
         fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
         return;
     }
     std::vector<ggml_backend_t> backends;
-    std::vector<size_t> max_mem_vec(max_mem, max_mem + n_devices);
     printf("Starting RPC server v%d.%d.%d\n",
         RPC_PROTO_MAJOR_VERSION,
         RPC_PROTO_MINOR_VERSION,
@@ -1751,7 +1738,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
     for (size_t i = 0; i < n_devices; i++) {
         auto dev = devices[i];
         size_t free, total;
-        rpc_dev_memory(dev, max_mem[i], &free, &total);
+        ggml_backend_dev_memory(dev, &free, &total);
         printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
                total / 1024 / 1024, free / 1024 / 1024);
         auto backend = ggml_backend_dev_init(dev, nullptr);
@@ -1797,7 +1784,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         }
         printf("Accepted client connection\n");
         fflush(stdout);
-        rpc_serve_client(backends, cache_dir, client_socket->fd, max_mem_vec);
+        rpc_serve_client(backends, cache_dir, client_socket->fd);
         printf("Client connection closed\n");
         fflush(stdout);
     }
