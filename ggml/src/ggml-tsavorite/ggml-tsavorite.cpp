@@ -1225,6 +1225,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
                         val[0] = scale;
                         ctx->kernels[kernel_type].pipeline->_mlir_fptr_3_input[kernel_sub_type](srcP0, srcP1, nodeP, glob_buf);
                         ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
+                        ++node->tsi_kernel_runs;
 	            }
 	        }
 	    }
@@ -1258,6 +1259,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
                     // kernel call
                     ctx->kernels[kernel_type].pipeline->_mlir_fptr_2_input[kernel_sub_type](srcP0, srcP1, nodeP);
                     ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
+                    ++node->tsi_kernel_runs;
                 }
             }
         }
@@ -1372,6 +1374,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
             ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input[kernel_sub_type](srcP0, nodeP);
 	}
         ++device->stats.op_run_count[kernel_type].num_of_kernel_call;
+        ++node->tsi_kernel_runs;
 
         if (ggml_tsavorite_log_type_val == GGML_TSAVORITE_LOG_DEBUG) {
           log_data.data_type = GGML_TSAVORITE_TENSOR_NODE;
