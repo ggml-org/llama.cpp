@@ -662,9 +662,10 @@ extern "C" {
 
 #if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
         int64_t perf_runs;
+	int64_t tsi_kernel_runs;
         int64_t perf_time_us;
         enum ggml_compute_backend_type ggml_compute_backend;
-        char padding[4];
+        char padding[12];
 #else
         char padding[8];
 #endif /* GML_PERF-related flag */
@@ -2561,11 +2562,13 @@ extern "C" {
 struct ggml_perf_backend_subtotals {
     int64_t total_us;
     int64_t runs;
+    int64_t tsi_kernel_count;
 };
 
 struct ggml_perf_unary_subtotals {
     int64_t total_us;
     int64_t runs;
+    int64_t tsi_kernel_count;
 };
 // internal perf accumulation struct
 struct ggml_perf_totals {

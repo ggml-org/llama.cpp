@@ -7249,12 +7249,14 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
         if (be >= GGML_COMPUTE_BACKEND_CPU && be < GGML_COMPUTE_BACKEND_COUNT) {
             totals[op].backend_subtotals[be].total_us += node->perf_time_us;
 	    totals[op].backend_subtotals[be].runs     += node->perf_runs;
+	    totals[op].backend_subtotals[be].tsi_kernel_count   += node->tsi_kernel_runs;
         }
 
         if (op == GGML_OP_UNARY) {
             enum ggml_unary_op subop = ggml_get_unary_op(node);
             totals[op].unary_subtotals[subop].total_us += node->perf_time_us;
             totals[op].unary_subtotals[subop].runs     += node->perf_runs;
+	    totals[op].unary_subtotals[subop].tsi_kernel_count   += node->tsi_kernel_runs;
         }
     }
 }
