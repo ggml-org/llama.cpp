@@ -337,7 +337,10 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
         GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
 
         id<MTLFunction> mtl_function;
-        if (!cv) {
+        if (!cv || cv->obj == nil) {
+            if (cv && cv->obj == nil) {
+                GGML_LOG_WARN("%s: warning: function constants unavailable for pipeline: base = '%s', name = '%s'\n", __func__, base, name);
+            }
             mtl_function = [lib->obj newFunctionWithName:base_func];
         } else {
             mtl_function = [lib->obj newFunctionWithName:base_func constantValues:cv->obj error:&error];
