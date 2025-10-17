@@ -4627,8 +4627,8 @@ struct test_fused_ffn_gate : public test_case {
             ggml_tensor * gate = ggml_new_tensor(ctx, type, 4, ne0.data());
             ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
 
-            ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
             ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
+            ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
 
             ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
 

@@ -33,6 +33,7 @@ static __global__ void mul_mat_vec_f(
 
     extern __shared__ char data_mmv[];
     float * buf_iw = (float *) data_mmv;
+    float * buf_iw_gate = has_gate ? (float *) (data_mmv + warp_size*sizeof(float)) : nullptr;
 
     if (block_size > warp_size) {
         if (tid < warp_size) {
@@ -172,25 +173,21 @@ static __global__ void mul_mat_vec_f(
 
         if (block_size > warp_size) {
             buf_iw[tid/warp_size] = sumf[j];
+            if constexpr (has_gate) {
+                buf_iw_gate[tid/warp_size] = sumf_gate[j];
+            }
             __syncthreads();
             if (tid < warp_size) {
                 sumf[j] = buf_iw[tid];
                 sumf[j] = warp_reduce_sum<warp_size>(sumf[j]);
-            }
-            if (j < ncols_dst) {
-                __syncthreads();
-            }
-
-            if constexpr (has_gate) {
-                buf_iw[tid/warp_size] = sumf_gate[j];
-                __syncthreads();
-                if (tid < warp_size) {
-                    sumf_gate[j] = buf_iw[tid];
+                if constexpr (has_gate) {
+                    sumf_gate[j] = buf_iw_gate[tid];
                     sumf_gate[j] = warp_reduce_sum<warp_size>(sumf_gate[j]);
                 }
-                if (j < ncols_dst) {
-                    __syncthreads();
-                }
+            }
+
+            if (j < ncols_dst) {
+                __syncthreads();
             }
         }
     }
@@ -240,7 +237,7 @@ static void launch_mul_mat_vec_f_cuda(
         }
     }
 
-    const int nbytes_shared = warp_size*sizeof(float);
+    const int nbytes_shared = warp_size*sizeof(float) + (has_gate ? warp_size*sizeof(float) : 0);
     const dim3 block_nums(nrows, nchannels_dst, nsamples_dst);
     const dim3 block_dims(block_size_best, 1, 1);
     switch (block_size_best) {
