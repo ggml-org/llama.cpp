@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <thread>
+#include <regex>
 
 namespace fs = std::filesystem;
 
@@ -131,24 +132,22 @@ static std::string fs_get_cache_directory() {
 }
 
 struct rpc_server_params {
-    std::string host        = "127.0.0.1";
-    int         port        = 50052;
-    size_t      backend_mem = 0;
-    bool        use_cache   = false;
-    int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
-    std::string device;
+    std::string              host        = "127.0.0.1";
+    int                      port        = 50052;
+    bool                     use_cache   = false;
+    int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
+    std::vector<std::string> devices;
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help                show this help message and exit\n");
-    fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
-    fprintf(stderr, "  -d DEV,  --device         device to use\n");
-    fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
-    fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
-    fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
-    fprintf(stderr, "  -c,      --cache          enable local file cache\n");
+    fprintf(stderr, "  -h, --help                       show this help message and exit\n");
+    fprintf(stderr, "  -t, --threads N                  number of threads for the CPU device (default: %d)\n", params.n_threads);
+    fprintf(stderr, "  -d, --device <dev1,dev2,...>     comma-separated list of devices\n");
+    fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
+    fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
 }
 
@@ -174,17 +173,17 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             if (++i >= argc) {
                 return false;
             }
-            params.device = argv[i];
-            if (ggml_backend_dev_by_name(params.device.c_str()) == nullptr) {
-                fprintf(stderr, "error: unknown device: %s\n", params.device.c_str());
-                fprintf(stderr, "available devices:\n");
-                for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    size_t free, total;
-                    ggml_backend_dev_memory(dev, &free, &total);
-                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+            const std::regex regex{ R"([,/]+)" };
+            std::string dev_str = argv[i];
+            std::sregex_token_iterator iter(dev_str.begin(), dev_str.end(), regex, -1);
+            std::sregex_token_iterator end;
+            for ( ; iter != end; ++iter) {
+                try {
+                    params.devices.push_back(*iter);
+                } catch (const std::exception & ) {
+                    fprintf(stderr, "error: invalid device: %s\n", iter->str().c_str());
+                    return false;
                 }
-                return false;
             }
         } else if (arg == "-p" || arg == "--port") {
             if (++i >= argc) {
@@ -196,11 +195,6 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             }
         } else if (arg == "-c" || arg == "--cache") {
             params.use_cache = true;
-        } else if (arg == "-m" || arg == "--mem") {
-            if (++i >= argc) {
-                return false;
-            }
-            params.backend_mem = std::stoul(argv[i]) * 1024 * 1024;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -213,51 +207,46 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
     return true;
 }
 
-static ggml_backend_t create_backend(const rpc_server_params & params) {
-    ggml_backend_t backend = nullptr;
+static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & params) {
+    std::vector<ggml_backend_dev_t> devices;
+    if (!params.devices.empty()) {
+        for (auto device : params.devices) {
+            ggml_backend_dev_t dev = ggml_backend_dev_by_name(device.c_str());
+            if (dev) {
+                devices.push_back(dev);
+            } else {
+                fprintf(stderr, "error: unknown device: %s\n", device.c_str());
+                fprintf(stderr, "available devices:\n");
+                for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    size_t free, total;
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                }
+                return {};
+            }
+        }
+    }
 
-    if (!params.device.empty()) {
-        ggml_backend_dev_t dev = ggml_backend_dev_by_name(params.device.c_str());
+    // Try non-CPU devices first
+    if (devices.empty()) {
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                devices.push_back(dev);
+            }
+        }
+    }
+
+    // If there are no accelerators, fallback to CPU device
+    if (devices.empty()) {
+        ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         if (dev) {
-            backend = ggml_backend_dev_init(dev, nullptr);
-            if (!backend) {
-                fprintf(stderr, "Failed to create backend for device %s\n", params.device.c_str());
-                return nullptr;
-            }
+            devices.push_back(dev);
         }
     }
 
-    // try to initialize a GPU backend first
-    if (!backend) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
-    }
-
-    // if there aren't GPU backends fallback to CPU backend
-    if (!backend) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-    }
-
-    if (backend) {
-        fprintf(stderr, "%s: using %s backend\n", __func__, ggml_backend_name(backend));
-
-        // set the number of threads
-        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-        if (reg) {
-            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-            if (ggml_backend_set_n_threads_fn) {
-                ggml_backend_set_n_threads_fn(backend, params.n_threads);
-            }
-        }
-    }
-
-    return backend;
-}
-
-static void get_backend_memory(ggml_backend_t backend, size_t * free_mem, size_t * total_mem) {
-    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-    GGML_ASSERT(dev != nullptr);
-    ggml_backend_dev_memory(dev, free_mem, total_mem);
+    return devices;
 }
 
 int main(int argc, char * argv[]) {
@@ -279,19 +268,12 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "\n");
     }
 
-    ggml_backend_t backend = create_backend(params);
-    if (!backend) {
-        fprintf(stderr, "Failed to create backend\n");
+    auto devices = get_devices(params);
+    if (devices.empty()) {
+        fprintf(stderr, "No devices found\n");
         return 1;
     }
     std::string endpoint = params.host + ":" + std::to_string(params.port);
-    size_t free_mem, total_mem;
-    if (params.backend_mem > 0) {
-        free_mem = params.backend_mem;
-        total_mem = params.backend_mem;
-    } else {
-        get_backend_memory(backend, &free_mem, &total_mem);
-    }
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
@@ -315,8 +297,6 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(backend, endpoint.c_str(), cache_dir, free_mem, total_mem);
-
-    ggml_backend_free(backend);
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
     return 0;
 }

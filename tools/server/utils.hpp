@@ -31,10 +31,10 @@
 
 using json = nlohmann::ordered_json;
 
-#define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, (slot).id_task, __VA_ARGS__)
-#define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, (slot).id_task, __VA_ARGS__)
-#define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, (slot).id_task, __VA_ARGS__)
-#define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, (slot).id_task, __VA_ARGS__)
+#define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 
 #define SRV_INF(fmt, ...) LOG_INF("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -459,9 +459,9 @@ static std::string tokens_to_output_formatted_string(const llama_context * ctx, 
     return out;
 }
 
-static bool server_sent_event(httplib::DataSink & sink, const char * event, const json & data) {
+static bool server_sent_event(httplib::DataSink & sink, const json & data) {
     const std::string str =
-        std::string(event) + ": " +
+        "data: " +
         data.dump(-1, ' ', false, json::error_handler_t::replace) +
         "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
@@ -849,46 +849,43 @@ static json format_response_rerank(
         const json & request,
         const json & ranks,
         bool is_tei_format,
-        std::vector<std::string> & texts) {
-    json res;
-    if (is_tei_format) {
-        // TEI response format
-        res = json::array();
-        bool return_text = json_value(request, "return_text", false);
-        for (const auto & rank : ranks) {
-            int index = json_value(rank, "index", 0);
-            json elem = json{
-                {"index", index},
-                {"score", json_value(rank, "score", 0.0)},
-            };
-            if (return_text) {
-                elem["text"] = std::move(texts[index]);
-            }
-            res.push_back(elem);
-        }
-    } else {
-        // Jina response format
-        json results = json::array();
-        int32_t n_tokens = 0;
-        for (const auto & rank : ranks) {
-            results.push_back(json{
-                {"index",           json_value(rank, "index", 0)},
-                {"relevance_score", json_value(rank, "score", 0.0)},
-            });
-
-            n_tokens += json_value(rank, "tokens_evaluated", 0);
-        }
-
-        res = json{
-            {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
-            {"object", "list"},
-            {"usage", json{
-                {"prompt_tokens", n_tokens},
-                {"total_tokens", n_tokens}
-            }},
-            {"results", results}
+        std::vector<std::string> & texts,
+        int top_n) {
+    int32_t n_tokens = 0;
+    bool return_text = is_tei_format && json_value(request, "return_text", false);
+    std::vector<json> elements; // Temporary vector to hold unsorted elements
+    std::string score_label = is_tei_format ? "score" : "relevance_score";
+    for (const auto & rank : ranks) {
+        int index = json_value(rank, "index", 0);
+        json elem = json{
+            {"index", index},
+            {score_label, json_value(rank, "score", 0.0)},
         };
+        n_tokens += json_value(rank, "tokens_evaluated", 0);
+        if (return_text) {
+            elem["text"] = std::move(texts[index]);
+        }
+        elements.push_back(elem);
     }
+
+    std::sort(elements.begin(), elements.end(), [score_label](const json& a, const json& b) {
+        return json_value(a, score_label, 0.0) > json_value(b, score_label, 0.0);
+    });
+
+    elements.resize(std::min(top_n, (int)elements.size()));
+    json results = elements;
+
+    if (is_tei_format) return results;
+
+    json res = json{
+        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"object", "list"},
+        {"usage", json{
+            {"prompt_tokens", n_tokens},
+            {"total_tokens", n_tokens}
+        }},
+        {"results", results}
+    };
 
     return res;
 }
@@ -1102,6 +1099,7 @@ public:
     ~server_tokens() = default;
 
     // Prevent copying
+    // TODO: server_tokens should be copyable - remove this:
     server_tokens(const server_tokens&) = delete;
     server_tokens& operator=(const server_tokens&) = delete;
 
@@ -1119,7 +1117,7 @@ public:
         }
     }
 
-    server_tokens(llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
+    server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
 
     // for debugging
     std::string str() const {
@@ -1144,9 +1142,8 @@ public:
         auto it = map_pos_to_media.find(pos);
         if (it != map_pos_to_media.end()) {
             return it->second;
-        } else {
-            throw std::runtime_error("Chunk not found");
         }
+        throw std::runtime_error("Chunk not found");
     }
 
     void push_back(llama_token tok) {
@@ -1170,7 +1167,7 @@ public:
             map_pos_to_media[start_pos] = std::move(new_chunk);
         } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
             size_t n_tokens;
-            auto text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+            const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
             for (size_t i = 0; i < n_tokens; ++i) {
                 push_back(text_tokens[i]);
             }
@@ -1190,7 +1187,7 @@ public:
             // We could also just check, but this will prevent silently dropping MTMD data.
             GGML_ASSERT(has_mtmd);
             for (auto it = tokens.map_pos_to_media.begin(); it != tokens.map_pos_to_media.end(); ) {
-                auto chunk = tokens.map_pos_to_media[it->first].get();
+                auto * chunk = tokens.map_pos_to_media[it->first].get();
                 mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
                 map_pos_to_media[start_pos+it->first] = std::move(new_chunk);
             }
@@ -1240,9 +1237,10 @@ public:
             // allowed to resize      ^                    ^
             // disallowed to resize          ^      ^             ^
             if (n > 0) {
-                llama_token last_token = tokens[n - 1];
                 // make sure we never remove tokens in the middle of an image
-                if (last_token == LLAMA_TOKEN_NULL) {
+                // note that the case where we keep a full image at the end is allowed:
+                //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
+                if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
                     find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
                 }
             }
@@ -1271,33 +1269,52 @@ public:
     }
 
     size_t get_common_prefix(const server_tokens & b) const {
-        size_t max_idx = std::min(tokens.size(), b.tokens.size());
-        for (size_t i = 0; i < max_idx; ++i) {
-            auto & ai =   tokens[i];
-            auto & bi = b.tokens[i];
+        const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
-            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
-                GGML_ASSERT(has_mtmd);
-                const auto & a_chunk =   find_chunk(i);
-                const auto & b_chunk = b.find_chunk(i);
-                GGML_ASSERT(a_chunk && b_chunk);
-                std::string ai_id  = mtmd_input_chunk_get_id(a_chunk.get());
-                std::string bi_id  = mtmd_input_chunk_get_id(b_chunk.get());
-                size_t a_pos       = mtmd_input_chunk_get_n_pos(a_chunk.get());
-                size_t b_pos       = mtmd_input_chunk_get_n_pos(b_chunk.get());
-                if (ai_id == bi_id && a_pos == b_pos) {
-                    GGML_ASSERT(a_pos > 0 && "Invalid media chunk"); // should never happen
-                    i += a_pos - 1; // will be +1 by the for loop
+        if (!has_mtmd) {
+            for (size_t i = 0; i < max_idx; ++i) {
+                if (tokens[i] == b.tokens[i]) {
                     continue;
-                } else {
-                    return i;
                 }
-            } else if (ai == bi) {
-                continue;
-            } else {
+
                 return i;
             }
+
+            return max_idx;
         }
+
+        for (size_t i = 0; i < max_idx; ++i) {
+            const llama_token ai =   tokens[i];
+            const llama_token bi = b.tokens[i];
+
+            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+                const auto & a_chunk =   find_chunk(i);
+                const auto & b_chunk = b.find_chunk(i);
+
+                GGML_ASSERT(a_chunk && b_chunk);
+
+                const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());
+                const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());
+
+                const size_t pos_a = mtmd_input_chunk_get_n_pos(a_chunk.get());
+                const size_t pos_b = mtmd_input_chunk_get_n_pos(b_chunk.get());
+
+                if (id_ai == id_bi && pos_a == pos_b) {
+                    GGML_ASSERT(pos_a > 0 && "Invalid media chunk"); // should never happen
+                    i += pos_a - 1; // will be +1 by the for loop
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (ai == bi) {
+                continue;
+            }
+
+            return i;
+        }
+
         return max_idx; // all tokens are equal
     }
 
@@ -1308,7 +1325,7 @@ public:
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
 
         for (size_t i = 0; i < tokens.size(); ++i) {
-            auto & t = tokens[i];
+            const auto & t = tokens[i];
             if (t == LLAMA_TOKEN_NULL) {
                 try {
                     const auto & chunk = find_chunk(i);
@@ -1330,8 +1347,8 @@ public:
                 mtmd_context * mctx,
                 llama_pos n_past,
                 int32_t seq_id,
-                llama_pos & n_pos_out) {
-        auto & chunk = find_chunk(n_past);
+                llama_pos & n_pos_out) const {
+        const auto & chunk = find_chunk(n_past);
         const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
                             ? "image" : "audio";
         SRV_INF("processing %s...\n", name);
@@ -1367,34 +1384,6 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     }
     return std::to_string(hash);
 }
-
-
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
-static server_tokens format_rerank(const struct llama_vocab * vocab, server_tokens & query, server_tokens & doc) {
-    server_tokens result = {};
-
-    // Get EOS token - use SEP token as fallback if EOS is not available
-    llama_token eos_token = llama_vocab_eos(vocab);
-    if (eos_token == LLAMA_TOKEN_NULL) {
-        eos_token = llama_vocab_sep(vocab);
-    }
-    if (llama_vocab_get_add_bos(vocab)) {
-        result.push_back(llama_vocab_bos(vocab));
-    }
-    result.push_back(query);
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-    if (llama_vocab_get_add_sep(vocab)) {
-        result.push_back(llama_vocab_sep(vocab));
-    }
-    result.push_back(doc);
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-    return result;
-}
-
 
 static server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
     mtmd::bitmaps bitmaps;
@@ -1499,5 +1488,45 @@ static std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * voc
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
     }
+    return result;
+}
+
+// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+static server_tokens format_rerank(const struct llama_model * model, const struct llama_vocab * vocab, mtmd_context * mctx, const std::string & query, const std::string & doc) {
+    server_tokens result = {};
+
+    const char * rerank_prompt = llama_model_chat_template(model, "rerank");
+
+    if (rerank_prompt != nullptr) {
+        std::string prompt = rerank_prompt;
+        string_replace_all(prompt, "{query}"   , query);
+        string_replace_all(prompt, "{document}", doc  );
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        result.push_back(tokens);
+    } else {
+        // Get EOS token - use SEP token as fallback if EOS is not available
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        llama_token eos_token = llama_vocab_eos(vocab);
+        if (eos_token == LLAMA_TOKEN_NULL) {
+            eos_token = llama_vocab_sep(vocab);
+        }
+
+        if (llama_vocab_get_add_bos(vocab)) {
+            result.push_back(llama_vocab_bos(vocab));
+        }
+        result.push_back(query_tokens);
+        if (llama_vocab_get_add_eos(vocab)) {
+            result.push_back(eos_token);
+        }
+        if (llama_vocab_get_add_sep(vocab)) {
+            result.push_back(llama_vocab_sep(vocab));
+        }
+        result.push_back(doc_tokens);
+        if (llama_vocab_get_add_eos(vocab)) {
+            result.push_back(eos_token);
+        }
+    }
+
     return result;
 }
