@@ -343,11 +343,12 @@ mechanism. Use of WebWorker helps avoid exposing browser global scope to the gen
 However any shared web worker scope isnt isolated. Either way always remember to cross check the tool
 requests and generated responses when using tool calling.
 
-web_url_fetch and family works along with a corresponding simple local web proxy/caching server logic
-that can bypass the CORS restrictions applied if trying to directly fetch from the browser js runtime
-environment. Depending on the path specified on the proxy server, if urltext, it additionally tries
-to convert html content into equivalent text to some extent. May add support for white list of allowed
-sites to access or so.
+fetch_web_url_raw/text and family works along with a corresponding simple local web proxy/caching
+server logic, this helps bypass the CORS restrictions applied if trying to directly fetch from the
+browser js runtime environment. Depending on the path specified wrt the proxy server, if urltext
+(and not urlraw), it additionally tries to convert html content into equivalent text to some extent
+in a simple minded manner by dropping head block as well as all scripts/styles/footers/headers/nav.
+May add support for white list of allowed sites to access or so. The simple proxy can be found at
 * tools/server/public_simplechat/local.tools/simpleproxy.py
 
 

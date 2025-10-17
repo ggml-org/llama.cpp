@@ -82,17 +82,17 @@ function message_toolsworker(mev) {
 }
 
 
-let weburlfetch_meta = {
+let fetchweburlraw_meta = {
         "type": "function",
         "function": {
-            "name": "web_url_fetch",
-            "description": "Fetch the requested web url through a proxy server in few seconds",
+            "name": "fetch_web_url_raw",
+            "description": "Fetch the requested web url through a proxy server and return the got content as is, in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"the url of the page / content to fetch from the internet"
+                        "description":"url of the web page to fetch from the internet"
                     }
                 },
                 "required": ["url"]
@@ -102,17 +102,18 @@ let weburlfetch_meta = {
 
 
 /**
- * Implementation of the web url logic. Dumb initial go.
+ * Implementation of the fetch web url raw logic. Dumb initial go.
  * Expects a simple minded proxy server to be running locally
  * * listening on port 3128
  * * expecting http requests
- *   * with a query token named url which gives the actual url to fetch
- * ALERT: Accesses a external web proxy/caching server be aware and careful
+ *   * with a query token named url wrt the path urlraw
+ *     which gives the actual url to fetch
+ * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function weburlfetch_run(toolcallid, toolname, obj) {
+function fetchweburlraw_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `http://127.0.0.1:3128/urlraw?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp=>resp.text()).then(data => {
@@ -124,17 +125,17 @@ function weburlfetch_run(toolcallid, toolname, obj) {
 }
 
 
-let weburlfetchstrip_meta = {
+let fetchweburltext_meta = {
         "type": "function",
         "function": {
-            "name": "web_url_fetch_strip_htmltags_and_some_useless",
-            "description": "Fetch the requested web url through a proxy server and strip away html tags as well as head, script, styles blocks before returning the remaining body in few seconds",
+            "name": "fetch_web_url_text",
+            "description": "Fetch the requested web url through a proxy server and return its text content after stripping away the html tags as well as head, script, style, header, footer, nav blocks, in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"the url of the page that will be fetched from the internet and inturn unwanted stuff stripped from its contents to some extent"
+                        "description":"url of the page that will be fetched from the internet and inturn unwanted stuff stripped from its contents to some extent"
                     }
                 },
                 "required": ["url"]
@@ -144,19 +145,20 @@ let weburlfetchstrip_meta = {
 
 
 /**
- * Implementation of the web url logic. Dumb initial go.
+ * Implementation of the fetch web url text logic. Dumb initial go.
  * Expects a simple minded proxy server to be running locally
  * * listening on port 3128
  * * expecting http requests
- *   * with a query token named url which gives the actual url to fetch
- * * strips out head as well as any script and style blocks in body
+ *   * with a query token named url wrt urltext path,
+ *     which gives the actual url to fetch
+ * * strips out head as well as any script, style, header, footer, nav and so blocks in body
  *   before returning remaining body contents.
- * ALERT: Accesses a external web proxy/caching server be aware and careful
+ * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function weburlfetchstrip_run(toolcallid, toolname, obj) {
+function fetchweburltext_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `http://127.0.0.1:3128/urltext?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp=>resp.text()).then(data => {
@@ -182,14 +184,14 @@ export let tc_switch = {
         "meta": calc_meta,
         "result": ""
     },
-    "web_url_fetch": {
-        "handler": weburlfetch_run,
-        "meta": weburlfetch_meta,
+    "fetch_web_url_raw": {
+        "handler": fetchweburlraw_run,
+        "meta": fetchweburlraw_meta,
         "result": ""
     },
-    "web_url_fetch_strip_htmltags_and_some_useless": {
-        "handler": weburlfetchstrip_run,
-        "meta": weburlfetchstrip_meta,
+    "fetch_web_url_text": {
+        "handler": fetchweburltext_run,
+        "meta": fetchweburltext_meta,
         "result": ""
     }
 }
