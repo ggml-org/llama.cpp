@@ -4,7 +4,6 @@
 		Funnel,
 		AlertTriangle,
 		Brain,
-		Cog,
 		Code,
 		Monitor,
 		Sun,
