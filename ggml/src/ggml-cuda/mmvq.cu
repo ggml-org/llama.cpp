@@ -242,7 +242,7 @@ static __global__ void mul_mat_vec_q(
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
             float result = tmp[j][threadIdx.x];
             if constexpr (has_gate) {
-                result = op(result) * tmp_gate[j][threadIdx.x];
+                result = result * op(tmp_gate[j][threadIdx.x]);
             }
             dst[j*stride_col_dst + threadIdx.x] = result;
         }

@@ -197,7 +197,7 @@ static __global__ void mul_mat_vec_f(
     }
 
     if constexpr (has_gate) {
-        dst[tid*stride_col_dst + row] = op(sumf[tid]) * sumf_gate[tid];
+        dst[tid*stride_col_dst + row] = sumf[tid] * op(sumf_gate[tid]);
     } else {
         dst[tid*stride_col_dst + row] = sumf[tid];
     }

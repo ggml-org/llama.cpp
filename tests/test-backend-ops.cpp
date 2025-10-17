@@ -4630,7 +4630,7 @@ struct test_fused_ffn_gate : public test_case {
             ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
             ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
 
-            ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
+            ggml_tensor * out = ggml_glu_split(ctx, ffn_gate, ffn_up, glu_op);
 
             ggml_set_name(out, "out");
             return out;
@@ -4652,10 +4652,10 @@ struct test_fused_ffn_gate : public test_case {
             ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, m);
             ggml_set_name(cur, "cur");
 
-            ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
             ggml_tensor * ffn_up   = ggml_mul_mat_id(ctx, ups, cur, ids);
+            ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
 
-            ggml_tensor * out = ggml_glu_split(ctx, ffn_up, ffn_gate, glu_op);
+            ggml_tensor * out = ggml_glu_split(ctx, ffn_gate, ffn_up, glu_op);
 
             ggml_set_name(out, "out");
             return out;
