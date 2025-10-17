@@ -334,9 +334,9 @@ The following tools/functions are currently provided by default
 * simple_calculator - which can solve simple arithmatic expressions
 * run_javascript_function_code - which can be used to run some javascript code in the browser
   context.
-* web_url_fetch - fetch requested url through a proxy server
-* web_url_fetch_strip_htmltags_and_some_useless - fetch requested url through a proxy server
-  and also try strip the html respose of html tags and also head, script & style blocks.
+* fetch_web_url_raw - fetch requested url through a proxy server
+* fetch_web_url_text - fetch requested url through a proxy server
+  and also try strip the html respose of html tags and also head, script, style, header,footer,... blocks.
 
 Currently the generated code / expression is run through a simple minded eval inside a web worker
 mechanism. Use of WebWorker helps avoid exposing browser global scope to the generated code directly.
