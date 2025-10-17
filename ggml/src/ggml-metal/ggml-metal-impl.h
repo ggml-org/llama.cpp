@@ -515,6 +515,19 @@ typedef struct {
 } ggml_metal_kargs_conv_transpose_1d;
 
 typedef struct {
+    int32_t  IC;
+    int32_t  IH;
+    int32_t  IW;
+    int32_t  KH;
+    int32_t  KW;
+    int32_t  OC;
+    int32_t  s0;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+} ggml_metal_kargs_conv_transpose_2d;
+
+typedef struct {
     uint64_t  ofs0;
     uint64_t  ofs1;
     int32_t  IW;
