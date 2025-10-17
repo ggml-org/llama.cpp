@@ -4,7 +4,7 @@
 		Funnel,
 		AlertTriangle,
 		Brain,
-		Cog,
+		Code,
 		Monitor,
 		Sun,
 		Moon,
@@ -88,9 +88,59 @@
 			]
 		},
 		{
-			title: 'Samplers',
+			title: 'Sampling',
 			icon: Funnel,
 			fields: [
+				{
+					key: 'temperature',
+					label: 'Temperature',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_range',
+					label: 'Dynamic temperature range',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_exponent',
+					label: 'Dynamic temperature exponent',
+					type: 'input'
+				},
+				{
+					key: 'top_k',
+					label: 'Top K',
+					type: 'input'
+				},
+				{
+					key: 'top_p',
+					label: 'Top P',
+					type: 'input'
+				},
+				{
+					key: 'min_p',
+					label: 'Min P',
+					type: 'input'
+				},
+				{
+					key: 'xtc_probability',
+					label: 'XTC probability',
+					type: 'input'
+				},
+				{
+					key: 'xtc_threshold',
+					label: 'XTC threshold',
+					type: 'input'
+				},
+				{
+					key: 'typ_p',
+					label: 'Typical P',
+					type: 'input'
+				},
+				{
+					key: 'max_tokens',
+					label: 'Max tokens',
+					type: 'input'
+				},
 				{
 					key: 'samplers',
 					label: 'Samplers',
@@ -152,68 +202,17 @@
 					key: 'showThoughtInProgress',
 					label: 'Show thought in progress',
 					type: 'checkbox'
-				},
-				{
-					key: 'disableReasoningFormat',
-					label:
-						'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
-					type: 'checkbox'
 				}
 			]
 		},
 		{
-			title: 'Advanced',
-			icon: Cog,
+			title: 'Developer',
+			icon: Code,
 			fields: [
 				{
-					key: 'temperature',
-					label: 'Temperature',
-					type: 'input'
-				},
-				{
-					key: 'dynatemp_range',
-					label: 'Dynamic temperature range',
-					type: 'input'
-				},
-				{
-					key: 'dynatemp_exponent',
-					label: 'Dynamic temperature exponent',
-					type: 'input'
-				},
-				{
-					key: 'top_k',
-					label: 'Top K',
-					type: 'input'
-				},
-				{
-					key: 'top_p',
-					label: 'Top P',
-					type: 'input'
-				},
-				{
-					key: 'min_p',
-					label: 'Min P',
-					type: 'input'
-				},
-				{
-					key: 'xtc_probability',
-					label: 'XTC probability',
-					type: 'input'
-				},
-				{
-					key: 'xtc_threshold',
-					label: 'XTC threshold',
-					type: 'input'
-				},
-				{
-					key: 'typ_p',
-					label: 'Typical P',
-					type: 'input'
-				},
-				{
-					key: 'max_tokens',
-					label: 'Max tokens',
-					type: 'input'
+					key: 'disableReasoningFormat',
+					label: 'Show raw LLM output',
+					type: 'checkbox'
 				},
 				{
 					key: 'custom',
