@@ -959,7 +959,7 @@ void write_output_files() {
     }
 
     std::string suffixes[2] = {"_f32", "_f16"};
-    for (auto op : {"add", "sub", "mul", "div", "add_rms"}) {
+    for (std::string op : {"add", "sub", "mul", "div", "add_rms"}) {
         hdr << "extern const void * " << op << "_data[2][2][2][2];\n";
         hdr << "extern const uint64_t " << op << "_len[2][2][2][2];\n";
 
