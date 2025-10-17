@@ -191,7 +191,24 @@ def main():
                     print(f"找到 {len(tensor_keys)} 个张量")
 
                 for key in tensor_keys:
-                    if '_imag' in key:  # 只处理实部，虚部会在量化时一起处理
+                    if 'lm_head' in key or 'embeddings' in key or 'norm' in key:
+                        tensor_data = f.get_tensor(key).to(torch.float16)
+                        numpy_array = tensor_data.cpu().numpy().astype(np.float16)
+                        model_arch = gguf.MODEL_ARCH.IFAIRY
+                        mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
+                        try:
+                            mapped_name = mapper.get_name(key)
+                            if mapped_name is None:
+                                # 直接报错
+                                raise Exception(f"No mapping found for tensor '{key}'")
+                        except Exception as e:
+                            print(f"Error mapping tensor name '{key}': {e}")
+                            exit(1)
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16)
+                        if verbose:
+                            print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
+                        continue
+                    if '_imag' in key:
                         continue
                     tensor_data = f.get_tensor(key).to(torch.float16)
                     tensor_data = quant_and_merge(key, tensor_data, f, weight_map)
@@ -213,10 +230,7 @@ def main():
                         continue
 
                     # 添加张量，指定自定义的类型
-                    if 'lm_head' in key:
-                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16)
-                    else:
-                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
+                    writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
 
                     if verbose:
                         print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
