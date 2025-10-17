@@ -116,7 +116,12 @@ let fetchweburlraw_meta = {
 function fetchweburlraw_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `http://127.0.0.1:3128/urlraw?url=${encodeURIComponent(obj.url)}`
-        fetch(newUrl).then(resp=>resp.text()).then(data => {
+        fetch(newUrl).then(resp => {
+            if (!resp.ok) {
+                throw new Error(`${resp.status}:${resp.statusText}`);
+            }
+            return resp.text()
+        }).then(data => {
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
@@ -161,7 +166,12 @@ let fetchweburltext_meta = {
 function fetchweburltext_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `http://127.0.0.1:3128/urltext?url=${encodeURIComponent(obj.url)}`
-        fetch(newUrl).then(resp=>resp.text()).then(data => {
+        fetch(newUrl).then(resp => {
+            if (!resp.ok) {
+                throw new Error(`${resp.status}:${resp.statusText}`);
+            }
+            return resp.text()
+        }).then(data => {
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
             message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
