@@ -7879,7 +7879,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                 // launch kernel
                 backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_size, local_size, dst);
-                
+
                 // deallocate sub buffers and images
                 CL_CHECK(clReleaseMemObject(src1_sub_buffer));
                 CL_CHECK(clReleaseMemObject(buf_src1_image));

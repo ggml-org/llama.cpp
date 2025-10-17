@@ -157,7 +157,7 @@ kernel void kernel_convert_block_mxfp4_trans(
     int i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
-    
+
     uint ne00_blk = ne00 / QK_MXFP4;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -193,7 +193,7 @@ kernel void kernel_restore_block_mxfp4_trans(
     int i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
-    
+
     uint ne00_blk = ne00 / QK_MXFP4;
     uint src_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;

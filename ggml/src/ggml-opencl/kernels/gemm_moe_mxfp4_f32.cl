@@ -87,7 +87,7 @@ __kernel void kernel_gemm_moe_mxfp4_f32(
     ushort i11 = router.y;
     ushort i1 = router.z;
     ushort tile_id = router.w;
-    
+
     if (tile_id * tile_size + i01 >= ne01) { // handle edge case when ne01 is not multiple of tile_size
         return;
     }

@@ -98,7 +98,7 @@ __kernel void kernel_gemv_moe_mxfp4_f32(
         uint offset = i11 * ne00 / 4 + ib00 * 8;
 
         half8 fp16x8 = mxfp4_to_fp16_packed8(as_ushort2(regQ.s0));
-        
+
         float4 shared_y4;
         shared_y4 = read_imagef(src1, (offset + 0));
         float4 acc = shared_y4 * (float4)(fp16x8.s0, fp16x8.s2, fp16x8.s4, fp16x8.s6);
