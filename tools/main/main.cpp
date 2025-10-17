@@ -83,6 +83,33 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+class template_content_tracker {
+public:
+    template_content_tracker() : pos_(0), start_(std::string::npos), end_(std::string::npos) {}
+
+    void set_range(size_t start, size_t end) {
+        start_ = start;
+        end_ = end;
+    }
+
+    bool should_display(size_t pos) const {
+        return start_ != std::string::npos && pos >= start_ && pos < end_;
+    }
+
+    bool at_end(size_t pos) const {
+        return start_ != std::string::npos && pos >= end_;
+    }
+
+    bool is_active() const {
+        return start_ != std::string::npos;
+    }
+
+private:
+    size_t pos_;
+    size_t start_;
+    size_t end_;
+};
+
 class partial_formatter {
 public:
     enum output_type {
@@ -365,8 +392,6 @@ int main(int argc, char ** argv) {
     chat_formatter chat_add_and_format(chat_msgs, chat_templates, params);
 
     std::string prompt;
-    std::string system_remaining;
-    std::string prompt_remaining;
     {
         if (params.conversation_mode && params.enable_chat_template) {
             if (!params.system_prompt.empty()) {
@@ -403,16 +428,27 @@ int main(int argc, char ** argv) {
     }
 
     // Set up content tracking to skip template markup during display
-    bool skip_template_markup = false;
+    size_t prompt_pos = 0;
+    template_content_tracker system_tracker;
+    template_content_tracker prompt_tracker;
+
     if (params.conversation_mode && params.enable_chat_template) {
+        size_t search_pos = 0;
         for (const auto & msg : chat_msgs) {
             if (msg.role == "system") {
-                system_remaining = msg.content;
+                size_t content_start = prompt.find(msg.content, search_pos);
+                if (content_start != std::string::npos) {
+                    system_tracker.set_range(content_start, content_start + msg.content.length());
+                    search_pos = content_start + msg.content.length();
+                }
             } else if (msg.role == "user") {
-                prompt_remaining = msg.content;
+                size_t content_start = prompt.find(msg.content, search_pos);
+                if (content_start != std::string::npos) {
+                    prompt_tracker.set_range(content_start, content_start + msg.content.length());
+                    search_pos = content_start + msg.content.length();
+                }
             }
         }
-        skip_template_markup = !system_remaining.empty() || !prompt_remaining.empty();
     }
 
     // Should not run without any tokens
@@ -848,29 +884,26 @@ int main(int argc, char ** argv) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                 if (!chat_add_and_format.get_partial_formatter() || assistant_ss.str().empty()) {
-                    if (skip_template_markup) {
-                        if (!token_str.empty() && !system_remaining.empty() &&
-                            system_remaining.compare(0, token_str.length(), token_str) == 0) {
+                    bool always_display = !system_tracker.is_active() && !prompt_tracker.is_active();
+                    if (always_display) {
+                        LOG("%s", token_str.c_str());
 
-                            system_remaining.erase(0, token_str.length());
-                            LOG("%s", token_str.c_str());
-                            if (system_remaining.empty()) {
-                                LOG("\n");
-                            }
-
-                        } else if (!token_str.empty() && !prompt_remaining.empty() &&
-                                   prompt_remaining.compare(0, token_str.length(), token_str) == 0) {
-
-                            prompt_remaining.erase(0, token_str.length());
-                            LOG("%s", token_str.c_str());
-                            if (prompt_remaining.empty()) {
-                                LOG("\n");
-                            }
+                    } else if (system_tracker.should_display(prompt_pos)) {
+                        LOG("%s", token_str.c_str());
+                        size_t next_pos = prompt_pos + token_str.length();
+                        if (system_tracker.at_end(next_pos)) {
+                            LOG("\n");
                         }
 
-                    } else {
+                    } else if (prompt_tracker.should_display(prompt_pos)) {
                         LOG("%s", token_str.c_str());
+                        size_t next_pos = prompt_pos + token_str.length();
+                        if (prompt_tracker.at_end(next_pos)) {
+                            LOG("\n");
+                        }
                     }
+
+                    prompt_pos += token_str.length();
                 }
 
                 // Record Displayed Tokens To Log
@@ -890,7 +923,6 @@ int main(int argc, char ** argv) {
         if (input_echo && (int) embd_inp.size() == n_consumed) {
             console::set_display(console::reset);
             display = true;
-            skip_template_markup = false; // system & prompt processing complete
         }
 
         // if not currently processing queued inputs;
