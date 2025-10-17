@@ -2,23 +2,32 @@
 	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants/processing-info';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { slotsService } from '$lib/services/slots';
-	import { isLoading, activeMessages, activeConversation } from '$lib/stores/chat.svelte';
+	import {
+		isConversationLoading,
+		activeMessages,
+		activeConversation
+	} from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
 	const processingState = useProcessingState();
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	let showSlotsInfo = $derived(isLoading() || config().keepStatsVisible);
+	// Check if the current active conversation is loading (for per-conversation UI state)
+	let isCurrentConversationLoading = $derived(
+		activeConversation() ? isConversationLoading(activeConversation()!.id) : false
+	);
+
+	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
 
 	$effect(() => {
 		const keepStatsVisible = config().keepStatsVisible;
 
-		if (keepStatsVisible || isLoading()) {
+		if (keepStatsVisible || isCurrentConversationLoading) {
 			processingState.startMonitoring();
 		}
 
-		if (!isLoading() && !keepStatsVisible) {
+		if (!isCurrentConversationLoading && !keepStatsVisible) {
 			setTimeout(() => {
 				if (!config().keepStatsVisible) {
 					processingState.stopMonitoring();

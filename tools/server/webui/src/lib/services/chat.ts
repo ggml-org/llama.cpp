@@ -29,7 +29,7 @@ import { slotsService } from './slots';
  * - Request lifecycle management (abort, cleanup)
  */
 export class ChatService {
-	private abortController: AbortController | null = null;
+	private abortControllers: Map<string, AbortController> = new Map();
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -43,7 +43,8 @@ export class ChatService {
 	 */
 	async sendMessage(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
-		options: SettingsChatServiceOptions = {}
+		options: SettingsChatServiceOptions = {},
+		conversationId?: string
 	): Promise<string | void> {
 		const {
 			stream,
@@ -79,9 +80,17 @@ export class ChatService {
 
 		const currentConfig = config();
 
-		// Cancel any ongoing request and create a new abort controller
-		this.abort();
-		this.abortController = new AbortController();
+		// Create or get abort controller for this conversation
+		const requestId = conversationId || 'default';
+
+		// Cancel any existing request for this conversation
+		if (this.abortControllers.has(requestId)) {
+			this.abortControllers.get(requestId)?.abort();
+		}
+
+		// Create new abort controller for this conversation
+		const abortController = new AbortController();
+		this.abortControllers.set(requestId, abortController);
 
 		// Convert database messages with attachments to API format if needed
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -172,7 +181,7 @@ export class ChatService {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				},
 				body: JSON.stringify(requestBody),
-				signal: this.abortController.signal
+				signal: abortController.signal
 			});
 
 			if (!response.ok) {
@@ -227,6 +236,9 @@ export class ChatService {
 				onError(userFriendlyError);
 			}
 			throw userFriendlyError;
+		} finally {
+			// Clean up the abort controller for this conversation
+			this.abortControllers.delete(requestId);
 		}
 	}
 
@@ -520,10 +532,20 @@ export class ChatService {
 	 *
 	 * @public
 	 */
-	public abort(): void {
-		if (this.abortController) {
-			this.abortController.abort();
-			this.abortController = null;
+	public abort(conversationId?: string): void {
+		if (conversationId) {
+			// Abort specific conversation
+			const abortController = this.abortControllers.get(conversationId);
+			if (abortController) {
+				abortController.abort();
+				this.abortControllers.delete(conversationId);
+			}
+		} else {
+			// Abort all conversations
+			for (const controller of this.abortControllers.values()) {
+				controller.abort();
+			}
+			this.abortControllers.clear();
 		}
 	}
 
