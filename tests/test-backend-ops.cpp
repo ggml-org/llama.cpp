@@ -4690,6 +4690,9 @@ struct test_fused_ffn_gate : public test_case {
     }
 
     double max_nmse_err() override {
+        if (glu_op == GGML_GLU_OP_GEGLU) {
+            return 1e-2;
+        }
         return 1e-3;
     }
 };
@@ -6953,7 +6956,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 if (!use_id && b) {
                     continue;
                 }
-                test_cases.emplace_back(new test_fused_ffn_gate(type, GGML_GLU_OP_SWIGLU, 1, 32, 256, use_id, 16, 8, b));
+                for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+                    test_cases.emplace_back(new test_fused_ffn_gate(type, glu_op, 1, 32, 256, use_id, 16, 8, b));
+                }
             }
         }
     }

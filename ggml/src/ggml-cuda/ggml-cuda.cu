@@ -2018,7 +2018,7 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
         return false;
     }
 
-    if (ffn_up->src[0]->type != ffn_gate->src[0]->type || !ggml_are_same_shape(ffn_up->src[0], ffn_gate->src[0]) ) {
+    if (ffn_up->src[0]->type != ffn_gate->src[0]->type || !ggml_are_same_shape(ffn_up->src[0], ffn_gate->src[0]) || !ggml_are_same_stride(ffn_up->src[0], ffn_gate->src[0])) {
         return false;
     }
 
@@ -2034,7 +2034,9 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up, const ggml
         return false;
     }
 
-    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU) {
+    static constexpr std::array<ggml_glu_op, 2> valid_glu_ops = {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU};
+
+    if (std::find(valid_glu_ops.begin(), valid_glu_ops.end(), ggml_get_glu_op(glu)) == valid_glu_ops.end()) {
         return false;
     }
 

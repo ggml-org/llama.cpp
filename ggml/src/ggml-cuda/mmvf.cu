@@ -135,8 +135,10 @@ static __global__ void mul_mat_vec_f(
                 ggml_cuda_mad(sumf[j], tmpx1, tmpy.y);
 
                 if constexpr (has_gate) {
-                    ggml_cuda_mad(sumf_gate[j], tmpx_gate, tmpy.x);
-                    ggml_cuda_mad(sumf_gate[j], tmpx_gate, tmpy.y);
+                    const float tmpx0 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx_gate)[0]);
+                    const float tmpx1 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx_gate)[1]);
+                    ggml_cuda_mad(sumf_gate[j], tmpx0, tmpy.x);
+                    ggml_cuda_mad(sumf_gate[j], tmpx1, tmpy.y);
                 }
             }
         }
@@ -202,6 +204,9 @@ static __global__ void mul_mat_vec_f(
         switch (glu_op) {
             case GGML_GLU_OP_SWIGLU:
                 gated_value = ggml_cuda_op_silu_single(gate_value);
+                break;
+            case GGML_GLU_OP_GEGLU:
+                gated_value = ggml_cuda_op_gelu_single(gate_value);
                 break;
             default:
                 gated_value = gate_value;
@@ -430,6 +435,8 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     GGML_ASSERT(        nb10       == ts_src1);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
     GGML_ASSERT(        nb0        == ts_dst);
+
+    GGML_ASSERT(!src0_gate || ggml_are_same_stride(src0_gate, src0));
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;

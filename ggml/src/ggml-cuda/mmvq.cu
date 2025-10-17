@@ -248,6 +248,9 @@ static __global__ void mul_mat_vec_q(
                     case GGML_GLU_OP_SWIGLU:
                         gated_value = ggml_cuda_op_silu_single(gate_value);
                         break;
+                    case GGML_GLU_OP_GEGLU:
+                        gated_value = ggml_cuda_op_gelu_single(gate_value);
+                        break;
                     default:
                         gated_value = gate_value;
                         break;
@@ -539,14 +542,10 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(        nb10       == ts_src1);
     GGML_ASSERT(        nb0        == ts_dst);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
-    if (src0_gate) {
-        GGML_ASSERT(src0_gate->nb[0] == ts_src0);
-        for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-            GGML_ASSERT(src0_gate->nb[i] == src0->nb[i]);
-        }
-    }
 
     GGML_ASSERT(!ids || ne12 == 1); // Implementation is only correct for batch size 1.
+
+    GGML_ASSERT(!src0_gate || ggml_are_same_stride(src0_gate, src0));
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;

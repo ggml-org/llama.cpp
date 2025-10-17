@@ -18,10 +18,7 @@ static __device__ __forceinline__ float op_step(float x) {
 }
 
 static __device__ __forceinline__ float op_gelu(float x) {
-    const float GELU_COEF_A    = 0.044715f;
-    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
-
-    return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
+    return ggml_cuda_op_gelu_single(x);
 }
 
 static __device__ __forceinline__ float op_gelu_erf(float x) {
@@ -37,7 +34,7 @@ static __device__ __forceinline__ float op_gelu_quick(float x) {
 }
 
 static __device__ __forceinline__ float op_silu(float x) {
-    return x / (1.0f + expf(-x));
+    return ggml_cuda_op_silu_single(x);
 }
 
 static __device__ __forceinline__ float op_tanh(float x) {
