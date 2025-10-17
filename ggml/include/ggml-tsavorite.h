@@ -140,6 +140,8 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_GEGLU_ERF,
   GGML_TSAVORITE_KERNEL_TYPE_GEGLU_QUICK,
 
+  GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX,
+
   GGML_TSAVORITE_KERNEL_TYPE_COUNT
 };
 
@@ -156,7 +158,7 @@ typedef struct tensor_log_ {
   uint32_t leaf2_len;
   uint32_t node_len;
   enum ggml_tsavorite_tensor_data_type data_type;
-  enum ggml_tsavorite_kernel_type kernel_type;
+  enum ggml_op kernel_type;
   uint64_t num_of_op;
   FILE *log_file;
   const ggml_tensor *tensor;
@@ -185,6 +187,7 @@ extern void _mlir_ciface_txe_sin_host(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid_host(void *a, void *res);
 extern void _mlir_ciface_txe_silu_host(void *a, void *res);
 extern void _mlir_ciface_txe_swiglu_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_soft_max_host(void *a, void *b, void *res, void *buf);
 extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
 
 /* 
@@ -210,7 +213,7 @@ extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 // GGML supports tensors with a maximum rank of 4
 #define MEM_REF_DESCRIPTOR_RANK 4
-#define TSI_TVU_LOAD_SIZE 32
+#define TSI_TVU_MEM_ALIGN 128
 
 //
 // backend API

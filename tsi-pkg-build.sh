@@ -38,11 +38,11 @@ cd ../../
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
 if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX"
 elif [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX"
 else
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX"   -DCMAKE_CXX_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX"
 fi
 
 cmake --build build-posix --config Release
