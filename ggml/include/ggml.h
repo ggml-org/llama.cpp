@@ -662,7 +662,7 @@ extern "C" {
 
 #if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
         int64_t perf_runs;
-	int64_t tsi_kernel_runs;
+        int64_t tsi_kernel_runs;
         int64_t perf_time_us;
         enum ggml_compute_backend_type ggml_compute_backend;
         char padding[12];
