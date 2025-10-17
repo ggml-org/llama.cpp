@@ -7256,7 +7256,7 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
             enum ggml_unary_op subop = ggml_get_unary_op(node);
             totals[op].unary_subtotals[subop].total_us += node->perf_time_us;
             totals[op].unary_subtotals[subop].runs     += node->perf_runs;
-	    totals[op].unary_subtotals[subop].tsi_kernel_count   += node->tsi_kernel_runs;
+            totals[op].unary_subtotals[subop].tsi_kernel_count   += node->tsi_kernel_runs;
         }
     }
 }
