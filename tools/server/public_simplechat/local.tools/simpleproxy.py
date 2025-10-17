@@ -97,29 +97,34 @@ class TextHtmlParser(html.parser.HTMLParser):
 
     def __init__(self):
         super().__init__()
-        self.bBody = False
+        self.inside = {
+            'body': False,
+            'script': False,
+            'style': False,
+            'header': False,
+            'footer': False,
+            'nav': False
+        }
+        self.monitored = [ 'body', 'script', 'style', 'header', 'footer', 'nav' ]
         self.bCapture = False
         self.text = ""
         self.textStripped = ""
 
+    def do_capture(self):
+        if self.inside['body'] and not (self.inside['script'] or self.inside['style'] or self.inside['header'] or self.inside['footer'] or self.inside['nav']):
+            return True
+        return False
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
-        if tag == 'body':
-            self.bBody = True
-            self.bCapture = True
-        if tag == 'script':
-            self.bCapture = False
-        if tag == 'style':
-            self.bCapture = False
+        if tag in self.monitored:
+            self.inside[tag] = True
 
     def handle_endtag(self, tag: str):
-        if tag == 'body':
-            self.bBody = False
-        if tag == 'script' or tag == 'style':
-            if self.bBody:
-                self.bCapture = True
+        if tag in self.monitored:
+            self.inside[tag] = False
 
     def handle_data(self, data: str):
-        if self.bCapture:
+        if self.do_capture():
             self.text += f"{data}\n"
 
     def syncup(self):
