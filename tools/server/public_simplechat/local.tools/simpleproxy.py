@@ -23,6 +23,20 @@ gMe = {
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
+    # Common headers to include in responses from this server
+    def send_headers_common(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', '*')
+        self.end_headers()
+
+    # overrides the SendError helper
+    # so that the common headers mentioned above can get added to them
+    # else CORS failure will be triggered by the browser on fetch from browser.
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        self.send_response(code, message)
+        self.send_headers_common()
+
     # Handle GET requests
     def do_GET(self):
         print(f"DBUG:ProxyHandler:GET:{self.path}")
@@ -41,10 +55,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         print(f"DBUG:ProxyHandler:OPTIONS:{self.path}")
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
-        self.end_headers()
+        self.send_headers_common()
 
 
 @dataclass(frozen=True)
