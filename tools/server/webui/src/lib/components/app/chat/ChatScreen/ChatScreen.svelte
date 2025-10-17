@@ -26,7 +26,6 @@
 		dismissErrorDialog,
 		errorDialog,
 		isLoading,
-		isConversationLoading,
 		sendMessage,
 		stopGeneration
 	} from '$lib/stores/chat.svelte';
@@ -84,10 +83,9 @@
 	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 
-	// Check if the current active conversation is loading (for per-conversation UI state)
-	let isCurrentConversationLoading = $derived(
-		activeConversation() ? isConversationLoading(activeConversation()!.id) : false
-	);
+	// Use global isLoading which is kept in sync with active conversation's loading state
+	// This ensures proper reactivity since isLoading is a $state variable
+	let isCurrentConversationLoading = $derived(isLoading());
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();

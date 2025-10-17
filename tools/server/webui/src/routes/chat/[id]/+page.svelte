@@ -16,6 +16,11 @@
 		if (chatId && chatId !== currentChatId) {
 			currentChatId = chatId;
 
+			// Skip loading if this conversation is already active (e.g., just created)
+			if (activeConversation()?.id === chatId) {
+				return;
+			}
+
 			(async () => {
 				const success = await chatStore.loadConversation(chatId);
 

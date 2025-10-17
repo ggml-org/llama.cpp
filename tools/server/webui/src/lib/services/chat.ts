@@ -199,7 +199,8 @@ export class ChatService {
 					onChunk,
 					onComplete,
 					onError,
-					options.onReasoningChunk
+					options.onReasoningChunk,
+					conversationId
 				);
 			} else {
 				return this.handleNonStreamResponse(response, onComplete, onError);
@@ -243,14 +244,13 @@ export class ChatService {
 	}
 
 	/**
-	 * Handles streaming response from the chat completion API.
-	 * Processes server-sent events and extracts content chunks from the stream.
-	 *
-	 * @param response - The fetch Response object containing the streaming data
+	 * Handles streaming response from the chat completion API
+	 * @param response - The Response object from the fetch request
 	 * @param onChunk - Optional callback invoked for each content chunk received
 	 * @param onComplete - Optional callback invoked when the stream is complete with full response
 	 * @param onError - Optional callback invoked if an error occurs during streaming
 	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
+	 * @param conversationId - Optional conversation ID for per-conversation state tracking
 	 * @returns {Promise<void>} Promise that resolves when streaming is complete
 	 * @throws {Error} if the stream cannot be read or parsed
 	 */
@@ -263,7 +263,8 @@ export class ChatService {
 			timings?: ChatMessageTimings
 		) => void,
 		onError?: (error: Error) => void,
-		onReasoningChunk?: (chunk: string) => void
+		onReasoningChunk?: (chunk: string) => void,
+		conversationId?: string
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -305,7 +306,7 @@ export class ChatService {
 							const promptProgress = parsed.prompt_progress;
 
 							if (timings || promptProgress) {
-								this.updateProcessingState(timings, promptProgress);
+								this.updateProcessingState(timings, promptProgress, conversationId);
 
 								// Store the latest timing data
 								if (timings) {
@@ -612,7 +613,8 @@ export class ChatService {
 
 	private updateProcessingState(
 		timings?: ChatMessageTimings,
-		promptProgress?: ChatMessagePromptProgress
+		promptProgress?: ChatMessagePromptProgress,
+		conversationId?: string
 	): void {
 		// Calculate tokens per second from timing data
 		const tokensPerSecond =
@@ -622,13 +624,16 @@ export class ChatService {
 
 		// Update slots service with timing data (async but don't wait)
 		slotsService
-			.updateFromTimingData({
-				prompt_n: timings?.prompt_n || 0,
-				predicted_n: timings?.predicted_n || 0,
-				predicted_per_second: tokensPerSecond,
-				cache_n: timings?.cache_n || 0,
-				prompt_progress: promptProgress
-			})
+			.updateFromTimingData(
+				{
+					prompt_n: timings?.prompt_n || 0,
+					predicted_n: timings?.predicted_n || 0,
+					predicted_per_second: tokensPerSecond,
+					cache_n: timings?.cache_n || 0,
+					prompt_progress: promptProgress
+				},
+				conversationId
+			)
 			.catch((error) => {
 				console.warn('Failed to update processing state:', error);
 			});

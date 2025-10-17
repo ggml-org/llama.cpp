@@ -2,21 +2,16 @@
 	import { PROCESSING_INFO_TIMEOUT } from '$lib/constants/processing-info';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { slotsService } from '$lib/services/slots';
-	import {
-		isConversationLoading,
-		activeMessages,
-		activeConversation
-	} from '$lib/stores/chat.svelte';
+	import { isLoading, activeMessages, activeConversation } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
 	const processingState = useProcessingState();
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	// Check if the current active conversation is loading (for per-conversation UI state)
-	let isCurrentConversationLoading = $derived(
-		activeConversation() ? isConversationLoading(activeConversation()!.id) : false
-	);
+	// Use global isLoading which is kept in sync with active conversation's loading state
+	// This ensures proper reactivity since isLoading is a $state variable
+	let isCurrentConversationLoading = $derived(isLoading());
 
 	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
 
@@ -37,14 +32,13 @@
 	});
 
 	$effect(() => {
-		activeConversation();
-
+		const conversation = activeConversation();
 		const messages = activeMessages() as DatabaseMessage[];
 		const keepStatsVisible = config().keepStatsVisible;
 
-		if (keepStatsVisible) {
+		if (keepStatsVisible && conversation) {
 			if (messages.length === 0) {
-				slotsService.clearState();
+				slotsService.clearConversationState(conversation.id);
 				return;
 			}
 
@@ -56,15 +50,18 @@
 					foundTimingData = true;
 
 					slotsService
-						.updateFromTimingData({
-							prompt_n: message.timings.prompt_n || 0,
-							predicted_n: message.timings.predicted_n || 0,
-							predicted_per_second:
-								message.timings.predicted_n && message.timings.predicted_ms
-									? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-									: 0,
-							cache_n: message.timings.cache_n || 0
-						})
+						.updateFromTimingData(
+							{
+								prompt_n: message.timings.prompt_n || 0,
+								predicted_n: message.timings.predicted_n || 0,
+								predicted_per_second:
+									message.timings.predicted_n && message.timings.predicted_ms
+										? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+										: 0,
+								cache_n: message.timings.cache_n || 0
+							},
+							conversation.id
+						)
 						.catch((error) => {
 							console.warn('Failed to update processing state from stored timings:', error);
 						});
@@ -73,7 +70,7 @@
 			}
 
 			if (!foundTimingData) {
-				slotsService.clearState();
+				slotsService.clearConversationState(conversation.id);
 			}
 		}
 	});

@@ -99,6 +99,16 @@ class ChatStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
+		// Set this conversation as active for statistics display
+		slotsService.setActiveConversation(conversation.id);
+
+		// Sync global isLoading state - new conversation is not loading
+		const isConvLoading = this.isConversationLoading(conversation.id);
+		this.isLoading = isConvLoading;
+
+		// Clear global currentResponse state - new conversation has no streaming
+		this.currentResponse = '';
+
 		await goto(`#/chat/${conversation.id}`);
 
 		return conversation.id;
@@ -121,6 +131,14 @@ class ChatStore {
 
 			// Set this conversation as active for statistics display
 			slotsService.setActiveConversation(convId);
+
+			// Sync global isLoading state with this conversation's loading state
+			const isConvLoading = this.isConversationLoading(convId);
+			this.isLoading = isConvLoading;
+
+			// Sync global currentResponse state with this conversation's streaming state
+			const streamingState = this.getConversationStreaming(convId);
+			this.currentResponse = streamingState?.response || '';
 
 			if (conversation.currNode) {
 				const allMessages = await DatabaseStore.getConversationMessages(convId);
@@ -299,12 +317,17 @@ class ChatStore {
 	private setConversationLoading(convId: string, loading: boolean): void {
 		if (loading) {
 			this.conversationLoadingStates.set(convId, true);
+			// Update global isLoading only if this is the active conversation
+			if (this.activeConversation?.id === convId) {
+				this.isLoading = true;
+			}
 		} else {
 			this.conversationLoadingStates.delete(convId);
-		}
-		// Update global isLoading for backward compatibility (active conversation only)
-		if (this.activeConversation?.id === convId) {
-			this.isLoading = loading;
+			// Only update global isLoading if we're clearing the active conversation's loading state
+			// This prevents background conversations from affecting the UI
+			if (this.activeConversation?.id === convId) {
+				this.isLoading = false;
+			}
 		}
 	}
 
@@ -446,9 +469,14 @@ class ChatStore {
 
 					this.updateMessageAtIndex(messageIndex, localUpdateData);
 
-					await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
-					this.activeConversation!.currNode = assistantMessage.id;
-					await this.refreshActiveMessages();
+					// Update database with the message's conversation ID (not activeConversation which may have changed)
+					await DatabaseStore.updateCurrentNode(assistantMessage.convId, assistantMessage.id);
+					
+					// Only update activeConversation.currNode if this is still the active conversation
+					if (this.activeConversation?.id === assistantMessage.convId) {
+						this.activeConversation.currNode = assistantMessage.id;
+						await this.refreshActiveMessages();
+					}
 
 					if (onComplete) {
 						await onComplete(streamedContent);
@@ -603,6 +631,7 @@ class ChatStore {
 		}
 
 		this.errorDialogState = null;
+		
 		// Set loading state for this specific conversation
 		this.setConversationLoading(this.activeConversation.id, true);
 		this.clearConversationStreaming(this.activeConversation.id);
@@ -1248,15 +1277,21 @@ class ChatStore {
 	}
 
 	/**
-	 * Clears the active conversation and resets state
+	 * Clears the active conversation and messages
 	 * Used when navigating away from chat or starting fresh
 	 * Note: Does not stop ongoing streaming to allow background completion
 	 */
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		// Don't clear currentResponse or isLoading to allow streaming to continue in background
-		// The streaming will complete and save to database automatically
+		
+		// Clear global UI state since there's no active conversation
+		// Background streaming will continue but won't affect the UI
+		this.isLoading = false;
+		this.currentResponse = '';
+		
+		// Clear active conversation in slots service
+		slotsService.setActiveConversation(null);
 	}
 
 	/** Refreshes active messages based on currNode after branch navigation */

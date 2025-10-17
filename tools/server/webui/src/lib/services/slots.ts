@@ -278,8 +278,18 @@ export class SlotsService {
 	/**
 	 * Get current processing state
 	 * Returns the last known state from timing data, or null if no data available
+	 * If activeConversationId is set, returns state for that conversation
 	 */
 	async getCurrentState(): Promise<ApiProcessingState | null> {
+		// If we have an active conversation, return its state
+		if (this.activeConversationId) {
+			const conversationState = this.conversationStates.get(this.activeConversationId);
+			if (conversationState) {
+				return conversationState;
+			}
+		}
+		
+		// Fallback to global state
 		if (this.lastKnownState) {
 			return this.lastKnownState;
 		}
