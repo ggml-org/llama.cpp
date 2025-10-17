@@ -1428,7 +1428,7 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     const int nb = n / QK_K;
 
-#if 0 // ARM NEON implementation disabled - TODO: fix to match block_ifairy structure
+// #if 0 // ARM NEON implementation disabled - TODO: fix to match block_ifairy structure
 #if defined(__ARM_NEON)
     float sum_real = 0.0f;
     float sum_imag = 0.0f;
@@ -1660,7 +1660,7 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     // Return magnitude
     *s = sqrtf(sum_real * sum_real + sum_imag * sum_imag);
 
-#endif // defined(__ARM_NEON)
+// #endif // defined(__ARM_NEON)
 
 #else
     UNUSED(x);

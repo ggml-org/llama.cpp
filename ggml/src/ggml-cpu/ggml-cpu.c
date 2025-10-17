@@ -378,13 +378,14 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_IFAIRY] = {
         // todo_liweitao fix
-        //         .from_float               = quantize_row_ifairy,
-        // .vec_dot                  = ggml_vec_dot_ifairy,
-        // .vec_dot_type             = GGML_TYPE_IFAIRY,
-        .from_float               = NULL, // ifairy requires complex input, not compatible with standard from_float
+        .from_float               = quantize_row_ifairy,
         .vec_dot                  = ggml_vec_dot_ifairy_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
+        // .from_float               = NULL, // ifairy requires complex input, not compatible with standard from_float
+        // .vec_dot                  = ggml_vec_dot_ifairy_q8_K,
+        // .vec_dot_type             = GGML_TYPE_Q8_K,
+        // .nrows                    = 1,
     },
 };
 

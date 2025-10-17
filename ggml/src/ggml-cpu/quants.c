@@ -417,7 +417,7 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 }
 
 // Complex 2-bit quantization dot product for Fairy±i model
-// Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act))
+// Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
 // We use q8_K for both real and imaginary activation parts stored sequentially
 void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);

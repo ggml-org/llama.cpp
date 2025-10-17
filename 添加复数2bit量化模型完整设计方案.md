@@ -1,5 +1,7 @@
 # llama.cpp中添加复数2-bit量化新模型完整设计方案
 
+> **重要说明**: 本文档已根据 iFairy 的实际实现进行重构。与原始理论方案相比，iFairy 采用了更优化的**合并存储**方案，其中每个 2-bit 值直接表示一个离散复数 {-1, +1, -i, +i}，而非分别量化实部和虚部。这种设计显著提高了压缩率（30x vs 7x），并特别适合频域/相位编码的神经网络。
+
 ## 目录
 1. [需求概述](#需求概述)
 2. [核心设计思路](#核心设计思路)
@@ -26,86 +28,100 @@
 - **复数运算支持**: GGML底层不支持复数,需要扩展
 - **架构兼容性**: 保持与现有llama.cpp生态的兼容
 
-### 1.3 命名约定
+### 1.3 命名约定 (iFairy 实际实现)
 
-假设新架构命名为:
-- **架构名**: `COMPLEXFORMER`
-- **量化类型**: `GGML_TYPE_CQ2_0` (Complex Quantized 2-bit)
-- **文件前缀**: `cq2`
+基于实际实现，使用以下命名:
+- **架构名**: `IFAIRY`
+- **量化类型**: `GGML_TYPE_IFAIRY`
+- **文件前缀**: `ifairy`
+- **块结构**: `block_ifairy`
+- **函数命名**: `quantize_row_ifairy_ref`, `dequantize_row_ifairy`, `ggml_vec_dot_ifairy_q8_0`
 
 ---
 
 ## 2. 核心设计思路
 
-### 2.1 复数权重表示
+### 2.1 复数权重表示 (iFairy 实际实现)
 
-#### 方案A: 分离存储(推荐)
+#### 实际采用方案: 合并存储 + 离散复数值
 
-```
-每个复数权重 = Real部分 + Imaginary部分
-
-内存布局:
-[Real_quantized][Imag_quantized]
-```
-
-**优点**:
-- 与现有量化框架兼容
-- 可以独立优化Real/Imag的量化
-- SIMD优化简单
-
-**缺点**:
-- 内存占用2倍(相对于实数)
-
-#### 方案B: 交错存储
+**iFairy 的独特设计**:
 
 ```
-[R0, I0, R1, I1, R2, I2, ...]
+每个复数权重 = 离散复数值 × 缩放因子
+
+内存布局（每个 2-bit 值直接表示一个复数）:
+[q0, q1, q2, q3, ...] 其中 qi ∈ {-1, +1, -i, +i}
+
+量化映射:
+  00 → -1 * d_real
+  01 → +1 * d_real
+  10 → -i * d_imag
+  11 → +i * d_imag
 ```
 
-**优点**:
-- 缓存友好
-- 适合某些复数运算
+**与原方案对比**:
 
-**缺点**:
-- 量化复杂
-- SIMD优化困难
+| 特性 | iFairy 方案 | 原方案 A（分离存储） | 原方案 B（交错存储） |
+|------|-------------|---------------------|---------------------|
+| 存储方式 | 合并（每个2-bit表示一个复数） | 分离（Real和Imag各自量化） | 交错（R,I,R,I...） |
+| 量化值 | 4个离散复数 {-1,+1,-i,+i} | 4个级别 × 2部分 | 4个级别 × 2部分 |
+| 缩放因子 | 全局共享（d_real, d_imag） | 每块独立 | 每块独立 |
+| 内存效率 | 最优（30x压缩率） | 较好（7x压缩率） | 较好（7x压缩率） |
+| SIMD优化 | 需要特殊处理 | 简单 | 中等 |
 
-**推荐**: 使用方案A (分离存储)
+**iFairy 优点**:
+- **极致压缩**: 每个复数仅用2-bit表示，压缩率达到30x
+- **硬件友好**: 量化值恰好对应单位复数的4个象限，适合快速FFT/DFT运算
+- **模型兼容**: 特别适合频域/相位编码的神经网络（如iFairy模型）
 
-### 2.2 2-bit量化方案
+**实现关键点**:
+- 量化时判断复数主要分量（实部或虚部）
+- 反量化时根据编码恢复对应的复数值
+- 点积需要处理复数乘法规则: `(a+bi)×(c+di) = (ac-bd) + (ad+bc)i`
 
-假设使用**分组量化**策略:
+### 2.2 2-bit量化方案 (iFairy 实际实现)
+
+使用**分组量化 + 合并存储**策略:
 
 ```c
-// 每个块量化32个复数值 (64个实数分量)
-#define QK_CQ2_0 64  // 量化块大小 (32个复数 = 64个实数)
+// 每个块处理 QK_K (256) 个 2-bit 值
+// 由于是复数，每个复数用一个 2-bit 值表示（离散化到 4 个复数值）
+#define QK_K 256  // 量化块大小（来自 K-quants）
 
 typedef struct {
-    ggml_fp16_t d_real;      // Real部分缩放因子
-    ggml_fp16_t d_imag;      // Imag部分缩放因子
-    uint8_t qs_real[QK_CQ2_0/4];  // Real部分2-bit量化值 (16字节)
-    uint8_t qs_imag[QK_CQ2_0/4];  // Imag部分2-bit量化值 (16字节)
-} block_cq2_0;
+    uint8_t qs[QK_K/4];  // 64 字节，存储 256 个 2-bit 值
+                         // 每个字节存储 4 个 2-bit 值
+                         // 对应 256 个复数的量化值
+    ggml_half d_real;    // FP16 缩放因子（实部）
+    ggml_half d_imag;    // FP16 缩放因子（虚部）
+} block_ifairy;
 
-// 总大小: 2*2 + 16 + 16 = 36字节
-// 存储64个fp32值 (256字节)
-// 压缩率: 256/36 = 7.1x
+// 总大小: 64 + 2 + 2 = 68 字节
+// 存储 256 个复数 = 512 个 fp32 值 (2048 字节)
+// 压缩率: 2048/68 = 30.1x
 ```
 
 **量化策略**:
-- 2-bit表示4个级别: [-1.5, -0.5, +0.5, +1.5] * scale
-- Real和Imag独立量化
+- 2-bit表示4个离散复数值: {-1, +1, -i, +i}
+- 编码映射:
+  - `00` → -1 (实部负)
+  - `01` → +1 (实部正)
+  - `10` → -i (虚部负)
+  - `11` → +i (虚部正)
+- 缩放因子全局共享（对所有块）
+- 合并存储：实部和虚部在同一个量化数组中
 
 ### 2.3 复数矩阵乘法
 
-复数矩阵乘法公式:
+复数矩阵乘法公式: 使用共轭乘法
 ```
-(A_r + iA_i) × (B_r + iB_i) = (A_r×B_r - A_i×B_i) + i(A_r×B_i + A_i×B_r)
+(A_r + iA_i) × (B_r + iB_i) = (A_r×B_r + A_i×B_i) + i(A_r×B_i - A_i×B_r)
 ```
 
 需要4次实数矩阵乘法:
-1. `Real_result = Real_A × Real_B - Imag_A × Imag_B`
-2. `Imag_result = Real_A × Imag_B + Imag_A × Real_B`
+1. `Real_result = Real_A × Real_B + Imag_A × Imag_B`
+2. `Imag_result = Real_A × Imag_B - Imag_A × Real_B`
 
 ---
 
@@ -121,7 +137,7 @@ typedef struct {
 enum ggml_type {
     // ... 现有类型 ...
     GGML_TYPE_MXFP4   = 39,
-    GGML_TYPE_CQ2_0   = 40,  // 新增: 复数2-bit量化
+    GGML_TYPE_IFAIRY  = 40,  // 新增: iFairy 复数2-bit量化
     GGML_TYPE_COUNT   = 41,  // 更新计数
 };
 ```
@@ -129,24 +145,31 @@ enum ggml_type {
 **注意**:
 - 选择下一个可用的枚举值(当前MXFP4=39)
 - 更新`GGML_TYPE_COUNT`
+- 命名使用 `IFAIRY` 而非 `CQ2_0`
 
 #### 3.1.2 定义量化块结构
 
 **文件**: `ggml/src/ggml-common.h` (新增部分)
 
 ```c
-#define QK_CQ2_0 64
+// 注意：QK_K 已在 ggml-common.h 中定义，通常为 256
 
-// 在文件末尾添加
+// iFairy 量化块结构
 typedef struct {
-    ggml_half d_real;              // FP16 缩放因子 (Real)
-    ggml_half d_imag;              // FP16 缩放因子 (Imag)
-    uint8_t   qs_real[QK_CQ2_0/4]; // 2-bit量化 Real (16字节)
-    uint8_t   qs_imag[QK_CQ2_0/4]; // 2-bit量化 Imag (16字节)
-} block_cq2_0;
+    uint8_t qs[QK_K/4];  // 64 字节: 存储 256 个 2-bit 值
+                         // 每个 2-bit 值表示一个离散复数: {-1, +1, -i, +i}
+    ggml_half d_real;    // FP16 缩放因子（实部）
+    ggml_half d_imag;    // FP16 缩放因子（虚部）
+} block_ifairy;
 
-static_assert(sizeof(block_cq2_0) == 36, "block_cq2_0 size incorrect");
+static_assert(sizeof(block_ifairy) == QK_K/4 + 2*sizeof(ggml_half),
+              "block_ifairy size incorrect");
 ```
+
+**关键点**:
+- 使用 `QK_K` 宏（与 K-quants 系列保持一致）
+- 每个块存储 256 个离散复数值
+- 总大小：68 字节（64 + 2 + 2）
 
 #### 3.1.3 注册类型特征
 
@@ -154,201 +177,269 @@ static_assert(sizeof(block_cq2_0) == 36, "block_cq2_0 size incorrect");
 
 ```c
 // 在 ggml_type_traits_cpu 数组中添加
-[GGML_TYPE_CQ2_0] = {
-    .type_name       = "cq2_0",
-    .blck_size       = QK_CQ2_0,
-    .type_size       = sizeof(block_cq2_0),
+[GGML_TYPE_IFAIRY] = {
+    .type_name       = "ifairy",
+    .blck_size       = QK_K,
+    .type_size       = sizeof(block_ifairy),
     .is_quantized    = true,
-    .to_float        = (ggml_to_float_t) dequantize_row_cq2_0,
-    .from_float      = quantize_row_cq2_0,
-    .from_float_ref  = (ggml_from_float_t) quantize_row_cq2_0_ref,
-    .vec_dot         = ggml_vec_dot_cq2_0_q8_0,  // 使用Q8_0作为对照
+    .to_float        = (ggml_to_float_t) dequantize_row_ifairy,
+    .from_float      = quantize_ifairy,
+    .from_float_ref  = (ggml_from_float_t) quantize_row_ifairy_ref,
+    .vec_dot         = ggml_vec_dot_ifairy_q8_0,  // 使用Q8_0作为对照
     .vec_dot_type    = GGML_TYPE_Q8_0,
     .nrows           = 1,
 },
 ```
 
+**注意**:
+- `blck_size` 设置为 `QK_K` (256)
+- `vec_dot` 函数需要专门实现复数点积
+- `to_float` 和 `from_float_ref` 的签名与标准量化不同（需要处理复数）
+
 ### 3.2 量化实现
 
 #### 3.2.1 量化函数
 
-**文件**: `ggml/src/ggml-cpu/quants.h`
+**文件**: `ggml/src/ggml-cpu/quants.h` 或 `ggml/src/ggml-quants.h`
 
 ```c
-// 函数声明
-void quantize_row_cq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
-void dequantize_row_cq2_0(const block_cq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
-void ggml_vec_dot_cq2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
-                               const void * GGML_RESTRICT vx, size_t bx,
-                               const void * GGML_RESTRICT vy, size_t by, int nrc);
+// 函数声明（注意：与标准量化不同，需要处理实部和虚部）
+void quantize_row_ifairy_ref(const float * GGML_RESTRICT x_real,
+                              const float * GGML_RESTRICT x_imag,
+                              block_ifairy * GGML_RESTRICT y,
+                              int64_t k);
+
+void dequantize_row_ifairy(const block_ifairy * GGML_RESTRICT x,
+                            float * GGML_RESTRICT y_real,
+                            float * GGML_RESTRICT y_imag,
+                            int64_t k);
+
+size_t quantize_ifairy(const float * GGML_RESTRICT src_real,
+                       const float * GGML_RESTRICT src_imag,
+                       void * GGML_RESTRICT dst,
+                       int64_t nrow,
+                       int64_t n_per_row,
+                       const float * quant_weights);
+
+void ggml_vec_dot_ifairy_q8_0(int n,
+                               float * GGML_RESTRICT s,
+                               size_t bs,
+                               const void * GGML_RESTRICT vx,
+                               size_t bx,
+                               const void * GGML_RESTRICT vy,
+                               size_t by,
+                               int nrc);
 ```
 
-**文件**: `ggml/src/ggml-cpu/quants.c`
+**关键说明**:
+- 量化和反量化函数接受**两个输入/输出数组**（实部和虚部）
+- 这与标准量化类型不同，需要在类型特征表中特殊处理
+
+**实际实现已在 3.2.2 节详细说明，这里不再重复**
+
+#### 3.2.2 复数点积实现
+
+**重要说明**: 基于 iFairy 的实际实现，我们的命名和数据布局与原方案不同：
+- 函数命名使用 `ifairy` 而非 `cq2`
+- 权重采用**合并存储**（interleaved storage）：实部和虚部交错存储在同一个量化块中
+- 每个块处理 QK_K (256) 个复数，其中实部和虚部交错排列
+- 量化格式：2-bit 编码为 4 个离散值 {-1, 1, -i, i}，使用二进制编码 00, 01, 10, 11
+
+**数据布局说明**:
+
+```
+block_ifairy 结构（QK_K = 256）:
+{
+    qs[QK_K/4]:    // 64 字节，存储 256 个 2-bit 值
+                   // 每个字节存储 4 个 2-bit 值
+                   // 对应 128 个复数（实部虚部交错）
+    d_real:        // FP16 缩放因子（实部）
+    d_imag:        // FP16 缩放因子（虚部）
+}
+
+量化值映射:
+  00 (0) -> -1   (实部负)
+  01 (1) -> +1   (实部正)
+  10 (2) -> -i   (虚部负)
+  11 (3) -> +i   (虚部正)
+```
+
+**文件**: `ggml/src/ggml-quants.c`
 
 ```c
-// 量化实现 (参考实现)
-void quantize_row_cq2_0_ref(const float * GGML_RESTRICT x, block_cq2_0 * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_CQ2_0 == 0);
-    const int nb = k / QK_CQ2_0;
+// iFairy 量化实现（参考实现）
+// 权重按 quantize_row_ifairy_ref 进行量化，激活也采用实部虚部交错存储
+void quantize_row_ifairy_ref(
+    const float * GGML_RESTRICT x_real,  // 实部输入
+    const float * GGML_RESTRICT x_imag,  // 虚部输入
+    block_ifairy * GGML_RESTRICT y,      // 量化输出
+    int64_t k) {                         // 元素总数（实部或虚部）
 
-    for (int i = 0; i < nb; i++) {
-        const float * src_real = x + i*QK_CQ2_0;           // Real部分
-        const float * src_imag = x + k + i*QK_CQ2_0;       // Imag部分
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
 
-        // 计算Real部分的最大绝对值
-        float amax_real = 0.0f;
-        for (int j = 0; j < QK_CQ2_0/2; j++) {  // 32个复数的Real部分
-            amax_real = MAX(amax_real, fabsf(src_real[j]));
-        }
+    // 计算全局缩放因子（对所有块共享）
+    float d_real = 0;
+    float d_imag = 0;
+    for (int64_t i = 0; i < k; i++) {
+        d_real = MAX(d_real, fabsf(x_real[i]));
+        d_imag = MAX(d_imag, fabsf(x_imag[i]));
+    }
 
-        // 计算Imag部分的最大绝对值
-        float amax_imag = 0.0f;
-        for (int j = 0; j < QK_CQ2_0/2; j++) {  // 32个复数的Imag部分
-            amax_imag = MAX(amax_imag, fabsf(src_imag[j]));
-        }
-
-        const float d_real = amax_real / 1.5f;  // 2-bit最大值为1.5
-        const float d_imag = amax_imag / 1.5f;
-        const float id_real = d_real ? 1.0f/d_real : 0.0f;
-        const float id_imag = d_imag ? 1.0f/d_imag : 0.0f;
-
+    // 量化每个块
+    for (int64_t i = 0; i < nb; i++) {
         y[i].d_real = GGML_FP32_TO_FP16(d_real);
         y[i].d_imag = GGML_FP32_TO_FP16(d_imag);
 
-        // 量化Real部分
-        for (int j = 0; j < QK_CQ2_0/2; j++) {
-            const float x0 = src_real[j] * id_real;
-            const uint8_t xi = quantize_2bit(x0);  // 映射到0,1,2,3
-
-            // 每4个值打包到1字节
-            const int byte_idx = j / 4;
-            const int bit_offset = (j % 4) * 2;
-            y[i].qs_real[byte_idx] |= (xi << bit_offset);
-        }
-
-        // 量化Imag部分 (同理)
-        for (int j = 0; j < QK_CQ2_0/2; j++) {
-            const float x0 = src_imag[j] * id_imag;
-            const uint8_t xi = quantize_2bit(x0);
-
-            const int byte_idx = j / 4;
-            const int bit_offset = (j % 4) * 2;
-            y[i].qs_imag[byte_idx] |= (xi << bit_offset);
+        // 每个块处理 QK_K 个复数（实际上是合并存储）
+        // qs 数组大小为 QK_K/4 字节，存储 QK_K 个 2-bit 值
+        // 按 32 个元素为一组进行处理（便于 SIMD 优化）
+        for (size_t j = 0; j < sizeof(y->qs); j += 32) {
+            for (size_t m = 0; m < 32; ++m) {
+                uint8_t q = 0;
+                // 每个字节存储 4 个 2-bit 值
+                for (size_t n = 0; n < 4; ++n) {
+                    int xi = 0;
+                    // 根据实部和虚部的值判断量化值
+                    if (x_real[m + n*32] == 0) {
+                        // 纯虚数: -i 或 i
+                        if (x_imag[m + n*32] > 0) {
+                            xi = 3; // i (11)
+                        } else {
+                            xi = 2; // -i (10)
+                        }
+                    } else {
+                        // 实数: -1 或 1
+                        if (x_real[m + n*32] > 0) {
+                            xi = 1; // 1 (01)
+                        } else {
+                            xi = 0; // -1 (00)
+                        }
+                    }
+                    q += xi << (2*n);  // 将 2-bit 值打包到字节中
+                }
+                y[i].qs[j + m] = q;
+            }
+            x_real += 4*32;  // 移动到下一组 128 个元素
+            x_imag += 4*32;
         }
     }
 }
 
-// 辅助函数: 2-bit量化
-static inline uint8_t quantize_2bit(float x) {
-    // 映射: [-1.5,-0.5) -> 0, [-0.5,0.5) -> 1, [0.5,1.5) -> 2, [1.5,inf) -> 3
-    if (x < -0.5f) return 0;
-    if (x <  0.5f) return 1;
-    if (x <  1.5f) return 2;
-    return 3;
+// iFairy 反量化实现
+void dequantize_row_ifairy(
+    const block_ifairy * GGML_RESTRICT x,  // 量化输入
+    float * GGML_RESTRICT y_real,          // 实部输出
+    float * GGML_RESTRICT y_imag,          // 虚部输出
+    int64_t k) {                           // 元素总数
+
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d_real = GGML_FP16_TO_FP32(x[i].d_real);
+        const float d_imag = GGML_FP16_TO_FP32(x[i].d_imag);
+
+        // 解包 2-bit 量化值
+        for (size_t j = 0; j < sizeof(x->qs); j += 32) {
+            for (size_t l = 0; l < 4; ++l) {      // 每字节 4 个 2-bit 值
+                for (size_t m = 0; m < 32; ++m) {  // 每组 32 个字节
+                    int8_t q = (x[i].qs[j + m] >> (l*2)) & 3;
+
+                    // 解码量化值:
+                    //   q=0 (00) -> (-1, 0)  实部=-1
+                    //   q=1 (01) -> (+1, 0)  实部=+1
+                    //   q=2 (10) -> (0, -1)  虚部=-1
+                    //   q=3 (11) -> (0, +1)  虚部=+1
+                    *y_real++ = (float)((q == 1) - (q == 0)) * d_real;
+                    *y_imag++ = (float)((q == 3) - (q == 2)) * d_imag;
+                }
+            }
+        }
+    }
 }
 
-// 反量化查找表
-static const float dequant_table_2bit[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
+// iFairy × Q8_0 复数点积实现（标量版本）
+// 注意：激活也采用实部虚部交错存储
+void ggml_vec_dot_ifairy_q8_0(
+    int n,                              // 向量长度（复数个数）
+    float * GGML_RESTRICT s,            // 输出：点积结果（real, imag）
+    size_t bs,                          // 步长
+    const void * GGML_RESTRICT vx,      // 输入 x（ifairy 量化）
+    size_t bx,
+    const void * GGML_RESTRICT vy,      // 输入 y（Q8_0 量化，实部虚部分离）
+    size_t by,
+    int nrc) {                          // 行数
 
-// 反量化实现
-void dequantize_row_cq2_0(const block_cq2_0 * GGML_RESTRICT x,
-                          float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_CQ2_0 == 0);
-    const int nb = k / QK_CQ2_0;
+    const int qk = QK_K;
+    const int nb = n / qk;
+    assert(n % qk == 0);
+    assert(nrc == 1);  // 暂不支持多行
+
+    const block_ifairy * GGML_RESTRICT x = (const block_ifairy *)vx;
+    const block_q8_0 * GGML_RESTRICT y = (const block_q8_0 *)vy;
+
+    // 复数点积: sum((a_r + i*a_i) * (b_r + i*b_i))
+    //         = sum(a_r*b_r - a_i*b_i) + i*sum(a_r*b_i + a_i*b_r)
+
+    float sum_real = 0.0f;
+    float sum_imag = 0.0f;
 
     for (int i = 0; i < nb; i++) {
         const float d_real = GGML_FP16_TO_FP32(x[i].d_real);
         const float d_imag = GGML_FP16_TO_FP32(x[i].d_imag);
 
-        float * dst_real = y + i*QK_CQ2_0;
-        float * dst_imag = y + k + i*QK_CQ2_0;
+        // 假设 y 也是交错存储或分离存储
+        // 这里需要根据实际激活的存储格式调整
+        const float d_y_real = GGML_FP16_TO_FP32(y[2*i].d);     // 实部块
+        const float d_y_imag = GGML_FP16_TO_FP32(y[2*i+1].d);   // 虚部块
 
-        // 解码Real部分
-        for (int j = 0; j < QK_CQ2_0/2; j++) {
-            const int byte_idx = j / 4;
-            const int bit_offset = (j % 4) * 2;
-            const uint8_t qi = (x[i].qs_real[byte_idx] >> bit_offset) & 0x03;
-            dst_real[j] = dequant_table_2bit[qi] * d_real;
+        int32_t acc_rr = 0;  // real × real
+        int32_t acc_ii = 0;  // imag × imag
+        int32_t acc_ri = 0;  // real × imag
+        int32_t acc_ir = 0;  // imag × real
+
+        // 遍历块内元素（每块 QK_K/4 字节，每字节 4 个 2-bit 值）
+        for (size_t j = 0; j < QK_K/4; j++) {
+            uint8_t qx = x[i].qs[j];
+
+            for (int k = 0; k < 4; k++) {  // 每字节 4 个 2-bit 值
+                int8_t q_val = (qx >> (2*k)) & 3;
+
+                // 解码 x 的实部和虚部
+                int8_t x_r = (q_val == 1) - (q_val == 0);  // -1 或 +1 或 0
+                int8_t x_i = (q_val == 3) - (q_val == 2);  // -1 或 +1 或 0
+
+                // 从 y 读取对应位置的值
+                int elem_idx = j * 4 + k;
+                int8_t y_r = y[2*i].qs[elem_idx];      // 实部
+                int8_t y_i = y[2*i+1].qs[elem_idx];    // 虚部
+
+                // 累加四个乘积项
+                acc_rr += x_r * y_r;
+                acc_ii += x_i * y_i;
+                acc_ri += x_r * y_i;
+                acc_ir += x_i * y_r;
+            }
         }
 
-        // 解码Imag部分
-        for (int j = 0; j < QK_CQ2_0/2; j++) {
-            const int byte_idx = j / 4;
-            const int bit_offset = (j % 4) * 2;
-            const uint8_t qi = (x[i].qs_imag[byte_idx] >> bit_offset) & 0x03;
-            dst_imag[j] = dequant_table_2bit[qi] * d_imag;
-        }
+        // 应用缩放因子并累加到结果
+        sum_real += (acc_rr - acc_ii) * d_real * d_y_real;
+        sum_imag += (acc_ri + acc_ir) * d_imag * d_y_imag;
     }
+
+    s[0] = sum_real;
+    s[bs] = sum_imag;  // 假设输出也采用某种交错格式
 }
 ```
 
-#### 3.2.2 复数点积实现
+**关键差异说明**:
 
-**文件**: `ggml/src/ggml-cpu/quants.c`
-
-```c
-// CQ2_0 × Q8_0 点积
-void ggml_vec_dot_cq2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
-                               const void * GGML_RESTRICT vx, size_t bx,
-                               const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    const int qk = QK8_0;
-    const int nb = n / qk;
-    assert(n % qk == 0);
-    assert(nrc == 1);  // 暂不支持多行
-
-    const block_cq2_0 * GGML_RESTRICT x = vx;
-    const block_q8_0  * GGML_RESTRICT y = vy;
-
-    // 复数乘法需要计算: (a_r + ia_i) * (b_r + ib_i)
-    // = (a_r*b_r - a_i*b_i) + i(a_r*b_i + a_i*b_r)
-
-    float sumr = 0.0f;  // Real部分结果
-    float sumi = 0.0f;  // Imag部分结果
-
-    for (int i = 0; i < nb; i++) {
-        // 解码Real部分
-        int32_t sumi_real_real = 0;
-        int32_t sumi_imag_imag = 0;
-        int32_t sumi_real_imag = 0;
-        int32_t sumi_imag_real = 0;
-
-        // 假设y也是复数表示 (或需要特殊处理)
-        // 这里简化为实数处理,实际需要根据模型调整
-
-        for (int j = 0; j < QK_CQ2_0/2; j++) {
-            // 解码x的Real和Imag
-            const int byte_idx = j / 4;
-            const int bit_offset = (j % 4) * 2;
-
-            const uint8_t qi_real = (x[i].qs_real[byte_idx] >> bit_offset) & 0x03;
-            const uint8_t qi_imag = (x[i].qs_imag[byte_idx] >> bit_offset) & 0x03;
-
-            const int8_t xi_real = (int8_t)(dequant_table_2bit[qi_real] * 8);  // 缩放到int8范围
-            const int8_t xi_imag = (int8_t)(dequant_table_2bit[qi_imag] * 8);
-
-            // 从y读取(假设y也编码了Real/Imag)
-            const int8_t yi_real = y[i].qs[j];
-            const int8_t yi_imag = y[i].qs[j + QK_CQ2_0/2];  // 假设Imag部分在后半段
-
-            // 累加
-            sumi_real_real += xi_real * yi_real;
-            sumi_imag_imag += xi_imag * yi_imag;
-            sumi_real_imag += xi_real * yi_imag;
-            sumi_imag_real += xi_imag * yi_real;
-        }
-
-        // 应用缩放因子
-        const float d_real = GGML_FP16_TO_FP32(x[i].d_real) * GGML_FP16_TO_FP32(y[i].d);
-        const float d_imag = GGML_FP16_TO_FP32(x[i].d_imag) * GGML_FP16_TO_FP32(y[i].d);
-
-        sumr += (sumi_real_real - sumi_imag_imag) * d_real / 64.0f;
-        sumi += (sumi_real_imag + sumi_imag_real) * d_imag / 64.0f;
-    }
-
-    s[0] = sumr;      // Real部分
-    s[bs] = sumi;     // Imag部分 (假设输出也是复数)
-}
-```
+1. **命名**: 使用 `ifairy` 而非 `cq2`
+2. **数据布局**: 合并存储（interleaved），实部虚部在同一个 `qs` 数组中
+3. **量化方案**: 4 个离散值 {-1, 1, -i, i}，而非原方案的 {-1.5, -0.5, 0.5, 1.5}
+4. **缩放因子**: 全局共享（对所有块），而非每块独立
+5. **块大小**: QK_K = 256（与 K-quants 一致），而非原方案的 64
 
 #### 3.2.3 SIMD优化(ARM NEON示例)
 
