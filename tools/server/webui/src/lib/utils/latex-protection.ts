@@ -141,6 +141,9 @@ export function preprocessLaTeX(content: string): string {
 	// Match \S...\[...\] and protect them and insert a line-break.
 	content = content.replace(/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g, (match, group1, group2, group3) => {
 		// Check if there are characters following the formula (display-formula in a table-cell?)
+		if (group1.endsWith('\\')) {
+			return match; // Backslash before \[, do nothing.
+		}
 		const hasSuffix = /\S/.test(group3);
 		let optBreak;
 		if (hasSuffix) {
@@ -185,7 +188,12 @@ export function preprocessLaTeX(content: string): string {
 	// Final pass: Convert \(...\) → $...$, \[...\] → $$...$$
 	content = content
 		.replace(/\\\((.+?)\\\)/g, '$$$1$') // inline
-		.replace(/\\\[(.+?)\\\]/g, '$$$$1$$'); // display
+		.replace(
+			/(^|.)\\\[([\s\S]*?)\\\]/g, // display, see PR16599
+			(_, prefix: string, content: string) => {
+				return `${prefix}$$${content}$$`;
+			}
+		);
 
 	return content;
 }
