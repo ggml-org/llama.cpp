@@ -147,7 +147,10 @@ static __global__ void mul_mat_vec_f(
         const nv_bfloat162 * gate_x2 = has_gate ? (const nv_bfloat162 *) gate_x : nullptr;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const nv_bfloat162 tmpx = x2[col2];
-            const nv_bfloat162 tmpx_gate = has_gate ? gate_x2[col2] : make_bfloat162(0.0f, 0.0f);
+            nv_bfloat162 tmpx_gate;
+            if constexpr (has_gate) {
+                tmpx_gate = gate_x2[col2];
+            }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
                 const float2 tmpy = y2[j*stride_col_y2 + col2];
