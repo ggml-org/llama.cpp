@@ -5,14 +5,15 @@
 #include <initializer_list>
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
-template <int experts_per_thread>
+template <int experts_per_thread, bool use_limit>
 __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const int limit, const int lane) {
     float max_val = -INFINITY;
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int idx = lane + i * WARP_SIZE;
-        if (idx < limit) {
+        const int  idx    = lane + i * WARP_SIZE;
+        const bool active = !use_limit || (idx < limit);
+        if (active) {
             max_val = max(max_val, vals[i]);
         }
     }
@@ -23,8 +24,9 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int idx = lane + i * WARP_SIZE;
-        if (idx < limit) {
+        const int  idx    = lane + i * WARP_SIZE;
+        const bool active = !use_limit || (idx < limit);
+        if (active) {
             const float val = expf(vals[i] - max_val);
             vals[i]         = val;
             sum += val;
@@ -39,8 +41,9 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int idx = lane + i * WARP_SIZE;
-        if (idx < limit) {
+        const int  idx    = lane + i * WARP_SIZE;
+        const bool active = !use_limit || (idx < limit);
+        if (active) {
             vals[i] *= inv_sum;
         }
     }
@@ -76,12 +79,12 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 
 #pragma unroll
     for (int i = 0; i < n_experts; i += WARP_SIZE) {
-        const int expert        = i + threadIdx.x;
-        wt[i / WARP_SIZE]       = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[expert] : -INFINITY;
+        const int expert  = i + threadIdx.x;
+        wt[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[expert] : -INFINITY;
     }
 
     if constexpr (!delayed_softmax) {
-        softmax_warp_inplace<experts_per_thread>(wt, n_experts, threadIdx.x);
+        softmax_warp_inplace<experts_per_thread, false>(wt, n_experts, threadIdx.x);
     }
 
     //at this point, each thread holds either a portion of the softmax distribution
@@ -144,7 +147,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     }
 
     if constexpr (delayed_softmax) {
-        softmax_warp_inplace<experts_per_thread>(output_weights, n_expert_used, threadIdx.x);
+        softmax_warp_inplace<experts_per_thread, true>(output_weights, n_expert_used, threadIdx.x);
     }
 
 #pragma unroll
