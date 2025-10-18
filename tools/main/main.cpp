@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <ggml-tsavorite.h>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -153,6 +154,7 @@ int main(int argc, char ** argv) {
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
+	ggml_tsi_finalize();
         return 1;
     }
 
