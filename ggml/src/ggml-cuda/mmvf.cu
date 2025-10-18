@@ -38,6 +38,9 @@ static __global__ void mul_mat_vec_f(
     if (block_size > warp_size) {
         if (tid < warp_size) {
             buf_iw[tid] = 0.0f;
+            if constexpr (has_gate) {
+                buf_iw_gate[tid] = 0.0f;
+            }
         }
         __syncthreads();
     }
