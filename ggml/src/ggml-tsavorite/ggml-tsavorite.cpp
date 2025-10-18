@@ -32,10 +32,10 @@ namespace tsirt = ::tsi::runtime;
 typedef struct _txe_device_t *txe_device_s;
 typedef struct _txe_compute_pipeline_state_t *txe_compute_pipeline_state_s;
 FILE *tsi_op_log_file;
+bool runtime_initialized = false;
 uint64_t num_of_op;
 // Centralized TSI runtime initialization - called once globally
 static void ensure_tsi_runtime_initialized() {
-  static bool runtime_initialized = false;
   if (!runtime_initialized) {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
@@ -693,6 +693,8 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
 static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
 
+  if (!ctx)
+      return;
 
   for (int i = 0; i < GGML_TSAVORITE_KERNEL_TYPE_COUNT; ++i) {
     if (ctx->kernels[i].pipeline) {
@@ -724,6 +726,23 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
                    /*truncateFuncNames*/ true)
             << std::endl;
+  sleep(2);
+}
+
+void
+ggml_tsi_finalize() {
+  if (runtime_initialized != true)
+      return;
+  tsi_finalize();
+  GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+  tsirt::utils::TSIProfiler::finalize();
+  std::cout << "\nOPU Profiling Results:" << std::endl;
+  std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
+                   /*truncateFuncNames*/ true)
+            << std::endl;
+  sleep(2);
+  GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+  return;
 }
 
 #if 0
