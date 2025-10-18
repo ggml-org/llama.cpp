@@ -484,11 +484,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         return;
     }
 
-    ml.get_key(LLM_KV_CONTEXT_LENGTH,    hparams.n_ctx_train);
-    ml.get_key(LLM_KV_EMBEDDING_LENGTH,  hparams.n_embd);
-    ml.get_key(LLM_KV_BLOCK_COUNT,       hparams.n_layer);
-    ml.get_key(LLM_KV_EXPERT_COUNT,      hparams.n_expert,      false);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used, false);
+    ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
+    ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
+    ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer);
+    ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
+    ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
+    ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
+    ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
 
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH, hparams.n_embd_features);
@@ -504,8 +506,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_expert_used <= hparams.n_expert);
     if (hparams.n_expert > 0) {
         GGML_ASSERT(hparams.n_expert_used > 0);
+        GGML_ASSERT(hparams.n_expert_groups < hparams.n_expert);
+        if (hparams.n_expert_groups > 0) {
+            GGML_ASSERT(hparams.n_expert % hparams.n_expert_groups == 0);
+            GGML_ASSERT(hparams.n_group_used > 0);
+            GGML_ASSERT(hparams.n_group_used < hparams.n_expert_groups);
+        }
     } else {
         GGML_ASSERT(hparams.n_expert_used == 0);
+        GGML_ASSERT(hparams.n_expert_groups == 0);
     }
 
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
@@ -1896,8 +1905,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
-                ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups);
-                ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
