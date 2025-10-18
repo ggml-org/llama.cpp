@@ -115,7 +115,8 @@ let fetchweburlraw_meta = {
  */
 function fetchweburlraw_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `http://127.0.0.1:3128/urlraw?url=${encodeURIComponent(obj.url)}`
+        // @ts-ignore
+        let newUrl = `${document['gMe'].proxyUrl}/urlraw?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);
@@ -165,7 +166,8 @@ let fetchweburltext_meta = {
  */
 function fetchweburltext_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `http://127.0.0.1:3128/urltext?url=${encodeURIComponent(obj.url)}`
+        // @ts-ignore
+        let newUrl = `${document['gMe'].proxyUrl}/urltext?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);

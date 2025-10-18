@@ -1035,6 +1035,7 @@ class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
+        this.proxyUrl = "http://127.0.0.1:3128"
     }
 
     /**
