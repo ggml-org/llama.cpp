@@ -101,6 +101,24 @@ describe('maskInlineLaTeX', () => {
 		expect(output).toBe('$\n$$\n');
 		expect(latexExpressions).toEqual([]);
 	});
+
+	it('LaTeX-spacer preceded by backslash', () => {
+		const latexExpressions: string[] = [];
+		const input = `\\[
+\\boxed{
+\\begin{aligned}
+N_{\\text{att}}^{\\text{(MHA)}} &=
+h \\bigl[\\, d_{\\text{model}}\\;d_{k} + d_{\\text{model}}\\;d_{v}\\, \\bigr]   && (\\text{Q,K,V の重み})\\\\
+&\\quad+ h(d_{k}+d_{k}+d_{v})                                          && (\\text{バイアス Q,K,V）}\\\\[4pt]
+&\\quad+ (h d_{v})\\, d_{\\text{model}}                                 && (\\text{出力射影 }W^{O})\\\\
+&\\quad+ d_{\\text{model}}                                            && (\\text{バイアス }b^{O})
+\\end{aligned}}
+\\]`;
+		const output = maskInlineLaTeX(input, latexExpressions);
+
+		expect(output).toBe(input);
+		expect(latexExpressions).toEqual([]);
+	});
 });
 
 describe('preprocessLaTeX', () => {
@@ -187,6 +205,32 @@ $$`);
   E = (1\\ \\text{kg}) \\times (3.0 \\times 10^8\\ \\text{m/s})^2 \\approx 9.0 \\times 10^{16}\\ \\text{J}
   $$
   というエネルギーに相当します。これは約 21 百万トンの TNT が爆発したときのエネルギーに匹敵します。`
+		);
+	});
+
+	test('LaTeX-spacer preceded by backslash', () => {
+		const input = `\\[
+\\boxed{
+\\begin{aligned}
+N_{\\text{att}}^{\\text{(MHA)}} &=
+h \\bigl[\\, d_{\\text{model}}\\;d_{k} + d_{\\text{model}}\\;d_{v}\\, \\bigr]   && (\\text{Q,K,V の重み})\\\\
+&\\quad+ h(d_{k}+d_{k}+d_{v})                                          && (\\text{バイアス Q,K,V）}\\\\[4pt]
+&\\quad+ (h d_{v})\\, d_{\\text{model}}                                 && (\\text{出力射影 }W^{O})\\\\
+&\\quad+ d_{\\text{model}}                                            && (\\text{バイアス }b^{O})
+\\end{aligned}}
+\\]`;
+		const output = preprocessLaTeX(input);
+		expect(output).toBe(
+			`$$
+\\boxed{
+\\begin{aligned}
+N_{\\text{att}}^{\\text{(MHA)}} &=
+h \\bigl[\\, d_{\\text{model}}\\;d_{k} + d_{\\text{model}}\\;d_{v}\\, \\bigr]   && (\\text{Q,K,V の重み})\\\\
+&\\quad+ h(d_{k}+d_{k}+d_{v})                                          && (\\text{バイアス Q,K,V）}\\\\[4pt]
+&\\quad+ (h d_{v})\\, d_{\\text{model}}                                 && (\\text{出力射影 }W^{O})\\\\
+&\\quad+ d_{\\text{model}}                                            && (\\text{バイアス }b^{O})
+\\end{aligned}}
+$$`
 		);
 	});
 

@@ -174,6 +174,17 @@ x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
 - Algebra: \[
 x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
 \]
+- Spacer preceded by backslash:
+\[
+\boxed{
+\begin{aligned}
+N_{\text{att}}^{\text{(MHA)}} &=
+h \bigl[\, d_{\text{model}}\;d_{k} + d_{\text{model}}\;d_{v}\, \bigr]   && (\text{Q,K,V の重み})\\
+&\quad+ h(d_{k}+d_{k}+d_{v})                                          && (\text{バイアス Q,K,V）}\\[4pt]
+&\quad+ (h d_{v})\, d_{\text{model}}                                 && (\text{出力射影 }W^{O})\\
+&\quad+ d_{\text{model}}                                            && (\text{バイアス }b^{O})
+\end{aligned}}
+\]
 
 ## Formulas in a Table
 
