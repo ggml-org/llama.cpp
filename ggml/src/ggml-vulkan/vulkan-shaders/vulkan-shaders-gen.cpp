@@ -920,6 +920,8 @@ void process_shaders() {
 
     string_to_spv("ssm_conv_f32", "ssm_conv.comp", {{"A_TYPE", "float"}});
 
+    string_to_spv("topk_moe_f32", "topk_moe.comp", {});
+
     for (auto &c : compiles) {
         c.wait();
     }
