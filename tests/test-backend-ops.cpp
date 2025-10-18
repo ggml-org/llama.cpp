@@ -6726,15 +6726,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    // for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
-    //     for (auto act_case : cases) {
-    //         // Direct CONV_2D
-    //         test_cases.emplace_back(new test_conv_2d_implicit(
-    //             { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-    //             { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
-    //             kernel_type, 1, 1, 0, 0, 1, 1, false));
-    //     }
-    // }
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto act_case : cases) {
+            // Direct CONV_2D
+            test_cases.emplace_back(new test_conv_2d_implicit(
+                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                kernel_type, 1, 1, 0, 0, 1, 1, false));
+        }
+    }
 
     // Stable-diffusion layers
     std::map<std::string, uint32_t> idx_sd{
