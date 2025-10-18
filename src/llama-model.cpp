@@ -507,7 +507,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     if (hparams.n_expert > 0) {
         GGML_ASSERT(hparams.n_expert_used > 0);
         GGML_ASSERT(hparams.n_expert_groups < hparams.n_expert);
-        if (hparams.n_expert_groups > 0) {
+        if (hparams.n_expert_groups > 1) {
             GGML_ASSERT(hparams.n_expert % hparams.n_expert_groups == 0);
             GGML_ASSERT(hparams.n_group_used > 0);
             GGML_ASSERT(hparams.n_group_used < hparams.n_expert_groups);
