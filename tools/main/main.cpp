@@ -154,7 +154,7 @@ int main(int argc, char ** argv) {
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
-	ggml_tsi_finalize();
+        ggml_tsi_finalize();
         return 1;
     }
 

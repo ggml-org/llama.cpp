@@ -731,10 +731,8 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
 
 void
 ggml_tsi_finalize() {
-  //if (tsi_op_log_file == NULL)
   if (runtime_initialized != true)
       return;
-  sleep(2);
   tsi_finalize();
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   tsirt::utils::TSIProfiler::finalize();
