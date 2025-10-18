@@ -21,8 +21,9 @@
 #define GGML_METAL_HAS_RESIDENCY_SETS 1
 #endif
 
-// overload of MTLGPUFamilyMetal3 (not available in some environments)
+// overload of MTLGPUFamilyMetalX (not available in some environments)
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
+static const NSInteger MTLGPUFamilyMetal4_GGML = 5002;
 
 // virtual address for GPU memory allocations
 static atomic_uintptr_t g_addr_device = 0x000000400ULL;
@@ -261,6 +262,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                     [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
                 }
 
+                if (ggml_metal_device_get_props(dev)->has_tensor) {
+                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
+                }
+
 #if GGML_METAL_EMBED_LIBRARY
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
@@ -470,6 +475,8 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
             dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
 
+            dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
+
             dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
             dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
@@ -529,6 +536,7 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
             GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
             GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
+            GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
             GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
             GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
 

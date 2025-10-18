@@ -9,9 +9,7 @@ __embed_ggml-common.h__
 
 #include <metal_stdlib>
 
-#define GGML_METAL_USE_METAL4
-
-#ifdef GGML_METAL_USE_METAL4
+#ifdef GGML_METAL_HAS_TENSOR
 #include <metal_tensor>
 
 #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
@@ -8218,7 +8216,7 @@ kernel void kernel_mul_mm(
         + args.nb11*(r1 + lr1)
         + args.nb10*iy);
 
-#ifndef GGML_METAL_USE_METAL4
+#ifndef GGML_METAL_HAS_TENSOR
     S0_8x8 ma[4];
     S1_8x8 mb[2];
 
@@ -8239,7 +8237,7 @@ kernel void kernel_mul_mm(
 #endif
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
-#ifndef GGML_METAL_USE_METAL4
+#ifndef GGML_METAL_HAS_TENSOR
         // load data and store to threadgroup memory
         if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bc_inp) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -8419,7 +8417,7 @@ kernel void kernel_mul_mm(
 
     if (!FC_mul_mm_bc_out || (r0 + NR0 <= args.ne0 && r1 + NR1 <= args.ne1)) {
         // if no bounds checks on the output are needed, we can directly write to device memory
-#ifdef GGML_METAL_USE_METAL4
+#ifdef GGML_METAL_HAS_TENSOR
         device float * C = (device float *) dst +
             r0 + \
             r1 * args.ne0 + im*args.ne1*args.ne0;
@@ -8441,7 +8439,7 @@ kernel void kernel_mul_mm(
 
         threadgroup float * temp_str = ((threadgroup float *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
 
-#ifdef GGML_METAL_USE_METAL4
+#ifdef GGML_METAL_HAS_TENSOR
         auto tC = tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>(sc, dextents<int32_t, 2>(NR0, NR1));
         cT.store(tC);
 #else
