@@ -41,9 +41,54 @@ static void copy_f32_to_f32_row(float* dst, const float* src, int64_t num_elemen
     }
 }
 
-// Copy a row of F32 data to F16 destination (with conversion)
+// Copy a row of F32 data to F16 destination (with SIMD conversion)
 static void copy_f32_to_f16_row(uint16_t* dst, const float* src, int64_t num_elements) {
-    for (int64_t i = 0; i < num_elements; i++) {
+    unsigned long mask_temp;
+    int64_t i = 0;
+
+    // Process 8 elements at a time using SIMD
+    const int64_t vec_size = 8;
+    const int64_t num_vec = num_elements / vec_size;
+
+    if (num_vec > 0) {
+        // Build offset vector for consecutive 16-bit stores: [0, 2, 4, 6, 8, 10, 12, 14]
+        // These are byte offsets for consecutive uint16_t values
+        float offset_vec_storage[8];
+        uint32_t* offsets = (uint32_t*)offset_vec_storage;
+        for (int j = 0; j < 8; j++) {
+            offsets[j] = j * 2;  // Byte offsets
+        }
+
+        __asm__ volatile (
+            "mova.x.m  %[mask_temp]         \n\t"  // Save mask
+            "mov.m.x   m0, x0, 0xFF         \n\t"  // Enable all 8 elements
+            "flw.ps    f1, 0(%[offsets])    \n\t"  // Load offset vector into f1
+            : [mask_temp] "=&r"(mask_temp)
+            : [offsets] "r"(offset_vec_storage)
+            : "f1"
+        );
+
+        // Process vectors
+        for (i = 0; i < num_vec * vec_size; i += vec_size) {
+            __asm__ volatile (
+                "flw.ps    f2, 0(%[src_ptr])    \n\t"  // Load 8 F32 values
+                "fcvt.f16.ps f3, f2             \n\t"  // Convert to F16 (in lower 16 bits)
+                "fsch.ps   f3, f1(%[dst_ptr])   \n\t"  // Scatter 8 F16 values: dst_ptr + offsets
+                :
+                : [src_ptr] "r"(src + i), [dst_ptr] "r"(dst + i)
+                : "f2", "f3", "memory"
+            );
+        }
+
+        __asm__ volatile (
+            "mova.m.x  %[mask_temp]         \n\t"  // Restore mask
+            :
+            : [mask_temp] "r"(mask_temp)
+        );
+    }
+
+    // Handle remainder elements (scalar)
+    for (; i < num_elements; i++) {
         dst[i] = fp32_to_fp16(src[i]);
     }
 }
