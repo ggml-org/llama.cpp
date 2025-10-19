@@ -134,6 +134,8 @@ jobs:
         include:
           - build: 'x64'
             os: ubuntu-22.04
+          - build: 's390x-z15' # z15 because our CI runners are on z15
+            os: ubuntu-22.04-s390x
           # GGML_BACKEND_DL and GGML_CPU_ALL_VARIANTS are not currently supported on arm
           # - build: 'arm64'
           #   os: ubuntu-22.04-arm
