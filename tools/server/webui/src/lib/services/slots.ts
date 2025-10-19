@@ -172,6 +172,7 @@ export class SlotsService {
 
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
+
 			return;
 		}
 
@@ -200,6 +201,7 @@ export class SlotsService {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});
+
 			if (response.ok) {
 				const slotsData = await response.json();
 				if (Array.isArray(slotsData) && slotsData.length > 0) {
@@ -236,6 +238,7 @@ export class SlotsService {
 
 		if (contextTotal === null) {
 			console.warn('No context total available - cannot calculate processing state');
+
 			return null;
 		}
 
@@ -276,6 +279,7 @@ export class SlotsService {
 	async getCurrentState(): Promise<ApiProcessingState | null> {
 		if (this.activeConversationId) {
 			const conversationState = this.conversationStates.get(this.activeConversationId);
+
 			if (conversationState) {
 				return conversationState;
 			}

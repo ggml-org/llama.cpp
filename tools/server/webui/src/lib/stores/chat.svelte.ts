@@ -97,14 +97,11 @@ class ChatStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
-		// Set this conversation as active for statistics display
 		slotsService.setActiveConversation(conversation.id);
 
-		// Sync global isLoading state - new conversation is not loading
 		const isConvLoading = this.isConversationLoading(conversation.id);
 		this.isLoading = isConvLoading;
 
-		// Clear global currentResponse state - new conversation has no streaming
 		this.currentResponse = '';
 
 		await goto(`#/chat/${conversation.id}`);

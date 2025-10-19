@@ -25,7 +25,6 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	// Track loading state reactively by checking if conversation ID is in loading conversations array
 	let isLoading = $derived(getAllLoadingConversations().includes(conversation.id));
 
 	function handleEdit(event: Event) {

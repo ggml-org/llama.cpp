@@ -7,12 +7,11 @@
 
 	const processingState = useProcessingState();
 
-	let processingDetails = $derived(processingState.getProcessingDetails());
-
 	let isCurrentConversationLoading = $derived(isLoading());
-
+	let processingDetails = $derived(processingState.getProcessingDetails());
 	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
 
+	// Track loading state reactively by checking if conversation ID is in loading conversations array
 	$effect(() => {
 		const keepStatsVisible = config().keepStatsVisible;
 
@@ -29,6 +28,7 @@
 		}
 	});
 
+	// Update processing state from stored timings
 	$effect(() => {
 		const conversation = activeConversation();
 		const messages = activeMessages() as DatabaseMessage[];
@@ -40,6 +40,8 @@
 				return;
 			}
 
+			// Search backwards through messages to find most recent assistant message with timing data
+			// Using reverse iteration for performance - avoids array copy and stops at first match
 			let foundTimingData = false;
 
 			for (let i = messages.length - 1; i >= 0; i--) {
