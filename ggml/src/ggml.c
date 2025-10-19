@@ -873,7 +873,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
-    [39] = { // GGML_TYPE_IFAIRY
+    [GGML_TYPE_IFAIRY] = {
         .type_name                = "ifairy",
         .blck_size                = QK_K,
         .type_size                = sizeof(block_ifairy),
@@ -7259,6 +7259,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        // todo_liweitao fix
+        case GGML_TYPE_IFAIRY:  result = quantize_ifairy (src + start, src + start ,(char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);
