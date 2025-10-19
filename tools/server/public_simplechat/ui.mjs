@@ -5,6 +5,27 @@
 
 
 /**
+ * Insert key-value pairs into passed element object.
+ * @param {HTMLElement} el
+ * @param {string} key
+ * @param {any} value
+ */
+function el_set(el, key, value) {
+    // @ts-ignore
+    el[key] = value
+}
+
+/**
+ * Retrieve the value corresponding to given key from passed element object.
+ * @param {HTMLElement} el
+ * @param {string} key
+ */
+function el_get(el, key) {
+    // @ts-ignore
+    return el[key]
+}
+
+/**
  * Set the class of the children, based on whether it is the idSelected or not.
  * @param {HTMLDivElement} elBase
  * @param {string} idSelected
@@ -72,16 +93,16 @@ export function el_create_append_p(text, elParent=undefined, id=undefined) {
  */
 export function el_create_boolbutton(id, texts, defaultValue, cb) {
     let el = document.createElement("button");
-    el["xbool"] = defaultValue;
-    el["xtexts"] = structuredClone(texts);
-    el.innerText = el["xtexts"][String(defaultValue)];
+    el_set(el, "xbool", defaultValue)
+    el_set(el, "xtexts", structuredClone(texts))
+    el.innerText = el_get(el, "xtexts")[String(defaultValue)];
     if (id) {
         el.id = id;
     }
     el.addEventListener('click', (ev)=>{
-        el["xbool"] = !el["xbool"];
-        el.innerText = el["xtexts"][String(el["xbool"])];
-        cb(el["xbool"]);
+        el_set(el, "xbool", !el_get(el, "xbool"));
+        el.innerText = el_get(el, "xtexts")[String(el_get(el, "xbool"))];
+        cb(el_get(el, "xbool"));
     })
     return el;
 }
@@ -121,8 +142,8 @@ export function el_creatediv_boolbutton(id, label, texts, defaultValue, cb, clas
  */
 export function el_create_select(id, options, defaultOption, cb) {
     let el = document.createElement("select");
-    el["xselected"] = defaultOption;
-    el["xoptions"] = structuredClone(options);
+    el_set(el, "xselected", defaultOption);
+    el_set(el, "xoptions", structuredClone(options));
     for(let cur of Object.keys(options)) {
         let op = document.createElement("option");
         op.value = cur;
