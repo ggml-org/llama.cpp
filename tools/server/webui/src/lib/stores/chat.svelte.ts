@@ -685,16 +685,24 @@ class ChatStore {
 	 * Stops the current message generation
 	 * Aborts ongoing requests and saves partial response if available
 	 */
-	stopGeneration(): void {
-		slotsService.stopStreaming();
-		chatService.abort();
-		this.savePartialResponseIfNeeded();
+	async stopGeneration(): Promise<void> {
+		if (!this.activeConversation) return;
 
-		// Clear all conversation loading and streaming states
-		this.conversationLoadingStates.clear();
-		this.conversationStreamingStates.clear();
-		this.isLoading = false;
-		this.currentResponse = '';
+		const convId = this.activeConversation.id;
+
+		// Save partial response BEFORE aborting to avoid race condition
+		// where onError callback clears the streaming state
+		await this.savePartialResponseIfNeeded(convId);
+
+		// Stop streaming and abort the request
+		slotsService.stopStreaming();
+		chatService.abort(convId);
+
+		// Clear loading and streaming states for the active conversation only
+		// Note: onError callback will also clear these, but that's okay - idempotent operations
+		this.setConversationLoading(convId, false);
+		this.clearConversationStreaming(convId);
+		slotsService.clearConversationState(convId);
 	}
 
 	/**
@@ -718,12 +726,26 @@ class ChatStore {
 	 * Saves partial response if generation was interrupted
 	 * Preserves user's partial content and timing data when generation is stopped early
 	 */
-	private async savePartialResponseIfNeeded(): Promise<void> {
-		if (!this.currentResponse.trim() || !this.activeMessages.length) {
+	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
+		// Use provided conversation ID or active conversation
+		const conversationId = convId || this.activeConversation?.id;
+		if (!conversationId) return;
+
+		// Get the streaming state for this conversation
+		const streamingState = this.conversationStreamingStates.get(conversationId);
+		if (!streamingState || !streamingState.response.trim()) {
 			return;
 		}
 
-		const lastMessage = this.activeMessages[this.activeMessages.length - 1];
+		// Get messages for this conversation
+		const messages =
+			conversationId === this.activeConversation?.id
+				? this.activeMessages
+				: await DatabaseStore.getConversationMessages(conversationId);
+
+		if (!messages.length) return;
+
+		const lastMessage = messages[messages.length - 1];
 
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
@@ -732,7 +754,7 @@ class ChatStore {
 					thinking?: string;
 					timings?: ChatMessageTimings;
 				} = {
-					content: this.currentResponse
+					content: streamingState.response
 				};
 
 				if (lastMessage.thinking?.trim()) {

@@ -194,14 +194,16 @@ export class ChatService {
 			}
 
 			if (stream) {
-				return this.handleStreamResponse(
+				await this.handleStreamResponse(
 					response,
 					onChunk,
 					onComplete,
 					onError,
 					options.onReasoningChunk,
-					conversationId
+					conversationId,
+					abortController.signal
 				);
+				return;
 			} else {
 				return this.handleNonStreamResponse(response, onComplete, onError);
 			}
@@ -264,7 +266,8 @@ export class ChatService {
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
-		conversationId?: string
+		conversationId?: string,
+		abortSignal?: AbortSignal
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -282,14 +285,29 @@ export class ChatService {
 		try {
 			let chunk = '';
 			while (true) {
+				// Check if we've been aborted before reading more data
+				if (abortSignal?.aborted) {
+					break;
+				}
+
 				const { done, value } = await reader.read();
 				if (done) break;
+
+				// Check again after async read
+				if (abortSignal?.aborted) {
+					break;
+				}
 
 				chunk += decoder.decode(value, { stream: true });
 				const lines = chunk.split('\n');
 				chunk = lines.pop() || ''; // Save incomplete line for next read
 
 				for (const line of lines) {
+					// Check abort signal before processing each line
+					if (abortSignal?.aborted) {
+						break;
+					}
+
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
@@ -317,19 +335,35 @@ export class ChatService {
 							if (content) {
 								hasReceivedData = true;
 								aggregatedContent += content;
-								onChunk?.(content);
+								// Only call callback if not aborted
+								if (!abortSignal?.aborted) {
+									onChunk?.(content);
+								}
 							}
 
 							if (reasoningContent) {
 								hasReceivedData = true;
 								fullReasoningContent += reasoningContent;
-								onReasoningChunk?.(reasoningContent);
+								// Only call callback if not aborted
+								if (!abortSignal?.aborted) {
+									onReasoningChunk?.(reasoningContent);
+								}
 							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
 						}
 					}
 				}
+
+				// Break outer loop if aborted during line processing
+				if (abortSignal?.aborted) {
+					break;
+				}
+			}
+
+			// Don't call onComplete if we've been aborted
+			if (abortSignal?.aborted) {
+				return;
 			}
 
 			if (streamFinished) {
