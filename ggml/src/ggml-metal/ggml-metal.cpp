@@ -191,6 +191,15 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
                 res += ggml_metal_op_mul_mat_id_extra_ids(tensor);
             } break;
+        case GGML_OP_MUL:
+        case GGML_OP_ADD_ID:
+            {
+                // TODO: ideally this should not be necessary
+                //       ref: https://github.com/ggml-org/llama.cpp/issues/16646#issuecomment-3419232927
+                if (tensor->src[0]->op == GGML_OP_ADD_ID || tensor->src[0]->op == GGML_OP_MUL_MAT_ID) {
+                    res = ggml_backend_metal_buffer_type_get_alloc_size(buft, tensor->src[0]);
+                }
+            } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 res += ggml_metal_op_flash_attn_ext_extra_pad(tensor);
