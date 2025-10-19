@@ -1104,7 +1104,6 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-
     // GELU using erf (error function) when possible
     // some backends may fallback to approximation based on Abramowitz and Stegun formula
     GGML_API struct ggml_tensor * ggml_gelu_erf(
