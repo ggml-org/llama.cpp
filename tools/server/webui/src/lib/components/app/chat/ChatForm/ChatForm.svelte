@@ -97,7 +97,9 @@
 	}
 
 	async function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		// Check for IME composition using isComposing property
+		// This prevents form submission when confirming IME word selection (e.g., Japanese/Chinese input)
+		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
 			event.preventDefault();
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;

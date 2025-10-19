@@ -93,7 +93,9 @@
 	}
 
 	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		// Check for IME composition using isComposing property
+		// This prevents saving edit when confirming IME word selection (e.g., Japanese/Chinese input)
+		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
 			event.preventDefault();
 			handleSaveEdit();
 		} else if (event.key === 'Escape') {
