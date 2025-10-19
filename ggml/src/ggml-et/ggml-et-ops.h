@@ -80,6 +80,7 @@ struct ggml_et_glu_params {
 struct ggml_et_softmax_params {
     ggml_tensor src0;     // F32 input tensor
     ggml_tensor src1;     // F32 mask tensor (optional, may be zeroed if not used)
+    ggml_tensor src2;     // F32 sinks tensor (optional, may be zeroed if not used)
     ggml_tensor dst;      // F32 output tensor
     float scale;          // Scale factor
     float max_bias;       // Max bias for ALiBi (0.0f if not used)

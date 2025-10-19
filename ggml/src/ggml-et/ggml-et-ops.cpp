@@ -726,6 +726,19 @@ bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         }
     }
 
+    // Check optional sinks tensor
+    if (node->src[2]) {
+        if (node->src[2]->type != GGML_TYPE_F32) {
+            GGML_LOG_ERROR("ET: SOFTMAX operation with unsupported sinks type: %s (F32 required)\n",
+                           ggml_type_name(node->src[2]->type));
+            return false;
+        }
+        if (!ggml_is_contiguous(node->src[2])) {
+            GGML_LOG_ERROR("ET: SOFTMAX operation requires contiguous sinks tensor\n");
+            return false;
+        }
+    }
+
     // Extract scale and max_bias from op_params
     float scale = 1.0f;
     float max_bias = 0.0f;
@@ -740,6 +753,11 @@ bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         params.src1 = *node->src[1];  // F32 mask tensor
     } else {
         memset(&params.src1, 0, sizeof(params.src1));  // Zero if no mask
+    }
+    if (node->src[2]) {
+        params.src2 = *node->src[2];  // F32 sinks tensor
+    } else {
+        memset(&params.src2, 0, sizeof(params.src2));  // Zero if no sinks
     }
     params.dst = *node;           // F32 output tensor
     params.scale = scale;         // Scale factor

@@ -263,6 +263,11 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
                     // Use simple softmax when no mask and default parameters
                     ctx->cpu_dst = ggml_soft_max(ctx->ggml_ctx, ctx->cpu_src0);
                 }
+
+                // Add sinks if present
+                if (ctx->cpu_src2) {
+                    ggml_soft_max_add_sinks(ctx->cpu_dst, ctx->cpu_src2);
+                }
             }
             break;
         case GGML_OP_GET_ROWS:

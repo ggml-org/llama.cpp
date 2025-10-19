@@ -584,6 +584,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Check optional mask tensor (F32 only)
                 if (op->src[1]) {
                     supported = op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[1]);
+                    if (!supported) break;
+                }
+                // Check optional sinks tensor (F32 only)
+                if (op->src[2]) {
+                    supported = op->src[2]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[2]);
                 } else {
                     supported = true;
                 }
