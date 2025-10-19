@@ -6,6 +6,7 @@ import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/u
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
+import { SvelteMap } from 'svelte/reactivity';
 import type { ExportedConversations } from '$lib/types/database';
 
 /**
@@ -51,10 +52,8 @@ class ChatStore {
 	isInitialized = $state(false);
 	isLoading = $state(false);
 	// Track loading and streaming state per conversation
-	conversationLoadingStates = $state<Map<string, boolean>>(new Map());
-	conversationStreamingStates = $state<Map<string, { response: string; messageId: string }>>(
-		new Map()
-	);
+	conversationLoadingStates = new SvelteMap<string, boolean>();
+	conversationStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	constructor() {
@@ -471,7 +470,7 @@ class ChatStore {
 
 					// Update database with the message's conversation ID (not activeConversation which may have changed)
 					await DatabaseStore.updateCurrentNode(assistantMessage.convId, assistantMessage.id);
-					
+
 					// Only update activeConversation.currNode if this is still the active conversation
 					if (this.activeConversation?.id === assistantMessage.convId) {
 						this.activeConversation.currNode = assistantMessage.id;
@@ -631,7 +630,7 @@ class ChatStore {
 		}
 
 		this.errorDialogState = null;
-		
+
 		// Set loading state for this specific conversation
 		this.setConversationLoading(this.activeConversation.id, true);
 		this.clearConversationStreaming(this.activeConversation.id);
@@ -1284,12 +1283,12 @@ class ChatStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		
+
 		// Clear global UI state since there's no active conversation
 		// Background streaming will continue but won't affect the UI
 		this.isLoading = false;
 		this.currentResponse = '';
-		
+
 		// Clear active conversation in slots service
 		slotsService.setActiveConversation(null);
 	}

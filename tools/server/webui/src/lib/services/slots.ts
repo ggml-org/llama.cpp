@@ -288,7 +288,7 @@ export class SlotsService {
 				return conversationState;
 			}
 		}
-		
+
 		// Fallback to global state
 		if (this.lastKnownState) {
 			return this.lastKnownState;
