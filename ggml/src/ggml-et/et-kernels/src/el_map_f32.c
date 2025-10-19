@@ -144,16 +144,10 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     // Calculate total number of rows (flatten dimensions 1,2,3)
     const int64_t total_rows = ne1 * ne2 * ne3;
 
-    // Distribute rows across threads
-    int64_t rows_per_thread = total_rows / num_threads;
-    if (rows_per_thread == 0) rows_per_thread = 1;
-
-    int64_t start_row = thread_id * rows_per_thread;
-    int64_t end_row = start_row + rows_per_thread;
-
-    if (end_row > total_rows) {
-        end_row = total_rows;
-    }
+    // Distribute rows across threads using ceiling division to handle remainder
+    const int64_t rows_per_thread = (total_rows + num_threads - 1) / num_threads;
+    const int64_t start_row = thread_id * rows_per_thread;
+    const int64_t end_row = (start_row + rows_per_thread < total_rows) ? (start_row + rows_per_thread) : total_rows;
 
     if (start_row >= total_rows) {
         return 0;
