@@ -35,7 +35,14 @@ class TensorNameMap:
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
-            "token_embeddings.weight",                   # ifairy
+        ),
+
+        # ifairy
+        MODEL_TENSOR.TOKEN_EMBD_REAL: (
+            "token_embeddings_real.weight",
+        ),
+        MODEL_TENSOR.TOKEN_EMBD_IMAG: (
+            "token_embeddings_imag.weight",
         ),
 
         # Token type embeddings
@@ -915,7 +922,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
-            "layer.{bid}.mlp.ffn_layernorm.weight",  # ifairy
+        ),
+        
+        # ifairy
+        MODEL_TENSOR.FFN_SUB_NORM_IMAG: (
+            "layer.{bid}.mlp.ffn_layernorm.weight_imag",
+        ),
+        MODEL_TENSOR.FFN_SUB_NORM_REAL: (
+            "layer.{bid}.mlp.ffn_layernorm.weight_real",
         ),
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
@@ -1475,17 +1489,29 @@ class TensorNameMap:
         ),
 
         # ifairy newly added
-        MODEL_TENSOR.FINAL_NORM:(
-            "final_norm.weight",
+        MODEL_TENSOR.FINAL_NORM_REAL:(
+            "final_norm.weight_real",
         ),
-        MODEL_TENSOR.POST_NORM:(
-            "layer.{bid}.post_layernorm.weight",
+        MODEL_TENSOR.FINAL_NORM_IMAG:(
+            "final_norm.weight_imag",
         ),
-        MODEL_TENSOR.PRE_NORM: (
-            "layer.{bid}.pre_layernorm.weight",
+        MODEL_TENSOR.POST_NORM_IMAG:(
+            "layer.{bid}.post_layernorm.weight_imag",
         ),
-        MODEL_TENSOR.ATTN_LAYERNORM: (
-            "layer.{bid}.self_attn.attn_layernorm.weight",
+        MODEL_TENSOR.POST_NORM_REAL:(
+            "layer.{bid}.post_layernorm.weight_real",
+        ),
+        MODEL_TENSOR.PRE_NORM_IMAG: (
+            "layer.{bid}.pre_layernorm.weight_imag",
+        ),
+        MODEL_TENSOR.PRE_NORM_REAL: (
+            "layer.{bid}.pre_layernorm.weight_real",
+        ),
+        MODEL_TENSOR.ATTN_LAYERNORM_REAL: (
+            "layer.{bid}.self_attn.attn_layernorm.weight_real",
+        ),
+        MODEL_TENSOR.ATTN_LAYERNORM_IMAG: (
+            "layer.{bid}.self_attn.attn_layernorm.weight_imag",
         ),
     }
 

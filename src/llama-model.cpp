@@ -227,12 +227,13 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 );
 
             } break;
+            /*
         case GGML_OP_IFAIRY_SPLIT:
             {
                 op_tensor = ggml_ifairy_split(ctx, w, hparams.n_embd_head_v);
 
             } break;
-        /*
+        
         case GGML_OP_IFAIRY_ROPE:
             {
                 int n_embd_head = hparams.n_embd_head_v;
@@ -13844,48 +13845,26 @@ struct llm_build_ifairy : public  llm_graph_context{
                 Vcur_real = ggml_reshape_3d(ctx0, Vcur_real, n_embd_head, n_head_kv, n_tokens);
                 Vcur_imag = ggml_reshape_3d(ctx0, Vcur_imag, n_embd_head, n_head_kv, n_tokens);
 
-                // Apply RoPE to real and imaginary parts separately
-                Qcur_real = ggml_rope_ext(
-                        ctx0, Qcur_real, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
+                ggml_tensor * Q_roped = ggml_ifairy_rope(ctx0, Qcur_real, Qcur_imag, inp_pos, n_rot, 0);
+                ggml_tensor * K_roped = ggml_ifairy_rope(ctx0, Kcur_real, Kcur_imag, inp_pos, n_rot, 0);
+                ggml_tensor * Vcur = ggml_concat(ctx0, Vcur_real, Vcur_imag, 0);
 
-                Qcur_imag = ggml_rope_ext(
-                        ctx0, Qcur_imag, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                Kcur_real = ggml_rope_ext(
-                        ctx0, Kcur_real, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                Kcur_imag = ggml_rope_ext(
-                        ctx0, Kcur_imag, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                cb(Qcur_real, "Qcur_real", il);
-                cb(Qcur_imag, "Qcur_imag", il);
-                cb(Kcur_real, "Kcur_real", il);
-                cb(Kcur_imag, "Kcur_imag", il);
-                cb(Vcur_real, "Vcur_real", il);
-                cb(Vcur_imag, "Vcur_imag", il);
+                cb(Q_roped, "Qcur_roped", il);
+                cb(K_roped, "Kcur_roped", il);
+                cb(Vcur, "Vcur", il);
 
                 // For complex attention, we compute magnitude for attention scores
                 // |Q*K| = sqrt((Q_r*K_r - Q_i*K_i)^2 + (Q_r*K_i + Q_i*K_r)^2)
                 // Simplified: use real part for attention computation
-                cur_real = build_attn(inp_attn,
+                ggml_tensor * cur = build_attn(inp_attn,
                         NULL, NULL,
-                        Qcur_real, Kcur_real, Vcur_real, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                        Q_roped, K_roped, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
-                cur_imag = build_attn(inp_attn,
-                        NULL, NULL,
-                        Qcur_imag, Kcur_imag, Vcur_imag, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                cur = ggml_reshape_3d(ctx0, cur, 2*n_embd_head, n_head, n_tokens);
+                cur_real = ggml_ifairy_split(ctx0, cur, cur->ne[0]/2, true);
+                cur_imag = ggml_ifairy_split(ctx0, cur, cur->ne[0]/2, false);
+                cur_real = ggml_reshape_2d(ctx0, cur_real, cur_real->ne[0] * cur_real->ne[1], cur_real->ne[2]);
+                cur_imag = ggml_reshape_2d(ctx0, cur_imag, cur_imag->ne[0] * cur_imag->ne[1], cur_imag->ne[2]);
 
                 // Apply sub-normalization
                 cur_real = build_norm(cur_real,

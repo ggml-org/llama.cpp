@@ -5903,9 +5903,9 @@ static void ggml_compute_forward_rope_ifairy(
         ggml_tensor * dst,
         const bool forward) {
 
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
-    const ggml_tensor * src2 = dst->src[2];
+    const ggml_tensor * src0 = dst->src[0]; // real
+    const ggml_tensor * src1 = dst->src[1]; // imag
+    const ggml_tensor * src2 = dst->src[2]; // pos
 
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
     int sections[4];
@@ -5929,7 +5929,7 @@ static void ggml_compute_forward_rope_ifairy(
     //printf("ne0: %d, ne1: %d, ne2: %d, ne3: %d\n", ne0, ne1, ne2, ne3);
     //printf("n_past = %d, ne2 = %d\n", n_past, ne2);
 
-    GGML_ASSERT(nb00 == sizeof(float));
+    //GGML_ASSERT(nb00 == sizeof(float));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -5967,18 +5967,13 @@ static void ggml_compute_forward_rope_ifairy(
     }
 
     const float * freq_factors = NULL;
-    if (src2 != NULL) {
-        GGML_ASSERT(src2->type == GGML_TYPE_F32);
-        GGML_ASSERT(src2->ne[0] >= n_dims / 2);
-        freq_factors = (const float *) src2->data;
-    }
 
     // backward process uses inverse rotation by cos and sin.
     // cos and sin build a rotation matrix, where the inverse is the transpose.
     // this essentially just switches the sign of sin.
     const float sin_sign = forward ? 1.0f : -1.0f;
 
-    const int32_t * pos = (const int32_t *) src1->data;
+    const int32_t * pos = (const int32_t *) src2->data;
 
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
@@ -6002,81 +5997,20 @@ static void ggml_compute_forward_rope_ifairy(
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;
 
-                if (is_neox || is_mrope) {
-                    if (is_vision){
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
+                
+                for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
+                    const float cos_theta = cache[i0 + 0];
+                    const float sin_theta = cache[i0 + 1];
 
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
+                    const float * const src_real = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                    const float * const src_imag = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                          float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
+                    const float x0 = src_real[0]; //real
+                    const float x1 = src_imag[0]; //imag
 
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims];
-
-                            dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                            dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
-                        }
-                    } else {
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
-
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
-
-                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
-
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims/2];
-
-                            dst_data[0]        = x0*cos_theta - x1*sin_theta;
-                            dst_data[n_dims/2] = x0*sin_theta + x1*cos_theta;
-                        }
-                    }
-                } else {
-                    for (int64_t i0 = 0; i0 < n_dims * 2; i0 += 2) {
-                        const float cos_theta = cache[i0 + 0];
-                        const float sin_theta = cache[i0 + 1];
-
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
-                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
-
-                        const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[1]); //real
-                        const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[0]); //imag
-
-                        dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                        dst_data[1]      = x0*sin_theta + x1*cos_theta;
-                    }
-                }
-
-                if (is_vision) {
-                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
-                        const int64_t ic = i0/2;
-
-                        const float cos_theta = cache[i0 + 0];
-                        const float sin_theta = cache[i0 + 1];
-
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
-
-                        const float x0 = src[0];
-                        const float x1 = src[n_dims];
-
-                        dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                        dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
-                    }
-                } else {
-                    // fill the remain channels with data from src tensor
-                    for (int64_t i0 = n_dims * 2; i0 < ne0 * 2; i0 += 2) {
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
-
-                        dst_data[0] = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[1]);
-                        dst_data[1] = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[0]);
-                    }
+                    dst_data[0]      = x0*cos_theta - x1*sin_theta;
+                    dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
                 }
             }
         }
@@ -6090,6 +6024,7 @@ static void ggml_compute_forward_ifairy_split_impl(
     const ggml_tensor * src0 = dst->src[0];
 
     const int n_dims     = ((int32_t *) dst->op_params)[0];
+    const int want_real = ((int32_t *) dst->op_params)[1];
 
 
     GGML_TENSOR_UNARY_OP_LOCALS
@@ -6120,16 +6055,27 @@ static void ggml_compute_forward_ifairy_split_impl(
             for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;
+
+                // 可以优化，当nb0==4的时候完全可以用memcpy代替
+                if(want_real) {
+                    for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
+                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                        const float x0 = src[0];
+
+                        dst_data[0]      = x0;
+                    }
+                }else{
                 
-                for (int64_t i0 = 0; i0 < n_dims * 2; i0 += 2) {
-                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00 / 2);
-                    float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                    for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
+                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[1]); //real
-                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t *)src)[0]); //imag
+                        const float x0 = src[n_dims];
 
-                    dst_data[0]      = x0;
-                    dst_data[1]      = x1;
+                        dst_data[0]      = x0;
+                    }
                 }
             }
         }
@@ -6138,6 +6084,62 @@ static void ggml_compute_forward_ifairy_split_impl(
 
 void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst){
     ggml_compute_forward_ifairy_split_impl(params, dst);
+}
+
+static void ggml_compute_forward_ifairy_merge_impl(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    const int n_dims     = src0->ne[0];
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr = ggml_nrows(dst);
+
+    GGML_ASSERT(n_dims % 2 == 0);
+    GGML_ASSERT(n_dims == ne0 * 2);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    // row index used to determine which thread to use
+    int ir = 0;
+
+
+    for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
+        for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
+            for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
+                if (ir++ < ir0) continue;
+                if (ir   > ir1) break;
+                
+                for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                    float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0 / 2);
+
+                    const ggml_fp16_t x0 = GGML_CPU_FP32_TO_FP16(src[0]); //real
+                    const ggml_fp16_t x1 = GGML_CPU_FP32_TO_FP16(src[1]); //imag
+
+                    ((ggml_fp16_t *)dst_data)[1]      = x0;
+                    ((ggml_fp16_t *)dst_data)[0]      = x1;
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_ifairy_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+    ggml_compute_forward_ifairy_merge_impl(params, dst);
 }
 
 void ggml_compute_forward_ifairy_rope(
