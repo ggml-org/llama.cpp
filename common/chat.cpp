@@ -2212,11 +2212,6 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
             // Test if arg_val is a partial JSON
             std::optional<common_json> value_json = std::nullopt;
             try { value_json = builder.try_consume_json(); }
-            catch (const common_chat_msg_partial_exception &partial) {
-                gen_partial_args([&](auto &&, auto &&needle){arguments[key] = needle;});
-                throw;
-            }
-            catch (const json::exception&) { builder.move_to(val_start); }
             catch (const std::runtime_error&) { builder.move_to(val_start); }
 
             // If it is a JSON and followed by </arg_value>, parse as json
