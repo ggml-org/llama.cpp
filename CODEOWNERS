@@ -55,7 +55,7 @@
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
-/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler
+/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler @am17an
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
