@@ -1,5 +1,5 @@
 {
-  "Exclude": ["^\\.gitmodules$", "stb_image\\.h"],
+  "Exclude": ["^\\.gitmodules$", "stb_image\\.h", "oci-go/"],
   "Disable": {
     "IndentSize": true
   }
