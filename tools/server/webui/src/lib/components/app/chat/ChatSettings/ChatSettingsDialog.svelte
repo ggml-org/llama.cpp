@@ -208,6 +208,11 @@
 			]
 		},
 		{
+			title: 'Import/Export',
+			icon: Database,
+			fields: []
+		},
+		{
 			title: 'Developer',
 			icon: Code,
 			fields: [
@@ -222,11 +227,6 @@
 					type: 'textarea'
 				}
 			]
-		},
-		{
-			title: 'Import/Export',
-			icon: Database,
-			fields: []
 		}
 		// TODO: Experimental features section will be implemented after initial release
 		// This includes Python interpreter (Pyodide integration) and other experimental features
