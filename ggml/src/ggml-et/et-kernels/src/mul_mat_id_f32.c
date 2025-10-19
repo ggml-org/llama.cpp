@@ -147,9 +147,11 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     const size_t nb1  = dst->nb[1];    // dst column stride
     const size_t nb2  = dst->nb[2];    // dst batch stride
 
-    // Verify K dimension alignment
-    if (K % block_size != 0) {
-        return -1;
+    // Verify K dimension alignment for quantization
+    // Q8_0 requires strict alignment (quantized data must be block-aligned)
+    // F32 and F16 can handle partial blocks with scalar remainders
+    if (src0->type == GGML_TYPE_Q8_0 && K % block_size != 0) {
+        return -1; // Q8_0 requires K to be multiple of block_size
     }
 
     // Verify first dimension is contiguous
@@ -219,6 +221,7 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
             const int64_t col_idx = n_idx % src1->ne[1];
             float sum = 0.0f;
 
+            // Process full blocks
             for (int64_t kb = 0; kb < K_blocks; kb++) {
                 // Get pointer to activation column at row kb*block_size
                 const float* b_col_start = (const float*)((const char*)src1_data +
@@ -247,6 +250,32 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
                     }
                     default:
                         return -1;
+                }
+            }
+
+            // Handle partial block (remainder) for F32 and F16
+            const int64_t K_remainder = K % block_size;
+            if (K_remainder > 0 && src0->type != GGML_TYPE_Q8_0) {
+                const int64_t remainder_offset = K_blocks * block_size;
+                const float* b_col_start = (const float*)((const char*)src1_data +
+                                                         remainder_offset * src1->nb[0] +
+                                                         col_idx * nb11 + batch_idx * nb12);
+
+                switch (src0->type) {
+                    case GGML_TYPE_F16: {
+                        const uint16_t* expert_row = (const uint16_t*)((const char*)src0_data +
+                                                                       m * nb01 + expert_id * nb02);
+                        sum += compute_block_dot_product_f16_partial(&expert_row[remainder_offset], b_col_start, K_remainder);
+                        break;
+                    }
+                    case GGML_TYPE_F32: {
+                        const float* expert_row = (const float*)((const char*)src0_data +
+                                                                 m * nb01 + expert_id * nb02);
+                        sum += compute_block_dot_product_f32_partial(&expert_row[remainder_offset], b_col_start, K_remainder);
+                        break;
+                    }
+                    default:
+                        break;
                 }
             }
 

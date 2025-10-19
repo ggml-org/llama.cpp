@@ -118,9 +118,11 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const size_t nb2  = dst->nb[2];    // dst batch stride 2
     const size_t nb3  = dst->nb[3];    // dst batch stride 3
 
-    // Verify K dimension alignment for quantization (must be multiple of block_size)
-    if (K % block_size != 0) {
-        return -1; // K dimension not aligned to quantization block size
+    // Verify K dimension alignment for quantization
+    // Q8_0 requires strict alignment (quantized data must be block-aligned)
+    // F32 and F16 can handle partial blocks with scalar remainders
+    if (src0->type == GGML_TYPE_Q8_0 && K % block_size != 0) {
+        return -1; // Q8_0 requires K to be multiple of block_size
     }
 
     // Verify first dimension is contiguous (required assumption)
@@ -192,6 +194,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             // Compute dot product: A[m, :] . B[:, n]
             float sum = 0.0f;
 
+            // Process full blocks
             for (int64_t kb = 0; kb < K_blocks; kb++) {
                 // Get pointer to B column at row kb*block_size
                 const float* b_col_start = (const float*)((const char*)src1_data +
@@ -220,6 +223,32 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                     }
                     default:
                         return -1;
+                }
+            }
+
+            // Handle partial block (remainder) for F32 and F16
+            const int64_t K_remainder = K % block_size;
+            if (K_remainder > 0 && src0->type != GGML_TYPE_Q8_0) {
+                const int64_t remainder_offset = K_blocks * block_size;
+                const float* b_col_start = (const float*)((const char*)src1_data +
+                                                         remainder_offset * src1->nb[0] +
+                                                         n * nb11 + i12 * nb12 + i13 * nb13);
+
+                switch (src0->type) {
+                    case GGML_TYPE_F16: {
+                        const uint16_t* f16_row = (const uint16_t*)((const char*)src0_data +
+                                                                    m * nb01 + i02 * nb02 + i03 * nb03);
+                        sum += compute_block_dot_product_f16_partial(&f16_row[remainder_offset], b_col_start, K_remainder);
+                        break;
+                    }
+                    case GGML_TYPE_F32: {
+                        const float* f32_row = (const float*)((const char*)src0_data +
+                                                              m * nb01 + i02 * nb02 + i03 * nb03);
+                        sum += compute_block_dot_product_f32_partial(&f32_row[remainder_offset], b_col_start, K_remainder);
+                        break;
+                    }
+                    default:
+                        break;
                 }
             }
 
