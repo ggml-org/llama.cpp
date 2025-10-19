@@ -8995,3 +8995,109 @@ kernel void kernel_opt_step_sgd_f32(
 
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
 }
+
+kernel void kernel_op_im2col_3d_f32(
+    constant ggml_metal_kargs_im2col_3d &args,
+    device const uchar *src1c,
+    device float *dst,
+    uint tpig[[thread_position_in_grid]]
+) {
+    const uint64_t total = args.N * args.OD * args.OH * args.OW;
+    if (tpig >= total)
+      return;
+
+    uint64_t idx = tpig;
+
+    uint64_t iow = idx % args.OW;
+    idx /= args.OW;
+
+    uint64_t ioh = idx % args.OH;
+    idx /= args.OH;
+
+    uint64_t iod = idx % args.OD;
+    idx /= args.OD;
+
+    uint64_t in  = idx;
+
+    uint64_t dst_base_offset = ((in * args.OD + iod) * args.OH + ioh) * args.OW + iow;
+    dst_base_offset *= args.IC_KD_KH_KW;
+
+    for (uint32_t iic = 0; iic < args.IC; ++iic) {
+        const uint64_t src_offset0 = ((in * args.IC) + iic) * args.nb13;
+
+        for (uint32_t ikd = 0; ikd < args.KD; ++ikd) {
+            for (uint32_t ikh = 0; ikh < args.KH; ++ikh) {
+                for (uint32_t ikw = 0; ikw < args.KW; ++ikw) {
+                    const int32_t iiw = iow * args.s0 + ikw * args.d0 - args.p0;
+                    const int32_t iih = ioh * args.s1 + ikh * args.d1 - args.p1;
+                    const int32_t iid = iod * args.s2 + ikd * args.d2 - args.p2;
+
+                    const uint64_t dst_idx = dst_base_offset + iic * args.KD_KH_KW + ikd * args.KH_KW + ikh * args.KW + ikw;
+
+                    float val = 0.0f;
+
+                    if (iid >= 0 && iid < args.ID && iih >= 0 && iih < args.IH && iiw >= 0 && iiw < args.IW) {
+                        const uint64_t src_offset = src_offset0 + iid * args.nb12 + iih * args.nb11 + iiw * args.nb10;
+                        const device const uchar* src_bytes = src1c + src_offset;
+                        val = *reinterpret_cast<const device float*>(src_bytes);
+                    }
+
+                    dst[dst_idx] = val;
+                }
+            }
+        }
+    }
+}
+
+kernel void kernel_op_im2col_3d_f16(
+    constant ggml_metal_kargs_im2col_3d &args,
+    device const uchar *src1c,
+    device half *dst,
+    uint tpig[[thread_position_in_grid]]
+) {
+    const uint64_t total = args.N * args.OD * args.OH * args.OW;
+    if (tpig >= total)
+      return;
+
+    uint64_t idx = tpig;
+
+    uint64_t iow = idx % args.OW;
+    idx /= args.OW;
+
+    uint64_t ioh = idx % args.OH;
+    idx /= args.OH;
+
+    uint64_t iod = idx % args.OD;
+    idx /= args.OD;
+
+    uint64_t in  = idx;
+
+    uint64_t dst_base_offset = ((in * args.OD + iod) * args.OH + ioh) * args.OW + iow;
+    dst_base_offset *= args.IC_KD_KH_KW;
+
+    for (uint32_t iic = 0; iic < args.IC; ++iic) {
+        const uint64_t src_offset0 = ((in * args.IC) + iic) * args.nb13;
+
+        for (uint32_t ikd = 0; ikd < args.KD; ++ikd) {
+            for (uint32_t ikh = 0; ikh < args.KH; ++ikh) {
+                for (uint32_t ikw = 0; ikw < args.KW; ++ikw) {
+                    const int32_t iiw = iow * args.s0 + ikw * args.d0 - args.p0;
+                    const int32_t iih = ioh * args.s1 + ikh * args.d1 - args.p1;
+                    const int32_t iid = iod * args.s2 + ikd * args.d2 - args.p2;
+
+                    const uint64_t dst_idx = dst_base_offset + iic * args.KD_KH_KW + ikd * args.KH_KW + ikh * args.KW + ikw;
+
+                    half val = half(0.0f);
+
+                    if (iid >= 0 && iid < args.ID && iih >= 0 && iih < args.IH && iiw >= 0 && iiw < args.IW) {
+                        const uint64_t src_offset = src_offset0 + iid * args.nb12 + iih * args.nb11 + iiw * args.nb10;
+                        const device const uchar* src_bytes = src1c + src_offset;
+                        val = half(*reinterpret_cast<const device float*>(src_bytes));
+                    }
+
+                    dst[dst_idx] = val;
+                }
+            }
+        }
+    }
+}

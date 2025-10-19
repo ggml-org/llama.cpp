@@ -799,4 +799,35 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_opt_step_sgd;
 
+typedef struct {
+    uint32_t s0;
+    uint32_t s1;
+    uint32_t s2;
+    uint32_t p0;
+    uint32_t p1;
+    uint32_t p2;
+    uint32_t d0;
+    uint32_t d1;
+    uint32_t d2;
+    uint32_t IC;
+    uint32_t ID;
+    uint32_t IH;
+    uint32_t IW;
+    uint32_t KD;
+    uint32_t KH;
+    uint32_t KW;
+    uint32_t OD;
+    uint32_t OH;
+    uint32_t OW;
+    uint64_t nb13;
+    uint64_t nb12;
+    uint64_t nb11;
+    uint64_t nb10;
+    uint64_t OH_OW;
+    uint64_t KH_KW;
+    uint64_t KD_KH_KW;
+    uint64_t IC_KD_KH_KW;
+    uint64_t N;
+} ggml_metal_kargs_im2col_3d;
+
 #endif // GGML_METAL_IMPL
