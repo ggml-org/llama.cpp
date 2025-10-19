@@ -4,7 +4,7 @@
 	import ConversationSelectionDialog from './ConversationSelectionDialog.svelte';
 	import { DatabaseStore } from '$lib/stores/database';
 	import type { ExportedConversations } from '$lib/types/database';
-	import { createMessageCountMap } from '$lib/utils/conversationUtils';
+	import { createMessageCountMap } from '$lib/utils/conversation-utils';
 	import { chatStore } from '$lib/stores/chat.svelte';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
@@ -12,7 +12,6 @@
 	let showExportSummary = $state(false);
 	let showImportSummary = $state(false);
 
-	// Dialog state
 	let showExportDialog = $state(false);
 	let showImportDialog = $state(false);
 	let availableConversations = $state<DatabaseConversation[]>([]);
@@ -23,14 +22,12 @@
 
 	async function handleExportClick() {
 		try {
-			// Load all conversations for selection
 			const allConversations = await DatabaseStore.getAllConversations();
 			if (allConversations.length === 0) {
 				alert('No conversations to export');
 				return;
 			}
 
-			// Load messages for each conversation to get counts
 			const conversationsWithMessages = await Promise.all(
 				allConversations.map(async (conv) => {
 					const messages = await DatabaseStore.getConversationMessages(conv.id);
@@ -38,7 +35,6 @@
 				})
 			);
 
-			// Create message count map
 			messageCountMap = createMessageCountMap(conversationsWithMessages);
 			availableConversations = allConversations;
 			showExportDialog = true;
@@ -50,7 +46,6 @@
 
 	async function handleExportConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			// Export selected conversations - use snapshot to get plain objects
 			const allData: ExportedConversations = await Promise.all(
 				selectedConversations.map(async (conv) => {
 					const messages = await DatabaseStore.getConversationMessages(conv.id);
@@ -63,6 +58,7 @@
 			});
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
+
 			a.href = url;
 			a.download = `conversations_${new Date().toISOString().split('T')[0]}.json`;
 			document.body.appendChild(a);
@@ -82,8 +78,8 @@
 
 	async function handleImportClick() {
 		try {
-			// Open file picker
 			const input = document.createElement('input');
+
 			input.type = 'file';
 			input.accept = '.json';
 
@@ -112,17 +108,15 @@
 						);
 					}
 
-					// Store full import data and extract conversations for selection dialog
 					fullImportData = importedData;
 					availableConversations = importedData.map(
 						(item: { conv: DatabaseConversation; messages: DatabaseMessage[] }) => item.conv
 					);
-
-					// Create message count map from imported data
 					messageCountMap = createMessageCountMap(importedData);
 					showImportDialog = true;
 				} catch (err: unknown) {
 					const message = err instanceof Error ? err.message : 'Unknown error';
+
 					console.error('Failed to parse file:', err);
 					alert(`Failed to parse file: ${message}`);
 				}
@@ -137,16 +131,13 @@
 
 	async function handleImportConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			// Filter the original import data to only include selected conversations
 			const selectedIds = new Set(selectedConversations.map((c) => c.id));
 			const selectedData = $state
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			// Import selected conversations with their messages
 			await DatabaseStore.importConversations(selectedData);
 
-			// Refresh the conversations list in the chat store
 			await chatStore.loadConversations();
 
 			importedConversations = selectedConversations;
@@ -245,7 +236,6 @@
 	</div>
 </div>
 
-<!-- Export Dialog -->
 <ConversationSelectionDialog
 	conversations={availableConversations}
 	{messageCountMap}
@@ -255,7 +245,6 @@
 	onConfirm={handleExportConfirm}
 />
 
-<!-- Import Dialog -->
 <ConversationSelectionDialog
 	conversations={availableConversations}
 	{messageCountMap}

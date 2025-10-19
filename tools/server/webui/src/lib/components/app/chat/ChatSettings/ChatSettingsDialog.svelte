@@ -470,10 +470,8 @@
 						</div>
 
 						{#if currentSection.title === 'Import/Export'}
-							<!-- Import/Export Section -->
 							<ImportExportTab />
 						{:else}
-							<!-- Regular Settings Fields -->
 							<div class="space-y-6">
 								<ChatSettingsFields
 									fields={currentSection.fields}

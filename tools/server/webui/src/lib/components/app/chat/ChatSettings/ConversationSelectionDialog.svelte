@@ -28,7 +28,6 @@
 	let searchQuery = $state('');
 	let selectedIds = $state.raw<SvelteSet<string>>(new SvelteSet(conversations.map((c) => c.id)));
 
-	// Filter conversations based on search query
 	let filteredConversations = $derived(
 		conversations.filter((conv) => {
 			const name = conv.name || 'Untitled conversation';
@@ -36,13 +35,11 @@
 		})
 	);
 
-	// Check if all filtered conversations are selected
 	let allSelected = $derived(
 		filteredConversations.length > 0 &&
 			filteredConversations.every((conv) => selectedIds.has(conv.id))
 	);
 
-	// Check if some (but not all) filtered conversations are selected
 	let someSelected = $derived(
 		filteredConversations.some((conv) => selectedIds.has(conv.id)) && !allSelected
 	);
@@ -59,13 +56,13 @@
 
 	function toggleAll() {
 		if (allSelected) {
-			// Deselect all filtered conversations
 			const newSet = new SvelteSet(selectedIds);
+
 			filteredConversations.forEach((conv) => newSet.delete(conv.id));
 			selectedIds = newSet;
 		} else {
-			// Select all filtered conversations
 			const newSet = new SvelteSet(selectedIds);
+
 			filteredConversations.forEach((conv) => newSet.add(conv.id));
 			selectedIds = newSet;
 		}
@@ -77,25 +74,22 @@
 	}
 
 	function handleCancel() {
-		// Reset selection to all conversations
 		selectedIds = new SvelteSet(conversations.map((c) => c.id));
 		searchQuery = '';
+
 		onCancel();
 	}
 
-	// Track previous open state to detect close
 	let previousOpen = $state(false);
 
-	// Reset selection when dialog opens, call onCancel when it closes
 	$effect(() => {
 		if (open && !previousOpen) {
-			// Dialog just opened
 			selectedIds = new SvelteSet(conversations.map((c) => c.id));
 			searchQuery = '';
 		} else if (!open && previousOpen) {
-			// Dialog just closed
 			onCancel();
 		}
+
 		previousOpen = open;
 	});
 </script>
@@ -103,11 +97,13 @@
 <Dialog.Root bind:open>
 	<Dialog.Portal>
 		<Dialog.Overlay class="z-[1000000]" />
+
 		<Dialog.Content class="z-[1000001] max-w-2xl">
 			<Dialog.Header>
 				<Dialog.Title>
 					Select Conversations to {mode === 'export' ? 'Export' : 'Import'}
 				</Dialog.Title>
+
 				<Dialog.Description>
 					{#if mode === 'export'}
 						Choose which conversations you want to export. Selected conversations will be downloaded
@@ -120,10 +116,11 @@
 			</Dialog.Header>
 
 			<div class="space-y-4">
-				<!-- Search Input -->
 				<div class="relative">
 					<Search class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+
 					<Input bind:value={searchQuery} placeholder="Search conversations..." class="pr-9 pl-9" />
+
 					{#if searchQuery}
 						<button
 							class="absolute top-1/2 right-3 -translate-y-1/2 text-muted-foreground hover:text-foreground"
@@ -135,7 +132,6 @@
 					{/if}
 				</div>
 
-				<!-- Selection Summary -->
 				<div class="flex items-center justify-between text-sm text-muted-foreground">
 					<span>
 						{selectedIds.size} of {conversations.length} selected
@@ -145,7 +141,6 @@
 					</span>
 				</div>
 
-				<!-- Conversations Table -->
 				<div class="overflow-hidden rounded-md border">
 					<ScrollArea class="h-[400px]">
 						<table class="w-full">
@@ -158,7 +153,9 @@
 											onCheckedChange={toggleAll}
 										/>
 									</th>
+
 									<th class="p-3 text-left text-sm font-medium">Conversation Name</th>
+
 									<th class="w-32 p-3 text-left text-sm font-medium">Messages</th>
 								</tr>
 							</thead>
@@ -185,6 +182,7 @@
 													onCheckedChange={() => toggleConversation(conv.id)}
 												/>
 											</td>
+
 											<td class="p-3 text-sm">
 												<div
 													class="max-w-[17rem] truncate"
@@ -193,6 +191,7 @@
 													{conv.name || 'Untitled conversation'}
 												</div>
 											</td>
+
 											<td class="p-3 text-sm text-muted-foreground">
 												{messageCountMap.get(conv.id) ?? 0}
 											</td>
@@ -207,6 +206,7 @@
 
 			<Dialog.Footer>
 				<Button variant="outline" onclick={handleCancel}>Cancel</Button>
+
 				<Button onclick={handleConfirm} disabled={selectedIds.size === 0}>
 					{mode === 'export' ? 'Export' : 'Import'} ({selectedIds.size})
 				</Button>
