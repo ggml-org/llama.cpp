@@ -69,6 +69,38 @@ static inline float et_powf(float base, float exp) {
     return result;
 }
 
+// Natural logarithm.
+static inline float et_logf(float x) {
+    // Handle special cases
+    if (x < 0.0f) {
+        // Return NaN for negative input
+        union { float f; uint32_t i; } nan = { .i = 0x7FC00000 };
+        return nan.f;
+    }
+    if (x == 0.0f) {
+        // Return -infinity for log(0)
+        union { float f; uint32_t i; } inf = { .i = 0xFF800000 };
+        return inf.f;
+    }
+    if (x == 1.0f) return 0.0f;
+
+    float log2_result;
+    unsigned long temp;
+
+    __asm__ volatile (
+        "mova.x.m  %[temp]              \n\t"  // Save current mask state
+        "mov.m.x   m0, x0, 1            \n\t"  // Set mask register m0 to enable element 0
+        "flog.ps %[result], %[x]        \n\t"  // result = log2(x)
+        "mova.m.x  %[temp]              \n\t"  // Restore mask state
+        : [temp] "=&r"(temp), [result] "=&f"(log2_result)
+        : [x] "f"(x)
+    );
+
+    // Convert log2 to natural log: ln(x) = log2(x) * ln(2)
+    const float ln2 = 0.69314718055994530942f;
+    return log2_result * ln2;
+}
+
 // Square root function implemented as et_powf(x, 0.5)
 static inline float et_sqrtf(float x) {
     // Handle special cases
