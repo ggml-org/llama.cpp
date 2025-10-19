@@ -8995,3 +8995,35 @@ kernel void kernel_opt_step_sgd_f32(
 
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
 }
+
+kernel void kernel_op_diag_mask_inf_f32(
+    constant ggml_metal_kargs_diag_mask_inf & args,
+    device const float * src0,
+    device float * dst,
+    uint tiitg[[thread_index_in_threadgroup]]
+) {
+    if (tiitg != 0) {
+        return;
+    }
+
+    const uint64_t ne0 = args.ne0;
+    const uint64_t ne1 = args.ne1;
+    const uint64_t ne2 = args.ne2;
+    const uint64_t ne3 = args.ne3;
+    const uint64_t n_past = args.n_past;
+
+    const uint64_t total = ne0 * ne1 * ne2 * ne3;
+
+    for (uint64_t idx = 0; idx < total; ++idx) {
+        uint64_t rem = idx;
+        const uint64_t i = rem % ne0;
+        rem /= ne0;
+        const uint64_t j = rem % ne1;
+
+        float val = src0[idx];
+        if (i > n_past + j) {
+            val = -INFINITY;
+        }
+        dst[idx] = val;
+    }
+}
