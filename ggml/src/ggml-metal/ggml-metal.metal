@@ -4298,8 +4298,8 @@ kernel void kernel_upscale_f32(
 
 kernel void kernel_pad_f32(
     constant ggml_metal_kargs_pad & args,
-    device  const char * src0,
-    device        char * dst,
+    device const char * src0,
+    device char       * dst,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]],
     uint3   ntg[[threads_per_threadgroup]]) {
@@ -4308,27 +4308,36 @@ kernel void kernel_pad_f32(
     const int64_t i2 = tgpig.y;
     const int64_t i1 = tgpig.x;
 
-    const int64_t i03 = i3;
-    const int64_t i02 = i2;
-    const int64_t i01 = i1;
-
-    device const float * src0_ptr = (device const float *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
-    device       float * dst_ptr  = (device       float *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
-
-    if (i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-            if (i0 < args.ne00) {
-                dst_ptr[i0] = src0_ptr[i0];
-            } else {
-                dst_ptr[i0] = 0.0f;
-            }
-        }
-
+    if (i1 >= args.ne1 || i2 >= args.ne2 || i3 >= args.ne3) {
         return;
     }
 
+    const int64_t dst_base_bytes = i3 * args.nb3 + i2 * args.nb2 + i1 * args.nb1;
+    device float *dst_ptr = (device float *)((device char *)dst + dst_base_bytes);
+
     for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-        dst_ptr[i0] = 0.0f;
+        const int src_i0 = i0 - args.lp0;
+        const int src_i1 = i1 - args.lp1;
+        const int src_i2 = i2 - args.lp2;
+        const int src_i3 = i3 - args.lp3;
+
+        if (src_i0 >= 0 && src_i0 < (int)args.ne00 &&
+            src_i1 >= 0 && src_i1 < (int)args.ne01 &&
+            src_i2 >= 0 && src_i2 < (int)args.ne02 &&
+            src_i3 >= 0 && src_i3 < (int)args.ne03) {
+            const int64_t src_offset_bytes =
+                src_i3 * args.nb03 +
+                src_i2 * args.nb02 +
+                src_i1 * args.nb01 +
+                src_i0 * args.nb00;
+
+            const float val =
+                ((const device float *)(src0 + src_offset_bytes))[0];
+
+            dst_ptr[i0] = ((const device float *)(src0 + src_offset_bytes))[0];
+        } else {
+            dst_ptr[i0] = 0.0f;
+        }
     }
 }
 

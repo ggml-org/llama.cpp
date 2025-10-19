@@ -3242,6 +3242,15 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint32_t, nb,  op,         nb);
 
+    const int32_t lp0 = ggml_get_op_params_i32(op, 0);
+    const int32_t rp0 = ggml_get_op_params_i32(op, 1);
+    const int32_t lp1 = ggml_get_op_params_i32(op, 2);
+    const int32_t rp1 = ggml_get_op_params_i32(op, 3);
+    const int32_t lp2 = ggml_get_op_params_i32(op, 4);
+    const int32_t rp2 = ggml_get_op_params_i32(op, 5);
+    const int32_t lp3 = ggml_get_op_params_i32(op, 6);
+    const int32_t rp3 = ggml_get_op_params_i32(op, 7);
+
     ggml_metal_kargs_pad args = {
         /*.ne00 =*/ ne00,
         /*.ne01 =*/ ne01,
@@ -3258,7 +3267,15 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
         /*.nb0  =*/ nb0,
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
-        /*.nb3  =*/ nb3
+        /*.nb3  =*/ nb3,
+        /*.lp0  =*/ lp0,
+        /*.rp0  =*/ rp0,
+        /*.lp1  =*/ lp1,
+        /*.rp1  =*/ rp1,
+        /*.lp2  =*/ lp2,
+        /*.rp2  =*/ rp2,
+        /*.lp3  =*/ lp3,
+        /*.rp3  =*/ rp3,
     };
 
     ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_pad(lib, op);
