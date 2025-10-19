@@ -293,8 +293,11 @@ int32_t llm_chat_apply_template(
             }
             if (role == "system") {
                 if (support_system_message) {
-                    ss << "<<SYS>>\n" << content << "\n<</SYS>>\n\n";
-                } else {
+                    ss << "[INST] <<SYS>>\n"
+                       << "You are a helpful assistant.\n"
+                       << "<</SYS>>\n\n";
+                }
+                else {
                     // if the model does not support system message, we still include it in the first message, but without <<SYS>>
                     ss << content << "\n";
                 }
