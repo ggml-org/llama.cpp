@@ -149,45 +149,54 @@ static inline float et_expf(float x) {
 }
 
 //******************************************************************************
-// Trigonometric Functions (Taylor Series)
-// Simple implementations using only basic arithmetic operations
+// Trigonometric Functions
 //******************************************************************************
 
-// Sine function using Taylor series approximation
+// Sine function using Taylor series
 static inline float et_sinf(float x) {
-    // Normalize to [-pi, pi] range first
-    const float pi = 3.14159265f;
-    const float two_pi = 6.28318531f;
+    const float pi = 3.14159265358979323846f;
+    const float two_pi = 6.28318530717958647693f;
+    const float pi_over_2 = 1.57079632679489661923f;
 
-    // Simple range reduction (not perfect but good enough for ROPE)
-    while (x > pi) x -= two_pi;
-    while (x < -pi) x += two_pi;
+    if (x > pi || x < -pi) {
+        float cycles = x * et_fdiv(1.0f, two_pi);
+        int n = (int)cycles;
+        if (x < 0.0f) n--;  // Floor for negative
+        x = x - (float)n * two_pi;
+    }
 
-    // Taylor series: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
+    // sin(x) = sin(π - x) for x in [π/2, π]
+    // sin(x) = -sin(-π - x) for x in [-π, -π/2]
+    int negate = 0;
+    if (x > pi_over_2) {
+        x = pi - x;
+    } else if (x < -pi_over_2) {
+        x = -pi - x;
+        negate = 1;
+    }
+
+    // sin(x) ≈ x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
     const float x2 = x * x;
     const float x3 = x2 * x;
     const float x5 = x3 * x2;
     const float x7 = x5 * x2;
+    const float x9 = x7 * x2;
+    const float x11 = x9 * x2;
 
-    return x - (x3 * et_fdiv(1.0f, 6.0f)) + (x5 * et_fdiv(1.0f, 120.0f)) - (x7 * et_fdiv(1.0f, 5040.0f));
+    float result = x
+                 - x3 * et_fdiv(1.0f, 6.0f)           // x^3/3!
+                 + x5 * et_fdiv(1.0f, 120.0f)         // x^5/5!
+                 - x7 * et_fdiv(1.0f, 5040.0f)        // x^7/7!
+                 + x9 * et_fdiv(1.0f, 362880.0f)      // x^9/9!
+                 - x11 * et_fdiv(1.0f, 39916800.0f);  // x^11/11!
+
+    return negate ? -result : result;
 }
 
-// Cosine function using Taylor series approximation
+// Cosine function using identity cos(x) = sin(x + π/2)
 static inline float et_cosf(float x) {
-    // Normalize to [-pi, pi] range first
-    const float pi = 3.14159265f;
-    const float two_pi = 6.28318531f;
-
-    // Simple range reduction (not perfect but good enough for ROPE)
-    while (x > pi) x -= two_pi;
-    while (x < -pi) x += two_pi;
-
-    // Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
-    const float x2 = x * x;
-    const float x4 = x2 * x2;
-    const float x6 = x4 * x2;
-
-    return 1.0f - (x2 * et_fdiv(1.0f, 2.0f)) + (x4 * et_fdiv(1.0f, 24.0f)) - (x6 * et_fdiv(1.0f, 720.0f));
+    const float pi_over_2 = 1.57079632679489661923f;
+    return et_sinf(x + pi_over_2);
 }
 
 //******************************************************************************
