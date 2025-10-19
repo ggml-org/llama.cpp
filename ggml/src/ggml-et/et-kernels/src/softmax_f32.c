@@ -35,6 +35,7 @@
 struct ggml_et_softmax_params {
     struct ggml_tensor src0;     // F32 input tensor
     struct ggml_tensor src1;     // F32 mask tensor (optional, may be zeroed if not used)
+    struct ggml_tensor src2;     // F32 sinks tensor (optional, may be zeroed if not used)
     struct ggml_tensor dst;      // F32 output tensor
     float scale;                 // Scale factor (temperature scaling)
     float max_bias;              // Max bias for ALiBi (0.0f if not used)
@@ -61,7 +62,9 @@ static void compute_softmax_row(
     int ne00,             // Input row length
     int ne10,             // Mask row length (guaranteed equal to ne00 in ggml)
     float scale,          // Scale factor
-    float slope)          // ALiBi slope factor
+    float slope,          // ALiBi slope factor
+    float sink_value,     // Sink value for this head (or -INFINITY if no sinks)
+    bool use_sinks)       // Whether sinks are enabled
 {
     // Step 1: Apply scaling and masking/bias to input
     // Copy input and apply scale
@@ -81,6 +84,12 @@ static void compute_softmax_row(
     // Step 2: Find maximum for numerical stability
     float max_val = find_max_f32(dst, ne00);
 
+    if (use_sinks) {
+        if (sink_value > max_val) {
+            max_val = sink_value;
+        }
+    }
+
     // Step 3: Compute exponentials and sum
     // exp(x[i] - max) for numerical stability
     float sum = 0.0f;
@@ -88,6 +97,10 @@ static void compute_softmax_row(
         float exp_val = et_expf(dst[i] - max_val);
         dst[i] = exp_val;
         sum += exp_val;
+    }
+
+    if (use_sinks) {
+        sum += et_expf(sink_value - max_val);
     }
 
     // Step 4: Normalize by sum to get probabilities
@@ -134,6 +147,7 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
     // Extract tensor references
     struct ggml_tensor* src0 = &params->src0;  // Input tensor
     struct ggml_tensor* src1 = &params->src1;  // Mask tensor (optional)
+    struct ggml_tensor* src2 = &params->src2;  // Sinks tensor (optional)
     struct ggml_tensor* dst = &params->dst;    // Output tensor
     float scale = params->scale;               // Scale factor
     float max_bias = params->max_bias;         // ALiBi max bias
@@ -146,31 +160,28 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
     // Check if mask is used and validate type
     bool use_mask = (src1->data != NULL && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16));
 
-    // Get data pointers
+    bool use_sinks = (src2->data != NULL && src2->type == GGML_TYPE_F32);
+
     float* src0_data = (float*)src0->data;
     float* dst_data = (float*)dst->data;
     float* mask_data = use_mask ? (float*)src1->data : NULL;
+    float* sinks_data = use_sinks ? (float*)src2->data : NULL;
 
-    // Validate data pointers
     if (!src0_data || !dst_data) {
         return -1; // Null data pointer
     }
 
-    // Get tensor dimensions
     const int64_t ne00 = src0->ne[0];  // Sequence length (columns)
     const int64_t ne01 = src0->ne[1];  // Number of rows
     const int64_t ne02 = src0->ne[2];  // Batch/head dimension
     const int64_t ne03 = src0->ne[3];  // Outer batch dimension
 
-    // Get mask dimensions for broadcasting
     const int64_t ne10 = use_mask ? src1->ne[0] : 0;  // Mask sequence length
     const int64_t ne11 = use_mask ? src1->ne[1] : 0;  // Mask rows
     const int64_t ne12 = use_mask ? src1->ne[2] : 0;  // Mask batch/head dimension
     const int64_t ne13 = use_mask ? src1->ne[3] : 0;  // Mask outer batch dimension
 
-    // Validate mask broadcasting compatibility using ggml's special rules
     if (use_mask) {
-        // ggml softmax broadcasting rules (not standard numpy broadcasting):
         // - Dimension 0: mask must equal input exactly
         // - Dimension 1: mask must be >= input (allows larger pre-allocated masks)
         // - Dimension 2: input must be divisible by mask (modulo broadcasting)
@@ -184,20 +195,60 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
     }
 
     // ALiBi slope calculation - compute per attention head
-    // Based on ggml CPU implementation for ALiBi positional encoding
-    float slope = 1.0f;
+    const uint32_t n_head = (uint32_t)ne02;
+    uint32_t n_head_log2 = 0;
+    float m0 = 1.0f;
+    float m1 = 1.0f;
+
     if (max_bias > 0.0f) {
-        // Simplified ALiBi slope calculation
-        // In full implementation, this varies per head: slope = pow(2^-8/n_heads, head_idx)
-        slope = 1.0f;
+        // This is equivalent to: 1 << floor(log2(n_head))
+        n_head_log2 = 1;
+        while (n_head_log2 < n_head) {
+            n_head_log2 <<= 1;
+        }
+        if (n_head_log2 > n_head) {
+            n_head_log2 >>= 1;
+        }
+
+        // Compute base slopes for ALiBi
+        // m0 = 2^(-max_bias / n_head_log2)
+        // m1 = 2^(-max_bias / (2 * n_head_log2))
+        float inv_n_head_log2 = et_fdiv(1.0f, (float)n_head_log2);
+        m0 = et_expf(-max_bias * 0.69314718f * inv_n_head_log2);  // 0.69314718 = ln(2)
+        m1 = et_expf(-max_bias * 0.69314718f * inv_n_head_log2 * 0.5f);
     }
 
     // Process tensor row by row
     // Calculate based on 4D tensor layout: [ne00, ne01, ne02, ne03]
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
+            // Calculate ALiBi slope for this attention head
+            float slope = 1.0f;
+            if (max_bias > 0.0f) {
+                const uint32_t h = (uint32_t)i02;  // head index
+                if (h < n_head_log2) {
+                    // slope = m0^(h+1) for first half of heads
+                    slope = m0;
+                    for (uint32_t i = 0; i < h; i++) {
+                        slope *= m0;
+                    }
+                } else {
+                    // slope = m1^(2*(h - n_head_log2) + 1) for second half
+                    const uint32_t exp = 2 * (h - n_head_log2) + 1;
+                    slope = m1;
+                    for (uint32_t i = 1; i < exp; i++) {
+                        slope *= m1;
+                    }
+                }
+            }
+
+            float sink_value = 0.0f;
+            if (use_sinks && sinks_data) {
+                // Sinks tensor is 1D array indexed by head (i02)
+                sink_value = sinks_data[i02];
+            }
+
             for (int64_t i01 = 0; i01 < ne01; i01++) {
-                // Calculate input row offset
                 const int64_t src_offset = i03 * ne02 * ne01 * ne00 +
                                           i02 * ne01 * ne00 +
                                           i01 * ne00;
@@ -223,8 +274,7 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
                     mask_row = mask_data + mask_offset;
                 }
 
-                // Compute softmax for this row
-                compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, (int)ne10, scale, slope);
+                compute_softmax_row(dst_row, src_row, mask_row, (int)ne00, (int)ne10, scale, slope, sink_value, use_sinks);
             }
         }
     }
