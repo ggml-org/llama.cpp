@@ -9,8 +9,6 @@
 
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
-	// Use global isLoading which is kept in sync with active conversation's loading state
-	// This ensures proper reactivity since isLoading is a $state variable
 	let isCurrentConversationLoading = $derived(isLoading());
 
 	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);

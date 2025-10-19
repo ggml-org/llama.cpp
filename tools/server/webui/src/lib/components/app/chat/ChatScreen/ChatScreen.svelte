@@ -83,8 +83,6 @@
 	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 
-	// Use global isLoading which is kept in sync with active conversation's loading state
-	// This ensures proper reactivity since isLoading is a $state variable
 	let isCurrentConversationLoading = $derived(isLoading());
 
 	async function handleDeleteConfirm() {

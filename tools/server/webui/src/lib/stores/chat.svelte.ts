@@ -51,7 +51,6 @@ class ChatStore {
 	errorDialogState = $state<{ type: 'timeout' | 'server'; message: string } | null>(null);
 	isInitialized = $state(false);
 	isLoading = $state(false);
-	// Track loading and streaming state per conversation
 	conversationLoadingStates = new SvelteMap<string, boolean>();
 	conversationStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
@@ -128,14 +127,11 @@ class ChatStore {
 
 			this.activeConversation = conversation;
 
-			// Set this conversation as active for statistics display
 			slotsService.setActiveConversation(convId);
 
-			// Sync global isLoading state with this conversation's loading state
 			const isConvLoading = this.isConversationLoading(convId);
 			this.isLoading = isConvLoading;
 
-			// Sync global currentResponse state with this conversation's streaming state
 			const streamingState = this.getConversationStreaming(convId);
 			this.currentResponse = streamingState?.response || '';
 
@@ -316,14 +312,11 @@ class ChatStore {
 	private setConversationLoading(convId: string, loading: boolean): void {
 		if (loading) {
 			this.conversationLoadingStates.set(convId, true);
-			// Update global isLoading only if this is the active conversation
 			if (this.activeConversation?.id === convId) {
 				this.isLoading = true;
 			}
 		} else {
 			this.conversationLoadingStates.delete(convId);
-			// Only update global isLoading if we're clearing the active conversation's loading state
-			// This prevents background conversations from affecting the UI
 			if (this.activeConversation?.id === convId) {
 				this.isLoading = false;
 			}
@@ -336,7 +329,6 @@ class ChatStore {
 
 	private setConversationStreaming(convId: string, response: string, messageId: string): void {
 		this.conversationStreamingStates.set(convId, { response, messageId });
-		// Update global currentResponse for backward compatibility (active conversation only)
 		if (this.activeConversation?.id === convId) {
 			this.currentResponse = response;
 		}
@@ -344,7 +336,6 @@ class ChatStore {
 
 	private clearConversationStreaming(convId: string): void {
 		this.conversationStreamingStates.delete(convId);
-		// Clear global currentResponse for backward compatibility (active conversation only)
 		if (this.activeConversation?.id === convId) {
 			this.currentResponse = '';
 		}
@@ -396,7 +387,6 @@ class ChatStore {
 		};
 
 		slotsService.startStreaming();
-		// Set this conversation as active for statistics display
 		slotsService.setActiveConversation(assistantMessage.convId);
 
 		await chatService.sendMessage(
@@ -406,7 +396,6 @@ class ChatStore {
 
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
-					// Update per-conversation streaming state
 					this.setConversationStreaming(
 						assistantMessage.convId,
 						streamedContent,
@@ -468,10 +457,8 @@ class ChatStore {
 
 					this.updateMessageAtIndex(messageIndex, localUpdateData);
 
-					// Update database with the message's conversation ID (not activeConversation which may have changed)
 					await DatabaseStore.updateCurrentNode(assistantMessage.convId, assistantMessage.id);
 
-					// Only update activeConversation.currNode if this is still the active conversation
 					if (this.activeConversation?.id === assistantMessage.convId) {
 						this.activeConversation.currNode = assistantMessage.id;
 						await this.refreshActiveMessages();
@@ -481,7 +468,6 @@ class ChatStore {
 						await onComplete(streamedContent);
 					}
 
-					// Clear per-conversation loading and streaming states
 					this.setConversationLoading(assistantMessage.convId, false);
 					this.clearConversationStreaming(assistantMessage.convId);
 					slotsService.clearConversationState(assistantMessage.convId);
@@ -631,7 +617,6 @@ class ChatStore {
 
 		this.errorDialogState = null;
 
-		// Set loading state for this specific conversation
 		this.setConversationLoading(this.activeConversation.id, true);
 		this.clearConversationStreaming(this.activeConversation.id);
 
@@ -644,7 +629,6 @@ class ChatStore {
 				throw new Error('Failed to add user message');
 			}
 
-			// If this is a new conversation, update the title with the first user prompt
 			if (isNewConversation && content) {
 				const title = content.trim();
 				await this.updateConversationName(this.activeConversation.id, title);
@@ -657,7 +641,6 @@ class ChatStore {
 			}
 
 			this.activeMessages.push(assistantMessage);
-			// Don't update currNode until after streaming completes to maintain proper conversation path
 
 			const conversationContext = this.activeMessages.slice(0, -1);
 
@@ -690,16 +673,11 @@ class ChatStore {
 
 		const convId = this.activeConversation.id;
 
-		// Save partial response BEFORE aborting to avoid race condition
-		// where onError callback clears the streaming state
 		await this.savePartialResponseIfNeeded(convId);
 
-		// Stop streaming and abort the request
 		slotsService.stopStreaming();
 		chatService.abort(convId);
 
-		// Clear loading and streaming states for the active conversation only
-		// Note: onError callback will also clear these, but that's okay - idempotent operations
 		this.setConversationLoading(convId, false);
 		this.clearConversationStreaming(convId);
 		slotsService.clearConversationState(convId);
@@ -715,7 +693,6 @@ class ChatStore {
 		chatService.abort();
 		await this.savePartialResponseIfNeeded();
 
-		// Clear all conversation loading and streaming states
 		this.conversationLoadingStates.clear();
 		this.conversationStreamingStates.clear();
 		this.isLoading = false;
@@ -727,17 +704,14 @@ class ChatStore {
 	 * Preserves user's partial content and timing data when generation is stopped early
 	 */
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
-		// Use provided conversation ID or active conversation
 		const conversationId = convId || this.activeConversation?.id;
 		if (!conversationId) return;
 
-		// Get the streaming state for this conversation
 		const streamingState = this.conversationStreamingStates.get(conversationId);
 		if (!streamingState || !streamingState.response.trim()) {
 			return;
 		}
 
-		// Get messages for this conversation
 		const messages =
 			conversationId === this.activeConversation?.id
 				? this.activeMessages
@@ -768,7 +742,6 @@ class ChatStore {
 						prompt_n: lastKnownState.promptTokens || 0,
 						predicted_n: lastKnownState.tokensDecoded || 0,
 						cache_n: lastKnownState.cacheTokens || 0,
-						// We don't have ms data from the state, but we can estimate
 						predicted_ms:
 							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
 								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
@@ -829,7 +802,6 @@ class ChatStore {
 			this.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseStore.updateMessage(messageId, { content: newContent });
 
-			// If this is the first user message, update the conversation title with confirmation if needed
 			if (isFirstUserMessage && newContent.trim()) {
 				await this.updateConversationTitleWithConfirmation(
 					this.activeConversation.id,
@@ -990,7 +962,6 @@ class ChatStore {
 		try {
 			const currentConfig = config();
 
-			// Only ask for confirmation if the setting is enabled and callback is provided
 			if (currentConfig.askForTitleConfirmation && onConfirmationNeeded) {
 				const conversation = await DatabaseStore.getConversation(convId);
 				if (!conversation) return false;
@@ -1305,13 +1276,8 @@ class ChatStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-
-		// Clear global UI state since there's no active conversation
-		// Background streaming will continue but won't affect the UI
 		this.isLoading = false;
 		this.currentResponse = '';
-
-		// Clear active conversation in slots service
 		slotsService.setActiveConversation(null);
 	}
 

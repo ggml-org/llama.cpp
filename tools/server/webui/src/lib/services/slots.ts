@@ -37,7 +37,6 @@ export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState | null) => void> = new Set();
 	private isStreamingActive: boolean = false;
 	private lastKnownState: ApiProcessingState | null = null;
-	// Track per-conversation streaming states and timing data
 	private conversationStates: Map<string, ApiProcessingState | null> = new Map();
 	private activeConversationId: string | null = null;
 
@@ -83,7 +82,6 @@ export class SlotsService {
 	 */
 	setActiveConversation(conversationId: string | null): void {
 		this.activeConversationId = conversationId;
-		// Update display to show stats for the active conversation
 		this.notifyCallbacks();
 	}
 
@@ -93,7 +91,6 @@ export class SlotsService {
 	updateConversationState(conversationId: string, state: ApiProcessingState | null): void {
 		this.conversationStates.set(conversationId, state);
 
-		// If this is the active conversation, update the display
 		if (conversationId === this.activeConversationId) {
 			this.lastKnownState = state;
 			this.notifyCallbacks();
@@ -113,7 +110,6 @@ export class SlotsService {
 	clearConversationState(conversationId: string): void {
 		this.conversationStates.delete(conversationId);
 
-		// If this was the active conversation, clear display
 		if (conversationId === this.activeConversationId) {
 			this.lastKnownState = null;
 			this.notifyCallbacks();
@@ -174,17 +170,14 @@ export class SlotsService {
 	): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
 
-		// Only update if we successfully parsed the state
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
 			return;
 		}
 
 		if (conversationId) {
-			// Update per-conversation state
 			this.updateConversationState(conversationId, processingState);
 		} else {
-			// Fallback to global state for backward compatibility
 			this.lastKnownState = processingState;
 			this.notifyCallbacks();
 		}
@@ -281,7 +274,6 @@ export class SlotsService {
 	 * If activeConversationId is set, returns state for that conversation
 	 */
 	async getCurrentState(): Promise<ApiProcessingState | null> {
-		// If we have an active conversation, return its state
 		if (this.activeConversationId) {
 			const conversationState = this.conversationStates.get(this.activeConversationId);
 			if (conversationState) {
@@ -289,12 +281,10 @@ export class SlotsService {
 			}
 		}
 
-		// Fallback to global state
 		if (this.lastKnownState) {
 			return this.lastKnownState;
 		}
 		try {
-			// Import dynamically to avoid circular dependency
 			const { chatStore } = await import('$lib/stores/chat.svelte');
 			const messages = chatStore.activeMessages;
 

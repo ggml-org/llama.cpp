@@ -80,33 +80,25 @@ export class ChatService {
 
 		const currentConfig = config();
 
-		// Create or get abort controller for this conversation
 		const requestId = conversationId || 'default';
 
-		// Cancel any existing request for this conversation
 		if (this.abortControllers.has(requestId)) {
 			this.abortControllers.get(requestId)?.abort();
 		}
 
-		// Create new abort controller for this conversation
 		const abortController = new AbortController();
 		this.abortControllers.set(requestId, abortController);
 
-		// Convert database messages with attachments to API format if needed
 		const normalizedMessages: ApiChatMessageData[] = messages
 			.map((msg) => {
-				// Check if this is a DatabaseMessage by checking for DatabaseMessage-specific fields
 				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-					// This is a DatabaseMessage, convert it
 					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 					return ChatService.convertMessageToChatServiceData(dbMsg);
 				} else {
-					// This is already an ApiChatMessageData object
 					return msg as ApiChatMessageData;
 				}
 			})
 			.filter((msg) => {
-				// Filter out empty system messages
 				if (msg.role === 'system') {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
@@ -116,7 +108,6 @@ export class ChatService {
 				return true;
 			});
 
-		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(normalizedMessages);
 
 		const requestBody: ApiChatCompletionRequest = {
@@ -185,7 +176,6 @@ export class ChatService {
 			});
 
 			if (!response.ok) {
-				// Use the new parseErrorResponse method to handle structured errors
 				const error = await this.parseErrorResponse(response);
 				if (onError) {
 					onError(error);
@@ -240,7 +230,6 @@ export class ChatService {
 			}
 			throw userFriendlyError;
 		} finally {
-			// Clean up the abort controller for this conversation
 			this.abortControllers.delete(requestId);
 		}
 	}
@@ -285,28 +274,19 @@ export class ChatService {
 		try {
 			let chunk = '';
 			while (true) {
-				// Check if we've been aborted before reading more data
-				if (abortSignal?.aborted) {
-					break;
-				}
+				if (abortSignal?.aborted) break;
 
 				const { done, value } = await reader.read();
 				if (done) break;
 
-				// Check again after async read
-				if (abortSignal?.aborted) {
-					break;
-				}
+				if (abortSignal?.aborted) break;
 
 				chunk += decoder.decode(value, { stream: true });
 				const lines = chunk.split('\n');
-				chunk = lines.pop() || ''; // Save incomplete line for next read
+				chunk = lines.pop() || '';
 
 				for (const line of lines) {
-					// Check abort signal before processing each line
-					if (abortSignal?.aborted) {
-						break;
-					}
+					if (abortSignal?.aborted) break;
 
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
@@ -325,8 +305,6 @@ export class ChatService {
 
 							if (timings || promptProgress) {
 								this.updateProcessingState(timings, promptProgress, conversationId);
-
-								// Store the latest timing data
 								if (timings) {
 									lastTimings = timings;
 								}
@@ -335,7 +313,6 @@ export class ChatService {
 							if (content) {
 								hasReceivedData = true;
 								aggregatedContent += content;
-								// Only call callback if not aborted
 								if (!abortSignal?.aborted) {
 									onChunk?.(content);
 								}
@@ -344,7 +321,6 @@ export class ChatService {
 							if (reasoningContent) {
 								hasReceivedData = true;
 								fullReasoningContent += reasoningContent;
-								// Only call callback if not aborted
 								if (!abortSignal?.aborted) {
 									onReasoningChunk?.(reasoningContent);
 								}
@@ -355,16 +331,10 @@ export class ChatService {
 					}
 				}
 
-				// Break outer loop if aborted during line processing
-				if (abortSignal?.aborted) {
-					break;
-				}
+				if (abortSignal?.aborted) break;
 			}
 
-			// Don't call onComplete if we've been aborted
-			if (abortSignal?.aborted) {
-				return;
-			}
+			if (abortSignal?.aborted) return;
 
 			if (streamFinished) {
 				if (!hasReceivedData && aggregatedContent.length === 0) {
@@ -569,14 +539,12 @@ export class ChatService {
 	 */
 	public abort(conversationId?: string): void {
 		if (conversationId) {
-			// Abort specific conversation
 			const abortController = this.abortControllers.get(conversationId);
 			if (abortController) {
 				abortController.abort();
 				this.abortControllers.delete(conversationId);
 			}
 		} else {
-			// Abort all conversations
 			for (const controller of this.abortControllers.values()) {
 				controller.abort();
 			}
@@ -638,7 +606,6 @@ export class ChatService {
 
 			return error;
 		} catch {
-			// If we can't parse the error response, return a generic error
 			const fallback = new Error(`Server error (${response.status}): ${response.statusText}`);
 			fallback.name = 'HttpError';
 			return fallback;
@@ -650,13 +617,11 @@ export class ChatService {
 		promptProgress?: ChatMessagePromptProgress,
 		conversationId?: string
 	): void {
-		// Calculate tokens per second from timing data
 		const tokensPerSecond =
 			timings?.predicted_ms && timings?.predicted_n
 				? (timings.predicted_n / timings.predicted_ms) * 1000
 				: 0;
 
-		// Update slots service with timing data (async but don't wait)
 		slotsService
 			.updateFromTimingData(
 				{
