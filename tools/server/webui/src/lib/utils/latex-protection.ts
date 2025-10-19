@@ -76,7 +76,11 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 }
 
 function escapeBrackets(text: string): string {
-	const pattern = /(```[\S\s]*?```|`.*?`)|\\\[([\S\s]*?[^\\])\\]|\\\((.*?)\\\)/g;
+	// Using the look‑behind pattern `(?<!\\)` we skip matches
+	// that are preceded by a backslash, e.g.
+	// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook)
+	// or `\\[4pt]`.
+	const pattern = /(```[\S\s]*?```|`.*?`)|(?<!\\)\\\[([\S\s]*?[^\\])\\]|(?<!\\)\\\((.*?)\\\)/g;
 	return text.replace(
 		pattern,
 		(
@@ -157,10 +161,13 @@ export function preprocessLaTeX(content: string): string {
 	});
 
 	// Match \(...\), \[...\], $$...$$ and protect them
-	content = content.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\(.*?\\\))/g, (match) => {
-		latexExpressions.push(match);
-		return `<<LATEX_${latexExpressions.length - 1}>>`;
-	});
+	content = content.replace(
+		/(\$\$[\s\S]*?\$\$|(?<!\\)\\\[[\s\S]*?\\\]|(?<!\\)\\\(.*?\\\))/g,
+		(match) => {
+			latexExpressions.push(match);
+			return `<<LATEX_${latexExpressions.length - 1}>>`;
+		}
+	);
 
 	// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
 	content = maskInlineLaTeX(content, latexExpressions);
@@ -187,9 +194,14 @@ export function preprocessLaTeX(content: string): string {
 
 	// Final pass: Convert \(...\) → $...$, \[...\] → $$...$$
 	content = content
-		.replace(/\\\((.+?)\\\)/g, '$$$1$') // inline
+		// Using the look‑behind pattern `(?<!\\)` we skip matches
+		// that are preceded by a backslash, e.g.
+		// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook).
+		.replace(/(?<!\\)\\\((.+?)\\\)/g, '$$$1$') // inline
 		.replace(
-			/(^|.)\\\[([\s\S]*?)\\\]/g, // display, see PR16599
+			// Using the look‑behind pattern `(?<!\\)` we skip matches
+			// that are preceded by a backslash, e.g. `\\[4pt]`.
+			/(?<!\\)\\\[([\s\S]*?)\\\]/g, // display, see also PR #16599
 			(_, prefix: string, content: string) => {
 				return `${prefix}$$${content}$$`;
 			}
