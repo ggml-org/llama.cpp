@@ -177,28 +177,9 @@
 		return mutated ? tempDiv.innerHTML : html;
 	}
 
-	function normalizeMathDelimiters(text: string): string {
-		return text
-			.replace(/(^|[^\\])\\\[((?:\\.|[\s\S])*?)\\\]/g, (_, prefix: string, content: string) => {
-				return `${prefix}$$${content}$$`;
-			})
-			.replace(/(^|[^\\])\\\(((?:\\.|[\s\S])*?)\\\)/g, (_, prefix: string, content: string) => {
-				return `${prefix}$${content}$`;
-			});
-	}
-
-	// change to true to use the PR16599,
-	// "fix: added a normalization step for MathJax-style \[\] and \(\) delimiters"
-	const usePR16599 = false;
-
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			let normalized: string;
-			if (usePR16599) {
-				normalized = normalizeMathDelimiters(text);
-			} else {
-				normalized = preprocessLaTeX(text);
-			}
+			let normalized = preprocessLaTeX(text);
 			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);

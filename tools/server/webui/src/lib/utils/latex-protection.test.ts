@@ -131,6 +131,15 @@ describe('preprocessLaTeX', () => {
 		);
 	});
 
+	test("don't inline \\\\( ... \\) to $...$", () => {
+		const input =
+			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula \\((x_1,\\ldots,x_n)\\).';
+		const output = preprocessLaTeX(input);
+		expect(output).toBe(
+			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula $(x_1,\\ldots,x_n)$.'
+		);
+	});
+
 	test('preserves display math \\[ ... \\] and protects adjacent text', () => {
 		const input = `Some kernel of \\(\\mathrm{SL}_2(\\mathbb{F}_7)\\):
   \\[
