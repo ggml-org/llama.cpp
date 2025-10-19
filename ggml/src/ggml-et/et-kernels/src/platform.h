@@ -96,6 +96,19 @@ static inline void atomic_store_f32(volatile float* addr, float value) {
     );
 }
 
+// Atomic store for F16 values to global memory
+// Uses ET hardware's custom shg instruction (store halfword global)
+// This ensures cache coherency when multiple threads write to nearby addresses
+// Address must be 16-bit aligned
+static inline void atomic_store_f16(volatile uint16_t* addr, uint16_t value) {
+    __asm__ volatile(
+        "shg %1, (%0)"
+        :
+        : "r"(addr), "r"(value)
+        : "memory"
+    );
+}
+
 //******************************************************************************
 // Kernel Startup Trampoline Macro
 //******************************************************************************
