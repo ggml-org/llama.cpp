@@ -199,30 +199,24 @@ static inline float fp16_to_fp32(uint16_t h) {
 }
 
 // Convert FP32 (single precision) to FP16 (IEEE 754 half precision)
+// Uses ET hardware FCVT.F16.PS instruction for accurate conversion
 static inline uint16_t fp32_to_fp16(float f) {
-    // Extract float bits
-    uint32_t f32 = *(uint32_t*)&f;
-    uint32_t sign = (f32 >> 16) & 0x8000;
-    int32_t exp = ((f32 >> 23) & 0xFF) - 127 + 15;
-    uint32_t mantissa = (f32 >> 13) & 0x3FF;
+    float result_f;
+    unsigned long temp;
 
-    // Handle special cases
-    if (exp <= 0) {
-        // Underflow to zero or subnormal
-        if (exp < -10) return (uint16_t)sign; // Zero
-        // Subnormal
-        mantissa = (mantissa | 0x400) >> (1 - exp);
-        return (uint16_t)(sign | mantissa);
-    } else if (exp >= 31) {
-        // Overflow to infinity or NaN
-        if (exp == 31 && mantissa != 0) {
-            return (uint16_t)(sign | 0x7C00 | mantissa); // NaN
-        }
-        return (uint16_t)(sign | 0x7C00); // Infinity
-    } else {
-        // Normal number
-        return (uint16_t)(sign | (exp << 10) | mantissa);
-    }
+    __asm__ volatile (
+        "mova.x.m  %[temp]              \n\t"  // Save current mask state
+        "mov.m.x   m0, x0, 1            \n\t"  // Set mask register m0 to enable element 0
+        "fcvt.f16.ps %[result], %[f]    \n\t"  // Convert FP32 to FP16 (result in lower 16 bits)
+        "mova.m.x  %[temp]              \n\t"  // Restore mask state
+        : [temp] "=&r"(temp), [result] "=&f"(result_f)
+        : [f] "f"(f)
+    );
+
+    // Extract lower 16 bits containing the FP16 value
+    // The instruction zero-extends to 32 bits, so upper 16 bits are 0
+    uint32_t result_bits = *(uint32_t*)&result_f;
+    return (uint16_t)result_bits;
 }
 
 #endif // MATH_FP_H
