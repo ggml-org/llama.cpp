@@ -114,6 +114,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
         case LLM_TYPE_A13B:          return "A13B";
+        case LLM_TYPE_7B_A1B:        return "7B.A1B";
         case LLM_TYPE_8B_A1B:        return "8B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
@@ -1843,8 +1844,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-                switch (hparams.n_layer) {
-                    // TODO: Add llm type label (not sure this is useful)
+                switch (hparams.n_embd) {
+                    case 1536: type = LLM_TYPE_7B_A1B; break;
+                    case 2048: case 2560: type = LLM_TYPE_3B; break;
+                    case 4096: type = LLM_TYPE_32B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
