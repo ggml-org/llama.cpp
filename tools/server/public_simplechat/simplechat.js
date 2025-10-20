@@ -1112,8 +1112,12 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-
-        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", "TRAPME-", (tag, elParent)=>{
+        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+            if (prop == "headers:Authorization") {
+                // @ts-ignore
+                elProp.placeholder = "Bearer OPENAI_API_KEY";
+            }
+        }, "TRAPME-", (tag, elParent)=>{
             if (tag == "TRAPME-apiEP") {
                 let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
                     // @ts-ignore
