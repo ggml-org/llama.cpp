@@ -71,7 +71,3 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context& ctx, ggml_tensor* ds
             , item_ct1);
          });
 }
-
-
-
-
