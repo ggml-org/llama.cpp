@@ -244,10 +244,11 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
+ * @param {((prop:string, elUI: HTMLElement)=>void)| undefined} fRefiner
  * @param {string | undefined} sTrapTag
  * @param {((tagPlusProp: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
  */
-export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, sTrapTag=undefined, fTrapper=undefined) {
+export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=undefined, sTrapTag=undefined, fTrapper=undefined) {
     let typeDict = {
         "string": "text",
         "number": "number",
@@ -275,11 +276,17 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, sTrapTag=un
                 }
                 oObj[k] = val;
             });
+            if (fRefiner) {
+                fRefiner(k, inp.el)
+            }
             fs.appendChild(inp.div);
         } else if (type == "boolean") {
             let bbtn = el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
                 oObj[k] = userVal;
             });
+            if (fRefiner) {
+                fRefiner(k, bbtn.el)
+            }
             fs.appendChild(bbtn.div);
         } else if (type == "object") {
             ui_show_obj_props_edit(fs, val, Object.keys(val), k)
