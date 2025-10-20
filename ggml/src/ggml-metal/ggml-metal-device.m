@@ -476,6 +476,9 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
 
             dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
+            if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
+                dev->props.has_tensor = false;
+            }
 
             dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
@@ -483,7 +486,6 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 #endif
 
             dev->props.use_shared_buffers = dev->props.has_unified_memory;
-
             if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                 dev->props.use_shared_buffers = false;
             }
