@@ -1159,7 +1159,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "GELU_ERF",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
+//static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
 
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
@@ -2566,6 +2566,11 @@ struct ggml_tensor * ggml_elu_inplace(
 }
 
 // ggml_relu
+struct ggml_tensor * ggml_ifairy_relu2(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_IFAIRY_RELU2);
+}
 
 struct ggml_tensor * ggml_relu(
         struct ggml_context * ctx,

@@ -9204,6 +9204,10 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_elu(params, dst);
             } break;
+        case GGML_UNARY_OP_IFAIRY_RELU2:
+            {
+                ggml_compute_forward_ifairy_relu2(params, dst);
+            } break;
         case GGML_UNARY_OP_RELU:
             {
                 ggml_compute_forward_relu(params, dst);
