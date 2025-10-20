@@ -1090,12 +1090,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
-#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE)
+if (res) {
+    #if defined(GGML_PERF) || defined(GGML_PERF_RELEASE)
         ggml_perf_accumulate(perf_totals, res->get_gf());
-#elif defined(GGML_PERF_DETAIL)
+    #elif defined(GGML_PERF_DETAIL)
         ggml_perf_accumulate(perf_totals, res->get_gf());
         ggml_perf_write_detailed_csv(res->get_gf(), perf_all_shape_fp);
-#endif /* GML_PERF-related flags */
+    #endif /* GML_PERF-related flags */
+}
 
 
         if (!res) {
@@ -1121,6 +1123,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 memory->seq_rm(s, pos_min[s], -1);
             }
 
+	    printf("\n ANOOP Status vakue %d ", status);
             switch (status) {
                 case GGML_STATUS_ABORTED:      return  2;
                 case GGML_STATUS_ALLOC_FAILED: return -2;
