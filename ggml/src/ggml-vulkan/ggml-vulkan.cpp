@@ -4736,7 +4736,7 @@ static void ggml_vk_instance_init() {
 
                         bool equals = std::equal(std::begin(old_id.deviceUUID), std::end(old_id.deviceUUID), std::begin(new_id.deviceUUID));
                         equals |= old_id.deviceLUIDValid && new_id.deviceLUIDValid &&
-                                 std::equal(std::begin(old_id.deviceLUID), std::end(old_id.deviceLUID), std::begin(new_id.deviceLUID));
+                            std::equal(std::begin(old_id.deviceLUID), std::end(old_id.deviceLUID), std::begin(new_id.deviceLUID));
 
                         return equals;
                     }
