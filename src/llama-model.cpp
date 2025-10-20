@@ -114,6 +114,8 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
         case LLM_TYPE_A13B:          return "A13B";
+        case LLM_TYPE_7B_A1B:        return "7B.A1B";
+        case LLM_TYPE_8B_A1B:        return "8B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
@@ -310,7 +312,7 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
 }
 
 // CPU: ACCEL -> GPU host -> CPU extra -> CPU
-static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices, bool use_extra_bufts) {
+static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices, bool use_extra_bufts, bool no_host) {
     buft_list_t buft_list;
 
     // add ACCEL buffer types
@@ -331,11 +333,13 @@ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & de
     // generally, this will be done using the first device in the list
     // a better approach would be to handle this on a weight-by-weight basis using the offload_op
     // function of the device to determine if it would benefit from being stored in a host buffer
-    for (auto * dev : devices) {
-        ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(dev);
-        if (buft) {
-            buft_list.emplace_back(dev, buft);
-            break;
+    if (!no_host) {
+        for (auto * dev : devices) {
+            ggml_backend_buffer_type_t buft = ggml_backend_dev_host_buffer_type(dev);
+            if (buft) {
+                buft_list.emplace_back(dev, buft);
+                break;
+            }
         }
     }
 
@@ -418,11 +422,8 @@ struct llama_model::impl {
     llama_mlocks mlock_bufs;
     llama_mlocks mlock_mmaps;
 
-    // contexts where the model tensors metadata is stored
-    std::vector<ggml_context_ptr> ctxs;
-
-    // the model memory buffers for the tensor data
-    std::vector<ggml_backend_buffer_ptr> bufs;
+    // contexts where the model tensors metadata is stored as well ass the corresponding buffers:
+    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
     buft_list_t cpu_buft_list;
     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
@@ -475,7 +476,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
 
     // everything past this point is not vocab-related
-    if (hparams.vocab_only) {
+    // for CLIP models, we only need to load tensors, no hparams
+    if (hparams.vocab_only || ml.get_arch() == LLM_ARCH_CLIP) {
         return;
     }
 
@@ -1215,12 +1217,21 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 hparams.set_swa_pattern(6);
 
                 hparams.causal_attn = false; // embeddings do not use causal attention
-                hparams.rope_freq_base_train_swa  = 10000.0f;
+                hparams.rope_freq_base_train_swa = 10000.0f;
                 hparams.rope_freq_scale_train_swa = 1.0f;
 
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_POOLING_TYPE,                hparams.pooling_type);
+                ml.get_key(LLM_KV_POOLING_TYPE, hparams.pooling_type);
+
+                //applied only if model converted with --sentence-transformers-dense-modules
+                ml.get_key(LLM_KV_DENSE_2_FEAT_IN, hparams.dense_2_feat_in, false);
+                ml.get_key(LLM_KV_DENSE_2_FEAT_OUT, hparams.dense_2_feat_out, false);
+                ml.get_key(LLM_KV_DENSE_3_FEAT_IN, hparams.dense_3_feat_in, false);
+                ml.get_key(LLM_KV_DENSE_3_FEAT_OUT, hparams.dense_3_feat_out, false);
+
+                GGML_ASSERT((hparams.dense_2_feat_in == 0 || hparams.dense_2_feat_in == hparams.n_embd) && "dense_2_feat_in must be equal to n_embd");
+                GGML_ASSERT((hparams.dense_3_feat_out == 0 || hparams.dense_3_feat_out == hparams.n_embd) && "dense_3_feat_out must be equal to n_embd");
 
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_0_3B; break;
@@ -1833,8 +1844,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-                switch (hparams.n_layer) {
-                    // TODO: Add llm type label (not sure this is useful)
+                switch (hparams.n_embd) {
+                    case 1536: type = LLM_TYPE_7B_A1B; break;
+                    case 2048: case 2560: type = LLM_TYPE_3B; break;
+                    case 4096: type = LLM_TYPE_32B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
@@ -1993,13 +2006,28 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 for (uint32_t il = 0; il < hparams.n_layer; ++il) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
+                hparams.n_layer_dense_lead = hparams.n_layer;
                 switch (hparams.n_ff()) {
                     case  4608: type = LLM_TYPE_350M; break;
                     case  6912: type = LLM_TYPE_700M; break;
                     case  8192: type = LLM_TYPE_1_2B; break;
                     case 10752: type = LLM_TYPE_2_6B; break;
-                    default:   type = LLM_TYPE_UNKNOWN;
+                    default:    type = LLM_TYPE_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_LFM2MOE:
+            {
+                ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
+
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+                }
+
+                type = LLM_TYPE_8B_A1B;
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
@@ -2083,7 +2111,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
 
     // build a list of buffer types for the CPU and GPU devices
-    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts);
+    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
     for (auto * dev : devices) {
         buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
         // add CPU buffer types as a fallback
@@ -2154,7 +2182,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     max_n_tensors += n_layer*2; // duplicated rope freq tensors
     const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors;
 
-    std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
+    // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
+    struct ggml_backend_buft_comparator {
+        bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
+            return ggml_backend_buft_name(lhs) < ggml_backend_buft_name(rhs);
+        }
+    };
+    std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
@@ -2169,12 +2204,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 throw std::runtime_error(format("failed to create ggml context"));
             }
 
-            ctx_map[buft] = ctx;
-            pimpl->ctxs.emplace_back(ctx);
+            ctx_map.emplace(buft, ctx);
 
             return ctx;
         }
-        return it->second;
+        return it->second.get();
     };
 
     const auto TENSOR_DUPLICATED   = llama_model_loader::TENSOR_DUPLICATED;
@@ -3667,6 +3701,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (output == NULL) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,   "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
+
+                    // Dense linear weights
+                    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.dense_2_feat_out}, TENSOR_NOT_REQUIRED);
+                    dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {hparams.dense_3_feat_in, n_embd}, TENSOR_NOT_REQUIRED);
+
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -5812,6 +5851,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 } break;
             case LLM_ARCH_LFM2:
+            case LLM_ARCH_LFM2MOE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab}, 0);
                     tok_norm = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
@@ -5823,11 +5863,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
-                        // ffn is same for transformer and conv layers
+
+                        const bool is_moe_layer = i >= static_cast<int>(hparams.n_layer_dense_lead);
+
+                        // ffn/moe is same for transformer and conv layers
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        if (is_moe_layer) {
+                            GGML_ASSERT(n_expert && n_expert_used);
+                            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),  {n_embd, n_expert}, 0);
+                            layer.ffn_gate_exps   = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff_exp,   n_embd, n_expert}, 0);
+                            layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),   {n_embd, hparams.n_ff_exp, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
+                        } else {  // dense
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        }
 
                         // for operator_norm
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
@@ -5991,16 +6043,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
-    std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_bufs;
-    ctx_bufs.reserve(ctx_map.size());
+    std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_buf_maps;
+    ctx_buf_maps.reserve(ctx_map.size());
 
     // Ensure we have enough capacity for the maximum backend buffer we will potentially create
     const size_t n_max_backend_buffer = ctx_map.size() * ml.files.size();
-    pimpl->bufs.reserve(n_max_backend_buffer);
+    pimpl->ctxs_bufs.reserve(n_max_backend_buffer);
 
-    for (auto & it : ctx_map) {
-        ggml_backend_buffer_type_t buft = it.first;
-        ggml_context * ctx              = it.second;
+    for (auto & [buft, ctx_ptr] : ctx_map) {
+        ggml_context * ctx = ctx_ptr.get();
 
         // skip contexts without tensors
         if (ggml_get_first_tensor(ctx) == nullptr) {
@@ -6024,6 +6075,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         bool buffer_from_host_ptr_supported = props.caps.buffer_from_host_ptr;
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
+        ggml_backend_buffer_t buf = nullptr;
         if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
@@ -6036,20 +6088,18 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     continue;
                 }
                 const size_t max_size = ggml_get_max_tensor_size(ctx);
-                ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
+                buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
                 if (buf == nullptr) {
                     throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
                 }
-                pimpl->bufs.emplace_back(buf);
                 buf_map.emplace(idx, buf);
             }
         }
         else {
-            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
             if (buf == nullptr) {
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
             }
-            pimpl->bufs.emplace_back(buf);
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
                 pimpl->mlock_bufs.emplace_back(new llama_mlock);
                 auto & mlock_buf = pimpl->mlock_bufs.back();
@@ -6060,10 +6110,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 buf_map.emplace(idx, buf);
             }
         }
-
-        if (pimpl->bufs.empty()) {
-            throw std::runtime_error("failed to allocate buffer");
-        }
+        pimpl->ctxs_bufs.emplace_back(std::move(ctx_ptr), buf);
 
         for (auto & buf : buf_map) {
             // indicate that this buffer contains weights
@@ -6071,7 +6118,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             ggml_backend_buffer_set_usage(buf.second, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         }
 
-        ctx_bufs.emplace_back(ctx, buf_map);
+        ctx_buf_maps.emplace_back(ctx, buf_map);
     }
 
     if (llama_supports_gpu_offload()) {
@@ -6089,22 +6136,20 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     // print memory requirements per buffer type
-    for (auto & buf : pimpl->bufs) {
+    for (auto & [_, buf] : pimpl->ctxs_bufs) {
         LLAMA_LOG_INFO("%s: %12s model buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf.get()), ggml_backend_buffer_get_size(buf.get()) / 1024.0 / 1024.0);
     }
 
     // populate tensors_by_name
-    for (auto & ctx : pimpl->ctxs) {
+    for (auto & [ctx, _] : pimpl->ctxs_bufs) {
         for (auto * cur = ggml_get_first_tensor(ctx.get()); cur != NULL; cur = ggml_get_next_tensor(ctx.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
 
     // load tensor data
-    for (auto & it : ctx_bufs) {
-        ggml_context * ctx = it.first;
-        auto & bufs = it.second;
-        if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+    for (auto & [ctx, buf_map] : ctx_buf_maps) {
+        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
         }
     }
@@ -6144,8 +6189,8 @@ size_t llama_model::n_devices() const {
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
-    for (const ggml_backend_buffer_ptr & buf_ptr : pimpl->bufs) {
-        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
+    for (const auto & [_, buf] : pimpl->ctxs_bufs) {
+        ret[ggml_backend_buffer_get_type(buf.get())] += ggml_backend_buffer_get_size(buf.get());
     }
     return ret;
 }
@@ -6308,7 +6353,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: expert_weights_norm  = %d\n",     __func__, hparams.expert_weights_norm);
     }
 
-    if (arch == LLM_ARCH_SMALLTHINKER) {
+    if (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
@@ -11313,8 +11358,8 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
     }
 };
 
-struct llm_build_gemma_embedding_iswa : public llm_graph_context {
-    llm_build_gemma_embedding_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+struct llm_build_gemma_embedding : public llm_graph_context {
+    llm_build_gemma_embedding(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_k;
 
         ggml_tensor * cur;
@@ -11331,8 +11376,7 @@ struct llm_build_gemma_embedding_iswa : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        // TODO: support cacheless iSWA embeddings [TAG_NO_CACHE_ISWA]
-        auto * inp_attn = build_attn_inp_kv_iswa();
+        auto * inp_attn = build_attn_inp_no_cache();
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -16268,10 +16312,10 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
     }
 
     ggml_tensor * build_layer_ffn(
-              ggml_tensor       * cur,
-              ggml_tensor       * inpSA,
-        const llama_model       & model,
-        const int                 il) {
+              ggml_tensor * cur,
+              ggml_tensor * inpSA,
+        const llama_model & model,
+        const int           il) {
 
         // For Granite architectures - scale residual
         if (hparams.f_residual_scale) {
@@ -18600,6 +18644,8 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
+            const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
+
             auto * prev_cur = cur;
             cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "model.layers.{}.operator_norm", il);
@@ -18614,7 +18660,16 @@ struct llm_build_lfm2 : public llm_graph_context {
             }
 
             cur = ggml_add(ctx0, prev_cur, cur);
-            cur = ggml_add(ctx0, cur, build_feed_forward(cur, il));
+
+            auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
+
+            ggml_tensor * ffn_out = is_moe_layer ?
+                build_moe_feed_forward(ffn_norm_out, il) :
+                build_dense_feed_forward(ffn_norm_out, il);
+            cb(ffn_norm_out, "model.layers.{}.ffn_out", il);
+
+            cur = ggml_add(ctx0, cur, ffn_out);
         }
 
         cur = build_norm(cur, model.tok_norm, NULL, LLM_NORM_RMS, -1);
@@ -18629,23 +18684,32 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 
-    ggml_tensor * build_feed_forward(ggml_tensor * cur,
-                                     int           il) const {
-        cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "model.layers.{}.ffn_norm", il);
+    ggml_tensor * build_moe_feed_forward(ggml_tensor * cur,
+                                         int           il) const {
+        return build_moe_ffn(cur,
+                    model.layers[il].ffn_gate_inp,
+                    model.layers[il].ffn_up_exps,
+                    model.layers[il].ffn_gate_exps,
+                    model.layers[il].ffn_down_exps,
+                    model.layers[il].ffn_exp_probs_b,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true,
+                    false, 0.0,
+                    static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
+                    il);
+    }
 
+    ggml_tensor * build_dense_feed_forward(ggml_tensor * cur,
+                                           int           il) const {
         GGML_ASSERT(!model.layers[il].ffn_up_b);
         GGML_ASSERT(!model.layers[il].ffn_gate_b);
         GGML_ASSERT(!model.layers[il].ffn_down_b);
-        cur = build_ffn(cur,
+        return build_ffn(cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
-        cb(cur, "model.layers.{}.feed_forward.w2", il);
-
-        return cur;
     }
 
     ggml_tensor * build_attn_block(ggml_tensor             * cur,
@@ -19313,7 +19377,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
-        //case LLM_ARCH_GEMMA_EMBEDDING: // TODO: disabled until the cacheless SWA logic is fixed [TAG_NO_CACHE_ISWA]
+        case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
@@ -19606,7 +19670,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GEMMA_EMBEDDING:
             {
-                llm = std::make_unique<llm_build_gemma_embedding_iswa>(*this, params);
+                llm = std::make_unique<llm_build_gemma_embedding>(*this, params);
             } break;
         case LLM_ARCH_STARCODER2:
             {
@@ -19815,6 +19879,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                 llm = std::make_unique<llm_build_falcon_h1>(*this, params);
             } break;
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
             {
                 llm = std::make_unique<llm_build_lfm2>(*this, params);
             } break;
@@ -19841,6 +19906,12 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
 
+    // if the gguf model was converted with --sentence-transformers-dense-modules
+    // there will be two additional dense projection layers
+    // dense linear projections are applied after pooling
+    // TODO: move reranking logic here and generalize
+    llm->build_dense_out(dense_2_out_layers, dense_3_out_layers);
+
     return llm->res->get_gf();
 }
 
@@ -19865,6 +19936,7 @@ llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
+        /*.no_host                     =*/ false,
     };
 
     return result;
@@ -19941,6 +20013,7 @@ int32_t llama_n_head(const llama_model * model) {
 llama_rope_type llama_model_rope_type(const llama_model * model) {
     switch (model->arch) {
         // these models do not use RoPE
+        case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_MPT:
@@ -20036,6 +20109,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_SEED_OSS:

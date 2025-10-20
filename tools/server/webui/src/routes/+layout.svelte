@@ -1,11 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import {
-		ChatSidebar,
-		ConversationTitleUpdateDialog,
-		MaximumContextAlertDialog
-	} from '$lib/components/app';
+	import { ChatSidebar, ConversationTitleUpdateDialog } from '$lib/components/app';
 	import {
 		activeMessages,
 		isLoading,
@@ -13,7 +9,7 @@
 	} from '$lib/stores/chat.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
@@ -99,6 +95,15 @@
 		serverStore.fetchServerProps();
 	});
 
+	// Sync settings when server props are loaded
+	$effect(() => {
+		const serverProps = serverStore.serverProps;
+
+		if (serverProps?.default_generation_settings?.params) {
+			settingsStore.syncWithServerDefaults();
+		}
+	});
+
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
 		const apiKey = config().apiKey;
@@ -144,8 +149,6 @@
 <ModeWatcher />
 
 <Toaster richColors />
-
-<MaximumContextAlertDialog />
 
 <ConversationTitleUpdateDialog
 	bind:open={titleUpdateDialogOpen}

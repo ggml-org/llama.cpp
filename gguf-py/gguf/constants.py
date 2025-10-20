@@ -128,6 +128,8 @@ class Keys:
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
+        DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
+        DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -407,6 +409,7 @@ class MODEL_ARCH(IntEnum):
     SMOLLM3          = auto()
     GPT_OSS          = auto()
     LFM2             = auto()
+    LFM2MOE          = auto()
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
@@ -432,6 +435,8 @@ class MODEL_TENSOR(IntEnum):
     TOKEN_TYPES          = auto()
     POS_EMBD             = auto()
     OUTPUT               = auto()
+    DENSE_2_OUT          = auto() # embeddinggemma 2_Dense
+    DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
     OUTPUT_NORM          = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
@@ -749,6 +754,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
+    MODEL_ARCH.LFM2MOE:          "lfm2moe",
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
     MODEL_ARCH.LLADA:            "llada",
@@ -775,6 +781,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
+    MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_3_OUT:                "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
@@ -1757,6 +1765,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.GEMMA_EMBEDDING: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.DENSE_2_OUT,
+        MODEL_TENSOR.DENSE_3_OUT,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
@@ -2697,6 +2707,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.OUTPUT,
+    ],
+    MODEL_ARCH.LFM2MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.SHORTCONV_CONV,
+        MODEL_TENSOR.SHORTCONV_INPROJ,
+        MODEL_TENSOR.SHORTCONV_OUTPROJ,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.ATTN_NORM, # operator_norm
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
     MODEL_ARCH.SMALLTHINKER: [
         MODEL_TENSOR.TOKEN_EMBD,

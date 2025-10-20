@@ -3,9 +3,12 @@
 #include "log.h"
 #include "regex-partial.h"
 
+#include <algorithm>
+#include <cctype>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using json = nlohmann::ordered_json;
@@ -166,6 +169,27 @@ void common_chat_msg_parser::consume_literal(const std::string & literal) {
 }
 
 bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think, const std::string & end_think) {
+    std::string pending_reasoning_prefix;
+
+    if (syntax_.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+        return false;
+    }
+
+    auto set_reasoning_prefix = [&](size_t prefix_pos) {
+        if (!syntax_.thinking_forced_open || syntax_.reasoning_in_content) {
+            return;
+        }
+        if (prefix_pos + start_think.size() > input_.size()) {
+            pending_reasoning_prefix.clear();
+            return;
+        }
+        // Capture the exact literal that opened the reasoning section so we can
+        // surface it back to callers. This ensures formats that force the
+        // reasoning tag open (e.g. DeepSeek R1) retain their original prefix
+        // instead of dropping it during parsing.
+        pending_reasoning_prefix = input_.substr(prefix_pos, start_think.size());
+    };
+
     auto handle_reasoning = [&](const std::string & reasoning, bool closed) {
         auto stripped_reasoning = string_strip(reasoning);
         if (stripped_reasoning.empty()) {
@@ -178,28 +202,116 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
                 add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "</think>" : end_think);
             }
         } else {
+            if (!pending_reasoning_prefix.empty()) {
+                add_reasoning_content(pending_reasoning_prefix);
+                pending_reasoning_prefix.clear();
+            }
             add_reasoning_content(stripped_reasoning);
         }
     };
-    if (syntax_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
-        if (syntax_.thinking_forced_open || try_consume_literal(start_think)) {
-            if (auto res = try_find_literal(end_think)) {
-                handle_reasoning(res->prelude, /* closed */ true);
-                consume_spaces();
-                return true;
-            }
-            auto rest = consume_rest();
+
+    const size_t saved_pos = pos_;
+    const size_t saved_content_size = result_.content.size();
+    const size_t saved_reasoning_size = result_.reasoning_content.size();
+
+    auto restore_state = [&]() {
+        move_to(saved_pos);
+        result_.content.resize(saved_content_size);
+        result_.reasoning_content.resize(saved_reasoning_size);
+    };
+
+    // Allow leading whitespace to be preserved as content when reasoning is present at the start
+    size_t cursor = pos_;
+    size_t whitespace_end = cursor;
+    while (whitespace_end < input_.size() && std::isspace(static_cast<unsigned char>(input_[whitespace_end]))) {
+        ++whitespace_end;
+    }
+
+    if (whitespace_end >= input_.size()) {
+        restore_state();
+        if (syntax_.thinking_forced_open) {
+            auto rest = input_.substr(saved_pos);
             if (!rest.empty()) {
                 handle_reasoning(rest, /* closed */ !is_partial());
             }
-            // Allow unclosed thinking tags, for now (https://github.com/ggml-org/llama.cpp/issues/13812, https://github.com/ggml-org/llama.cpp/issues/13877)
-            // if (!syntax_.thinking_forced_open) {
-            //     throw common_chat_msg_partial_exception(end_think);
-            // }
+            move_to(input_.size());
             return true;
         }
+        return false;
     }
-    return false;
+
+    cursor = whitespace_end;
+    const size_t remaining = input_.size() - cursor;
+    const size_t start_prefix = std::min(start_think.size(), remaining);
+    const bool has_start_tag = input_.compare(cursor, start_prefix, start_think, 0, start_prefix) == 0;
+
+    if (has_start_tag && start_prefix < start_think.size()) {
+        move_to(input_.size());
+        return true;
+    }
+
+    if (has_start_tag) {
+        if (whitespace_end > pos_) {
+            add_content(input_.substr(pos_, whitespace_end - pos_));
+        }
+        set_reasoning_prefix(cursor);
+        cursor += start_think.size();
+    } else if (syntax_.thinking_forced_open) {
+        cursor = whitespace_end;
+    } else {
+        restore_state();
+        return false;
+    }
+    while (true) {
+        if (cursor >= input_.size()) {
+            move_to(input_.size());
+            return true;
+        }
+
+        size_t end_pos = input_.find(end_think, cursor);
+        if (end_pos == std::string::npos) {
+            std::string_view remaining_view(input_.data() + cursor, input_.size() - cursor);
+            size_t partial_off = string_find_partial_stop(remaining_view, end_think);
+            size_t reasoning_end = partial_off == std::string::npos ? input_.size() : cursor + partial_off;
+            if (reasoning_end > cursor) {
+                handle_reasoning(input_.substr(cursor, reasoning_end - cursor), /* closed */ partial_off == std::string::npos && !is_partial());
+            }
+            move_to(input_.size());
+            return true;
+        }
+
+        if (end_pos > cursor) {
+            handle_reasoning(input_.substr(cursor, end_pos - cursor), /* closed */ true);
+        } else {
+            handle_reasoning("", /* closed */ true);
+        }
+
+        cursor = end_pos + end_think.size();
+
+        while (cursor < input_.size() && std::isspace(static_cast<unsigned char>(input_[cursor]))) {
+            ++cursor;
+        }
+
+        const size_t next_remaining = input_.size() - cursor;
+        if (next_remaining == 0) {
+            move_to(cursor);
+            return true;
+        }
+
+        const size_t next_prefix = std::min(start_think.size(), next_remaining);
+        if (input_.compare(cursor, next_prefix, start_think, 0, next_prefix) == 0) {
+            if (next_prefix < start_think.size()) {
+                move_to(input_.size());
+                return true;
+            }
+            set_reasoning_prefix(cursor);
+            cursor += start_think.size();
+            continue;
+        }
+
+        move_to(cursor);
+        return true;
+    }
 }
 
 std::string common_chat_msg_parser::consume_rest() {
@@ -320,7 +432,7 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
         if (is_arguments_path({})) {
             // Entire JSON is the arguments and was parsed fully.
             return consume_json_result {
-                partial->json.dump(),
+                partial->json.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true),
                 /* .is_partial = */ false,
             };
         }
@@ -332,7 +444,7 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
     std::vector<std::string> path;
     std::function<json(const json &)> remove_unsupported_healings_and_dump_args = [&](const json & j) -> json {
         if (is_arguments_path(path)) {
-            auto arguments = j.dump();
+            auto arguments = j.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true);
             if (is_partial() && !partial->healing_marker.marker.empty()) {
                 auto idx = arguments.find(partial->healing_marker.json_dump_marker);
                 if (idx != std::string::npos) {

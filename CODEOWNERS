@@ -2,7 +2,7 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
-/.github/actions/                       @slaren
+/.github/actions/                       @slaren @CISC
 /.github/workflows/                     @CISC
 /.github/workflows/release.yml          @slaren
 /.github/workflows/winget.yml           @slaren
@@ -55,7 +55,7 @@
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
-/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler
+/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler @am17an
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
@@ -70,6 +70,7 @@
 /ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
+/ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren

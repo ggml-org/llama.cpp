@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
+	import { Trash2, Pencil, MoreHorizontal, Download } from '@lucide/svelte';
 	import { ActionDropdown } from '$lib/components/app';
+	import { downloadConversation } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -100,6 +101,15 @@
 						label: 'Edit',
 						onclick: handleEdit,
 						shortcut: ['shift', 'cmd', 'e']
+					},
+					{
+						icon: Download,
+						label: 'Export',
+						onclick: (e) => {
+							e.stopPropagation();
+							downloadConversation(conversation.id);
+						},
+						shortcut: ['shift', 'cmd', 's']
 					},
 					{
 						icon: Trash2,

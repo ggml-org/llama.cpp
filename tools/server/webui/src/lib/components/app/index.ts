@@ -25,16 +25,16 @@ export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
 export { default as ChatSettingsDialog } from './chat/ChatSettings/ChatSettingsDialog.svelte';
 export { default as ChatSettingsFooter } from './chat/ChatSettings/ChatSettingsFooter.svelte';
 export { default as ChatSettingsFields } from './chat/ChatSettings/ChatSettingsFields.svelte';
+export { default as ParameterSourceIndicator } from './chat/ChatSettings/ParameterSourceIndicator.svelte';
 
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
 
+export { default as ChatErrorDialog } from './dialogs/ChatErrorDialog.svelte';
 export { default as EmptyFileAlertDialog } from './dialogs/EmptyFileAlertDialog.svelte';
 
 export { default as ConversationTitleUpdateDialog } from './dialogs/ConversationTitleUpdateDialog.svelte';
-
-export { default as MaximumContextAlertDialog } from './dialogs/MaximumContextAlertDialog.svelte';
 
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
 

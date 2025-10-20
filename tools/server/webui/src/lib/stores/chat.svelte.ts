@@ -5,7 +5,8 @@ import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { extractPartialThinking } from '$lib/utils/thinking';
+import { toast } from 'svelte-sonner';
+import type { ExportedConversations } from '$lib/types/database';
 
 /**
  * ChatStore - Central state management for chat conversations and AI interactions
@@ -38,7 +39,6 @@ import { extractPartialThinking } from '$lib/utils/thinking';
  * - Conversation branching for exploring different response paths
  * - Streaming AI responses with real-time content updates
  * - File attachment support (images, PDFs, text files, audio)
- * - Context window management with error recovery
  * - Partial response saving when generation is interrupted
  * - Message editing with automatic response regeneration
  */
@@ -47,11 +47,9 @@ class ChatStore {
 	activeMessages = $state<DatabaseMessage[]>([]);
 	conversations = $state<DatabaseConversation[]>([]);
 	currentResponse = $state('');
+	errorDialogState = $state<{ type: 'timeout' | 'server'; message: string } | null>(null);
 	isInitialized = $state(false);
 	isLoading = $state(false);
-	maxContextError = $state<{ message: string; estimatedTokens: number; maxContext: number } | null>(
-		null
-	);
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	constructor() {
@@ -67,8 +65,6 @@ class ChatStore {
 	async initialize(): Promise<void> {
 		try {
 			await this.loadConversations();
-
-			this.maxContextError = null;
 
 			this.isInitialized = true;
 		} catch (error) {
@@ -97,8 +93,6 @@ class ChatStore {
 
 		this.activeConversation = conversation;
 		this.activeMessages = [];
-
-		this.maxContextError = null;
 
 		await goto(`#/chat/${conversation.id}`);
 
@@ -131,8 +125,6 @@ class ChatStore {
 				// Load all messages for conversations without currNode (backward compatibility)
 				this.activeMessages = await DatabaseStore.getConversationMessages(convId);
 			}
-
-			this.maxContextError = null;
 
 			return true;
 		} catch (error) {
@@ -342,11 +334,9 @@ class ChatStore {
 				this.currentResponse = streamedContent;
 
 				captureModelIfNeeded();
-
-				const partialThinking = extractPartialThinking(streamedContent);
 				const messageIndex = this.findMessageIndex(assistantMessage.id);
 				this.updateMessageAtIndex(messageIndex, {
-					content: partialThinking.remainingContent || streamedContent
+					content: streamedContent
 				});
 			},
 
@@ -419,56 +409,6 @@ class ChatStore {
 					return;
 				}
 
-				if (error.name === 'ContextError') {
-					console.warn('Context error detected:', error.message);
-					this.isLoading = false;
-					this.currentResponse = '';
-
-					const messageIndex = this.activeMessages.findIndex(
-						(m: DatabaseMessage) => m.id === assistantMessage.id
-					);
-
-					if (messageIndex !== -1) {
-						this.activeMessages.splice(messageIndex, 1);
-						DatabaseStore.deleteMessage(assistantMessage.id).catch(console.error);
-					}
-
-					// Use structured context info from new exceed_context_size_error format if available
-					const contextInfo = (
-						error as Error & {
-							contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
-						}
-					).contextInfo;
-					let estimatedTokens = 0;
-					let maxContext = serverStore.serverProps?.default_generation_settings.n_ctx || 8192;
-
-					if (contextInfo) {
-						// Use precise token counts from server response
-						estimatedTokens = contextInfo.promptTokens;
-						maxContext = contextInfo.maxContext;
-					} else {
-						// Fallback to estimation for older error format
-						try {
-							// Rough estimation: ~4 characters per token
-							const messageContent = JSON.stringify(messages);
-							estimatedTokens = Math.ceil(messageContent.length / 4);
-						} catch {
-							estimatedTokens = 0;
-						}
-					}
-
-					this.maxContextError = {
-						message: error.message,
-						estimatedTokens,
-						maxContext
-					};
-
-					if (onError) {
-						onError(error);
-					}
-					return;
-				}
-
 				console.error('Streaming error:', error);
 				this.isLoading = false;
 				this.currentResponse = '';
@@ -478,14 +418,32 @@ class ChatStore {
 				);
 
 				if (messageIndex !== -1) {
-					this.activeMessages[messageIndex].content = `Error: ${error.message}`;
+					const [failedMessage] = this.activeMessages.splice(messageIndex, 1);
+
+					if (failedMessage) {
+						DatabaseStore.deleteMessage(failedMessage.id).catch((cleanupError) => {
+							console.error('Failed to remove assistant message after error:', cleanupError);
+						});
+					}
 				}
+
+				const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+
+				this.showErrorDialog(dialogType, error.message);
 
 				if (onError) {
 					onError(error);
 				}
 			}
 		});
+	}
+
+	private showErrorDialog(type: 'timeout' | 'server', message: string): void {
+		this.errorDialogState = { type, message };
+	}
+
+	dismissErrorDialog(): void {
+		this.errorDialogState = null;
 	}
 
 	/**
@@ -575,6 +533,7 @@ class ChatStore {
 			return;
 		}
 
+		this.errorDialogState = null;
 		this.isLoading = true;
 		this.currentResponse = '';
 
@@ -604,37 +563,23 @@ class ChatStore {
 
 			const conversationContext = this.activeMessages.slice(0, -1);
 
-			await this.streamChatCompletion(
-				conversationContext,
-				assistantMessage,
-				undefined,
-				(error: Error) => {
-					if (error.name === 'ContextError' && userMessage) {
-						const userMessageIndex = this.findMessageIndex(userMessage.id);
-
-						if (userMessageIndex !== -1) {
-							this.activeMessages.splice(userMessageIndex, 1);
-							DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
-						}
-					}
-				}
-			);
+			await this.streamChatCompletion(conversationContext, assistantMessage);
 		} catch (error) {
 			if (this.isAbortError(error)) {
 				this.isLoading = false;
 				return;
 			}
 
-			if (error instanceof Error && error.name === 'ContextError' && userMessage) {
-				const userMessageIndex = this.findMessageIndex(userMessage.id);
-				if (userMessageIndex !== -1) {
-					this.activeMessages.splice(userMessageIndex, 1);
-					DatabaseStore.deleteMessage(userMessage.id).catch(console.error);
-				}
-			}
-
 			console.error('Failed to send message:', error);
 			this.isLoading = false;
+			if (!this.errorDialogState) {
+				if (error instanceof Error) {
+					const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+					this.showErrorDialog(dialogType, error.message);
+				} else {
+					this.showErrorDialog('server', 'Unknown error occurred while sending message');
+				}
+			}
 		}
 	}
 
@@ -664,24 +609,6 @@ class ChatStore {
 	}
 
 	/**
-	 * Clears the max context error state
-	 * Removes any displayed context limit warnings
-	 */
-	clearMaxContextError(): void {
-		this.maxContextError = null;
-	}
-
-	/**
-	 * Sets the max context error state
-	 * @param error - The context error details or null to clear
-	 */
-	setMaxContextError(
-		error: { message: string; estimatedTokens: number; maxContext: number } | null
-	): void {
-		this.maxContextError = error;
-	}
-
-	/**
 	 * Saves partial response if generation was interrupted
 	 * Preserves user's partial content and timing data when generation is stopped early
 	 */
@@ -694,18 +621,16 @@ class ChatStore {
 
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
-				const partialThinking = extractPartialThinking(this.currentResponse);
-
 				const updateData: {
 					content: string;
 					thinking?: string;
 					timings?: ChatMessageTimings;
 				} = {
-					content: partialThinking.remainingContent || this.currentResponse
+					content: this.currentResponse
 				};
 
-				if (partialThinking.thinking) {
-					updateData.thinking = partialThinking.thinking;
+				if (lastMessage.thinking?.trim()) {
+					updateData.thinking = lastMessage.thinking;
 				}
 
 				const lastKnownState = await slotsService.getCurrentState();
@@ -725,7 +650,10 @@ class ChatStore {
 
 				await DatabaseStore.updateMessage(lastMessage.id, updateData);
 
-				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
+				lastMessage.content = this.currentResponse;
+				if (updateData.thinking !== undefined) {
+					lastMessage.thinking = updateData.thinking;
+				}
 				if (updateData.timings) {
 					lastMessage.timings = updateData.timings;
 				}
@@ -952,6 +880,166 @@ class ChatStore {
 	}
 
 	/**
+	 * Downloads a conversation as JSON file
+	 * @param convId - The conversation ID to download
+	 */
+	async downloadConversation(convId: string): Promise<void> {
+		if (!this.activeConversation || this.activeConversation.id !== convId) {
+			// Load the conversation if not currently active
+			const conversation = await DatabaseStore.getConversation(convId);
+			if (!conversation) return;
+
+			const messages = await DatabaseStore.getConversationMessages(convId);
+			const conversationData = {
+				conv: conversation,
+				messages
+			};
+
+			this.triggerDownload(conversationData);
+		} else {
+			// Use current active conversation data
+			const conversationData: ExportedConversations = {
+				conv: this.activeConversation!,
+				messages: this.activeMessages
+			};
+
+			this.triggerDownload(conversationData);
+		}
+	}
+
+	/**
+	 * Triggers file download in browser
+	 * @param data - Data to download (expected: { conv: DatabaseConversation, messages: DatabaseMessage[] })
+	 * @param filename - Optional filename
+	 */
+	private triggerDownload(data: ExportedConversations, filename?: string): void {
+		const conversation =
+			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
+		if (!conversation) {
+			console.error('Invalid data: missing conversation');
+			return;
+		}
+		const conversationName = conversation.name ? conversation.name.trim() : '';
+		const convId = conversation.id || 'unknown';
+		const truncatedSuffix = conversationName
+			.toLowerCase()
+			.replace(/[^a-z0-9]/gi, '_')
+			.replace(/_+/g, '_')
+			.substring(0, 20);
+		const downloadFilename = filename || `conversation_${convId}_${truncatedSuffix}.json`;
+
+		const conversationJson = JSON.stringify(data, null, 2);
+		const blob = new Blob([conversationJson], {
+			type: 'application/json'
+		});
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = downloadFilename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	/**
+	 * Exports all conversations with their messages as a JSON file
+	 */
+	async exportAllConversations(): Promise<void> {
+		try {
+			const allConversations = await DatabaseStore.getAllConversations();
+			if (allConversations.length === 0) {
+				throw new Error('No conversations to export');
+			}
+
+			const allData: ExportedConversations = await Promise.all(
+				allConversations.map(async (conv) => {
+					const messages = await DatabaseStore.getConversationMessages(conv.id);
+					return { conv, messages };
+				})
+			);
+
+			const blob = new Blob([JSON.stringify(allData, null, 2)], {
+				type: 'application/json'
+			});
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `all_conversations_${new Date().toISOString().split('T')[0]}.json`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+
+			toast.success(`All conversations (${allConversations.length}) prepared for download`);
+		} catch (err) {
+			console.error('Failed to export conversations:', err);
+			throw err;
+		}
+	}
+
+	/**
+	 * Imports conversations from a JSON file.
+	 * Supports both single conversation (object) and multiple conversations (array).
+	 * Uses DatabaseStore for safe, encapsulated data access
+	 */
+	async importConversations(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const input = document.createElement('input');
+			input.type = 'file';
+			input.accept = '.json';
+
+			input.onchange = async (e) => {
+				const file = (e.target as HTMLInputElement)?.files?.[0];
+				if (!file) {
+					reject(new Error('No file selected'));
+					return;
+				}
+
+				try {
+					const text = await file.text();
+					const parsedData = JSON.parse(text);
+					let importedData: ExportedConversations;
+
+					if (Array.isArray(parsedData)) {
+						importedData = parsedData;
+					} else if (
+						parsedData &&
+						typeof parsedData === 'object' &&
+						'conv' in parsedData &&
+						'messages' in parsedData
+					) {
+						// Single conversation object
+						importedData = [parsedData];
+					} else {
+						throw new Error(
+							'Invalid file format: expected array of conversations or single conversation object'
+						);
+					}
+
+					const result = await DatabaseStore.importConversations(importedData);
+
+					// Refresh UI
+					await this.loadConversations();
+
+					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
+
+					resolve(undefined);
+				} catch (err: unknown) {
+					const message = err instanceof Error ? err.message : 'Unknown error';
+					console.error('Failed to import conversations:', err);
+					toast.error('Import failed', {
+						description: message
+					});
+					reject(new Error(`Import failed: ${message}`));
+				}
+			};
+
+			input.click();
+		});
+	}
+
+	/**
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
@@ -1090,7 +1178,6 @@ class ChatStore {
 		this.activeMessages = [];
 		this.currentResponse = '';
 		this.isLoading = false;
-		this.maxContextError = null;
 	}
 
 	/** Refreshes active messages based on currNode after branch navigation */
@@ -1378,6 +1465,7 @@ class ChatStore {
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
 		if (!this.activeConversation) return;
 
+		this.errorDialogState = null;
 		this.isLoading = true;
 		this.currentResponse = '';
 
@@ -1424,14 +1512,17 @@ export const activeMessages = () => chatStore.activeMessages;
 export const isLoading = () => chatStore.isLoading;
 export const currentResponse = () => chatStore.currentResponse;
 export const isInitialized = () => chatStore.isInitialized;
-export const maxContextError = () => chatStore.maxContextError;
+export const errorDialog = () => chatStore.errorDialogState;
 
 export const createConversation = chatStore.createConversation.bind(chatStore);
+export const downloadConversation = chatStore.downloadConversation.bind(chatStore);
+export const exportAllConversations = chatStore.exportAllConversations.bind(chatStore);
+export const importConversations = chatStore.importConversations.bind(chatStore);
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
+export const dismissErrorDialog = chatStore.dismissErrorDialog.bind(chatStore);
+
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
-export const clearMaxContextError = chatStore.clearMaxContextError.bind(chatStore);
-export const setMaxContextError = chatStore.setMaxContextError.bind(chatStore);
 
 // Branching operations
 export const refreshActiveMessages = chatStore.refreshActiveMessages.bind(chatStore);
