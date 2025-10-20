@@ -133,12 +133,18 @@ function fetchweburlraw_run(toolcallid, toolname, obj) {
 
 /**
  * Setup fetch_web_url_raw for tool calling
- * NOTE: Currently it just checks there is something at given proxyUrl
+ * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function fetchweburlraw_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(`${document["gMe"].proxyUrl}/urlraw?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
+    let got = await fetch(`${document["gMe"].proxyUrl}/aum?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
+        if (resp.statusText != 'bharatavarshe') {
+            console.log("WARN:ToolJS:FetchWebUrlRaw:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
+            return
+        } else {
+            console.log("INFO:ToolJS:FetchWebUrlRaw:Enabling...")
+        }
         tcs["fetch_web_url_raw"] = {
             "handler": fetchweburlraw_run,
             "meta": fetchweburlraw_meta,
@@ -201,12 +207,18 @@ function fetchweburltext_run(toolcallid, toolname, obj) {
 
 /**
  * Setup fetch_web_url_text for tool calling
- * NOTE: Currently it just checks there is something at given proxyUrl
+ * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function fetchweburltext_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(`${document["gMe"].proxyUrl}/urltext?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+    let got = await fetch(`${document["gMe"].proxyUrl}/aum?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+        if (resp.statusText != 'bharatavarshe') {
+            console.log("WARN:ToolJS:FetchWebUrlText:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
+            return
+        } else {
+            console.log("INFO:ToolJS:FetchWebUrlText:Enabling...")
+        }
         tcs["fetch_web_url_text"] = {
             "handler": fetchweburltext_run,
             "meta": fetchweburltext_meta,
