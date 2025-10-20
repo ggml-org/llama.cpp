@@ -233,14 +233,21 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
 
 
 /**
- * Auto create ui input elements for fields in apiRequestOptions
- * Currently supports text and number field types.
+ * Auto create ui input elements for specified fields/properties in given object
+ * Currently supports text, number, boolean field types.
+ * Also supports recursing if a object type field is found.
+ * For some reason if caller wants to handle certain properties on their own
+ * * prefix the prop name in lProps with sTrapTag
+ * * fTrapper will be called with the parent ui element
+ *   into which the new ui elements created for editting the prop, if any, should be attached
  * @param {HTMLDivElement|HTMLFieldSetElement} elDiv
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
+ * @param {string | undefined} sTrapTag
+ * @param {((tagPlusProp: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
  */
-export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend) {
+export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, sTrapTag=undefined, fTrapper=undefined) {
     let typeDict = {
         "string": "text",
         "number": "number",
@@ -251,6 +258,14 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend) {
     fs.appendChild(legend);
     elDiv.appendChild(fs);
     for(const k of lProps) {
+        if (sTrapTag) {
+            if (k.startsWith(sTrapTag)) {
+                if (fTrapper) {
+                    fTrapper(k, fs)
+                }
+                continue
+            }
+        }
         let val = oObj[k];
         let type = typeof(val);
         if (((type == "string") || (type == "number"))) {
