@@ -1044,7 +1044,7 @@ class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
-        this.proxyUrl = "http://127.0.0.1:3128"
+        this.toolFetchProxyUrl = "http://127.0.0.1:3128"
     }
 
     /**
@@ -1121,7 +1121,7 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
