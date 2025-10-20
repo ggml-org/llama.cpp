@@ -1,3 +1,9 @@
+import {
+	CODE_BLOCK_REGEXP,
+	LATEX_MATH_AND_CODE_PATTERN,
+	MHCHEM_PATTERN_MAP
+} from '$lib/constants/latex-protection';
+
 /**
  * Replaces inline LaTeX expressions enclosed in `$...$` with placeholders, avoiding dollar signs
  * that appear to be part of monetary values or identifiers.
@@ -43,7 +49,8 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 
 				const charBeforeOpen = openDollarIndex > 0 ? line[openDollarIndex - 1] : '';
 				const charAfterOpen = line[openDollarIndex + 1];
-				const charBeforeClose = openDollarIndex + 1 < closeDollarIndex ? line[closeDollarIndex - 1] : '';
+				const charBeforeClose =
+					openDollarIndex + 1 < closeDollarIndex ? line[closeDollarIndex - 1] : '';
 				const charAfterClose = closeDollarIndex + 1 < line.length ? line[closeDollarIndex + 1] : '';
 
 				let shouldSkipAsNonLatex = false;
@@ -87,14 +94,8 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 }
 
 function escapeBrackets(text: string): string {
-	// Using the look‑behind pattern `(?<!\\)` we skip matches
-	// that are preceded by a backslash, e.g.
-	// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook)
-	// or `\\[4pt]`.
-	const pattern = /(```[\S\s]*?```|`.*?`)|(?<!\\)\\\[([\S\s]*?[^\\])\\]|(?<!\\)\\\((.*?)\\\)/g;
-
 	return text.replace(
-		pattern,
+		LATEX_MATH_AND_CODE_PATTERN,
 		(
 			match: string,
 			codeBlock: string | undefined,
@@ -116,14 +117,12 @@ function escapeBrackets(text: string): string {
 
 // Escape $\\ce{...} → $\\ce{...} but with proper handling
 function escapeMhchem(text: string): string {
-	return text.replaceAll('$\\ce{', '$\\\\ce{').replaceAll('$\\pu{', '$\\\\pu{');
+	return MHCHEM_PATTERN_MAP.reduce((result, [pattern, replacement]) => {
+		return result.replace(pattern, replacement);
+	}, text);
 }
 
-// See also:
-// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
-
-// Protect code blocks: ```...``` and `...`
-const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
+const doEscapeMhchem = false;
 
 /**
  * Preprocesses markdown content to safely handle LaTeX math expressions while protecting
@@ -145,10 +144,13 @@ const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
  * // → "Price: $10. The equation is $x^2$."
  */
 export function preprocessLaTeX(content: string): string {
+	// See also:
+	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
+
 	// Step 1: Protect code blocks
 	const codeBlocks: string[] = [];
 
-	content = content.replace(codeBlockRegex, (match) => {
+	content = content.replace(CODE_BLOCK_REGEXP, (match) => {
 		codeBlocks.push(match);
 
 		return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
@@ -207,7 +209,7 @@ export function preprocessLaTeX(content: string): string {
 	// Step 6: Apply additional escaping functions (brackets and mhchem)
 	content = escapeBrackets(content);
 
-	if (content.includes('\\ce{') || content.includes('\\pu{')) {
+	if (doEscapeMhchem && (content.includes('\\ce{') || content.includes('\\pu{'))) {
 		content = escapeMhchem(content);
 	}
 
