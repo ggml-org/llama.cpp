@@ -56,7 +56,6 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context& ctx, ggml_tensor* ds
     const int64_t nb3 = src0->nb[3];
 
     int num_blocks = (ne00 + SYCL_CONCAT_BLOCK_SIZE - 1) / SYCL_CONCAT_BLOCK_SIZE;
-    
     sycl::range<3> global(num_blocks * SYCL_CONCAT_BLOCK_SIZE, ne01, ne02*ne03);
     sycl::range<3> local(SYCL_CONCAT_BLOCK_SIZE, 1, 1);
 
