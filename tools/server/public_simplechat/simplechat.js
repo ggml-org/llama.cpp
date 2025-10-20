@@ -1174,7 +1174,7 @@ class Me {
         });
         elDiv.appendChild(bb.div);
 
-        this.show_settings_apirequestoptions(elDiv);
+        ui.ui_show_obj_props_edit(elDiv, this.apiRequestOptions, Object.keys(this.apiRequestOptions), "ApiRequestOptions")
 
         let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
             // @ts-ignore
