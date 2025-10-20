@@ -1108,59 +1108,26 @@ class Me {
     }
 
     /**
-     * Auto create ui input elements for fields in apiRequestOptions
-     * Currently supports text and number field types.
-     * @param {HTMLDivElement} elDiv
-     */
-    show_settings_apirequestoptions(elDiv) {
-        let typeDict = {
-            "string": "text",
-            "number": "number",
-        };
-        let fs = document.createElement("fieldset");
-        let legend = document.createElement("legend");
-        legend.innerText = "ApiRequestOptions";
-        fs.appendChild(legend);
-        elDiv.appendChild(fs);
-        for(const k in this.apiRequestOptions) {
-            let val = this.apiRequestOptions[k];
-            let type = typeof(val);
-            if (((type == "string") || (type == "number"))) {
-                let inp = ui.el_creatediv_input(`Set${k}`, k, typeDict[type], this.apiRequestOptions[k], (val)=>{
-                    if (type == "number") {
-                        val = Number(val);
-                    }
-                    this.apiRequestOptions[k] = val;
-                });
-                fs.appendChild(inp.div);
-            } else if (type == "boolean") {
-                let bbtn = ui.el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
-                    this.apiRequestOptions[k] = userVal;
-                });
-                fs.appendChild(bbtn.div);
-            }
-        }
-    }
-
-    /**
      * Show settings ui for configurable parameters, in the passed Div element.
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
 
-        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings")
-
-        let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
-            // @ts-ignore
-            this.apiEP = ApiEP.Type[val];
-        });
-        elDiv.appendChild(sel.div);
-
-        sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
-            this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
-        });
-        elDiv.appendChild(sel.div);
-
+        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", "TRAPME-", (tag, elParent)=>{
+            if (tag == "TRAPME-apiEP") {
+                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
+                    // @ts-ignore
+                    this.apiEP = ApiEP.Type[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+            if (tag == "TRAPME-iRecentUserMsgCnt") {
+                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
+                    this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+        })
     }
 
 }
