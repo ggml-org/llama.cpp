@@ -236,6 +236,11 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * Auto create ui input elements for specified fields/properties in given object
  * Currently supports text, number, boolean field types.
  * Also supports recursing if a object type field is found.
+ *
+ * If for any reason the caller wants to refine the created ui element for a specific prop,
+ * they can define a fRefiner callback, which will be called back with prop name and ui element.
+ * The fRefiner callback even helps work with Obj with-in Obj scenarios.
+ *
  * For some reason if caller wants to handle certain properties on their own
  * * prefix the prop name in lProps with sTrapTag
  * * fTrapper will be called with the parent ui element
@@ -244,7 +249,7 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
- * @param {((prop:string, elUI: HTMLElement)=>void)| undefined} fRefiner
+ * @param {((prop:string, elProp: HTMLElement)=>void)| undefined} fRefiner
  * @param {string | undefined} sTrapTag
  * @param {((tagPlusProp: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
  */
@@ -289,7 +294,12 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
             }
             fs.appendChild(bbtn.div);
         } else if (type == "object") {
-            ui_show_obj_props_edit(fs, val, Object.keys(val), k)
+            ui_show_obj_props_edit(fs, val, Object.keys(val), k, (prop, elProp)=>{
+                if (fRefiner) {
+                    let theProp = `${k}:${prop}`
+                    fRefiner(theProp, elProp)
+                }
+            })
         }
     }
 }
