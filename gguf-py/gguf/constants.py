@@ -276,6 +276,21 @@ class Keys:
         USE_SILU            = "clip.use_silu"
         N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
 
+        class Rope:
+            DIMENSION_COUNT          = "clip.vision.rope.dimension_count"
+            DIMENSION_SECTIONS       = "clip.vision.rope.dimension_sections"
+            FREQ_BASE                = "clip.vision.rope.freq_base"
+            SCALING_TYPE             = "clip.vision.rope.scaling.type"
+            SCALING_FACTOR           = "clip.vision.rope.scaling.factor"
+            SCALING_ATTN_FACTOR      = "clip.vision.rope.scaling.attn_factor"
+            SCALING_ORIG_CTX_LEN     = "clip.vision.rope.scaling.original_context_length"
+            SCALING_FINETUNED        = "clip.vision.rope.scaling.finetuned"
+            SCALING_YARN_LOG_MUL     = "clip.vision.rope.scaling.yarn_log_multiplier"
+            SCALING_YARN_EXT_FACTOR  = "clip.vision.rope.scaling.yarn_ext_factor"
+            SCALING_YARN_ATTN_FACTOR = "clip.vision.rope.scaling.yarn_attn_factor"
+            SCALING_YARN_BETA_FAST   = "clip.vision.rope.scaling.yarn_beta_fast"
+            SCALING_YARN_BETA_SLOW   = "clip.vision.rope.scaling.yarn_beta_slow"
+
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
@@ -385,6 +400,7 @@ class MODEL_ARCH(IntEnum):
     CHATGLM          = auto()
     GLM4             = auto()
     GLM4_MOE         = auto()
+    GLM4V_MOE        = auto()
     BITNET           = auto()
     T5               = auto()
     T5ENCODER        = auto()
@@ -427,6 +443,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GLM_EDGE  = auto()
     MERGER    = auto()
     GEMMA3    = auto()
+    GLM4V     = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -656,10 +673,10 @@ class MODEL_TENSOR(IntEnum):
     A_MM_NORM_PRE        = auto()
     A_MM_NORM_MID        = auto()
     # nextn/mtp
-    NEXTN_EH_PROJ        = auto()
-    NEXTN_EMBED_TOKENS   = auto()
-    NEXTN_ENORM          = auto()
-    NEXTN_HNORM          = auto()
+    NEXTN_EH_PROJ          = auto()
+    NEXTN_EMBED_TOKENS     = auto()
+    NEXTN_ENORM            = auto()
+    NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
 
@@ -729,6 +746,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.GLM4_MOE:         "glm4moe",
+    MODEL_ARCH.GLM4V_MOE:        "glm4v_moe",
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
     MODEL_ARCH.T5ENCODER:        "t5encoder",
@@ -2273,6 +2291,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
+    MODEL_ARCH.GLM4V_MOE: [ # same as GLM4_MOE without MTP tensors
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
@@ -3029,6 +3071,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
+    GLM4V = "glm4v_moe"
 
 
 # Items here are (block size, type size)
