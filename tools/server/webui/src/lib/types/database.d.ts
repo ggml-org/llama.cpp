@@ -34,11 +34,22 @@ export interface DatabaseMessageExtraPdfFile {
 	processedAsImages: boolean; // Whether PDF was processed as images
 }
 
+/**
+ * Legacy format from old webui - pasted content was stored as "context" type
+ * @deprecated Use DatabaseMessageExtraTextFile instead
+ */
+export interface DatabaseMessageExtraLegacyContext {
+	type: 'context';
+	name: string;
+	content: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
-	| DatabaseMessageExtraPdfFile;
+	| DatabaseMessageExtraPdfFile
+	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
 	id: string;
