@@ -1492,6 +1492,46 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
+ggml_tensor * llm_graph_context::ifairy_build_attn(
+        llm_graph_input_attn_kv * inp,
+        ggml_tensor * q_cur, // [n_embd_head_q * 2, n_head_q, n_tokens]
+        ggml_tensor * k_cur, // [n_embd_head_k * 2, n_head_k, n_tokens]
+        ggml_tensor * v_cur, // [n_embd_head_v * 2, n_head_v, n_tokens]);
+        float   kq_scale,
+        int   il){
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const auto * mctx_cur = inp->mctx;
+
+    // store to KV cache
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, NULL, kq_mask, NULL, NULL, kq_scale, il);
+
+    cur = ggml_reshape_3d(ctx0, cur, cur->ne[0] / n_head_kv, n_head_kv, n_tokens);
+
+    cur = ggml_ifairy_merge(ctx0, cur);
+
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * cur->ne[1], cur->ne[2]);
+    cb(cur, "kqv_out", il);
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor * wo,
