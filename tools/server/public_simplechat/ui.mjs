@@ -303,3 +303,26 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
         }
     }
 }
+
+
+/**
+ * Show the specified properties and their values wrt the given object.
+ * @param {HTMLElement | undefined} elDiv
+ * @param {any} oObj
+ * @param {Array<string>} lProps
+ * @param {string} sLegend
+ */
+export function ui_show_obj_props_info(elDiv, oObj, lProps, sLegend) {
+    let p = el_create_append_p(`${sLegend}`, elDiv);
+    p.className = "role-system";
+
+    for (const k of lProps) {
+        let val = oObj[k];
+        let vtype = typeof(val)
+        if (vtype != 'object') {
+            el_create_append_p(`${k}:${oObj[k]}`, elDiv)
+        } else {
+            el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elDiv);
+        }
+    }
+}
