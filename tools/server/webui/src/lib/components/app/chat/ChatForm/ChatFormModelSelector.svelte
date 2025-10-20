@@ -63,7 +63,7 @@
 	}
 </script>
 
-<div class={cn('flex min-w-0 flex-col gap-1', className)}>
+<div class={cn('flex max-w-[200px] min-w-[120px] flex-col items-end gap-1', className)}>
 	{#if loading && options.length === 0 && !isMounted}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-4 w-4 animate-spin" />
@@ -80,13 +80,13 @@
 			onValueChange={handleSelect}
 			disabled={loading || updating}
 		>
-			<Select.Trigger
-				class="h-9 w-full min-w-[140px] justify-between rounded-full border border-input bg-background/80 px-3 text-left text-sm sm:min-w-[200px]"
-			>
-				<span class="truncate font-medium">{selectedOption?.name || 'Select model'}</span>
+			<Select.Trigger variant="plain" size="sm" class="hover:text-foreground">
+				<span class="max-w-[160px] truncate text-right"
+					>{selectedOption?.name || 'Select model'}</span
+				>
 
 				{#if updating}
-					<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+					<Loader2 class="h-3.5 w-3.5 animate-spin text-muted-foreground" />
 				{/if}
 			</Select.Trigger>
 

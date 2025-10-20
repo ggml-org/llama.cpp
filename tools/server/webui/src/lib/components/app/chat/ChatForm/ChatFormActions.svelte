@@ -30,9 +30,9 @@
 </script>
 
 <div class="flex w-full items-center gap-2 {className}">
-	<ChatFormActionFileAttachments {disabled} {onFileUpload} />
+	<ChatFormActionFileAttachments class="mr-auto" {disabled} {onFileUpload} />
 
-	<ChatFormModelSelector class="min-w-[140px] flex-1" />
+	<ChatFormModelSelector class="shrink-0" />
 
 	{#if isLoading}
 		<Button
