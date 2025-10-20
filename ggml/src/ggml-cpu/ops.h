@@ -66,6 +66,7 @@ void ggml_compute_forward_soft_max_ext_back(const struct ggml_compute_params * p
 void ggml_compute_forward_ifairy_rope(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_ifairy_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_ifairy_add(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rope(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rope_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_clamp(const struct ggml_compute_params * params, struct ggml_tensor * dst);
