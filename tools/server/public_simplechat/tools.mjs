@@ -15,10 +15,11 @@ let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
 export let tc_switch = {}
 
 export function init() {
-    tjs.init(gToolsWorker)
-    for (const key in tjs.tc_switch) {
-        tc_switch[key] = tjs.tc_switch[key]
-    }
+    tjs.init(gToolsWorker).then(()=>{
+        for (const key in tjs.tc_switch) {
+            tc_switch[key] = tjs.tc_switch[key]
+        }
+    })
 }
 
 export function meta() {
