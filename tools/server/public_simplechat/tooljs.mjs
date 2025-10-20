@@ -138,7 +138,7 @@ function fetchweburlraw_run(toolcallid, toolname, obj) {
  */
 async function fetchweburlraw_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(document["gMe"].proxyUrl).then(resp=>{
+    let got = await fetch(`${document["gMe"].proxyUrl}/urlraw?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
         tcs["fetch_web_url_raw"] = {
             "handler": fetchweburlraw_run,
             "meta": fetchweburlraw_meta,
@@ -206,7 +206,7 @@ function fetchweburltext_run(toolcallid, toolname, obj) {
  */
 async function fetchweburltext_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(document["gMe"].proxyUrl).then(resp=>{
+    let got = await fetch(`${document["gMe"].proxyUrl}/urltext?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         tcs["fetch_web_url_text"] = {
             "handler": fetchweburltext_run,
             "meta": fetchweburltext_meta,
