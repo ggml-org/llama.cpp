@@ -10,8 +10,8 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 
-#include "types.comp"
-#include "flash_attn_base.comp"
+#include "types.glsl"
+#include "flash_attn_base.glsl"
 
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
@@ -152,14 +152,17 @@ void main() {
             uint32_t d = (idx + tid) % (HSK / 4);
             uint32_t c = (idx + tid) / (HSK / 4);
             if (c < Bc && d < HSK / 4) {
+                f16vec4 K_Tf = f16vec4(0);
+                if (!KV_bounds_check || j * Bc + c < KV) {
 #if BLOCK_SIZE > 1
-                uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE + 4 * d;
-                uint ib = coord / BLOCK_SIZE;
-                uint iqs = (coord % BLOCK_SIZE);
-                f16vec4 K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
+                    uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE + 4 * d;
+                    uint ib = coord / BLOCK_SIZE;
+                    uint iqs = (coord % BLOCK_SIZE);
+                    K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
 #else
-                f16vec4 K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
+                    K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
 #endif
+                }
 
                 ksh[c * kshstride + d] = K_Tf;
             }
@@ -198,11 +201,15 @@ void main() {
         }
 
         if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
+            bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
+
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) % Bc;
                 uint32_t r = (idx + tid) / Bc;
                 if (idx + tid < Bc * Br || idx + gl_WorkGroupSize.x <= Bc * Br) {
-                    sfsh[c * sfshstride + r] += ACC_TYPE(slope[r] * float(data_m[m_offset + (i * Br + r) * m_stride + (j * Bc + c)]));
+                    if ((!KV_bounds_check || j * Bc + c < KV) && (!nem1_bounds_check || i * Br + r < p.nem1)) {
+                        sfsh[c * sfshstride + r] += ACC_TYPE(slope[r] * float(data_m[m_offset + (i * Br + r) * m_stride + (j * Bc + c)]));
+                    }
                 }
             }
             barrier();
@@ -210,8 +217,11 @@ void main() {
 
         float eMf[rows_per_thread];
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            float rowmaxf = sfsh[tile_row(r) + (0 * cols_per_iter + col_tid) * sfshstride];
+            float rowmaxf = NEG_FLT_MAX_OVER_2;
             [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+                if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                    continue;
+                }
                 rowmaxf = max(rowmaxf, float(sfsh[tile_row(r) + (c * cols_per_iter + col_tid) * sfshstride]));
             }
             float Moldf = Mf[r];
@@ -233,6 +243,9 @@ void main() {
         }
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                continue;
+            }
             float Pf[rows_per_thread];
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 Pf[r] = exp(sfsh[tile_row(r) + (c * cols_per_iter + col_tid) * sfshstride] - Mf[r]);
@@ -345,8 +358,8 @@ void main() {
     }
 
     if ((p.mask_n_head_log2 & SINK_ENABLE_BIT) != 0) {
-        [[unroll]] for (uint32_t r = 0; r < Br; ++r) {
-            float sink = perElemOpGetSink(r, 0u, ACC_TYPE(0), iq2);
+        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+            float sink = perElemOpGetSink(tile_row(r), 0u, ACC_TYPE(0), iq2);
 
             float ms = 1.0f;
             float vs = 1.0f;

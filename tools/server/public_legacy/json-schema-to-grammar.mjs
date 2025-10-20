@@ -631,9 +631,10 @@ export class SchemaConverter {
       const required = new Set(schema.required || []);
       const properties = Object.entries(schema.properties ?? {});
       return this._addRule(ruleName, this._buildObjectRule(properties, required, name, schema.additionalProperties));
-    } else if ((schemaType === undefined || schemaType === 'object') && 'allOf' in schema) {
+    } else if ((schemaType === undefined || schemaType === 'object' || schemaType === 'string') && 'allOf' in schema) {
       const required = new Set();
       const properties = [];
+      const enumSets = [];
       const addComponent = (compSchema, isRequired) => {
         const ref = compSchema.$ref;
         if (ref !== undefined) {
@@ -648,6 +649,10 @@ export class SchemaConverter {
             }
           }
         }
+
+        if ('enum' in compSchema) {
+          enumSets.push(new Set(compSchema.enum || []));
+        }
       };
 
       for (const t of schema.allOf) {
@@ -660,6 +665,14 @@ export class SchemaConverter {
         }
       }
 
+      if (enumSets.length > 0) {
+        const enumIntersection = new Set([...enumSets[0]].filter(v => enumSets.every(s => s.has(v))));
+        if (enumIntersection.size > 0) {
+          const sortedEnums = [...enumIntersection].sort((a, b) => a.localeCompare(b));
+          const rule = '(' + sortedEnums.map(v => this._generateConstantRule(v)).join(' | ') + ') space';
+          return this._addRule(ruleName, rule);
+        }
+      }
       return this._addRule(ruleName, this._buildObjectRule(properties, required, name, null));
     } else if ((schemaType === undefined || schemaType === 'array') && ('items' in schema || 'prefixItems' in schema)) {
       const items = schema.items ?? schema.prefixItems;

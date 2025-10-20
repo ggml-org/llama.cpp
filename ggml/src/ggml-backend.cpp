@@ -463,6 +463,13 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
     backend->iface.event_wait(backend, event);
 }
 
+static void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+    GGML_ASSERT(backend);
+    if (backend->iface.graph_optimize != NULL) {
+        backend->iface.graph_optimize(backend, cgraph);
+    }
+}
+
 // Backend device
 
 const char * ggml_backend_dev_name(ggml_backend_dev_t device) {
@@ -651,7 +658,7 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS GGML_MAX_SRC
+#define GGML_SCHED_MAX_SPLIT_INPUTS 30
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
@@ -1298,6 +1305,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         struct ggml_backend_sched_split * split = &sched->splits[i];
         split->graph = ggml_graph_view(graph, split->i_start, split->i_end);
 
+        // Optimize this split of the graph. This needs to happen before we make graph_copy,
+        // so they are in sync.
+        ggml_backend_graph_optimize(sched->backends[split->backend_id], &split->graph);
+
         // add inputs to the graph copy so that they are allocated by ggml-alloc at the start of the split
         for (int j = 0; j < split->n_inputs; j++) {
             assert(graph_copy->size > (graph_copy->n_nodes + 1));
@@ -1780,6 +1791,14 @@ ggml_backend_t ggml_backend_sched_get_backend(ggml_backend_sched_t sched, int i)
     GGML_ASSERT(sched);
     GGML_ASSERT(i >= 0 && i < sched->n_backends);
     return sched->backends[i];
+}
+
+ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    GGML_ASSERT(sched);
+    int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
+
+    return sched->bufts[backend_index];
 }
 
 size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend) {

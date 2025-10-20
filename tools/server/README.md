@@ -190,7 +190,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--no-slots` | disables slots monitoring endpoint<br/>(env: LLAMA_ARG_NO_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
 | `--jinja` | use jinja template for chat (default: disabled)<br/>(env: LLAMA_ARG_JINJA) |
-| `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
+| `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: deepseek)<br/>(env: LLAMA_ARG_THINK) |
 | `--reasoning-budget N` | controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, hunyuan-dense, hunyuan-moe, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, seed_oss, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, hunyuan-dense, hunyuan-moe, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, seed_oss, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
@@ -271,7 +271,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 - Using `CMake`:
 
   ```bash
-  cmake -B build -DLLAMA_SERVER_SSL=ON
+  cmake -B build -DLLAMA_OPENSSL=ON
   cmake --build build --config Release -t llama-server
   ```
 
@@ -391,9 +391,9 @@ node index.js
 
 ## API Endpoints
 
-### GET `/health`: Returns heath check result
+### GET `/health`: Returns health check result
 
-This endpoint is public (no API key check).
+This endpoint is public (no API key check). `/v1/health` also works.
 
 **Response format**
 
@@ -511,6 +511,8 @@ These words will not be included in the completion, so make sure to add them to 
 `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
+
+`return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 3 values: `total`, `cache` and `processed`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. Default: `false`
 
 `post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
 
@@ -844,7 +846,7 @@ To use this endpoint with POST method, you need to start server with `--props`
 
 ### POST `/embeddings`: non-OpenAI-compatible embeddings API
 
-This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidian norm.
+This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidean norm.
 
 Note that the response format of this endpoint is different from `/v1/embeddings`.
 
@@ -1043,6 +1045,7 @@ Available metrics:
 - `llamacpp:kv_cache_tokens`: KV-cache tokens.
 - `llamacpp:requests_processing`: Number of requests processing.
 - `llamacpp:requests_deferred`: Number of requests deferred.
+- `llamacpp:n_past_max`: High watermark of the context size observed.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
@@ -1275,6 +1278,34 @@ curl http://localhost:8080/v1/chat/completions \
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
 **See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
+
+*Timings and context usage*
+
+The response contains a `timings` object, for example:
+
+```js
+{
+  "choices": [],
+  "created": 1757141666,
+  "id": "chatcmpl-ecQULm0WqPrftUqjPZO1CFYeDjGZNbDu",
+  // ...
+  "timings": {
+    "cache_n": 236, // number of prompt tokens reused from cache
+    "prompt_n": 1, // number of prompt tokens being processed
+    "prompt_ms": 30.958,
+    "prompt_per_token_ms": 30.958,
+    "prompt_per_second": 32.301828283480845,
+    "predicted_n": 35, // number of predicted tokens
+    "predicted_ms": 661.064,
+    "predicted_per_token_ms": 18.887542857142858,
+    "predicted_per_second": 52.94494935437416
+  }
+}
+```
+
+This provides information on the performance of the server. It also allows calculating the current context usage.
+
+The total number of tokens in context is equal to `prompt_n + cache_n + predicted_n`
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 

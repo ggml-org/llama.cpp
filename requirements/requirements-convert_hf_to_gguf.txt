@@ -2,7 +2,9 @@ mistral-common>=1.8.3
 
 -r ./requirements-convert_legacy_llama.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch~=2.4.0; platform_machine != "s390x"
+
+## Embedding Gemma requires PyTorch 2.6.0 or later
+torch~=2.6.0; platform_machine != "s390x"
 
 # torch s390x packages can only be found from nightly builds
 --extra-index-url https://download.pytorch.org/whl/nightly

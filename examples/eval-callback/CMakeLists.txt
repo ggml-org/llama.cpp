@@ -5,6 +5,11 @@ target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 set(TEST_TARGET test-eval-callback)
-add_test(NAME ${TEST_TARGET}
-        COMMAND llama-eval-callback --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf --model stories260K.gguf --prompt hello --seed 42 -ngl 0)
+if(NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
+        add_test(NAME ${TEST_TARGET}
+                        COMMAND llama-eval-callback --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf --model stories260K.gguf --prompt hello --seed 42 -ngl 0)
+else()
+        add_test(NAME ${TEST_TARGET}
+                        COMMAND llama-eval-callback --hf-repo ggml-org/models --hf-file tinyllamas/stories260K-be.gguf --model stories260K-be.gguf --prompt hello --seed 42 -ngl 0)
+endif()
 set_property(TEST ${TEST_TARGET} PROPERTY LABELS eval-callback curl)

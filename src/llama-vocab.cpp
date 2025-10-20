@@ -347,6 +347,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_OLMO:
             case LLAMA_VOCAB_PRE_TYPE_JAIS:
             case LLAMA_VOCAB_PRE_TYPE_TRILLION:
+            case LLAMA_VOCAB_PRE_TYPE_GRANITE_DOCLING:
                 regex_exprs = {
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
                 };
@@ -432,6 +433,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     // original regex from tokenizer.json
                     // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1}| ?[^\\s\\p{L}\\p{N}\r\n]+|\\s*[\r\n]+|\\s+(?!\\S)|\\s+"
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1}| ?[^\\s\\p{L}\\p{N}\\r\\n]+|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
+            case LLAMA_VOCAB_PRE_TYPE_GROK_2:
+                regex_exprs = {
+                    // original regex from tokenizer.json
+                    // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
             default:
@@ -1765,7 +1773,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
                 const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
                 precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
-#ifdef IS_BIG_ENDIAN
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endiannes of data in precompiled_charsmap binary blob
                 uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
                 *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
@@ -1955,7 +1963,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TRILLION;
                 clean_spaces = false;
             } else if (
-                tokenizer_pre == "bailingmoe") {
+                tokenizer_pre == "granite-docling") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_GRANITE_DOCLING;
+                clean_spaces = false;
+            } else if (
+                tokenizer_pre == "bailingmoe" ||
+                tokenizer_pre == "llada-moe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_BAILINGMOE;
                 clean_spaces = false;
             } else if (
@@ -1973,6 +1986,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "kimi-k2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_KIMI_K2;
+                clean_spaces = false;
+            } else if (
+                tokenizer_pre == "grok-2") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_GROK_2;
                 clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
@@ -2154,6 +2171,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|end|>"
                         || t.first == "<end_of_turn>"
                         || t.first == "<|endoftext|>"
+                        || t.first == "<|end_of_text|>" // granite
                         || t.first == "<EOT>"
                         || t.first == "_<EOT>"
                         || t.first == "<｜end▁of▁sentence｜>" // DeepSeek
