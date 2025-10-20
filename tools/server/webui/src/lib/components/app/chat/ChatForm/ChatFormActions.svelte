@@ -4,6 +4,7 @@
 	import ChatFormActionFileAttachments from './ChatFormActionFileAttachments.svelte';
 	import ChatFormActionRecord from './ChatFormActionRecord.svelte';
 	import ChatFormModelSelector from './ChatFormModelSelector.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import type { FileTypeCategory } from '$lib/enums/files';
 
 	interface Props {
@@ -27,12 +28,15 @@
 		onMicClick,
 		onStop
 	}: Props = $props();
+	let currentConfig = $derived(config());
 </script>
 
 <div class="flex w-full items-center gap-2 {className}">
 	<ChatFormActionFileAttachments class="mr-auto" {disabled} {onFileUpload} />
 
-	<ChatFormModelSelector class="shrink-0" />
+	{#if currentConfig.modelSelectorEnabled}
+		<ChatFormModelSelector class="shrink-0" />
+	{/if}
 
 	{#if isLoading}
 		<Button

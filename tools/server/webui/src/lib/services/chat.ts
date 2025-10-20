@@ -121,8 +121,9 @@ export class ChatService {
 			stream
 		};
 
-		const activeModel = selectedModelName();
-		if (activeModel) {
+		const modelSelectorEnabled = Boolean(currentConfig.modelSelectorEnabled);
+		const activeModel = modelSelectorEnabled ? selectedModelName() : null;
+		if (modelSelectorEnabled && activeModel) {
 			requestBody.model = activeModel;
 		}
 
