@@ -19,7 +19,7 @@ gguf_file_load::gguf_file_load(struct ggml_context ** ctx, load_input_t load_inp
         if (!meta) {
             throw std::runtime_error(format("%s: failed to load model from %s", __func__, file_input.fname.c_str()));
         }
-        file = std::make_unique<llama_file_disk>(file_input.fname.c_str(), "ro");
+        file = std::make_unique<llama_file_disk>(file_input.fname.c_str(), "rb");
     } else if (std::holds_alternative<buffer_future_load_input>(load_input)) {
         const auto & future_input = std::get<buffer_future_load_input>(load_input);
         auto         future_file =
