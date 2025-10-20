@@ -276,8 +276,7 @@ $$`
 		const input = 'Chemical reaction: \\( \\ce{H2O} \\) and $\\ce{CO2}$';
 		const output = preprocessLaTeX(input);
 
-		expect(output).toBe('Chemical reaction: $ \\ce{H2O} $ and $\\\\ce{CO2}$');
-		// Note: \\ce{...} remains, but $\\ce{...} → $\\\\ce{...} via escapeMhchem
+		expect(output).toBe('Chemical reaction: $ \\ce{H2O} $ and $\\ce{CO2}$');
 	});
 
 	test('preserves code blocks', () => {
@@ -285,5 +284,21 @@ $$`
 		const output = preprocessLaTeX(input);
 
 		expect(output).toBe(input); // Code blocks prevent misinterpretation
+	});
+
+	test('escape backslash in mchem ce', () => {
+		const input = 'mchem ce:\n$\\ce{2H2(g) + O2(g) -> 2H2O(l)}$';
+		const output = preprocessLaTeX(input);
+
+		// mhchem-escape would insert a backslash here.
+		expect(output).toBe('mchem ce:\n$\\ce{2H2(g) + O2(g) -> 2H2O(l)}$');
+	});
+
+	test('escape backslash in mchem pu', () => {
+		const input = 'mchem pu:\n$\\pu{-572 kJ mol^{-1}}$';
+		const output = preprocessLaTeX(input);
+
+		// mhchem-escape would insert a backslash here.
+		expect(output).toBe('mchem pu:\n$\\pu{-572 kJ mol^{-1}}$');
 	});
 });

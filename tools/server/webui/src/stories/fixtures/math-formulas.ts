@@ -199,6 +199,16 @@ x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
 | | \(\displaystyle \prod_{k=1}^{n}k = n! \) | Factorial definition |
 | **Geometry** | \( \mathbf{a}\cdot \mathbf{b} = \|\mathbf{a}\|\,\|\mathbf{b}\|\,\cos\theta \) | Dot product & angle |
 
+## No math (but chemical)
+
+Balanced chemical reaction with states:
+
+\[
+\ce{2H2(g) + O2(g) -> 2H2O(l)}
+\]
+
+The standard enthalpy change for the reaction is: $\Delta H^\circ = \pu{-572 kJ mol^{-1}}$.
+
 ---
 
 *This document showcases various mathematical notation and formulas that can be rendered in markdown using LaTeX syntax.*
