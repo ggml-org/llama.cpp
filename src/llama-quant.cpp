@@ -1577,13 +1577,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             float depth_score = 0.0f;
             float type_score = 0.0f;
 
-            // Depth component: output, embeddings & early/late layers are important
-            if (name.find("output.weight") != std::string::npos ||
-                name.find("token_embd.weight") != std::string::npos) {
+            // Depth component: output & early/late layers are important
+            if (name == "output.weight") {
                 depth_score = 1.0f;
-            }
-            else if (name.find(".attn_output.weight") != std::string::npos) {
-                depth_score = 0.9f;
             } else {
                 static const std::regex layer_pattern(R"(blk\.(\d+)\.)");
                 std::smatch match;
@@ -1591,38 +1587,40 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     const int layer = std::stoi(match[1]);
                     const float normalized_layer = (float)layer / (float)std::max(1, (int)model.hparams.n_layer - 1);
                     const float center_dist = std::abs(normalized_layer - 0.5f) * 2.0f;
-                    depth_score = 0.2f + 0.6f * center_dist;
+                    depth_score = 0.9f * center_dist;
                 }
             }
 
-            // Type component: certain tensor types are more important
-            if (name.find("output.weight") != std::string::npos) {
+            // Type component: certain tensor types have more impact on model quality
+            if (name == "output.weight") {
                 type_score = 1.0f;
-            } else if (name.find(".attn_output.weight") != std::string::npos) {
-                type_score = 0.9f;
             } else if (name.find(".ffn_down.weight") != std::string::npos ||
-                       name.find(".ffn_down_shexp.weight") != std::string::npos ||
                        name.find(".ffn_down_exps.weight") != std::string::npos) {
+                type_score = 0.9f;
+            } else if (name.find(".attn_output.weight") != std::string::npos ||
+                       name.find(".time_mix_output.weight") != std::string::npos ||
+                       name.find(".attn_o.weight") != std::string::npos) {
                 type_score = 0.8f;
+            } else if (name.find(".ffn_up.weight") != std::string::npos ||
+                       name.find(".ffn_gate.weight") != std::string::npos ||
+                       name.find(".ffn_up_exps.weight") != std::string::npos ||
+                       name.find(".ffn_gate_exps.weight") != std::string::npos) {
+                type_score = 0.3f;
             } else if (name.find(".attn_q.weight") != std::string::npos ||
                        name.find(".attn_k.weight") != std::string::npos ||
                        name.find(".attn_v.weight") != std::string::npos ||
                        name.find(".attn_qkv.weight") != std::string::npos) {
-                type_score = 0.7f;
-            } else if (name.find(".ffn_up.weight") != std::string::npos ||
-                       name.find(".ffn_gate.weight") != std::string::npos ||
-                       name.find(".ffn_up_shexp.weight") != std::string::npos ||
-                       name.find(".ffn_gate_shexp.weight") != std::string::npos ||
-                       name.find(".ffn_up_exps.weight") != std::string::npos ||
-                       name.find(".ffn_gate_exps.weight") != std::string::npos) {
-                type_score = 0.6f;
+                type_score = 0.2f;
             } else if (name.find("token_embd.weight") != std::string::npos) {
-                type_score = 0.5f;
+                type_score = 0.1f;
             }
 
             // Weighted combination
-            total_score = 0.80f * type_score + 0.20f * depth_score; // 80% type + 20% depth
-            scores[name] = total_score;
+            total_score = 0.8f * type_score + 0.2f * depth_score; // 80% type + 20% depth
+            if (total_score != 0.0f) {
+                scores[name] = total_score;
+                LLAMA_LOG_DEBUG("\t%s: \t %45s \t depth score %.4f \t type score %.4f \t total score %.4f\n", func, name.c_str(), depth_score, type_score, total_score);
+            }
         }
 
         return scores;
@@ -1636,15 +1634,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::sort(sorted_scores.begin(), sorted_scores.end(), [](const auto & a, const auto & b) { return a.second > b.second; });
 
         // Select top percentile
-        const size_t n_important = std::max<size_t>(1, std::llround((double)sorted_scores.size() * 0.25f)); // top 25%
+        const size_t n_important = std::max<size_t>(1, std::llround((double)sorted_scores.size() * 0.25f)); // bump top 25%
 
         std::unordered_set<std::string> important;
         for (size_t i = 0; i < std::min(n_important, sorted_scores.size()); ++i) {
             important.insert(sorted_scores[i].first);
-            //LLAMA_LOG_DEBUG("\t%s: important tensor %s (score %.4f)\n", func, sorted_scores[i].first.c_str(), sorted_scores[i].second);
+            LLAMA_LOG_DEBUG("\t%s: important tensor %s (score %.4f)\n", func, sorted_scores[i].first.c_str(), sorted_scores[i].second);
         }
 
-        LLAMA_LOG_INFO("%s: prioritizing %zu out off %zu tensors\n", func, important.size(), sorted_scores.size());
+        const auto pct = 100.0 * (double)important.size() / (double)sorted_scores.size();
+        LLAMA_LOG_INFO("%s: prioritizing %zu out of %zu tensors (%.2f%%)\n", func, important.size(), sorted_scores.size(), pct);
         return important;
     };
 
