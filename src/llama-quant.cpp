@@ -690,7 +690,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 #endif
     };
 
-    constexpr double epsilon = 1e-12;
+    const double epsilon = 1e-12;
     constexpr double infinity = std::numeric_limits<double>::infinity();
     constexpr uint32_t file_magic = 0x42505731;  // BPW1
     const char * func = __func__;
@@ -1118,7 +1118,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Returns lambda per slice or 0.0 if no activations
-    auto estimate_lambda = [](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
+    auto estimate_lambda = [&](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
         const int64_t ns = std::max<int64_t>(1, ne2);
         std::vector<float> lambdas(ns, 0.0f);
         if (!activations) { return lambdas; }
@@ -1421,7 +1421,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
-        auto pareto_convex = [epsilon](std::vector<candidate_types> & candidates) {
+        auto pareto_convex = [&](std::vector<candidate_types> & candidates) {
             if (candidates.empty()) { return; }
 
             std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
