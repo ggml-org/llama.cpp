@@ -52,6 +52,7 @@
 		"eslint-plugin-svelte": "^3.0.0",
 		"fflate": "^0.8.2",
 		"globals": "^16.0.0",
+		"http-server": "^14.1.1",
 		"mdast": "^3.0.0",
 		"mdsvex": "^0.12.3",
 		"playwright": "^1.53.0",
