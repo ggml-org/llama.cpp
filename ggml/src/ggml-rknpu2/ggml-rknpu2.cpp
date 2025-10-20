@@ -66,6 +66,9 @@ struct RknpuPerfLogger {
         }                                                               \
     } while (0)
 
+// --- Constants ---
+
+#define NUM_CORES 3
 
 // --- Helper functions ---
 
@@ -178,7 +181,6 @@ static std::vector<MatrixSegment> compute_matrix_segments(int N, int num_cores =
 
 // RKNN buffer context
 struct ggml_backend_rknpu_buffer_context {
-    rknn_tensor_mem * rknn_mem;
     DmaBuffer dma_buf;
     std::string name;
 };
@@ -217,14 +219,14 @@ struct rknpu_matmul_context {
 struct ggml_backend_rknpu_context {
     std::string name;
     std::mutex mutex;
-    
+
     // RKNN matmul contexts cache
     std::unordered_map<std::tuple<int, int, int, int>, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
-    
-    // B-matrices cache
-    std::unordered_map<std::tuple<const ggml_tensor*, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> b_npu_buffer_cache;
 
-    // A- and C-matrices cache
+    // B-matrices handle cache (from fd)
+    std::unordered_map<std::pair<ggml_backend_buffer_t, size_t>, std::shared_ptr<rknn_tensor_mem>, PairHasher> b_mem_handle_cache;
+
+    // A- and C-matrices cache (from create_mem)
     std::unordered_map<std::tuple<int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> a_buffer_cache;
     std::unordered_map<std::tuple<int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> c_buffer_cache;
 
@@ -247,12 +249,12 @@ struct ggml_backend_rknpu_context {
             case 2: core_mask = RKNN_NPU_CORE_2; break;
             default: core_mask = RKNN_NPU_CORE_AUTO; break;
         }
-        
+
         int ret = rknn_matmul_set_core_mask(ctx->ctx, core_mask);
         if (ret != RKNN_SUCC) {
             RKNPU_LOG_ERROR("Failed to set core mask %d for core %d\n", core_mask, core_id);
         }
-        
+
         matmul_ctx_cache[key] = ctx;
         return ctx;
     }
@@ -335,7 +337,7 @@ static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
             rknn_destroy_mem(mem_ctx_for_deleter, m);
         }
     };
-    
+
     std::shared_ptr<rknn_tensor_mem> mem_shared(mem, deleter);
     cache[key] = mem_shared;
     return mem_shared;
@@ -343,7 +345,6 @@ static std::shared_ptr<rknn_tensor_mem> get_or_create_npu_buffer(
 
 static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
     auto* backend_ctx = (ggml_backend_rknpu_context*)backend->context;
-    const int NUM_CORES = 3;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor* node = cgraph->nodes[i];
@@ -362,26 +363,36 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         const int K = (int)src0->ne[0];
         const int N = (int)src0->ne[1];
 
-        auto segments = compute_matrix_segments(N, NUM_CORES);
-        
-        std::vector<std::shared_ptr<rknpu_matmul_context>> matmul_ctxs(NUM_CORES);
-        std::vector<std::shared_ptr<rknn_tensor_mem>> mem_B_segments(NUM_CORES);
-        std::shared_ptr<rknn_tensor_mem> mem_A_shared;
-        std::vector<std::shared_ptr<rknn_tensor_mem>> mem_C_segments(NUM_CORES);
+        auto all_segments = compute_matrix_segments(N, NUM_CORES);
 
-        // ===== 1. Preraring contexts =====
+        std::vector<MatrixSegment> active_segments;
+        for (const auto& seg : all_segments) {
+            if (seg.size_n > 0) {
+                active_segments.push_back(seg);
+            }
+        }
+
+        if (active_segments.empty()) {
+            RKNPU_LOG_INFO("Node %s skipped, no active segments for N=%d\n", node->name, N);
+            continue;
+        }
+
+        const size_t num_active_segments = active_segments.size();
+        std::vector<std::shared_ptr<rknpu_matmul_context>> matmul_ctxs(num_active_segments);
+        std::vector<std::shared_ptr<rknn_tensor_mem>> mem_B_segments(num_active_segments);
+        std::shared_ptr<rknn_tensor_mem> mem_A_shared;
+        std::vector<std::shared_ptr<rknn_tensor_mem>> mem_C_segments(num_active_segments);
+
+        // ===== 1. Preparing contexts =====
         {
             #if RKNPU_PERF_LOG
             RknpuPerfLogger perf_ctx(node_name + " - Context preparation");
             #endif
-            
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                int N_segment = segments[core_id].size_n;
-                if (N_segment == 0) continue;
-                matmul_ctxs[core_id] = backend_ctx->get_matmul_ctx(M, K, N_segment, core_id);
-                
-                if (!matmul_ctxs[core_id] || matmul_ctxs[core_id]->ctx == 0) {
-                    RKNPU_LOG_ERROR("Failed to create matmul context for core %d\n", core_id);
+            for (size_t i = 0; i < num_active_segments; ++i) {
+                const auto& seg = active_segments[i];
+                matmul_ctxs[i] = backend_ctx->get_matmul_ctx(M, K, seg.size_n, seg.core_id);
+                if (!matmul_ctxs[i] || matmul_ctxs[i]->ctx == 0) {
+                    RKNPU_LOG_ERROR("Failed to create matmul context for core %d\n", seg.core_id);
                     return GGML_STATUS_FAILED;
                 }
             }
@@ -392,54 +403,42 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             #if RKNPU_PERF_LOG
             RknpuPerfLogger perf_b(node_name + " - B matrix preparation");
             #endif
-            
-            std::vector<bool> need_upload(NUM_CORES, false);
-            std::vector<std::vector<uint16_t>> packed_segments(NUM_CORES);
-            
-            // Creating or getting memory from cache (sequentially)
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (segments[core_id].size_n == 0) continue;
-                std::lock_guard<std::mutex> lock(backend_ctx->mutex);
-                auto cache_key = std::make_tuple(src0, core_id);
-                auto it = backend_ctx->b_npu_buffer_cache.find(cache_key);
 
-                if (it != backend_ctx->b_npu_buffer_cache.end()) {
-                    mem_B_segments[core_id] = it->second;
-                } else {
-                    need_upload[core_id] = true;
-                    auto& matmul_ctx = matmul_ctxs[core_id];
-                    rknn_tensor_mem* mem = rknn_create_mem(matmul_ctx->ctx, matmul_ctx->io_attr.B.size);
-                    if (!mem) return GGML_STATUS_FAILED;
+            ggml_backend_buffer_t src0_buffer = src0->buffer;
+            auto* src0_buf_ctx = (ggml_backend_rknpu_buffer_context*)src0_buffer->context;
+            size_t src0_base_offset_in_dma = (uintptr_t)src0->data - (uintptr_t)ggml_backend_buffer_get_base(src0_buffer);
 
-                    auto mem_ctx_for_deleter = get_rknpu_memory_context().get_ctx();
-                    auto deleter = [mem_ctx_for_deleter](rknn_tensor_mem* m) { if (m) rknn_destroy_mem(mem_ctx_for_deleter, m); };
-                    mem_B_segments[core_id] = std::shared_ptr<rknn_tensor_mem>(mem, deleter);
-                    backend_ctx->b_npu_buffer_cache[cache_key] = mem_B_segments[core_id];
+            size_t current_offset_in_tensor = 0;
+            for (const auto& seg : all_segments) {
+                bool is_active = false;
+                for (size_t i = 0; i < num_active_segments; ++i) {
+                    if (active_segments[i].offset_n == seg.offset_n) {
+                        auto& matmul_ctx = matmul_ctxs[i];
+                        size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
+                        size_t total_offset = src0_base_offset_in_dma + current_offset_in_tensor;
+                        
+                        auto cache_key = std::make_pair(src0_buffer, total_offset);
+                        std::lock_guard<std::mutex> lock(backend_ctx->mutex);
+                        auto it = backend_ctx->b_mem_handle_cache.find(cache_key);
+
+                        if (it != backend_ctx->b_mem_handle_cache.end()) {
+                            mem_B_segments[i] = it->second;
+                        } else {
+                            rknn_tensor_mem* mem = rknn_create_mem_from_fd(matmul_ctx->ctx, src0_buf_ctx->dma_buf.fd, src0_buf_ctx->dma_buf.virt_addr, segment_size_bytes, total_offset);
+                            if (!mem) {
+                                RKNPU_LOG_ERROR("rknn_create_mem_from_fd for B segment failed! offset=%zu, size=%zu\n", total_offset, segment_size_bytes);
+                                return GGML_STATUS_FAILED;
+                            }
+                            auto deleter = [ctx = matmul_ctx->ctx](rknn_tensor_mem* m) { if (m) rknn_destroy_mem(ctx, m); };
+                            mem_B_segments[i] = std::shared_ptr<rknn_tensor_mem>(mem, deleter);
+                            backend_ctx->b_mem_handle_cache[cache_key] = mem_B_segments[i];
+                        }
+                        RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[i].get(), &matmul_ctx->io_attr.B), "set_io_mem B segment");
+                        is_active = true;
+                        break;
+                    }
                 }
-            }
-
-            // Packing segments into native format (parallel)
-            #pragma omp parallel for num_threads(NUM_CORES)
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (need_upload[core_id]) {
-                    auto& matmul_ctx = matmul_ctxs[core_id];
-                    packed_segments[core_id].resize(matmul_ctx->io_attr.B.size / sizeof(uint16_t));
-                    
-                    pack_B_segment_fp16_native_from_KN(
-                        packed_segments[core_id].data(),
-                        (const uint16_t*)src0->data,
-                        K, N, segments[core_id].offset_n, segments[core_id].size_n);
-                }
-            }
-
-            // Setting and syncronizing memory in NPU (sequentially)
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                 if (segments[core_id].size_n == 0) continue;
-                if (need_upload[core_id]) {
-                    memcpy(mem_B_segments[core_id]->virt_addr, packed_segments[core_id].data(), packed_segments[core_id].size() * sizeof(uint16_t));
-                    RKNN_CHECK(rknn_mem_sync(matmul_ctxs[core_id]->ctx, mem_B_segments[core_id].get(), RKNN_MEMORY_SYNC_TO_DEVICE), "sync B segment");
-                }
-                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctxs[core_id]->ctx, mem_B_segments[core_id].get(), &matmul_ctxs[core_id]->io_attr.B), "set_io_mem B segment");
+                current_offset_in_tensor += (size_t)seg.size_n * K * sizeof(uint16_t);
             }
         }
 
@@ -477,9 +476,8 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
             RKNN_CHECK(rknn_mem_sync(matmul_ctx_0->ctx, mem_A_shared.get(), RKNN_MEMORY_SYNC_TO_DEVICE), "sync A TO_DEVICE");
 
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (segments[core_id].size_n == 0) continue;
-                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctxs[core_id]->ctx, mem_A_shared.get(), &matmul_ctxs[core_id]->io_attr.A), "set_io_mem A for core");
+            for (size_t i = 0; i < num_active_segments; i++) {
+                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctxs[i]->ctx, mem_A_shared.get(), &matmul_ctxs[i]->io_attr.A), "set_io_mem A for core");
             }
         }
 
@@ -489,13 +487,12 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             RknpuPerfLogger perf_c(node_name + " - C matrix preparation");
             #endif
             
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (segments[core_id].size_n == 0) continue;
-                auto& matmul_ctx = matmul_ctxs[core_id];
-                auto cache_key = std::make_tuple(M, segments[core_id].size_n, core_id);
-                mem_C_segments[core_id] = get_or_create_npu_buffer(backend_ctx, matmul_ctx->ctx, matmul_ctx->io_attr.C.size, cache_key, backend_ctx->c_buffer_cache);
-                if (!mem_C_segments[core_id]) return GGML_STATUS_FAILED;
-                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_C_segments[core_id].get(), &matmul_ctx->io_attr.C), "set_io_mem C");
+            for (size_t i = 0; i < num_active_segments; i++) {
+                auto& matmul_ctx = matmul_ctxs[i];
+                auto cache_key = std::make_tuple(M, active_segments[i].size_n, active_segments[i].core_id);
+                mem_C_segments[i] = get_or_create_npu_buffer(backend_ctx, matmul_ctx->ctx, matmul_ctx->io_attr.C.size, cache_key, backend_ctx->c_buffer_cache);
+                if (!mem_C_segments[i]) return GGML_STATUS_FAILED;
+                RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_C_segments[i].get(), &matmul_ctx->io_attr.C), "set_io_mem C");
             }
         }
 
@@ -505,13 +502,11 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             RknpuPerfLogger perf_run(node_name + " - NPU parallel execution");
             #endif
             
-            #pragma omp parallel for num_threads(NUM_CORES)
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (segments[core_id].size_n > 0) {
-                    int ret = rknn_matmul_run(matmul_ctxs[core_id]->ctx);
-                    if (ret != RKNN_SUCC) {
-                        RKNPU_LOG_ERROR("rknn_matmul_run failed for core %d with error %d\n", core_id, ret);
-                    }
+            #pragma omp parallel for num_threads(num_active_segments)
+            for (size_t i = 0; i < num_active_segments; i++) {
+                int ret = rknn_matmul_run(matmul_ctxs[i]->ctx);
+                if (ret != RKNN_SUCC) {
+                    RKNPU_LOG_ERROR("rknn_matmul_run failed for core %d with error %d\n", active_segments[i].core_id, ret);
                 }
             }
         }
@@ -524,19 +519,16 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
             float* dst_data = (float*)dst->data;
             
-            for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                if (segments[core_id].size_n == 0) continue;
-                RKNN_CHECK(rknn_mem_sync(matmul_ctxs[core_id]->ctx, mem_C_segments[core_id].get(), RKNN_MEMORY_SYNC_FROM_DEVICE), "sync C FROM_DEVICE");
+            for (size_t i = 0; i < num_active_segments; i++) {
+                RKNN_CHECK(rknn_mem_sync(matmul_ctxs[i]->ctx, mem_C_segments[i].get(), RKNN_MEMORY_SYNC_FROM_DEVICE), "sync C FROM_DEVICE");
             }
 
             #pragma omp parallel for
             for (int m = 0; m < M; m++) {
-                for (int core_id = 0; core_id < NUM_CORES; core_id++) {
-                    if (segments[core_id].size_n == 0) continue;
-                    
-                    int N_offset = segments[core_id].offset_n;
-                    int N_segment = segments[core_id].size_n;
-                    float* src_segment_base = (float*)mem_C_segments[core_id]->virt_addr;
+                for (size_t i = 0; i < num_active_segments; i++) {
+                    int N_offset = active_segments[i].offset_n;
+                    int N_segment = active_segments[i].size_n;
+                    float* src_segment_base = (float*)mem_C_segments[i]->virt_addr;
 
                     memcpy(dst_data + (size_t)m * N + N_offset,
                            src_segment_base + (size_t)m * N_segment,
@@ -556,17 +548,13 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
 static void ggml_backend_rknpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    rknn_matmul_ctx mem_ctx = get_rknpu_memory_context().get_ctx();
-    if (mem_ctx != 0 && ctx->rknn_mem != nullptr) {
-        RKNN_CHECK(rknn_destroy_mem(mem_ctx, ctx->rknn_mem), "rknn_destroy_mem");
-    }
     dma_free(ctx->dma_buf);
     delete ctx;
 }
 
 static void * ggml_backend_rknpu_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    return ctx->rknn_mem->virt_addr;
+    return ctx->dma_buf.virt_addr;
 }
 
 static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
@@ -577,32 +565,48 @@ static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffe
 
 static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     auto * ctx = (ggml_backend_rknpu_buffer_context *) buffer->context;
+    uint8_t* dma_base = (uint8_t*)ctx->dma_buf.virt_addr;
+    uint8_t* tensor_dma_ptr = dma_base + ((uintptr_t)tensor->data - (uintptr_t)ggml_backend_buffer_get_base(buffer));
 
-    uint8_t * base = (uint8_t *) ctx->rknn_mem->virt_addr;
-    uint8_t * dst  = (uint8_t *) tensor->data + offset;
-    GGML_ASSERT(dst >= base && dst + size <= base + ctx->rknn_mem->size);
+    // Weights
+    if (tensor->type == GGML_TYPE_F16) {
+        const int K = (int)tensor->ne[0];
+        const int N = (int)tensor->ne[1];
+        auto segments = compute_matrix_segments(N, NUM_CORES);
 
-    memcpy(dst, data, size);
+        uint8_t* current_write_ptr = tensor_dma_ptr;
+        const uint16_t* src_data = (const uint16_t*)data;
 
-    auto mem_ctx = get_rknpu_memory_context().get_ctx();
-    RKNN_CHECK(rknn_mem_sync(mem_ctx, ctx->rknn_mem, RKNN_MEMORY_SYNC_TO_DEVICE), "mem_sync write");
+        std::vector<uint16_t> packed_data_temp;
+
+        for (const auto& seg : segments) {
+            size_t segment_packed_size = (size_t)seg.size_n * K * sizeof(uint16_t);
+            packed_data_temp.resize(segment_packed_size / sizeof(uint16_t));
+
+            pack_B_segment_fp16_native_from_KN(
+                packed_data_temp.data(),
+                src_data,
+                K, N, seg.offset_n, seg.size_n
+            );
+            memcpy(current_write_ptr, packed_data_temp.data(), segment_packed_size);
+            current_write_ptr += segment_packed_size;
+        }
+    // Other types
+    } else {
+        memcpy(tensor_dma_ptr + offset, data, size);
+    }
 }
 
 static void ggml_backend_rknpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    rknn_matmul_ctx mem_ctx = get_rknpu_memory_context().get_ctx();
-
-    RKNN_CHECK(rknn_mem_sync(mem_ctx, ctx->rknn_mem, RKNN_MEMORY_SYNC_FROM_DEVICE), "rknn_mem_sync from device");
-
-    memcpy(data, (const char *)tensor->data + offset, size);
+    uint8_t* dma_base = (uint8_t*)ctx->dma_buf.virt_addr;
+    uint8_t* tensor_dma_ptr = dma_base + ((uintptr_t)tensor->data - (uintptr_t)ggml_backend_buffer_get_base(buffer));
+    memcpy(data, tensor_dma_ptr + offset, size);
 }
 
 static void ggml_backend_rknpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_rknpu_buffer_context * ctx = (ggml_backend_rknpu_buffer_context *)buffer->context;
-    memset(ctx->rknn_mem->virt_addr, value, ctx->rknn_mem->size);
-    
-    rknn_matmul_ctx mem_ctx = get_rknpu_memory_context().get_ctx();
-    RKNN_CHECK(rknn_mem_sync(mem_ctx, ctx->rknn_mem, RKNN_MEMORY_SYNC_TO_DEVICE), "rknn_mem_sync to device after clear");
+    memset(ctx->dma_buf.virt_addr, value, ctx->dma_buf.size);
 }
 
 
@@ -617,27 +621,15 @@ static const char * ggml_backend_rknpu_buffer_type_get_name(ggml_backend_buffer_
 
 static ggml_backend_buffer_t ggml_backend_rknpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     UNUSED(buft);
-    rknn_matmul_ctx mem_ctx = get_rknpu_memory_context().get_ctx();
-    if (mem_ctx == 0) {
-        RKNPU_LOG_ERROR("RKNPU memory context not initialized, cannot allocate buffer.\n");
-        return NULL;
-    }
 
     DmaBuffer dma_buf = dma_alloc(size);
     if (dma_buf.fd < 0) {
         RKNPU_LOG_ERROR("dma_alloc failed to allocate %zu bytes\n", size);
         return NULL;
     }
-    
-    rknn_tensor_mem * rknn_mem = rknn_create_mem_from_fd(mem_ctx, dma_buf.fd, dma_buf.virt_addr, size, 0);
-    if (rknn_mem == NULL) {
-        RKNPU_LOG_ERROR("rknn_create_mem_from_fd failed for size %zu\n", size);
-        dma_free(dma_buf);
-        return NULL;
-    }
 
-    ggml_backend_rknpu_buffer_context * ctx = new ggml_backend_rknpu_buffer_context{rknn_mem, dma_buf, "rknpu_dma_buffer"};
-    
+    ggml_backend_rknpu_buffer_context * ctx = new ggml_backend_rknpu_buffer_context{dma_buf, "rknpu_dma_buffer"};
+
     static const ggml_backend_buffer_i rknpu_buffer_interface = {
         /* .free_buffer   = */ ggml_backend_rknpu_buffer_free_buffer,
         /* .get_base      = */ ggml_backend_rknpu_buffer_get_base,
