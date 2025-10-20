@@ -1040,8 +1040,9 @@ class ChatStore {
 
 	/**
 	 * Exports all conversations with their messages as a JSON file
+	 * Returns the list of exported conversations
 	 */
-	async exportAllConversations(): Promise<void> {
+	async exportAllConversations(): Promise<DatabaseConversation[]> {
 		try {
 			const allConversations = await DatabaseStore.getAllConversations();
 			if (allConversations.length === 0) {
@@ -1068,6 +1069,7 @@ class ChatStore {
 			URL.revokeObjectURL(url);
 
 			toast.success(`All conversations (${allConversations.length}) prepared for download`);
+			return allConversations;
 		} catch (err) {
 			console.error('Failed to export conversations:', err);
 			throw err;
@@ -1078,8 +1080,9 @@ class ChatStore {
 	 * Imports conversations from a JSON file.
 	 * Supports both single conversation (object) and multiple conversations (array).
 	 * Uses DatabaseStore for safe, encapsulated data access
+	 * Returns the list of imported conversations
 	 */
-	async importConversations(): Promise<void> {
+	async importConversations(): Promise<DatabaseConversation[]> {
 		return new Promise((resolve, reject) => {
 			const input = document.createElement('input');
 			input.type = 'file';
@@ -1120,7 +1123,9 @@ class ChatStore {
 
 					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
 
-					resolve(undefined);
+					// Extract the conversation objects from imported data
+					const importedConversations = importedData.map((item) => item.conv);
+					resolve(importedConversations);
 				} catch (err: unknown) {
 					const message = err instanceof Error ? err.message : 'Unknown error';
 					console.error('Failed to import conversations:', err);
