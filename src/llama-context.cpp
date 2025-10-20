@@ -1091,10 +1091,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
 #if defined(GGML_PERF) || defined(GGML_PERF_RELEASE)
+    if (res) {
         ggml_perf_accumulate(perf_totals, res->get_gf());
+    }
 #elif defined(GGML_PERF_DETAIL)
+    if (res) {
         ggml_perf_accumulate(perf_totals, res->get_gf());
         ggml_perf_write_detailed_csv(res->get_gf(), perf_all_shape_fp);
+    } 
 #endif /* GML_PERF-related flags */
 
 
