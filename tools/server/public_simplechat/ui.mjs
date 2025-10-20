@@ -230,3 +230,42 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
     div.appendChild(el);
     return { div: div, el: el };
 }
+
+
+/**
+ * Auto create ui input elements for fields in apiRequestOptions
+ * Currently supports text and number field types.
+ * @param {HTMLDivElement} elDiv
+ * @param {any} oObj
+ * @param {Array<string>} lProps
+ * @param {string} sLegend
+ */
+export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend) {
+    let typeDict = {
+        "string": "text",
+        "number": "number",
+    };
+    let fs = document.createElement("fieldset");
+    let legend = document.createElement("legend");
+    legend.innerText = sLegend;
+    fs.appendChild(legend);
+    elDiv.appendChild(fs);
+    for(const k in lProps) {
+        let val = oObj[k];
+        let type = typeof(val);
+        if (((type == "string") || (type == "number"))) {
+            let inp = el_creatediv_input(`Set${k}`, k, typeDict[type], oObj[k], (val)=>{
+                if (type == "number") {
+                    val = Number(val);
+                }
+                oObj[k] = val;
+            });
+            fs.appendChild(inp.div);
+        } else if (type == "boolean") {
+            let bbtn = el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
+                oObj[k] = userVal;
+            });
+            fs.appendChild(bbtn.div);
+        }
+    }
+}
