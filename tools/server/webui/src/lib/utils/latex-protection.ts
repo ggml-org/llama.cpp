@@ -12,7 +12,7 @@
  * @returns The processed string with LaTeX replaced by placeholders.
  */
 export function maskInlineLaTeX(content: string, latexExpressions: string[]): string {
-	if (content.indexOf('$') == -1) {
+	if (!content.includes('$')) {
 		return content;
 	}
 	return content
@@ -21,56 +21,67 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 			if (line.indexOf('$') == -1) {
 				return line;
 			}
-			let result = '';
-			let index = 0;
-			while (index < line.length) {
-				const openIndex = line.indexOf('$', index);
-				if (openIndex == -1) {
-					result += line.slice(index);
+
+			let processedLine = '';
+			let currentPosition = 0;
+
+			while (currentPosition < line.length) {
+				const openDollarIndex = line.indexOf('$', currentPosition);
+
+				if (openDollarIndex == -1) {
+					processedLine += line.slice(currentPosition);
 					break;
 				}
 
 				// Is there a next $-sign?
-				const nextIndex = line.indexOf('$', openIndex + 1);
-				if (nextIndex == -1) {
-					result += line.slice(index);
+				const closeDollarIndex = line.indexOf('$', openDollarIndex + 1);
+
+				if (closeDollarIndex == -1) {
+					processedLine += line.slice(currentPosition);
 					break;
 				}
 
-				const beforeOpenChar = openIndex > 0 ? line[openIndex - 1] : '';
-				const afterOpenChar = line[openIndex + 1];
-				const beforeCloseChar = openIndex + 1 < nextIndex ? line[nextIndex - 1] : '';
-				const afterCloseChar = nextIndex + 1 < line.length ? line[nextIndex + 1] : '';
-				let cont = false;
-				if (nextIndex == index + 1) {
-					// no content
-					cont = true;
+				const charBeforeOpen = openDollarIndex > 0 ? line[openDollarIndex - 1] : '';
+				const charAfterOpen = line[openDollarIndex + 1];
+				const charBeforeClose = openDollarIndex + 1 < closeDollarIndex ? line[closeDollarIndex - 1] : '';
+				const charAfterClose = closeDollarIndex + 1 < line.length ? line[closeDollarIndex + 1] : '';
+
+				let shouldSkipAsNonLatex = false;
+
+				if (closeDollarIndex == currentPosition + 1) {
+					// No content
+					shouldSkipAsNonLatex = true;
 				}
-				if (/[A-Za-z0-9_$-]/.test(beforeOpenChar)) {
-					// character, digit, $, _ or - before first '$', no TeX.
-					cont = true;
+
+				if (/[A-Za-z0-9_$-]/.test(charBeforeOpen)) {
+					// Character, digit, $, _ or - before first '$', no TeX.
+					shouldSkipAsNonLatex = true;
 				}
+
 				if (
-					/[0-9]/.test(afterOpenChar) &&
-					(/[A-Za-z0-9_$-]/.test(afterCloseChar) || ' ' == beforeCloseChar)
+					/[0-9]/.test(charAfterOpen) &&
+					(/[A-Za-z0-9_$-]/.test(charAfterClose) || ' ' == charBeforeClose)
 				) {
 					// First $ seems to belong to an amount.
-					cont = true;
+					shouldSkipAsNonLatex = true;
 				}
-				if (cont) {
-					result += line.slice(index, openIndex + 1);
-					index = openIndex + 1;
+
+				if (shouldSkipAsNonLatex) {
+					processedLine += line.slice(currentPosition, openDollarIndex + 1);
+					currentPosition = openDollarIndex + 1;
+
 					continue;
 				}
 
 				// Treat as LaTeX
-				result += line.slice(index, openIndex);
-				const latexContent = line.slice(openIndex, nextIndex + 1);
+				processedLine += line.slice(currentPosition, openDollarIndex);
+				const latexContent = line.slice(openDollarIndex, closeDollarIndex + 1);
 				latexExpressions.push(latexContent);
-				result += `<<LATEX_${latexExpressions.length - 1}>>`;
-				index = nextIndex + 1;
+				processedLine += `<<LATEX_${latexExpressions.length - 1}>>`;
+				currentPosition = closeDollarIndex + 1;
 			}
-			return result;
+
+			return processedLine;
 		})
 		.join('\n');
 }
@@ -81,6 +92,7 @@ function escapeBrackets(text: string): string {
 	// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook)
 	// or `\\[4pt]`.
 	const pattern = /(```[\S\s]*?```|`.*?`)|(?<!\\)\\\[([\S\s]*?[^\\])\\]|(?<!\\)\\\((.*?)\\\)/g;
+
 	return text.replace(
 		pattern,
 		(
@@ -96,6 +108,7 @@ function escapeBrackets(text: string): string {
 			} else if (roundBracket != null) {
 				return `$${roundBracket}$`;
 			}
+
 			return match;
 		}
 	);
@@ -134,8 +147,10 @@ const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
 export function preprocessLaTeX(content: string): string {
 	// Step 1: Protect code blocks
 	const codeBlocks: string[] = [];
+
 	content = content.replace(codeBlockRegex, (match) => {
 		codeBlocks.push(match);
+
 		return `<<CODE_BLOCK_${codeBlocks.length - 1}>>`;
 	});
 
@@ -150,6 +165,7 @@ export function preprocessLaTeX(content: string): string {
 		}
 		const hasSuffix = /\S/.test(group3);
 		let optBreak;
+
 		if (hasSuffix) {
 			latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
 			optBreak = '';
@@ -157,6 +173,7 @@ export function preprocessLaTeX(content: string): string {
 			latexExpressions.push(`\\[${group2}\\]`);
 			optBreak = '\n';
 		}
+
 		return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
 	});
 
@@ -165,6 +182,7 @@ export function preprocessLaTeX(content: string): string {
 		/(\$\$[\s\S]*?\$\$|(?<!\\)\\\[[\s\S]*?\\\]|(?<!\\)\\\(.*?\\\))/g,
 		(match) => {
 			latexExpressions.push(match);
+
 			return `<<LATEX_${latexExpressions.length - 1}>>`;
 		}
 	);
@@ -188,6 +206,7 @@ export function preprocessLaTeX(content: string): string {
 
 	// Step 6: Apply additional escaping functions (brackets and mhchem)
 	content = escapeBrackets(content);
+
 	if (content.includes('\\ce{') || content.includes('\\pu{')) {
 		content = escapeMhchem(content);
 	}
