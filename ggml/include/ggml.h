@@ -1658,8 +1658,7 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_ifairy_rope(
             struct ggml_context * ctx,
-            struct ggml_tensor  * real,
-            struct ggml_tensor  * imag,
+            struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             int                   n_dims,
             int                   mode);
