@@ -94,7 +94,7 @@ Once inside
   * oneshot or streamed mode.
   * use built in tool calling or not
 
-* In completion mode
+* In completion mode >> note: most recent work has been in chat mode <<
   * one normally doesnt use a system prompt in completion mode.
   * logic by default doesnt insert any role specific "ROLE: " prefix wrt each role's message.
     If the model requires any prefix wrt user role messages, then the end user has to
@@ -263,9 +263,9 @@ matter clearing site data, dont directly override site caching in all cases. Wor
 have to change port. Or in dev tools of browser, you may be able to disable caching fully.
 
 
-Currently the server to communicate with is maintained globally and not as part of a specific
-chat session. So if one changes the server ip/url in setting, then all chat sessions will auto
-switch to this new server, when you try using those sessions.
+Currently the settings are maintained globally and not as part of a specific chat session, including
+the server to communicate with. So if one changes the server ip/url in setting, then all chat sessions
+will auto switch to this new server, when you try using those sessions.
 
 
 By switching between chat.add_system_begin/anytime, one can control whether one can change
@@ -298,7 +298,9 @@ wrt the set of fields sent to server along with the user query, to check how the
 wrt repeatations in general in the generated text response.
 
 A end-user can change these behaviour by editing gMe from browser's devel-tool/console or by
-using the provided settings ui (for settings exposed through the ui).
+using the provided settings ui (for settings exposed through the ui). The logic uses a generic
+helper which autocreates property edit ui elements for the specified set of properties. If the
+new property is a number or text or boolean, the autocreate logic will handle it.
 
 
 ### OpenAi / Equivalent API WebService
@@ -403,6 +405,8 @@ get incorporated in result sent to ai engine on the server side.
 Is the promise land trap deep enough, need to think through and explore around this once later.
 
 Trap error responses.
+
+Handle reasoning/thinking responses from ai models.
 
 
 ### Debuging the handshake
