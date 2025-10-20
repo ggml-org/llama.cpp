@@ -131,6 +131,23 @@ function fetchweburlraw_run(toolcallid, toolname, obj) {
 }
 
 
+/**
+ * Setup fetch_web_url_raw for tool calling
+ * NOTE: Currently it just checks there is something at given proxyUrl
+ * @param {Object<string, Object<string, any>>} tcs
+ */
+async function fetchweburlraw_setup(tcs) {
+    // @ts-ignore
+    let got = await fetch(document["gMe"].proxyUrl).then(resp=>{
+        tcs["fetch_web_url_raw"] = {
+            "handler": fetchweburlraw_run,
+            "meta": fetchweburlraw_meta,
+            "result": ""
+        };
+    }).catch(err=>console.log(`WARN:ToolJS:FetchWebUrlRaw:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+}
+
+
 let fetchweburltext_meta = {
         "type": "function",
         "function": {
@@ -183,6 +200,23 @@ function fetchweburltext_run(toolcallid, toolname, obj) {
 
 
 /**
+ * Setup fetch_web_url_text for tool calling
+ * NOTE: Currently it just checks there is something at given proxyUrl
+ * @param {Object<string, Object<string, any>>} tcs
+ */
+async function fetchweburltext_setup(tcs) {
+    // @ts-ignore
+    let got = await fetch(document["gMe"].proxyUrl).then(resp=>{
+        tcs["fetch_web_url_text"] = {
+            "handler": fetchweburltext_run,
+            "meta": fetchweburltext_meta,
+            "result": ""
+        };
+    }).catch(err=>console.log(`WARN:ToolJS:FetchWebUrlText:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+}
+
+
+/**
  * @type {Object<string, Object<string, any>>}
  */
 export let tc_switch = {
@@ -196,23 +230,16 @@ export let tc_switch = {
         "meta": calc_meta,
         "result": ""
     },
-    "fetch_web_url_raw": {
-        "handler": fetchweburlraw_run,
-        "meta": fetchweburlraw_meta,
-        "result": ""
-    },
-    "fetch_web_url_text": {
-        "handler": fetchweburltext_run,
-        "meta": fetchweburltext_meta,
-        "result": ""
-    }
 }
 
 
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
+ * Also to setup tool calls, which need to cross check things at runtime
  * @param {Worker} toolsWorker
  */
-export function init(toolsWorker) {
+export async function init(toolsWorker) {
     gToolsWorker = toolsWorker
+    await fetchweburlraw_setup(tc_switch)
+    await fetchweburltext_setup(tc_switch)
 }
