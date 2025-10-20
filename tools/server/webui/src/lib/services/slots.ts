@@ -37,6 +37,8 @@ export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState | null) => void> = new Set();
 	private isStreamingActive: boolean = false;
 	private lastKnownState: ApiProcessingState | null = null;
+	private conversationStates: Map<string, ApiProcessingState | null> = new Map();
+	private activeConversationId: string | null = null;
 
 	/**
 	 * Start streaming session tracking
@@ -76,6 +78,62 @@ export class SlotsService {
 	}
 
 	/**
+	 * Set the active conversation for statistics display
+	 */
+	setActiveConversation(conversationId: string | null): void {
+		this.activeConversationId = conversationId;
+		this.notifyCallbacks();
+	}
+
+	/**
+	 * Update processing state for a specific conversation
+	 */
+	updateConversationState(conversationId: string, state: ApiProcessingState | null): void {
+		this.conversationStates.set(conversationId, state);
+
+		if (conversationId === this.activeConversationId) {
+			this.lastKnownState = state;
+			this.notifyCallbacks();
+		}
+	}
+
+	/**
+	 * Get processing state for a specific conversation
+	 */
+	getConversationState(conversationId: string): ApiProcessingState | null {
+		return this.conversationStates.get(conversationId) || null;
+	}
+
+	/**
+	 * Clear state for a specific conversation
+	 */
+	clearConversationState(conversationId: string): void {
+		this.conversationStates.delete(conversationId);
+
+		if (conversationId === this.activeConversationId) {
+			this.lastKnownState = null;
+			this.notifyCallbacks();
+		}
+	}
+
+	/**
+	 * Notify all callbacks with current state
+	 */
+	private notifyCallbacks(): void {
+		const currentState = this.activeConversationId
+			? this.conversationStates.get(this.activeConversationId) || null
+			: this.lastKnownState;
+
+		for (const callback of this.callbacks) {
+			try {
+				callback(currentState);
+			} catch (error) {
+				console.error('Error in slots service callback:', error);
+			}
+		}
+	}
+
+	/**
 	 * @deprecated Polling is no longer used - timing data comes from ChatService streaming response
 	 * This method logs a warning if called to help identify outdated usage
 	 */
@@ -100,29 +158,29 @@ export class SlotsService {
 	/**
 	 * Updates processing state with timing data from ChatService streaming response
 	 */
-	async updateFromTimingData(timingData: {
-		prompt_n: number;
-		predicted_n: number;
-		predicted_per_second: number;
-		cache_n: number;
-		prompt_progress?: ChatMessagePromptProgress;
-	}): Promise<void> {
+	async updateFromTimingData(
+		timingData: {
+			prompt_n: number;
+			predicted_n: number;
+			predicted_per_second: number;
+			cache_n: number;
+			prompt_progress?: ChatMessagePromptProgress;
+		},
+		conversationId?: string
+	): Promise<void> {
 		const processingState = await this.parseCompletionTimingData(timingData);
 
-		// Only update if we successfully parsed the state
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
+
 			return;
 		}
 
-		this.lastKnownState = processingState;
-
-		for (const callback of this.callbacks) {
-			try {
-				callback(processingState);
-			} catch (error) {
-				console.error('Error in timing callback:', error);
-			}
+		if (conversationId) {
+			this.updateConversationState(conversationId, processingState);
+		} else {
+			this.lastKnownState = processingState;
+			this.notifyCallbacks();
 		}
 	}
 
@@ -143,6 +201,7 @@ export class SlotsService {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});
+
 			if (response.ok) {
 				const slotsData = await response.json();
 				if (Array.isArray(slotsData) && slotsData.length > 0) {
@@ -179,6 +238,7 @@ export class SlotsService {
 
 		if (contextTotal === null) {
 			console.warn('No context total available - cannot calculate processing state');
+
 			return null;
 		}
 
@@ -214,13 +274,21 @@ export class SlotsService {
 	/**
 	 * Get current processing state
 	 * Returns the last known state from timing data, or null if no data available
+	 * If activeConversationId is set, returns state for that conversation
 	 */
 	async getCurrentState(): Promise<ApiProcessingState | null> {
+		if (this.activeConversationId) {
+			const conversationState = this.conversationStates.get(this.activeConversationId);
+
+			if (conversationState) {
+				return conversationState;
+			}
+		}
+
 		if (this.lastKnownState) {
 			return this.lastKnownState;
 		}
 		try {
-			// Import dynamically to avoid circular dependency
 			const { chatStore } = await import('$lib/stores/chat.svelte');
 			const messages = chatStore.activeMessages;
 

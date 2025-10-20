@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal, Download } from '@lucide/svelte';
+	import { Trash2, Pencil, MoreHorizontal, Download, Loader2 } from '@lucide/svelte';
 	import { ActionDropdown } from '$lib/components/app';
-	import { downloadConversation } from '$lib/stores/chat.svelte';
+	import { downloadConversation, getAllLoadingConversations } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -24,6 +24,8 @@
 
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
+
+	let isLoading = $derived(getAllLoadingConversations().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -83,11 +85,16 @@
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
 >
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<span class="truncate text-sm font-medium" onclick={handleMobileSidebarItemClick}>
-		{conversation.name}
-	</span>
+	<div class="flex min-w-0 flex-1 items-center gap-2">
+		{#if isLoading}
+			<Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+		{/if}
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<span class="truncate text-sm font-medium" onclick={handleMobileSidebarItemClick}>
+			{conversation.name}
+		</span>
+	</div>
 
 	{#if renderActionsDropdown}
 		<div class="actions flex items-center">
