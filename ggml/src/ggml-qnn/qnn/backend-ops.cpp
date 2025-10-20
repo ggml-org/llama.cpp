@@ -174,6 +174,10 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_UNARY_OP_EXP
     false,  // GGML_UNARY_OP_GELU_ERF
     false,  // GGML_UNARY_OP_XIELU
+    false,  // GGML_UNARY_OP_FLOOR
+    false,  // GGML_UNARY_OP_CEIL
+    false,  // GGML_UNARY_OP_ROUND
+    false,  // GGML_UNARY_OP_TRUNC
 };
 
 static_assert(kQnnSupportedOps[GGML_OP_NONE], "GGML_OP_NONE is not true");
