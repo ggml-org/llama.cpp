@@ -350,8 +350,11 @@ server logic, this helps bypass the CORS restrictions applied if trying to direc
 browser js runtime environment. Depending on the path specified wrt the proxy server, if urltext
 (and not urlraw), it additionally tries to convert html content into equivalent text to some extent
 in a simple minded manner by dropping head block as well as all scripts/styles/footers/headers/nav.
-May add support for white list of allowed sites to access or so. The simple proxy can be found at
-* tools/server/public_simplechat/local.tools/simpleproxy.py
+May add support for white list of allowed sites to access or so.
+* the logic does a simple dumb check to see if there is something running at specified proxyUrl
+  before enabling fetch web related tool calls.
+* The bundled simple proxy can be found at
+  * tools/server/public_simplechat/local.tools/simpleproxy.py
 
 
 #### Extending with new tools
