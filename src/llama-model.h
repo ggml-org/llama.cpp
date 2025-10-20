@@ -107,6 +107,7 @@ enum llm_type {
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
     LLM_TYPE_A13B,
+    LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
