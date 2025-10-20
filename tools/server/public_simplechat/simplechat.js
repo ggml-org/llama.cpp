@@ -402,8 +402,9 @@ class SimpleChat {
      * Show the contents in the specified div
      * @param {HTMLDivElement} div
      * @param {boolean} bClear
+     * @param {boolean} bShowInfoAll
      */
-    show(div, bClear=true) {
+    show(div, bClear=true, bShowInfoAll=false) {
         if (bClear) {
             div.replaceChildren();
         }
@@ -419,7 +420,7 @@ class SimpleChat {
             if (bClear) {
                 div.innerHTML = gUsageMsg;
                 gMe.setup_load(div, this);
-                gMe.show_info(div);
+                gMe.show_info(div, bShowInfoAll);
             }
         }
         return last;
@@ -1072,7 +1073,7 @@ class Me {
             console.log("DBUG:SimpleChat:SC:Load", chat);
             chat.load();
             queueMicrotask(()=>{
-                chat.show(div);
+                chat.show(div, true, true);
                 this.multiChat.elInSystem.value = chat.get_system_latest().ns.content;
             });
         });
@@ -1085,35 +1086,13 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-
-        let p = ui.el_create_append_p("Settings (devel-tools-console document[gMe])", elDiv);
-        p.className = "role-system";
-
-        if (bAll) {
-
-            ui.el_create_append_p(`baseURL:${this.baseURL}`, elDiv);
-
-            ui.el_create_append_p(`Authorization:${this.headers["Authorization"]}`, elDiv);
-
-            ui.el_create_append_p(`bStream:${this.bStream}`, elDiv);
-
-            ui.el_create_append_p(`bTools:${this.bTools}`, elDiv);
-
-            ui.el_create_append_p(`bTrimGarbage:${this.bTrimGarbage}`, elDiv);
-
-            ui.el_create_append_p(`ApiEndPoint:${this.apiEP}`, elDiv);
-
-            ui.el_create_append_p(`iRecentUserMsgCnt:${this.iRecentUserMsgCnt}`, elDiv);
-
-            ui.el_create_append_p(`bCompletionFreshChatAlways:${this.bCompletionFreshChatAlways}`, elDiv);
-
-            ui.el_create_append_p(`bCompletionInsertStandardRolePrefix:${this.bCompletionInsertStandardRolePrefix}`, elDiv);
-
-        }
-
-        ui.el_create_append_p(`apiRequestOptions:${JSON.stringify(this.apiRequestOptions, null, " - ")}`, elDiv);
-        ui.el_create_append_p(`headers:${JSON.stringify(this.headers, null, " - ")}`, elDiv);
-
+        fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
+            this.modelInfo = {
+                modelPath: json["model_path"],
+                ctxSize: json["default_generation_settings"]["n_ctx"]
+            }
+            ui.ui_show_obj_props_info(elDiv, this, ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings/Info (devel-tools-console document[gMe])")
+        }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
     /**
