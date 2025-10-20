@@ -47,6 +47,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 handle_urlraw(self, pr)
             case '/urltext':
                 handle_urltext(self, pr)
+            case '/aum':
+                handle_aum(self, pr)
             case _:
                 print(f"WARN:ProxyHandler:GET:UnknownPath{pr.path}")
                 self.send_error(400, f"WARN:UnknownPath:{pr.path}")
@@ -56,6 +58,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         print(f"DBUG:ProxyHandler:OPTIONS:{self.path}")
         self.send_response(200)
         self.send_headers_common()
+
+
+def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    ph.send_response_only(200, "bharatavarshe")
+    ph.send_header('Access-Control-Allow-Origin', '*')
+    ph.end_headers()
 
 
 @dataclass(frozen=True)
