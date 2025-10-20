@@ -2834,7 +2834,7 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
         }
     }
 
-    if (node->op == GGML_OP_SCALE &&
+    if ((node->op == GGML_OP_SCALE || node->op == GGML_OP_GLU) &&
         memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
         return false;
     }

@@ -4690,10 +4690,7 @@ struct test_fused_ffn_gate : public test_case {
     }
 
     double max_nmse_err() override {
-        if (glu_op == GGML_GLU_OP_GEGLU) {
-            return 1e-2;
-        }
-        return 1e-3;
+        return 5e-4;
     }
 };
 
