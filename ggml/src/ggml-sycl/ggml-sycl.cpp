@@ -3744,6 +3744,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_CONCAT:
             ggml_sycl_op_concat(ctx, dst);
             break;
+        case GGML_OP_PAD_REFLECT_1D:
+            ggml_sycl_op_pad_reflect_1d(ctx,dst);
+            break;
         case GGML_OP_UPSCALE:
             ggml_sycl_upscale(ctx, dst);
             break;
@@ -4455,6 +4458,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIV:
         case GGML_OP_REPEAT:
             return true;
+        case GGML_OP_PAD_REFLECT_1D:
+            return ggml_is_contiguous(op->src[0]) && op-> type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
