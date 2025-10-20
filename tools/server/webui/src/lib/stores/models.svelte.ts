@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import { ModelsService } from '$lib/services/models';
 import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
+import { SELECTED_MODEL_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys';
 
 export interface ModelOption {
 	id: string;
@@ -16,8 +17,6 @@ type PersistedModelSelection = {
 	id: string;
 	model: string;
 };
-
-const STORAGE_KEY = 'llama.cpp:selectedModel';
 
 class ModelsStore {
 	private _models = $state<ModelOption[]>([]);
@@ -79,9 +78,7 @@ class ModelsStore {
 
 			const models: ModelOption[] = response.data.map((item, index) => {
 				const details = response.models?.[index];
-				const rawCapabilities = Array.isArray(details?.capabilities)
-					? [...(details?.capabilities ?? [])]
-					: [];
+				const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
 				const displayNameSource =
 					details?.name && details.name.trim().length > 0 ? details.name : item.id;
 				const displayName = this.toDisplayName(displayNameSource);
@@ -99,36 +96,17 @@ class ModelsStore {
 
 			this._models = models;
 
-			const persisted = this.readPersistedSelection();
-			let nextSelectionId = this._selectedModelId ?? persisted?.id ?? null;
-			let nextSelectionName = this._selectedModelName ?? persisted?.model ?? null;
-			if (nextSelectionId) {
-				const match = models.find((model) => model.id === nextSelectionId);
-				if (match) {
-					nextSelectionId = match.id;
-					nextSelectionName = match.model;
-				} else if (models[0]) {
-					nextSelectionId = models[0].id;
-					nextSelectionName = models[0].model;
-				} else {
-					nextSelectionId = null;
-					nextSelectionName = null;
-				}
-			} else if (models[0]) {
-				nextSelectionId = models[0].id;
-				nextSelectionName = models[0].model;
-			}
+			const selection = this.determineInitialSelection(models);
 
-			this._selectedModelId = nextSelectionId;
-			this._selectedModelName = nextSelectionName;
+			this._selectedModelId = selection.id;
+			this._selectedModelName = selection.model;
 			this.persistSelection(
-				nextSelectionId && nextSelectionName
-					? { id: nextSelectionId, model: nextSelectionName }
-					: null
+				selection.id && selection.model ? { id: selection.id, model: selection.model } : null
 			);
 		} catch (error) {
 			this._models = [];
 			this._error = error instanceof Error ? error.message : 'Failed to load models';
+
 			throw error;
 		} finally {
 			this._loading = false;
@@ -167,13 +145,45 @@ class ModelsStore {
 		return candidate && candidate.trim().length > 0 ? candidate : id;
 	}
 
+	/**
+	 * Determines which model should be selected after fetching the models list.
+	 * Priority: current selection > persisted selection > first available model > none
+	 */
+	private determineInitialSelection(models: ModelOption[]): {
+		id: string | null;
+		model: string | null;
+	} {
+		const persisted = this.readPersistedSelection();
+		let nextSelectionId = this._selectedModelId ?? persisted?.id ?? null;
+		let nextSelectionName = this._selectedModelName ?? persisted?.model ?? null;
+
+		if (nextSelectionId) {
+			const match = models.find((m) => m.id === nextSelectionId);
+			if (match) {
+				nextSelectionId = match.id;
+				nextSelectionName = match.model;
+			} else if (models[0]) {
+				nextSelectionId = models[0].id;
+				nextSelectionName = models[0].model;
+			} else {
+				nextSelectionId = null;
+				nextSelectionName = null;
+			}
+		} else if (models[0]) {
+			nextSelectionId = models[0].id;
+			nextSelectionName = models[0].model;
+		}
+
+		return { id: nextSelectionId, model: nextSelectionName };
+	}
+
 	private readPersistedSelection(): PersistedModelSelection | null {
 		if (!browser) {
 			return null;
 		}
 
 		try {
-			const raw = localStorage.getItem(STORAGE_KEY);
+			const raw = localStorage.getItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
 			if (!raw) {
 				return null;
 			}
@@ -183,6 +193,7 @@ class ModelsStore {
 				const id = parsed.id;
 				const model =
 					typeof parsed.model === 'string' && parsed.model.length > 0 ? parsed.model : id;
+
 				return { id, model };
 			}
 		} catch (error) {
@@ -199,9 +210,9 @@ class ModelsStore {
 
 		try {
 			if (selection) {
-				localStorage.setItem(STORAGE_KEY, JSON.stringify(selection));
+				localStorage.setItem(SELECTED_MODEL_LOCALSTORAGE_KEY, JSON.stringify(selection));
 			} else {
-				localStorage.removeItem(STORAGE_KEY);
+				localStorage.removeItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
 			}
 		} catch (error) {
 			console.warn('Failed to persist model selection to localStorage:', error);
