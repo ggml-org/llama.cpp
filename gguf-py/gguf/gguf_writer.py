@@ -755,6 +755,12 @@ class GGUFWriter:
     def add_expert_shared_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)
 
+    def add_expert_group_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_GROUP_COUNT.format(arch=self.arch), count)
+
+    def add_expert_group_used_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_GROUP_USED_COUNT.format(arch=self.arch), count)
+
     def add_expert_weights_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_WEIGHTS_SCALE.format(arch=self.arch), value)
 
