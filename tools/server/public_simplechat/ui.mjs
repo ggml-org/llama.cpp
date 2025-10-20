@@ -235,7 +235,7 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
 /**
  * Auto create ui input elements for fields in apiRequestOptions
  * Currently supports text and number field types.
- * @param {HTMLDivElement} elDiv
+ * @param {HTMLDivElement|HTMLFieldSetElement} elDiv
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
@@ -250,7 +250,7 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend) {
     legend.innerText = sLegend;
     fs.appendChild(legend);
     elDiv.appendChild(fs);
-    for(const k in lProps) {
+    for(const k of lProps) {
         let val = oObj[k];
         let type = typeof(val);
         if (((type == "string") || (type == "number"))) {
@@ -266,6 +266,8 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend) {
                 oObj[k] = userVal;
             });
             fs.appendChild(bbtn.div);
+        } else if (type == "object") {
+            ui_show_obj_props_edit(fs, val, Object.keys(val), k)
         }
     }
 }
