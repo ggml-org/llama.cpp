@@ -929,6 +929,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     // select top n_group_used expert groups
+    // https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/e815299b0bcbac849fa540c768ef21845365c9eb/modeling_deepseek.py#L440-L457
     if (hparams.n_expert_groups > 1 && n_tokens > 0) {
         const int64_t n_exp_per_group = n_expert / hparams.n_expert_groups;
 
@@ -943,7 +944,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         group_scores = ggml_reshape_2d(ctx0, group_scores, group_scores->ne[1], group_scores->ne[2]); // [n_expert_groups, n_tokens]
 
         ggml_tensor * expert_groups = ggml_top_k(ctx0, group_scores, hparams.n_group_used); // [n_group_used, n_tokens]
-        cb(expert_groups->src[0], "ffn_moe_group_argsort", il);
         cb(expert_groups, "ffn_moe_group_topk", il);
 
         // mask out the other groups

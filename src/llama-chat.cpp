@@ -650,7 +650,7 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << " Ассистент:[SEP]";
         }
-    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING || tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
+    } else if (tmpl == LLM_CHAT_TEMPLATE_BAILING || tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
         // Bailing (Ling/Ring) template
         for (auto message : chat) {
             std::string role(message->role);
@@ -671,7 +671,7 @@ int32_t llm_chat_apply_template(
                 ss << "<think>";
             }
         }
-    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING2) {
+    } else if (tmpl == LLM_CHAT_TEMPLATE_BAILING2) {
         // Bailing2 (Ling 2.0) template
         bool has_system = !chat.empty() && std::string(chat[0]->role) == "system";
 
