@@ -199,7 +199,16 @@ class ChatMessageEx {
      */
     update_oneshot(nwo, apiEP) {
         if (apiEP == ApiEP.Type.Chat) {
-            this.ns.content = nwo["choices"][0]["message"]["content"];
+            let curContent = nwo["choices"][0]["message"]["content"];
+            if (curContent != undefined) {
+                if (curContent != null) {
+                    this.ns.content = curContent;
+                }
+            }
+            let curTCs = nwo["choices"][0]["message"]["tool_calls"];
+            if (curTCs != undefined) {
+                this.ns.tool_calls = curTCs;
+            }
         } else {
             try {
                 this.ns.content = nwo["choices"][0]["text"];
