@@ -27,6 +27,7 @@
 
 	let searchQuery = $state('');
 	let selectedIds = $state.raw<SvelteSet<string>>(new SvelteSet(conversations.map((c) => c.id)));
+	let lastClickedId = $state<string | null>(null);
 
 	let filteredConversations = $derived(
 		conversations.filter((conv) => {
@@ -44,14 +45,40 @@
 		filteredConversations.some((conv) => selectedIds.has(conv.id)) && !allSelected
 	);
 
-	function toggleConversation(id: string) {
+	function toggleConversation(id: string, shiftKey: boolean = false) {
 		const newSet = new SvelteSet(selectedIds);
+
+		if (shiftKey && lastClickedId !== null) {
+			const lastIndex = filteredConversations.findIndex((c) => c.id === lastClickedId);
+			const currentIndex = filteredConversations.findIndex((c) => c.id === id);
+
+			if (lastIndex !== -1 && currentIndex !== -1) {
+				const start = Math.min(lastIndex, currentIndex);
+				const end = Math.max(lastIndex, currentIndex);
+
+				const shouldSelect = !newSet.has(id);
+
+				for (let i = start; i <= end; i++) {
+					if (shouldSelect) {
+						newSet.add(filteredConversations[i].id);
+					} else {
+						newSet.delete(filteredConversations[i].id);
+					}
+				}
+
+				selectedIds = newSet;
+				return;
+			}
+		}
+
 		if (newSet.has(id)) {
 			newSet.delete(id);
 		} else {
 			newSet.add(id);
 		}
+
 		selectedIds = newSet;
+		lastClickedId = id;
 	}
 
 	function toggleAll() {
@@ -76,6 +103,7 @@
 	function handleCancel() {
 		selectedIds = new SvelteSet(conversations.map((c) => c.id));
 		searchQuery = '';
+		lastClickedId = null;
 
 		onCancel();
 	}
@@ -86,6 +114,7 @@
 		if (open && !previousOpen) {
 			selectedIds = new SvelteSet(conversations.map((c) => c.id));
 			searchQuery = '';
+			lastClickedId = null;
 		} else if (!open && previousOpen) {
 			onCancel();
 		}
@@ -174,12 +203,16 @@
 									{#each filteredConversations as conv (conv.id)}
 										<tr
 											class="cursor-pointer border-b transition-colors hover:bg-muted/50"
-											onclick={() => toggleConversation(conv.id)}
+											onclick={(e) => toggleConversation(conv.id, e.shiftKey)}
 										>
-											<td class="p-3" onclick={(e) => e.stopPropagation()}>
+											<td class="p-3">
 												<Checkbox
 													checked={selectedIds.has(conv.id)}
-													onCheckedChange={() => toggleConversation(conv.id)}
+													onclick={(e) => {
+														e.preventDefault();
+														e.stopPropagation();
+														toggleConversation(conv.id, e.shiftKey);
+													}}
 												/>
 											</td>
 
