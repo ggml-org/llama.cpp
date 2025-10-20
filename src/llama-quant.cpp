@@ -1421,7 +1421,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
-        auto pareto_convex = [](std::vector<candidate_types> & candidates) {
+        auto pareto_convex = [epsilon](std::vector<candidate_types> & candidates) {
             if (candidates.empty()) { return; }
 
             std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
