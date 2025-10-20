@@ -37,5 +37,7 @@
 #include "softmax.hpp"
 #include "tsembd.hpp"
 #include "wkv.hpp"
+#include "pad_reflect_1d.hpp"
+
 
 #endif  // GGML_SYCL_BACKEND_HPP
