@@ -94,6 +94,17 @@
 					attachmentIndex: index,
 					textContent: attachment.content
 				});
+			} else if (attachment.type === 'context') {
+				// Legacy format from old webui - treat as text file
+				items.push({
+					id: `attachment-${index}`,
+					name: attachment.name,
+					type: 'text',
+					isImage: false,
+					attachment,
+					attachmentIndex: index,
+					textContent: attachment.content
+				});
 			} else if (attachment.type === 'audioFile') {
 				items.push({
 					id: `attachment-${index}`,
