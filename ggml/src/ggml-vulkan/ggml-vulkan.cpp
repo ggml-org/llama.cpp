@@ -4776,7 +4776,7 @@ static void ggml_vk_instance_init() {
 #endif
                             break;
                     }
-                    driver_priorities[vk::DriverId::eMesaDozen] = 4;
+                    driver_priorities[vk::DriverId::eMesaDozen] = 100;
 
                     if (driver_priorities.count(old_driver.driverID)) {
                         old_priority = driver_priorities[old_driver.driverID];
