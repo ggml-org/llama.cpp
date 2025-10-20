@@ -312,17 +312,21 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
  * @param {Array<string>} lProps
  * @param {string} sLegend
  */
-export function ui_show_obj_props_info(elDiv, oObj, lProps, sLegend) {
+export function ui_show_obj_props_info(elDiv, oObj, lProps, sLegend, sOffset="") {
     let p = el_create_append_p(`${sLegend}`, elDiv);
-    p.className = "role-system";
+    if (sOffset.length == 0) {
+        p.className = "role-system";
+    }
 
     for (const k of lProps) {
+        let kPrint = `${sOffset}${k}`
         let val = oObj[k];
         let vtype = typeof(val)
         if (vtype != 'object') {
-            el_create_append_p(`${k}:${oObj[k]}`, elDiv)
+            el_create_append_p(`${kPrint}:${oObj[k]}`, elDiv)
         } else {
-            el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elDiv);
+            ui_show_obj_props_info(elDiv, val, Object.keys(val), kPrint, `>${sOffset}`)
+            //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elDiv);
         }
     }
 }
