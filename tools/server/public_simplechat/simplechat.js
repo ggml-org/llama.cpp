@@ -1148,33 +1148,7 @@ class Me {
      */
     show_settings(elDiv) {
 
-        let inp = ui.el_creatediv_input("SetBaseURL", "BaseURL", "text", this.baseURL, (val)=>{
-            this.baseURL = val;
-        });
-        elDiv.appendChild(inp.div);
-
-        inp = ui.el_creatediv_input("SetAuthorization", "Authorization", "text", this.headers["Authorization"], (val)=>{
-            this.headers["Authorization"] = val;
-        });
-        inp.el.placeholder = "Bearer OPENAI_API_KEY";
-        elDiv.appendChild(inp.div);
-
-        let bb = ui.el_creatediv_boolbutton("SetStream", "Stream", {true: "[+] yes stream", false: "[-] do oneshot"}, this.bStream, (val)=>{
-            this.bStream = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetTools", "Tools", {true: "[+] yes tools", false: "[-] no tools"}, this.bTools, (val)=>{
-            this.bTools = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetTrimGarbage", "TrimGarbage", {true: "[+] yes trim", false: "[-] dont trim"}, this.bTrimGarbage, (val)=>{
-            this.bTrimGarbage = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "iRecentUserMsgCnt"], "Settings")
+        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings")
 
         let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
             // @ts-ignore
@@ -1186,16 +1160,6 @@ class Me {
             this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
         });
         elDiv.appendChild(sel.div);
-
-        bb = ui.el_creatediv_boolbutton("SetCompletionFreshChatAlways", "CompletionFreshChatAlways", {true: "[+] yes fresh", false: "[-] no, with history"}, this.bCompletionFreshChatAlways, (val)=>{
-            this.bCompletionFreshChatAlways = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetCompletionInsertStandardRolePrefix", "CompletionInsertStandardRolePrefix", {true: "[+] yes insert", false: "[-] dont insert"}, this.bCompletionInsertStandardRolePrefix, (val)=>{
-            this.bCompletionInsertStandardRolePrefix = val;
-        });
-        elDiv.appendChild(bb.div);
 
     }
 
