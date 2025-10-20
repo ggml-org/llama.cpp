@@ -31,7 +31,8 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile,
 	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraPdfFile
+	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraLegacyContext
 } from '$lib/types/database';
 
 import type {
@@ -73,6 +74,7 @@ declare global {
 		DatabaseMessageExtraImageFile,
 		DatabaseMessageExtraTextFile,
 		DatabaseMessageExtraPdfFile,
+		DatabaseMessageExtraLegacyContext,
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,
