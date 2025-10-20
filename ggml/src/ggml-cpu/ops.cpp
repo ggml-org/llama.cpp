@@ -2643,71 +2643,6 @@ void ggml_compute_forward_silu_back(
     }
 }
 
-static void ggml_compute_forward_geglu_back_f32(
-        const ggml_compute_params * params,
-        const struct ggml_tensor * grad,
-        const struct ggml_tensor * x,
-        const struct ggml_tensor * g,
-        struct ggml_tensor * dst) {
-
-    GGML_ASSERT(ggml_can_repeat(grad, dst));
-    GGML_ASSERT(ggml_are_same_shape(x, g));
-    GGML_ASSERT(grad->type == GGML_TYPE_F32);
-    GGML_ASSERT(x->type == GGML_TYPE_F32);
-    GGML_ASSERT(g->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    const int nc = dst->ne[0];
-
-    GGML_ASSERT(nc % 2 == 0);
-
-    const size_t nb1 = dst->nb[1];
-    const size_t nb2 = dst->nb[2];
-    const size_t nb3 = dst->nb[3];
-
-    for (int i3 = 0; i3 < dst->ne[3]; i3++) {
-        for (int i2 = 0; i2 < dst->ne[2]; i2++) {
-            for (int i1 = ith; i1 < dst->ne[1]; i1 += nth) {
-                float * dst_ptr = (float *)((char *) dst->data + i3*nb3 + i2*nb2 + i1*nb1);
-                const float * grad_ptr = (const float *)((char *) grad->data + i3*grad->nb[3] + i2*grad->nb[2] + i1*grad->nb[1]);
-                const float * x_ptr = (const float *)((char *) x->data + i3*x->nb[3] + i2*x->nb[2] + i1*x->nb[1]);
-                const float * g_ptr = (const float *)((char *) g->data + i3*g->nb[3] + i2*g->nb[2] + i1*g->nb[1]);
-
-                const int half = nc / 2;
-                ggml_vec_gelu_f32(half, dst_ptr, g_ptr);
-                ggml_vec_mul_f32(half, dst_ptr, dst_ptr, grad_ptr);
-                float * temp = (float *)alloca(half * sizeof(float));
-                ggml_vec_gelu_backward_f32(half, temp, g_ptr, grad_ptr);
-                ggml_vec_mul_f32(half, dst_ptr + half, temp, x_ptr);
-            }
-        }
-    }
-}
-
-void ggml_compute_forward_geglu_back(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
-    const struct ggml_tensor * grad = dst->src[0];
-    const struct ggml_tensor * x = dst->src[1];
-    const struct ggml_tensor * g = dst->src[2];
-
-    switch (dst->type) {
-        case GGML_TYPE_F32:
-            {
-                ggml_compute_forward_geglu_back_f32(params, grad, x, g, dst);
-            } break;
-        default:
-            {
-                GGML_ABORT("fatal error");
-            }
-    }
-}
-
-
 // ggml_compute_forward_reglu
 
 static void ggml_compute_forward_reglu_f32(
@@ -4104,107 +4039,6 @@ static void ggml_compute_forward_out_prod_f32(
     }
 }
 
-static void ggml_compute_forward_out_prod_f16_f32(
-        const ggml_compute_params * params,
-              ggml_tensor * dst) {
-
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
-
-    GGML_TENSOR_BINARY_OP_LOCALS
-
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(src0->type == GGML_TYPE_F16);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    GGML_ASSERT(ne0 == ne00);
-    GGML_ASSERT(ne1 == ne10);
-    GGML_ASSERT(ne2 == ne12);
-    GGML_ASSERT(ne3 == ne13);
-
-    GGML_ASSERT(ne2 % ne02 == 0);
-    GGML_ASSERT(ne3 % ne03 == 0);
-
-    // we don't support permuted src0 or src1
-    GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
-
-    // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
-    // GGML_ASSERT(nb0 <= nb1);
-    // GGML_ASSERT(nb1 <= nb2);
-    // GGML_ASSERT(nb2 <= nb3);
-
-    // nb01 >= nb00 - src0 is not transposed
-    //   compute by src0 rows
-
-    if (ith == 0) {
-        ggml_vec_set_f32(ne0*ne1*ne2*ne3, (float *)dst->data, 0);
-    }
-    ggml_barrier(params->threadpool);
-
-    // dst[:,:,:,:] = 0
-    // for i2,i3:
-    //   for i1:
-    //     for i01:
-    //       for i0:
-    //         dst[i0,i1,i2,i3] += src0[i0,i01,i2,i3] * src1[i1,i01,i2,i3]
-
-    // parallelize by last three dimensions
-
-    // total rows in dst
-    const int64_t nr = ne1*ne2*ne3;
-
-    // rows per thread
-    const int64_t dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int64_t ir0 = dr*ith;
-    const int64_t ir1 = MIN(ir0 + dr, nr);
-
-    // block-tiling attempt
-    const int64_t blck_0 = MAX(GGML_VEC_MAD_UNROLL, 32);
-    const int64_t blck_1 = 16;
-
-    // dps == dst per src0, used for group query attention
-    const int64_t dps2 = ne2 / ne02;
-    const int64_t dps3 = ne3 / ne03;
-
-    for (int64_t bir = ir0; bir < ir1; bir += blck_1) {
-        const int64_t bir1 = MIN(bir + blck_1, ir1);
-        for (int64_t bi01 = 0; bi01 < ne01; bi01 += blck_0) {
-            const int64_t bne01 = MIN(bi01 + blck_0, ne01);
-            for (int64_t ir = bir; ir < bir1; ++ir) {
-                // dst indices
-                const int64_t i3 = ir/(ne2*ne1);
-                const int64_t i2 = (ir - i3*ne2*ne1)/ne1;
-                const int64_t i1 = (ir - i3*ne2*ne1 - i2*ne1);
-
-                const int64_t i02 = i2 / dps2;
-                const int64_t i03 = i3 / dps3;
-
-                //const int64_t i10 = i1;
-                const int64_t i12 = i2;
-                const int64_t i13 = i3;
-
-                for (int64_t i01 = bi01; i01 < bne01; ++i01) {
-                    const int64_t i11 = i01;
-
-                    ggml_fp16_t * s0 = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
-                    float * s1 = (float *) ((char *) src1->data + (i1*nb10 + i11*nb11 + i12*nb12 + i13*nb13));
-                    float * d  = (float *) ((char *)  dst->data + (          i1*nb1 + i2*nb2 + i3*nb3));
-
-                    for (int i = 0; i < ne0; ++i) {
-                        d[i] += GGML_CPU_FP16_TO_FP32(s0[i])*(*s1);
-                    }
-                }
-            }
-        }
-    }
-}
-
 static void ggml_compute_forward_out_prod_q_f32(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4328,8 +4162,9 @@ void ggml_compute_forward_out_prod(
             } break;
         case GGML_TYPE_F16:
             {
-                ggml_compute_forward_out_prod_f16_f32(params, dst);
-            } break;
+                GGML_ABORT("fatal error"); // todo
+                // ggml_compute_forward_out_prod_f16_f32(params, dst);
+            }
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_out_prod_f32(params, dst);

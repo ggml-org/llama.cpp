@@ -1310,32 +1310,6 @@ inline static void ggml_vec_silu_backward_f16(const int n, ggml_fp16_t * dx, con
     }
 }
 
-inline static float ggml_gelu_backward_f32(float x, float dy) {
-    const float tanh_arg = SQRT_2_OVER_PI * x * (1.0f + GELU_COEF_A * x * x);
-    const float tanh_val = tanhf(tanh_arg);
-    const float sech2_val = 1.0f - tanh_val * tanh_val;
-    const float dtanh_dx = SQRT_2_OVER_PI * (1.0f + 3.0f * GELU_COEF_A * x * x) * sech2_val;
-    return dy * 0.5f * (1.0f + tanh_val + x * dtanh_dx);
-}
-
-inline static void ggml_vec_gelu_backward_f32(const int n, float * dx, const float * x, const float * dy) {
-    for (int i = 0; i < n; ++i) {
-        dx[i] = ggml_gelu_backward_f32(x[i], dy[i]);
-    }
-}
-
-inline static void ggml_vec_gelu_backward_f16(const int n, ggml_fp16_t * dx, const ggml_fp16_t * x, const ggml_fp16_t * dy) {
-    for (int i = 0; i < n; ++i) {
-        float xi = GGML_CPU_FP16_TO_FP32(x[i]);
-        float tanh_arg = SQRT_2_OVER_PI * xi * (1.0f + GELU_COEF_A * xi * xi);
-        float tanh_val = tanhf(tanh_arg);
-        float sech2_val = 1.0f - tanh_val * tanh_val;
-        float dtanh_dx = SQRT_2_OVER_PI * (1.0f + 3.0f * GELU_COEF_A * xi * xi) * sech2_val;
-
-        dx[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(dy[i]) * 0.5f * (1.0f + tanh_val + xi * dtanh_dx));
-    }
-}
-
 inline static void ggml_vec_reglu_f32 (const int n, float * y, const float * x, const float * g) {
     for (int i = 0; i < n; ++i) {
         y[i] = (x[i] > 0.f) ? x[i] * g[i] : 0.f;

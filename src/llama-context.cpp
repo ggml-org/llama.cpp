@@ -1386,7 +1386,7 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
-    return std::max<uint32_t>(2048u, 32u*model.n_tensors());
+    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -2122,23 +2122,6 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     for (struct llama_layer & layer : model->layers) {
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {
             llama_set_param(reinterpret_cast<struct ggml_tensor **>(&layer)[i], param_filter, param_filter_ud);
-        }
-    }
-
-    // Set LoRA params as trainable if any?
-    for (const auto & adapter_pair : loras) {
-        llama_adapter_lora * adapter = adapter_pair.first;
-        if (adapter) {
-            // Register lora tensors as params for training
-            for (const auto & tensor_pair : adapter->ab_map) {
-                const llama_adapter_lora_weight & weight = tensor_pair.second;
-                if (weight.a) {
-                    llama_set_param(weight.a, param_filter, param_filter_ud);
-                }
-                if (weight.b) {
-                    llama_set_param(weight.b, param_filter, param_filter_ud);
-                }
-            }
         }
     }
 }

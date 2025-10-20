@@ -942,7 +942,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "REPEAT_BACK",
     "CONCAT",
     "SILU_BACK",
-    "GEGLU_BACK",
     "NORM",
     "RMS_NORM",
     "RMS_NORM_BACK",
@@ -1020,7 +1019,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1047,7 +1046,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "repeat_back(x)",
     "concat(x, y)",
     "silu_back(x)",
-    "geglu_back(x)",
     "norm(x)",
     "rms_norm(x)",
     "rms_norm_back(x)",
@@ -1125,7 +1123,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
+static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2692,22 +2690,6 @@ struct ggml_tensor * ggml_silu_back(
     result->op     = GGML_OP_SILU_BACK;
     result->src[0] = a;
     result->src[1] = b;
-
-    return result;
-}
-
-// ggml_geglu_back
-struct ggml_tensor * ggml_geglu_back(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * grad,
-        struct ggml_tensor  * x,
-        struct ggml_tensor  * g) {
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, x);
-
-    result->op     = GGML_OP_GEGLU_BACK;
-    result->src[0] = grad;
-    result->src[1] = x;
-    result->src[2] = g;
 
     return result;
 }
@@ -6496,16 +6478,6 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, ggml_silu(ctx, src0), grad));
                     }
                 } break;
-                case GGML_GLU_OP_GEGLU: {
-                    if (src0_needs_grads) {
-                        GGML_ASSERT(src1 && "backward pass only implemented for split geglu");
-                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_gelu(ctx, src1)));
-                    }
-                    if (src1_needs_grads) {
-                        struct ggml_tensor * grad_mul_src0 = ggml_mul(ctx, grad, src0);
-                        ggml_add_or_set(ctx, cgraph, isrc1, ggml_geglu_back(ctx, grad_mul_src0, src1, src1));
-                    }
-                } break;
                 default: {
                     GGML_ABORT("unsupported glu op for backward pass: %s", ggml_glu_op_name(ggml_get_glu_op(tensor)));
                 } //break;
@@ -6655,10 +6627,6 @@ void ggml_build_backward_expand(
             case GGML_OP_GET_ROWS:      // row indices not differentiable
             case GGML_OP_GET_ROWS_BACK: // same as for GET_ROWS
             case GGML_OP_ROPE:          // positions not differentiable
-                ignore_src[1] = true;
-                break;
-            case GGML_OP_SET_ROWS:
-                ignore_src[0] = true;
                 ignore_src[1] = true;
                 break;
 
