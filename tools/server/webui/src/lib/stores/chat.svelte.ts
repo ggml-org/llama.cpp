@@ -815,8 +815,8 @@ class ChatStore {
 			this.activeMessages = this.activeMessages.slice(0, messageIndex + 1);
 			this.updateConversationTimestamp();
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			try {
 				const assistantMessage = await this.createAssistantMessage();
@@ -839,7 +839,7 @@ class ChatStore {
 				);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
-				this.isLoading = false;
+				this.setConversationLoading(this.activeConversation!.id, false);
 
 				const messageIndex = this.findMessageIndex(messageId);
 				this.updateMessageAtIndex(messageIndex, { content: originalContent });
@@ -881,8 +881,8 @@ class ChatStore {
 			this.activeMessages = this.activeMessages.slice(0, messageIndex);
 			this.updateConversationTimestamp();
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			try {
 				const parentMessageId =
@@ -903,7 +903,7 @@ class ChatStore {
 				await this.streamChatCompletion(conversationContext, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
-				this.isLoading = false;
+				this.setConversationLoading(this.activeConversation!.id, false);
 			}
 		} catch (error) {
 			if (this.isAbortError(error)) return;
@@ -1517,8 +1517,8 @@ class ChatStore {
 				return;
 			}
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
@@ -1552,7 +1552,7 @@ class ChatStore {
 			if (this.isAbortError(error)) return;
 
 			console.error('Failed to regenerate message with branching:', error);
-			this.isLoading = false;
+			this.setConversationLoading(this.activeConversation!.id, false);
 		}
 	}
 
@@ -1564,8 +1564,8 @@ class ChatStore {
 		if (!this.activeConversation) return;
 
 		this.errorDialogState = null;
-		this.isLoading = true;
-		this.currentResponse = '';
+		this.setConversationLoading(this.activeConversation.id, true);
+		this.clearConversationStreaming(this.activeConversation.id);
 
 		try {
 			// Get conversation path up to the user message
@@ -1597,7 +1597,7 @@ class ChatStore {
 			await this.streamChatCompletion(conversationPath, assistantMessage);
 		} catch (error) {
 			console.error('Failed to generate response:', error);
-			this.isLoading = false;
+			this.setConversationLoading(this.activeConversation!.id, false);
 		}
 	}
 
