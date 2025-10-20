@@ -35,6 +35,52 @@ function llamaCppBuildPlugin() {
 
 					let content = readFileSync(indexPath, 'utf-8');
 
+					// Inline KaTeX fonts directly from node_modules
+					const katexFonts = [
+						'KaTeX_AMS-Regular.woff2',
+						'KaTeX_Caligraphic-Bold.woff2',
+						'KaTeX_Caligraphic-Regular.woff2',
+						'KaTeX_Fraktur-Bold.woff2',
+						'KaTeX_Fraktur-Regular.woff2',
+						'KaTeX_Main-BoldItalic.woff2',
+						'KaTeX_Main-Bold.woff2',
+						'KaTeX_Main-Italic.woff2',
+						'KaTeX_Main-Regular.woff2',
+						'KaTeX_Math-BoldItalic.woff2',
+						'KaTeX_Math-Italic.woff2',
+						'KaTeX_SansSerif-Bold.woff2',
+						'KaTeX_SansSerif-Italic.woff2',
+						'KaTeX_SansSerif-Regular.woff2',
+						'KaTeX_Script-Regular.woff2',
+						'KaTeX_Size1-Regular.woff2',
+						'KaTeX_Size2-Regular.woff2',
+						'KaTeX_Size3-Regular.woff2',
+						'KaTeX_Size4-Regular.woff2',
+						'KaTeX_Typewriter-Regular.woff2'
+					];
+
+					katexFonts.forEach((font) => {
+						const fontPath = resolve('node_modules/katex/dist/fonts', font);
+						if (existsSync(fontPath)) {
+							const fontContent = readFileSync(fontPath, 'utf-8');
+							// Replace both the original and hashed references
+							// e.g. url(./KaTeX_Math-Italic.flOr_0UB.ttf) has to be replaces by a base64 data url.
+							content = content.replace(
+								new RegExp(`url\\(./${font.split('.')[0]}[.][^.]*[.]woff2\\)`, 'g'),
+								`url('data:application/font-woff2;base64,${Buffer.from(fontContent).toString('base64')}')`
+							);
+							// Remove ttf- and woff-URLs. See node_modules/katex/src/styles/fonts.scss.
+							content = content.replace(
+								new RegExp(`,url\\(./${font.split('.')[0]}[.][^.]*[.]woff\\)`, 'g'),
+								``
+							);
+							content = content.replace(
+								new RegExp(`,url\\(./${font.split('.')[0]}[.][^.]*[.]ttf\\)`, 'g'),
+								``
+							);
+						}
+					});
+
 					const faviconPath = resolve('static/favicon.svg');
 					if (existsSync(faviconPath)) {
 						const faviconContent = readFileSync(faviconPath, 'utf-8');
@@ -76,11 +122,10 @@ function llamaCppBuildPlugin() {
 
 export default defineConfig({
 	build: {
-		chunkSizeWarningLimit: 3072
+		chunkSizeWarningLimit: 3072,
+		minify: true // enable JS minification
 	},
-
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
-
 	test: {
 		projects: [
 			{
