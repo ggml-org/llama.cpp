@@ -11,6 +11,7 @@ void ggml_compute_forward_sub(const struct ggml_compute_params * params, struct 
 void ggml_compute_forward_mul(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_div(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_ifairy_add(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_ifairy_mul(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
 #ifdef __cplusplus
 }

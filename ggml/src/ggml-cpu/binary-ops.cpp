@@ -47,6 +47,22 @@ static inline float op_ifairy_add(float a, float b) {
     return ca.f;
 }
 
+static inline float op_ifairy_mul(float a, float b) {
+    complex_union ca, cb; // a is active and b is gate
+    ca.f = a;
+    cb.f = b;
+    float ra = GGML_BF16_TO_FP32(ca.complex.real);
+    float ia = GGML_BF16_TO_FP32(ca.complex.imag);
+    float rg = GGML_BF16_TO_FP32(cb.complex.real);
+    float ig = GGML_BF16_TO_FP32(cb.complex.imag);
+    // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
+    float r = ra*rg + ia*ig;
+    float i = ra*ig - ia*rg;
+    ca.complex.real = GGML_FP32_TO_BF16(r);
+    ca.complex.imag = GGML_FP32_TO_BF16(i);
+    return ca.f;
+}
+
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
 static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const src0_t * x, const src1_t * y) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
@@ -184,4 +200,8 @@ void ggml_compute_forward_div(const ggml_compute_params * params, ggml_tensor * 
 
 void ggml_compute_forward_ifairy_add(const ggml_compute_params * params, ggml_tensor * dst) {
     binary_op<op_ifairy_add>(params, dst);
+}
+
+void ggml_compute_forward_ifairy_mul(const ggml_compute_params * params, ggml_tensor * dst) {
+    binary_op<op_ifairy_mul>(params, dst);
 }
