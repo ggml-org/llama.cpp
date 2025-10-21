@@ -191,6 +191,17 @@ It is attached to the document object. Some of these can also be updated using t
         inturn the machine goes into power saving mode or so, the platform may stop network connection,
         leading to exception.
 
+    iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end.
+    This is set to 10 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt
+    user messages after the latest system prompt and its responses from the ai model will be sent
+    to the ai-model, when querying for a new response. Note that if enabled, only user messages after
+    the latest system message/prompt will be considered.
+
+      This specified sliding window user message count also includes the latest user query.
+      <0 : Send entire chat history to server
+      0 : Send only the system message if any to the server
+      >0 : Send the latest chat history from the latest system prompt, limited to specified cnt.
+
   tools - contains controls related to tool calling
 
     enabled - control whether tool calling is enabled or not
@@ -250,22 +261,12 @@ It is attached to the document object. Some of these can also be updated using t
   Content-Type is set to application/json. Additionally Authorization entry is provided, which can
   be set if needed using the settings ui.
 
-  iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end.
-  This is set to 10 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt
-  user messages after the latest system prompt and its responses from the ai model will be sent
-  to the ai-model, when querying for a new response. Note that if enabled, only user messages after
-  the latest system message/prompt will be considered.
 
-    This specified sliding window user message count also includes the latest user query.
-    <0 : Send entire chat history to server
-     0 : Send only the system message if any to the server
-    >0 : Send the latest chat history from the latest system prompt, limited to specified cnt.
-
-
-By using gMe's iRecentUserMsgCnt and apiRequestOptions.max_tokens/n_predict one can try to control
-the implications of loading of the ai-model's context window by chat history, wrt chat response to
-some extent in a simple crude way. You may also want to control the context size enabled when the
-server loads ai-model, on the server end.
+By using gMe's chatProps.iRecentUserMsgCnt and apiRequestOptions.max_tokens/n_predict one can try to
+control the implications of loading of the ai-model's context window by chat history, wrt chat response
+to some extent in a simple crude way. You may also want to control the context size enabled when the
+server loads ai-model, on the server end. One can look at the current context size set on the server
+end by looking at the settings/info block shown when ever one switches-to/is-shown a new session.
 
 
 Sometimes the browser may be stuborn with caching of the file, so your updates to html/css/js
@@ -288,8 +289,8 @@ the system prompt, anytime during the conversation or only at the beginning.
 By default things are setup to try and make the user experience a bit better, if possible.
 However a developer when testing the server of ai-model may want to change these value.
 
-Using iRecentUserMsgCnt reduce chat history context sent to the server/ai-model to be
-just the system-prompt, prev-user-request-and-ai-response and cur-user-request, instead of
+Using chatProps.iRecentUserMsgCnt reduce chat history context sent to the server/ai-model to be
+just the system-prompt, few prev-user-requests-and-ai-responses and cur-user-request, instead of
 full chat history. This way if there is any response with garbage/repeatation, it doesnt
 mess with things beyond the next question/request/query, in some ways. The trim garbage
 option also tries to help avoid issues with garbage in the context to an extent.

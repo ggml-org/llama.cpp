@@ -413,7 +413,7 @@ class SimpleChat {
             div.replaceChildren();
         }
         let last = undefined;
-        for(const x of this.recent_chat(gMe.iRecentUserMsgCnt)) {
+        for(const x of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
             let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
             entry.className = `role-${x.ns.role}`;
             last = entry;
@@ -473,7 +473,7 @@ class SimpleChat {
      */
     request_messages_jsonstr() {
         let req = {
-            messages: this.recent_chat_ns(gMe.iRecentUserMsgCnt),
+            messages: this.recent_chat_ns(gMe.chatProps.iRecentUserMsgCnt),
         }
         return this.request_jsonstr_extend(req);
     }
@@ -485,7 +485,7 @@ class SimpleChat {
     request_prompt_jsonstr(bInsertStandardRolePrefix) {
         let prompt = "";
         let iCnt = 0;
-        for(const msg of this.recent_chat(gMe.iRecentUserMsgCnt)) {
+        for(const msg of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
             iCnt += 1;
             if (iCnt > 1) {
                 prompt += "\n";
@@ -1021,11 +1021,11 @@ class Me {
         };
         this.chatProps = {
             stream: true,
-        }
+            iRecentUserMsgCnt: 10,
+        };
         this.bCompletionFreshChatAlways = true;
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
-        this.iRecentUserMsgCnt = 10;
         /** @type {Object<string, number>} */
         this.sRecentUserMsgCnt = {
             "Full": -1,
@@ -1094,9 +1094,9 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
         if (!bAll) {
-            props = [ "baseURL", "modelInfo", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt" ];
+            props = [ "baseURL", "modelInfo", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps" ];
         }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
@@ -1112,12 +1112,12 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
             }
-        }, [":apiEP", ":iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
+        }, [":apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
             if (propWithPath == ":apiEP") {
                 let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
                     // @ts-ignore
@@ -1125,9 +1125,9 @@ class Me {
                 });
                 elParent.appendChild(sel.div);
             }
-            if (propWithPath == ":iRecentUserMsgCnt") {
-                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
-                    this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
+            if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
+                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.chatProps.iRecentUserMsgCnt, (val)=>{
+                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
                 });
                 elParent.appendChild(sel.div);
             }
