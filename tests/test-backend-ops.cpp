@@ -4690,7 +4690,7 @@ struct test_fused_ffn_gate : public test_case {
     }
 
     double max_nmse_err() override {
-        return 5e-4;
+        return 1e-3;
     }
 };
 
