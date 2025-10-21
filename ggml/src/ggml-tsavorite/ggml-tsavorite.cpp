@@ -731,18 +731,20 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
 
 void
 ggml_tsi_finalize() {
-  if (runtime_initialized != true)
-      return;
-  tsi_finalize();
-  GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-  tsirt::utils::TSIProfiler::finalize();
-  std::cout << "\nOPU Profiling Results:" << std::endl;
-  std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
+  #ifdef GGML_TSAVORITE
+      if (runtime_initialized != true)
+          return;
+      tsi_finalize();
+      GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+      tsirt::utils::TSIProfiler::finalize();
+      std::cout << "\nOPU Profiling Results:" << std::endl;
+      std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
                    /*truncateFuncNames*/ true)
-            << std::endl;
-  sleep(2);
-  GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
-  return;
+                << std::endl;
+      sleep(2);
+      GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+  #endif /* GGML_TSAVORITE */
+      return;
 }
 
 #if 0
