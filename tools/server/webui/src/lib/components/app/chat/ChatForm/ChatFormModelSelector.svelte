@@ -57,20 +57,19 @@
 		};
 	}
 
-	onMount(() => {
+	onMount(async () => {
 		let disposed = false;
 
-		(async () => {
-			try {
-				await fetchModels();
-			} catch (error) {
-				console.error('Unable to load models:', error);
-			} finally {
-				if (!disposed) {
-					isMounted = true;
-				}
+		try {
+			await fetchModels();
+		} catch (error) {
+			console.error('Unable to load models:', error);
+		} finally {
+			if (!disposed) {
+				isMounted = true;
 			}
-		})();
+		}
+	}
 
 		function handlePointerDown(event: PointerEvent) {
 			if (!container) return;
