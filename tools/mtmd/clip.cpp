@@ -446,7 +446,7 @@ struct clip_ctx {
             throw std::runtime_error("failed to initialize CPU backend");
         }
         if (ctx_params.use_gpu) {
-            auto backend_name = std::getenv("MTMD_BACKEND_DEVICE");
+            auto backend_name = ctx_params.backend_device ? ctx_params.backend_device : std::getenv("MTMD_BACKEND_DEVICE");
             if (backend_name != nullptr) {
                 backend = ggml_backend_init_by_name(backend_name, nullptr);
                 if (!backend) {

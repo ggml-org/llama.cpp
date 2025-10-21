@@ -35,6 +35,7 @@ struct clip_context_params {
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
+    const char * backend_device; // optional, if null will use env var or default GPU backend
 };
 
 struct clip_init_result {

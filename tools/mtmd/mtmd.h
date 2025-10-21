@@ -87,6 +87,8 @@ struct mtmd_context_params {
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
+
+    const char * backend_device; // optional GPU backend name (e.g. "CUDA", "Metal", "Vulkan"), if null will use env var or default
 };
 
 MTMD_API const char * mtmd_default_marker(void);
