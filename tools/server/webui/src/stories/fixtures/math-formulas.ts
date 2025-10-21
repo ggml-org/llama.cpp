@@ -174,6 +174,12 @@ x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
 - Algebra: \[
 x = \frac{-b \pm \sqrt{\,b^{2}-4ac\,}}{2a}
 \]
+- Algebraic topology, Homotopy Groups of $\mathbb{S}^3$:
+$$\pi_n(\mathbb{S}^3) = \begin{cases}
+\mathbb{Z} & n = 3 \\
+0 & n > 3, n \neq 4 \\
+\mathbb{Z}_2 & n = 4 \\
+\end{cases}$$
 - Spacer preceded by backslash:
 \[
 \boxed{

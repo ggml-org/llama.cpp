@@ -25,6 +25,9 @@ export const CODE_BLOCK_REGEXP = /(```[\s\S]*?```|`[^`\n]+`)/g;
 export const LATEX_MATH_AND_CODE_PATTERN =
 	/(```[\S\s]*?```|`.*?`)|(?<!\\)\\\[([\S\s]*?[^\\])\\]|(?<!\\)\\\((.*?)\\\)/g;
 
+/** Regex to capture the content of a $$...\\\\...$$ block (display-formula with line-break) */
+export const LATEX_LINEBREAK_REGEXP = /\$\$([\s\S]*?\\\\[\s\S]*?)\$\$/;
+
 /** map from mchem-regexp to replacement */
 export const MHCHEM_PATTERN_MAP: readonly [RegExp, string][] = [
 	[/(\s)\$\\ce{/g, '$1$\\\\ce{'],

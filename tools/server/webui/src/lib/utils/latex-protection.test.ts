@@ -272,6 +272,23 @@ $$`
 		// $5 becomes \$5 only *after* real math is masked — but here it's correct because the masking logic avoids treating $5 as math.
 	});
 
+	test('display with LaTeX-line-breaks', () => {
+		const input = String.raw`- Algebraic topology, Homotopy Groups of $\mathbb{S}^3$:
+$$\pi_n(\mathbb{S}^3) = \begin{cases}
+\mathbb{Z} & n = 3 \\
+0 & n > 3, n \neq 4 \\
+\mathbb{Z}_2 & n = 4 \\
+\end{cases}$$`;
+		const output = preprocessLaTeX(input);
+		// If the formula contains '\\' the $$-delimiters should be in their own line.
+		expect(output).toBe(`- Algebraic topology, Homotopy Groups of $\\mathbb{S}^3$:
+$$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
+\\mathbb{Z} & n = 3 \\\\
+0 & n > 3, n \\neq 4 \\\\
+\\mathbb{Z}_2 & n = 4 \\\\
+\\end{cases}\n$$`);
+	});
+
 	test('handles mhchem notation safely if present', () => {
 		const input = 'Chemical reaction: \\( \\ce{H2O} \\) and $\\ce{CO2}$';
 		const output = preprocessLaTeX(input);
