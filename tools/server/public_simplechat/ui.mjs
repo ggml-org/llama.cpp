@@ -306,26 +306,44 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
 
 
 /**
- * Show the specified properties and their values wrt the given object.
- * @param {HTMLElement | undefined} elDiv
+ * Show the specified properties and their values wrt the given object,
+ * with in the elParent provided.
+ * @param {HTMLDivElement | HTMLElement} elParent
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
+ * @param {string} sOffset - can be used to prefix each of the prop entries
+ * @param {any | undefined} dClassNames - can specify class for top level div and legend
  */
-export function ui_show_obj_props_info(elDiv, oObj, lProps, sLegend, sOffset="") {
-    let p = el_create_append_p(`${sLegend}`, elDiv);
+export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset="", dClassNames=undefined) {
     if (sOffset.length == 0) {
-        p.className = "role-system";
+        let div = document.createElement("div");
+        div.classList.add(`DivObjPropsInfoL${sOffset.length}`)
+        elParent.appendChild(div)
+        elParent = div
     }
+    let elPLegend = el_create_append_p(sLegend, elParent)
+    if (dClassNames) {
+        if (dClassNames['div']) {
+            elParent.className = dClassNames['div']
+        }
+        if (dClassNames['legend']) {
+            elPLegend.className = dClassNames['legend']
+        }
+    }
+    let elS = document.createElement("section");
+    elS.classList.add(`SectionObjPropsInfoL${sOffset.length}`)
+    elParent.appendChild(elPLegend);
+    elParent.appendChild(elS);
 
     for (const k of lProps) {
         let kPrint = `${sOffset}${k}`
         let val = oObj[k];
         let vtype = typeof(val)
         if (vtype != 'object') {
-            el_create_append_p(`${kPrint}:${oObj[k]}`, elDiv)
+            el_create_append_p(`${kPrint}: ${oObj[k]}`, elS)
         } else {
-            ui_show_obj_props_info(elDiv, val, Object.keys(val), kPrint, `>${sOffset}`)
+            ui_show_obj_props_info(elS, val, Object.keys(val), kPrint, `>${sOffset}`)
             //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elDiv);
         }
     }
