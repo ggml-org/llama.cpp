@@ -7020,14 +7020,12 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
         }
 
         // if node is a view, check if the view_src and all it's parent view_srcs are within the subgraph
-        if (node->view_src) {
-            struct ggml_tensor * view_src = node->view_src;
-            while (view_src) {
-                if (ggml_find_tensor_node_list(cgraph, node_idxs, count, view_src) == -1) {
-                    return false;
-                }
-                view_src = view_src->view_src;
+        struct ggml_tensor * view_src = node->view_src;
+        while (view_src) {
+            if (ggml_find_tensor_node_list(cgraph, node_idxs, count, view_src) == -1) {
+                return false;
             }
+            view_src = view_src->view_src;
         }
     }
 
