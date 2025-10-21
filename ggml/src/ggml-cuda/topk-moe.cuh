@@ -8,7 +8,8 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
                            ggml_tensor *               weights,
                            ggml_tensor *               ids,
                            const bool                  with_norm,
-                           const bool                  delayed_softmax = false);
+                           const bool                  delayed_softmax = false,
+                           ggml_tensor *               weight_clamp    = nullptr);
 
 bool ggml_cuda_should_use_topk_moe(const ggml_tensor * softmax, const ggml_tensor * weights);
 
