@@ -163,6 +163,7 @@ class ModelsStore {
 
 		if (nextSelectionId) {
 			const match = models.find((m) => m.id === nextSelectionId);
+
 			if (match) {
 				nextSelectionId = match.id;
 				nextSelectionName = match.model;
