@@ -6,6 +6,13 @@
  *
  * @param modelName - The model name or path to normalize
  * @returns The normalized model name (filename only)
+ *
+ * @example
+ * normalizeModelName('models/llama-3.1-8b') // Returns: 'llama-3.1-8b'
+ * normalizeModelName('C:\\Models\\gpt-4') // Returns: 'gpt-4'
+ * normalizeModelName('simple-model') // Returns: 'simple-model'
+ * normalizeModelName('  spaced  ') // Returns: 'spaced'
+ * normalizeModelName('') // Returns: ''
  */
 export function normalizeModelName(modelName: string): string {
 	const trimmed = modelName.trim();
