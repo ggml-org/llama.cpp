@@ -275,7 +275,7 @@ bool test_rope() {
     }
 
     // 应用 ROPE
-    struct ggml_tensor* result = ggml_ifairy_rope(ctx, x, x, pos, n_dims, 0); // ggml_ifairy_rope接口改了，直接俩x肯定不对，但是先这样，再让AI改吧
+    struct ggml_tensor* result = ggml_ifairy_rope(ctx, x, pos, n_dims, 0);
 
     // 构建计算图
     struct ggml_cgraph* gf = ggml_new_graph(ctx);

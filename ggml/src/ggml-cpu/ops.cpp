@@ -5903,9 +5903,8 @@ static void ggml_compute_forward_rope_ifairy(
         ggml_tensor * dst,
         const bool forward) {
 
-    const ggml_tensor * src0 = dst->src[0]; // real
-    const ggml_tensor * src1 = dst->src[1]; // imag
-    const ggml_tensor * src2 = dst->src[2]; // pos
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1]; // pos
 
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
     int sections[4];
@@ -5973,7 +5972,7 @@ static void ggml_compute_forward_rope_ifairy(
     // this essentially just switches the sign of sin.
     const float sin_sign = forward ? 1.0f : -1.0f;
 
-    const int32_t * pos = (const int32_t *) src2->data;
+    const int32_t * pos = (const int32_t *) src1->data;
 
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
@@ -6002,12 +6001,11 @@ static void ggml_compute_forward_rope_ifairy(
                     const float cos_theta = cache[i0 + 0];
                     const float sin_theta = cache[i0 + 1];
 
-                    const float * const src_real = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                    const float * const src_imag = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const float x0 = src_real[0]; //real
-                    const float x1 = src_imag[0]; //imag
+                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[1]); //real
+                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[0]); //imag
 
                     dst_data[0]      = x0*cos_theta - x1*sin_theta;
                     dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
@@ -9203,6 +9201,10 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_ELU:
             {
                 ggml_compute_forward_elu(params, dst);
+            } break;
+        case GGML_UNARY_OP_IFAIRY_RELU2:
+            {
+                ggml_compute_forward_ifairy_relu2(params, dst);
             } break;
         case GGML_UNARY_OP_RELU:
             {

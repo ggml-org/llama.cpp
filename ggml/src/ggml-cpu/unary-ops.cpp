@@ -24,6 +24,33 @@ static inline float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
 }
 
+typedef struct {
+    ggml_fp16_t imag;
+    ggml_fp16_t real;
+} ifairy_complex;
+
+typedef union {
+    float f;
+    ifairy_complex complex;
+} complex_union;
+
+static inline float op_ifairy_relu2(float x) {
+    complex_union u;
+    u.f = x;
+    if((u.complex.imag & u.complex.real) >> 15) {
+        // both real and imag are negative
+        return 0.f;
+    } else {
+        float r = GGML_FP16_TO_FP32(u.complex.real);
+        float i = GGML_FP16_TO_FP32(u.complex.imag);
+        r = r*r;
+        i = i*i;
+        u.complex.real = GGML_FP32_TO_FP16(r);
+        u.complex.imag = GGML_FP32_TO_FP16(i);
+        return u.f;
+    }
+}
+
 static inline float op_relu(float x) {
     return (x > 0.f) ? x : 0.f;
 }
@@ -143,6 +170,10 @@ void ggml_compute_forward_tanh(const ggml_compute_params * params, ggml_tensor *
 
 void ggml_compute_forward_elu(const ggml_compute_params * params, ggml_tensor * dst) {
     unary_op<op_elu>(params, dst);
+}
+
+void ggml_compute_forward_ifairy_relu2(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<op_ifairy_relu2>(params, dst);
 }
 
 void ggml_compute_forward_relu(const ggml_compute_params * params, ggml_tensor * dst) {

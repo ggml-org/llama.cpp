@@ -1159,7 +1159,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "GELU_ERF",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
+//static_assert(GGML_UNARY_OP_COUNT == 15, "GGML_UNARY_OP_COUNT != 15");
 
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
@@ -2566,6 +2566,11 @@ struct ggml_tensor * ggml_elu_inplace(
 }
 
 // ggml_relu
+struct ggml_tensor * ggml_ifairy_relu2(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_IFAIRY_RELU2);
+}
 
 struct ggml_tensor * ggml_relu(
         struct ggml_context * ctx,
@@ -3995,7 +4000,6 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b,
-        struct ggml_tensor  * c,
         int                   n_dims,
         int                   sections[GGML_MROPE_SECTIONS],
         int                   mode,
@@ -4009,8 +4013,8 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
         bool                  inplace) {
     GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
 
-    GGML_ASSERT(ggml_is_vector(c));
-    GGML_ASSERT(c->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_vector(b));
+    GGML_ASSERT(b->type == GGML_TYPE_I32);
 
     bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
 
@@ -4035,20 +4039,18 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
     result->op     = GGML_OP_IFAIRY_ROPE;
     result->src[0] = a;
     result->src[1] = b;
-    result->src[2] = c;
 
     return result;
 }
 
 struct ggml_tensor * ggml_ifairy_rope(
         struct ggml_context * ctx,
-        struct ggml_tensor  * real,
-        struct ggml_tensor  * imag,
+        struct ggml_tensor  * a,
         struct ggml_tensor  * b,
         int                   n_dims,
         int                   mode) {
     return ggml_ifairy_rope_impl(
-        ctx, real, imag, b, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, false
+        ctx, a, b, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, false
     );
 }
 

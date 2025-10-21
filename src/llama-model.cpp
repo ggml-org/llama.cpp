@@ -13742,7 +13742,7 @@ struct llm_build_bitnet : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 };
-
+/*
 struct llm_build_ifairy : public  llm_graph_context{
     llm_build_ifairy(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -13845,12 +13845,12 @@ struct llm_build_ifairy : public  llm_graph_context{
                 Vcur_real = ggml_reshape_3d(ctx0, Vcur_real, n_embd_head, n_head_kv, n_tokens);
                 Vcur_imag = ggml_reshape_3d(ctx0, Vcur_imag, n_embd_head, n_head_kv, n_tokens);
 
-                ggml_tensor * Q_roped = ggml_ifairy_rope(ctx0, Qcur_real, Qcur_imag, inp_pos, n_rot, 0);
-                ggml_tensor * K_roped = ggml_ifairy_rope(ctx0, Kcur_real, Kcur_imag, inp_pos, n_rot, 0);
+                //ggml_tensor * Q_roped = ggml_ifairy_rope(ctx0, Qcur_real, Qcur_imag, inp_pos, n_rot, 0);
+                //ggml_tensor * K_roped = ggml_ifairy_rope(ctx0, Kcur_real, Kcur_imag, inp_pos, n_rot, 0);
                 ggml_tensor * Vcur = ggml_concat(ctx0, Vcur_real, Vcur_imag, 0);
 
-                cb(Q_roped, "Qcur_roped", il);
-                cb(K_roped, "Kcur_roped", il);
+                //cb(Q_roped, "Qcur_roped", il);
+                //cb(K_roped, "Kcur_roped", il);
                 cb(Vcur, "Vcur", il);
 
                 // For complex attention, we compute magnitude for attention scores
@@ -14001,6 +14001,7 @@ struct llm_build_ifairy : public  llm_graph_context{
         ggml_build_forward_expand(gf, cur);
     }
 };
+*/
 
 struct llm_build_t5_enc : public llm_graph_context {
     llm_build_t5_enc(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -19573,7 +19574,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_IFAIRY:
             {
-                llm = std::make_unique<llm_build_ifairy>(*this, params);
+                // llm = std::make_unique<llm_build_ifairy>(*this, params);
             } break;
         case LLM_ARCH_T5:
             {

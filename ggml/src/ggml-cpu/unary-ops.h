@@ -12,6 +12,7 @@ void ggml_compute_forward_neg(const struct ggml_compute_params * params, struct 
 void ggml_compute_forward_step(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_tanh(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_elu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_ifairy_relu2(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_relu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_sigmoid(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_hardsigmoid(const struct ggml_compute_params * params, struct ggml_tensor * dst);
