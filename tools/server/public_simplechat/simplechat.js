@@ -399,7 +399,11 @@ class SimpleChat {
     }
 
     /**
-     * Show the contents in the specified div
+     * Show the chat contents in the specified div.
+     * If requested to clear prev stuff and inturn no chat content then show
+     * * usage info
+     * * option to load prev saved chat if any
+     * * as well as settings/info.
      * @param {HTMLDivElement} div
      * @param {boolean} bClear
      * @param {boolean} bShowInfoAll
@@ -1086,12 +1090,16 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
+        let props = ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
+        if (!bAll) {
+            props = [ "baseURL", "modelInfo", "headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt" ];
+        }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
                 modelPath: json["model_path"],
                 ctxSize: json["default_generation_settings"]["n_ctx"]
             }
-            ui.ui_show_obj_props_info(elDiv, this, ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings/Info (devel-tools-console document[gMe])", "", { legend: 'role-system' })
+            ui.ui_show_obj_props_info(elDiv, this, props, "Settings/Info (devel-tools-console document[gMe])", "", { legend: 'role-system' })
         }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
