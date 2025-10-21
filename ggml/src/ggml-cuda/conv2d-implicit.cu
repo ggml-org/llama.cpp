@@ -730,6 +730,8 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
     }
 }
 
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
 template<const int BM, const int BN, const int BK, const int WM, const int WN,
         const int WK,  const int NUM_THREADS>
 static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
@@ -793,16 +795,16 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   // these register arrays are used to cache values pre-fetched from global memory during the inner loop of the kernel
   // the code is nicer if we hard code it for these tile dimensions and number of threads
   // since we performing this copy with float4 pointers, for these tile dimensions it works out to be 8 float4s for A and 4 float4s for B
-  static_assert(BM_dim == 256);
-  static_assert(BN_dim == 256);
-  static_assert(BK_dim == 32);
+  static_assert(BM == 256);
+  static_assert(BN == 256);
+  static_assert(BK == 32);
   static_assert(NUM_THREADS == 256);
   float4 A_gmem_cache_reg[4];
   float4 B_gmem_cache_reg[4];
     
   // prefetch the first block tile of A,B into shared memory
-  half* A_block_gmem = A + (block_m * BM_dim * A_stride);
-  half* B_block_gmem = B + (block_n * BN_dim);
+  half* A_block_gmem = input + (block_m * BM * A_stride);
+  half* B_block_gmem = weight + (block_n * BN);
   tileMemcpySwizzleA<BM_dim, NUM_THREADS>(A_block_gmem, A_block_smem, K);
   tileMemcpySwizzle<BK_dim, BN_dim, NUM_THREADS, SWIZZLE_BITS_B>(B_block_gmem, B_block_smem, N);
 
@@ -905,6 +907,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
 }
 
+#endif
 
 #define NUM_VARIANTS 6
 
