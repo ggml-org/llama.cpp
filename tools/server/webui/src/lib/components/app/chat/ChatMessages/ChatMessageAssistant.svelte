@@ -84,6 +84,7 @@
 	});
 	const handleCopyModel = () => {
 		const model = displayedModel();
+
 		void copyToClipboard(model ?? '');
 	};
 </script>
