@@ -240,7 +240,8 @@ static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(g
 }
 
 static bool is_op_unsupported_case(const ggml_tensor* op) {
-    if (op->op == GGML_OP_SOFT_MAX) {
+    switch (op->op) {
+    case GGML_OP_SOFT_MAX: {
         if (op->src[2] != nullptr) {
             GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
             return true;
@@ -254,9 +255,9 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
             GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with max_bias > 0\n");
             return true;
         }
+        break;
     }
-
-    if (op->op == GGML_OP_FLASH_ATTN_EXT) {
+    case GGML_OP_FLASH_ATTN_EXT: {
         if (op->src[4] != nullptr) {
             GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
             return true;
@@ -276,32 +277,32 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
             GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with logit_softcap != 0\n");
             return true;
         }
+        break;
     }
-
-    if (op->op == GGML_OP_PERMUTE) {
+    case GGML_OP_PERMUTE: {
         if (op->type == GGML_TYPE_BF16) {
             // err msg: [GPU] Could not find a suitable kernel for transpose
             GGML_LOG_WARN("OpenVINO backend does not support PERMUTE with BF16 type\n");
             return true;
         }
+        break;
     }
-
-    if (op->op == GGML_OP_CPY) {
+    case GGML_OP_CPY: {
         if (op->src[1] != op) {
             GGML_LOG_WARN("OpenVINO backend only supports CPY that is a cast\n");
             return true;
         }
+        break;
     }
-
-    if (op->op == GGML_OP_MUL_MAT) {
+    case GGML_OP_MUL_MAT: {
         if (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16) {
             // Has accuracy issue, try enabling this and see `test-backend-ops -o "MUL_MAT"`
             GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with two F16 tensors\n");
             return true;
         }
+        break;
     }
-
-    if (op->op == GGML_OP_ROPE) {
+    case GGML_OP_ROPE: {
         const int32_t* op_params = op->op_params;
         const int n_dims = op_params[1];
         const int mode = op_params[2];
@@ -330,12 +331,17 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
         if (op->src[0]->op == GGML_OP_VIEW) {
             if (op->src[0]->view_src->ne[1] != op->src[0]->ne[2]) {
                 GGML_LOG_WARN(
-                    "OpenVINO backend does not support ROPE with src[0]->view_src->ne[1] %ld != src[0]->ne[2] %ld\n",
+                    "OpenVINO backend does not support ROPE with src[0]->view_src->ne[1] %ld != src[0]->ne[2] "
+                    "%ld\n",
                     op->src[0]->view_src->ne[1],
                     op->src[0]->ne[2]);
                 return true;
             }
         }
+        break;
+    }
+    default:
+        break;
     }
     return false;
 }
