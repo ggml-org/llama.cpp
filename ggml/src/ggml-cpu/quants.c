@@ -468,6 +468,7 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
 
     for (int i = 0; i < nb; ++i) {
         // We assume y contains interleaved real and imaginary blocks
+        // todo_liweitao 不能这么量化
         const block_q8_K * y_real = &y[i * 2];
         const block_q8_K * y_imag = &y[i * 2 + 1];
 
