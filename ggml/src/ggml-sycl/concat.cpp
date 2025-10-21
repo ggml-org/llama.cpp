@@ -168,9 +168,7 @@ void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
         const T * src1_d = (const T *) src1->data;
 
         T * dst_d = (T *) dst->data;
-        
-        size_t type_size = elem_size(dst->type);
-        
+        size_t type_size = elem_size(dst->type);     
         if (dim != 3) {
             for (int i3 = 0; i3 < dst->ne[3]; i3++) {
                 concat_T_sycl<T>(src0_d + i3 * (src0->nb[3] / type_size), src1_d + i3 * (src1->nb[3] / type_size),
