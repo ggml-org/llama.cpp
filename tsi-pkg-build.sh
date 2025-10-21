@@ -11,7 +11,7 @@ echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
-#pip install --upgrade pip
+pip install --upgrade pip
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
 pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.4.2-py3-none-any.whl
 pip install onnxruntime-training
