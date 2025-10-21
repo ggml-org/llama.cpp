@@ -28,6 +28,7 @@
 		onMicClick,
 		onStop
 	}: Props = $props();
+
 	let currentConfig = $derived(config());
 </script>
 
