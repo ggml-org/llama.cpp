@@ -33,8 +33,8 @@ FuseToSDPA::FuseToSDPA() {
     const auto m_v = ov::pass::pattern::any_input();
     const auto m_qkv = ov::pass::pattern::wrap_type<ov::op::v0::MatMul>({m_softmax_qk_f16, m_v});
 
-    const auto callback = [=](ov::pass::pattern::Matcher& m) {
-        auto& pattern_to_output = m.get_pattern_value_map();
+    const auto callback = [=](ov::pass::pattern::Matcher & m) {
+        auto & pattern_to_output = m.get_pattern_value_map();
         auto k = pattern_to_output[m_k];
         auto q = pattern_to_output[m_q];
         auto v = pattern_to_output[m_v];

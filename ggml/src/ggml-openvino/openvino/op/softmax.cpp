@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -13,16 +17,12 @@
 #include <openvino/op/softmax.hpp>
 #include <vector>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_soft_max(const NodeContext& context) {
+OutputVector translate_soft_max(const NodeContext & context) {
     num_inputs_check(context, 1, 2);
 
     auto input_node = context.get_input(0).get_node_shared_ptr();
@@ -30,9 +30,9 @@ OutputVector translate_soft_max(const NodeContext& context) {
 
     float scale = 1.0f;
     float max_bias = 0.0f;
-    auto* op_params = context.get_output_op_params(0);
-    memcpy(&scale, (float*) op_params + 0, sizeof(float));
-    memcpy(&max_bias, (float*) op_params + 1, sizeof(float));
+    auto * op_params = context.get_output_op_params(0);
+    memcpy(&scale, (float *) op_params + 0, sizeof(float));
+    memcpy(&max_bias, (float *) op_params + 1, sizeof(float));
     auto src0_shape = context.get_input_shape(0).get_shape();
     const uint32_t h = src0_shape[2];
     const uint32_t n_head = src0_shape[0];

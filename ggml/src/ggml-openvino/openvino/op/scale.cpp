@@ -1,17 +1,17 @@
-#include <openvino/op/constant.hpp>
-#include <openvino/op/multiply.hpp>
-#include <vector>
-
 #include "../node_context.hpp"
 #include "../op_table.hpp"
 #include "../utils.hpp"
+
+#include <openvino/op/constant.hpp>
+#include <openvino/op/multiply.hpp>
+#include <vector>
 
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_scale(const NodeContext& context) {
+OutputVector translate_scale(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     float scale;

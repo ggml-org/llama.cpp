@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node_output.hpp>
@@ -7,16 +11,12 @@
 #include <openvino/op/slice.hpp>
 #include <openvino/op/split.hpp>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_glu_swiglu(const NodeContext& context) {
+OutputVector translate_glu_swiglu(const NodeContext & context) {
     num_inputs_check(context, 1, 2);
 
     ov::Output<ov::Node> src0;
@@ -32,7 +32,7 @@ OutputVector translate_glu_swiglu(const NodeContext& context) {
         src1 = split->output(1);
     }
 
-    int32_t* params = context.get_output_op_params(0);
+    int32_t * params = context.get_output_op_params(0);
     const int32_t swapped = params[1];
     if (swapped) {
         std::swap(src0, src1);

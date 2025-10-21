@@ -1,15 +1,15 @@
 #include "eliminate_zp.hpp"
 
 #include <openvino/core/graph_util.hpp>
+#include <openvino/core/parallel.hpp>
 #include <openvino/core/rt_info.hpp>
-#include <openvino/pass/pattern/op/label.hpp>
-#include <openvino/pass/pattern/op/pattern.hpp>
-#include <openvino/pass/pattern/op/wrap_type.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/subtract.hpp>
-#include <openvino/core/parallel.hpp>
+#include <openvino/pass/pattern/op/label.hpp>
+#include <openvino/pass/pattern/op/pattern.hpp>
+#include <openvino/pass/pattern/op/wrap_type.hpp>
 
 namespace ov {
 namespace frontend {
@@ -35,13 +35,17 @@ EliminateZeroPoints::EliminateZeroPoints() {
     auto m_scale = ov::pass::pattern::any_input();
     auto m_multiply = ov::pass::pattern::wrap_type<ov::op::v1::Multiply>({m_scale, m_subtract});
 
-    const auto callback = [=](ov::pass::pattern::Matcher& m) {
-        const auto& pattern_map = m.get_pattern_value_map();
+    const auto callback = [=](ov::pass::pattern::Matcher & m) {
+        const auto & pattern_map = m.get_pattern_value_map();
 
-        auto multiply_node = std::dynamic_pointer_cast<ov::op::v1::Multiply>(pattern_map.at(m_multiply).get_node_shared_ptr());
-        auto subtract_node = std::dynamic_pointer_cast<ov::op::v1::Subtract>(pattern_map.at(m_subtract).get_node_shared_ptr());
-        auto data_constant = std::dynamic_pointer_cast<ov::op::v0::Constant>(pattern_map.at(m_data_constant).get_node_shared_ptr());
-        auto zp_constant = std::dynamic_pointer_cast<ov::op::v0::Constant>(pattern_map.at(m_zp_constant).get_node_shared_ptr());
+        auto multiply_node =
+            std::dynamic_pointer_cast<ov::op::v1::Multiply>(pattern_map.at(m_multiply).get_node_shared_ptr());
+        auto subtract_node =
+            std::dynamic_pointer_cast<ov::op::v1::Subtract>(pattern_map.at(m_subtract).get_node_shared_ptr());
+        auto data_constant =
+            std::dynamic_pointer_cast<ov::op::v0::Constant>(pattern_map.at(m_data_constant).get_node_shared_ptr());
+        auto zp_constant =
+            std::dynamic_pointer_cast<ov::op::v0::Constant>(pattern_map.at(m_zp_constant).get_node_shared_ptr());
 
         if (!multiply_node || !subtract_node || !data_constant || !zp_constant) {
             return false;
@@ -101,14 +105,16 @@ EliminateZeroPoints::EliminateZeroPoints() {
             new_constant = std::make_shared<ov::op::v0::Constant>(target_type, data_shape, adjusted_values);
         }
 
-        auto new_convert = std::make_shared<ov::op::v0::Convert>(new_constant, subtract_node->get_output_element_type(0));
+        auto new_convert =
+            std::make_shared<ov::op::v0::Convert>(new_constant, subtract_node->get_output_element_type(0));
         ov::replace_node(subtract_node, new_convert);
 
         return true;
     };
 
-    register_matcher(std::make_shared<ov::pass::pattern::Matcher>(m_multiply, "ov::frontend::ggml::pass::EliminateZeroPoints"),
-                     callback);
+    register_matcher(
+        std::make_shared<ov::pass::pattern::Matcher>(m_multiply, "ov::frontend::ggml::pass::EliminateZeroPoints"),
+        callback);
 }
 
 }  // namespace pass
