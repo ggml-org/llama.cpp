@@ -1,4 +1,8 @@
 
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -6,16 +10,12 @@
 #include <openvino/op/slice.hpp>
 #include <vector>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_cont(const NodeContext& context) {
+OutputVector translate_cont(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     int op_case = context.get_op_case();
@@ -29,9 +29,7 @@ OutputVector translate_cont(const NodeContext& context) {
         // The input comes from a PERMUTE
         dst_shape[1] = -1;
         res = std::make_shared<ov::op::v1::Reshape>(
-            context.get_input(0),
-            ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape),
-            false);
+            context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape), false);
     } else if (op_case == 2) {
         // The input comes from a TRANSPOSE
         return {context.get_input(0)};

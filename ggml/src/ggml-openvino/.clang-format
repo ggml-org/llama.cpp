@@ -2,12 +2,10 @@
 # Override root .clang-format
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
-ReferenceAlignment: Left
-PointerAlignment: Left
 Cpp11BracedListStyle: true
-AccessModifierOffset: -4
-BinPackArguments: false
+SpacesInContainerLiterals: false
 BreakBeforeBraces: Attach
+AccessModifierOffset: -4
 IndentCaseBlocks: false
 IndentCaseLabels: false
 
@@ -32,7 +30,15 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
-BinPackParameters: true
+# Treat CUDA keywords/attributes as "attribute macros" and avoid breaking lines inside them
+AttributeMacros:
+  - __host__
+  - __device__
+  - __global__
+  - __forceinline__
+  - __launch_bounds__
+BinPackArguments: true
+BinPackParameters: false # OnePerLine
 BitFieldColonSpacing: Both
 # BreakAdjacentStringLiterals: true
 BreakAfterAttributes: Never
@@ -58,14 +64,17 @@ ExperimentalAutoDetectBinPacking: false
 FixNamespaceComments: true
 IncludeBlocks:   Regroup
 IncludeCategories:
-  - Regex:           '^<.*\.h>'
+  - Regex:           '".*"'
     Priority:        1
     SortPriority:    0
-  - Regex:           '^<.*'
+  - Regex:           '^<.*\.h>'
     Priority:        2
     SortPriority:    0
-  - Regex:           '.*'
+  - Regex:           '^<.*'
     Priority:        3
+    SortPriority:    0
+  - Regex:           '.*'
+    Priority:        4
     SortPriority:    0
 IncludeIsMainRegex: '([-_](test|unittest))?$'
 IncludeIsMainSourceRegex: ''
@@ -100,6 +109,7 @@ PenaltyBreakString: 1000
 PenaltyBreakTemplateDeclaration: 10
 PenaltyExcessCharacter: 1000000
 PenaltyReturnTypeOnItsOwnLine: 200
+PointerAlignment: Middle
 QualifierAlignment: Left
 #QualifierOrder: ['static', 'inline', 'friend', 'constexpr', 'const', 'volatile', 'type', 'restrict']
 RawStringFormats:
@@ -113,6 +123,7 @@ RawStringFormats:
       - 'c++'
       - 'C++'
     CanonicalDelimiter: ''
+ReferenceAlignment: Middle
 ReflowComments:  false # IndentOnly
 SeparateDefinitionBlocks: Always
 SortIncludes:    CaseInsensitive

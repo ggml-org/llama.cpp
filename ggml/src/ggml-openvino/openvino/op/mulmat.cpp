@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -15,16 +19,12 @@
 #include <openvino/op/util/op_types.hpp>
 #include <vector>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_mulmat(const NodeContext& context) {
+OutputVector translate_mulmat(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
     int op_case = context.get_op_case();

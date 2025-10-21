@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -14,16 +18,12 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <vector>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_rope(const NodeContext& context) {
+OutputVector translate_rope(const NodeContext & context) {
     num_inputs_check(context, 2, 3);
 
     int op_case = context.get_op_case();
@@ -32,7 +32,7 @@ OutputVector translate_rope(const NodeContext& context) {
 
     auto data_node = context.get_input(0).get_node_shared_ptr();
     auto output_shape = context.get_output_shape(0).to_shape();
-    int32_t* op_params = context.get_output_op_params(0);
+    int32_t * op_params = context.get_output_op_params(0);
 
     Output<Node> cos_theta_node;
     Output<Node> sin_theta_node;
@@ -85,7 +85,8 @@ OutputVector translate_rope(const NodeContext& context) {
         auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, 3);
         res = std::make_shared<ov::op::v1::Reshape>(stack, std::make_shared<ov::op::v0::ShapeOf>(data_node), false);
         if (!(context.is_static())) {
-            res = std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+            res =
+                std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         }
     } else if (mode == ROPE_TYPE_NEOX) {
         auto data_split = std::make_shared<ov::op::v1::Split>(

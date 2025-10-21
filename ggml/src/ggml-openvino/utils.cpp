@@ -1,5 +1,11 @@
 #include "utils.h"
 
+#include "ggml-impl.h"
+#include "ggml-openvino/ggml-decoder.h"
+#include "ggml.h"
+#include "openvino/frontend.hpp"
+#include "openvino/input_model.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -23,15 +29,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ggml-impl.h"
-#include "ggml-openvino/ggml-decoder.h"
-#include "ggml.h"
-#include "openvino/frontend.hpp"
-#include "openvino/input_model.hpp"
-
-ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& name) {
-    const auto* ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
-    auto* input_data = ggml_tensor->data;
+ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
+    const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
+    auto * input_data = ggml_tensor->data;
     ov::Shape input_shape;
     if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
         input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor).to_shape();
@@ -45,13 +45,14 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     return input_tensor;
 }
 
-std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
-    std::map<std::string, void*> output_tensors;
+std::map<std::string, void *> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
+    std::map<std::string, void *> output_tensors;
+
     auto output_names = ggml_decoder->get_model_output_names();
     for (size_t inp = 0; inp < output_names.size(); ++inp) {
         auto name = output_names[inp];
-        const auto* tensor = ggml_decoder->get_output_ggml_tensor(name);
-        auto* output_data = tensor->view_src ? tensor->view_src->data : tensor->data;
+        const auto * tensor = ggml_decoder->get_output_ggml_tensor(name);
+        auto * output_data = tensor->view_src ? tensor->view_src->data : tensor->data;
         output_tensors[name] = output_data;
     }
     return output_tensors;
@@ -63,14 +64,14 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     return front_end;
 }
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
+enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     static ov::Core core;
 
     static std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
     if (device.empty()) {
-        const std::vector<std::string> preferred_device = { "GPU", "CPU", "NPU" };
+        const std::vector<std::string> preferred_device = {"GPU", "CPU", "NPU"};
         const auto available_devices = core.get_available_devices();
-        for (const auto& dev : preferred_device) {
+        for (const auto & dev : preferred_device) {
             if (std::find(available_devices.begin(), available_devices.end(), dev) != available_devices.end()) {
                 device = dev;
                 break;
@@ -92,17 +93,17 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     auto start_time = ggml_time_us();
 
-    auto* cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
+    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
     if (cache_dir && !is_static) {
         core.set_property(ov::cache_dir(cache_dir));
     }
 
     static std::mutex cache_mutex;
-    static std::unordered_map<struct ggml_cgraph*, std::shared_ptr<ov::InferRequest>> infer_request_cache;
-    static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_input_names_cache;
-    static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_output_names_cache;
+    static std::unordered_map<ggml_cgraph *, std::shared_ptr<ov::InferRequest>> infer_request_cache;
+    static std::unordered_map<ggml_cgraph *, std::vector<std::string>> ov_input_names_cache;
+    static std::unordered_map<ggml_cgraph *, std::vector<std::string>> ov_output_names_cache;
     // For NPU, store the kvcache model, since we cannot create two infer_request
-    static std::unordered_map<struct ggml_cgraph*, ov::CompiledModel> compiled_model_cache;
+    static std::unordered_map<ggml_cgraph *, ov::CompiledModel> compiled_model_cache;
 
     std::shared_ptr<GgmlOvDecoder> ggml_decoder;
     ov::InferRequest infer_request;
@@ -181,7 +182,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
                     ov::serialize(model, timestamped_filename);
                 }
 
-                auto* disable_sdpa_optimization = getenv("GGML_OPENVINO_DISABLE_SDPA_OPTIMIZATION");
+                auto * disable_sdpa_optimization = getenv("GGML_OPENVINO_DISABLE_SDPA_OPTIMIZATION");
                 if (disable_sdpa_optimization && std::string(disable_sdpa_optimization) != "0") {
                     config = {
                         {"GPU_ENABLE_SDPA_OPTIMIZATION", "0"}
@@ -196,10 +197,10 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
             std::vector<std::string> ov_input_names;
             std::vector<std::string> ov_output_names;
-            for (const auto& ov_param : model->get_parameters()) {
+            for (const auto & ov_param : model->get_parameters()) {
                 ov_input_names.push_back(ov_param->get_friendly_name());
             }
-            for (const auto& ov_output : model->get_results()) {
+            for (const auto & ov_output : model->get_results()) {
                 ov_output_names.push_back(ov_output->get_friendly_name());
             }
             ov_input_names_cache[cgraph] = ov_input_names;
@@ -225,7 +226,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     auto gguf_tensor_addrs = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < ov_output_names.size(); i++) {
-        auto& result_name = ov_output_names[i];
+        auto & result_name = ov_output_names[i];
         const auto output_tensor = infer_request.get_output_tensor(i);
 
         std::memcpy(gguf_tensor_addrs[result_name], output_tensor.data(), output_tensor.get_byte_size());
@@ -278,7 +279,7 @@ ov::AnyMap get_npu_generate_config() {
     return config;
 }
 
-std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& device) {
+std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device) {
     if (device == "NPU") {
         return {
             {GGML_TYPE_Q4_0, ExtraQuantType::Q4_0_128},
@@ -297,15 +298,15 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string& devi
     return {};
 }
 
-bool is_naive(struct ggml_cgraph* cgraph) {
+bool is_naive(ggml_cgraph * cgraph) {
     constexpr int naive_graph_size_threshold = 20;
     return cgraph->n_nodes < naive_graph_size_threshold;
 }
 
-enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
-                               ov::Core& core,
-                               const std::string& device,
-                               const ov::AnyMap& config) {
+enum ggml_status naive_compute(ggml_cgraph * cgraph,
+                               ov::Core & core,
+                               const std::string & device,
+                               const ov::AnyMap & config) {
     if (cgraph->n_nodes == 1 && (cgraph->nodes[0]->op == GGML_OP_NONE || cgraph->nodes[0]->op == GGML_OP_VIEW)) {
         return GGML_STATUS_SUCCESS;
     }
@@ -343,7 +344,7 @@ enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
     return GGML_STATUS_SUCCESS;
 }
 
-ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name) {
+ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name) {
     bool is_static = ggml_decoder->is_static();
     bool is_first_token = ggml_decoder->is_first_token();
 
@@ -358,10 +359,10 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
         if (param_name == "inp_tokens" || param_name == "inp_pos") {
             if (is_first_token) {
                 size_t context_size = ggml_decoder->get_context_size();
-                const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+                const auto * input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
                 std::vector<int32_t> padded_data = pad_input<int32_t>(input_tensor_ggml, 1, context_size, 0);
                 input_tensor = ov::Tensor(ov::element::i32, ov::Shape{1, 1, context_size});
-                auto* data_ptr = input_tensor.data<int32_t>();
+                auto * data_ptr = input_tensor.data<int32_t>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             } else {
                 input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
@@ -369,22 +370,22 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
 
         } else if (param_name.find("KQ_mask") == 0) {
             size_t context_size = ggml_decoder->get_context_size();
-            const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+            const auto * input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
             if (is_first_token) {
                 std::vector<float> padded_data =
                     pad_input<float>(input_tensor_ggml, context_size, context_size, -INFINITY);
                 set_zero_diagonal(padded_data, context_size);
                 input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, context_size, context_size});
-                auto* data_ptr = input_tensor.data<float>();
+                auto * data_ptr = input_tensor.data<float>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             } else {
                 std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, 1, context_size, -INFINITY);
                 input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, 1, context_size});
-                auto* data_ptr = input_tensor.data<float>();
+                auto * data_ptr = input_tensor.data<float>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             }
 
-        } else if (const auto* op = ggml_decoder->get_tensor_used_op(ggml_decoder->get_tensor_from_name(param_name));
+        } else if (const auto * op = ggml_decoder->get_tensor_used_op(ggml_decoder->get_tensor_from_name(param_name));
                    op && op->op == GGML_OP_SET_ROWS && is_static && is_first_token) {
             input_tensor = ov::Tensor(ov::element::i64, ov::Shape{1, 1, 1});
         } else {
@@ -394,8 +395,8 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
     return input_tensor;
 }
 
-size_t checksum(const void* data, size_t size) {
-    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+size_t checksum(const void * data, size_t size) {
+    const uint8_t * bytes = static_cast<const uint8_t *>(data);
     size_t sum = 0;
     for (size_t i = 0; i < size; ++i) {
         sum += (uint8_t) i;
@@ -408,36 +409,37 @@ size_t checksum(const void* data, size_t size) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
-void print_input_tensor_info(const std::string& name, const ov::Tensor& tensor) {
+void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor) {
     std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
               << std::endl;
     switch (tensor.get_element_type()) {
-        case ov::element::f32:
-            std::cout << *(tensor.data<float>()) << std::endl;
-            break;
-        case ov::element::f16:
-            std::cout << *(tensor.data<ov::float16>()) << std::endl;
-            break;
-        case ov::element::i32:
-            for (size_t i = 0; i < tensor.get_size(); ++i) {
-                std::cout << tensor.data<int32_t>()[i] << " ";
-            }
-            std::cout << std::endl;
-            break;
-        case ov::element::i64:
-            std::cout << *(tensor.data<int64_t>()) << std::endl;
-            break;
-        default:
-            break;
+    case ov::element::f32:
+        std::cout << *(tensor.data<float>()) << std::endl;
+        break;
+    case ov::element::f16:
+        std::cout << *(tensor.data<ov::float16>()) << std::endl;
+        break;
+    case ov::element::i32:
+        for (size_t i = 0; i < tensor.get_size(); ++i) {
+            std::cout << tensor.data<int32_t>()[i] << " ";
+        }
+        std::cout << std::endl;
+        break;
+    case ov::element::i64:
+        std::cout << *(tensor.data<int64_t>()) << std::endl;
+        break;
+    default:
+        break;
     }
 }
 
-void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
-                              std::map<std::string, void*>& output_dst) {
+void print_output_tensor_info(const std::string & name,
+                              const ov::Tensor & tensor,
+                              std::map<std::string, void *> & output_dst) {
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape()
               << ", Address: " << output_dst[name] << std::endl;
 
-    auto print_float_stats = [](const std::string& type_name, size_t size, auto get_value) {
+    auto print_float_stats = [](const std::string & type_name, size_t size, auto get_value) {
         if (size == 0) {
             return;
         }
@@ -467,13 +469,13 @@ void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
 
     switch (tensor.get_element_type()) {
     case ov::element::f32: {
-        const float* data = tensor.data<float>();
+        const float * data = tensor.data<float>();
         size_t size = tensor.get_size();
         print_float_stats("[f32]", size, [data](size_t i) { return data[i]; });
         break;
     }
     case ov::element::f16: {
-        const ov::float16* data = tensor.data<ov::float16>();
+        const ov::float16 * data = tensor.data<ov::float16>();
         size_t size = tensor.get_size();
         print_float_stats("[f16]", size, [data](size_t i) { return static_cast<float>(data[i]); });
         break;
@@ -485,17 +487,17 @@ void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
 
 #pragma GCC diagnostic pop
 
-void set_zero_diagonal(std::vector<float>& matrix, size_t dim) {
+void set_zero_diagonal(std::vector<float> & matrix, size_t dim) {
     for (size_t i = 0; i < dim; ++i) {
         matrix[i * dim + i] = 0.0f;
     }
 }
 
-bool is_prefill(struct ggml_cgraph* cgraph) {
+bool is_prefill(ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
-        auto* op = cgraph->nodes[i];
+        auto * op = cgraph->nodes[i];
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            auto* src = op->src[j];
+            auto * src = op->src[j];
             if (src == nullptr) {
                 break;
             }

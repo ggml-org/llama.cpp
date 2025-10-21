@@ -1,15 +1,15 @@
-#include <openvino/op/transpose.hpp>
-
 #include "../node_context.hpp"
 #include "../op_table.hpp"
 #include "../utils.hpp"
+
+#include <openvino/op/transpose.hpp>
 
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_transpose(const NodeContext& context) {
+OutputVector translate_transpose(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     auto res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),

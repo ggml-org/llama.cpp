@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
 #include <openvino/op/constant.hpp>
@@ -5,16 +9,12 @@
 #include <openvino/op/gather.hpp>
 #include <openvino/op/squeeze.hpp>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_get_rows(const NodeContext& context) {
+OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
     int op_case = context.get_op_case();

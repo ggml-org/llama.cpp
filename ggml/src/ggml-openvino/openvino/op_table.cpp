@@ -1,13 +1,13 @@
 #include "op_table.hpp"
 
+#include "utils.hpp"
+
 #include <openvino/op/add.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/subtract.hpp>
-
-#include "utils.hpp"
 
 namespace ov {
 namespace frontend {

@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -15,16 +19,12 @@
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_set_rows(const NodeContext& context) {
+OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
     auto data = context.get_input(0);
@@ -44,8 +44,7 @@ OutputVector translate_set_rows(const NodeContext& context) {
     Output<Node> res;
     if (context.is_static()) {
         auto dst_reshaped = std::make_shared<ov::op::v1::Reshape>(
-            dst,
-            ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) dst_shape[1], (int64_t) dst_shape[2]}),
+            dst, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) dst_shape[1], (int64_t) dst_shape[2]}),
             false);
         auto indices_reshaped =
             std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
@@ -55,7 +54,8 @@ OutputVector translate_set_rows(const NodeContext& context) {
         auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
         res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
     } else {
-        assert(dst.get_partial_shape().rank() == 4 && dst.get_partial_shape()[2].is_static() && dst.get_partial_shape()[3].is_static());
+        assert(dst.get_partial_shape().rank() == 4 && dst.get_partial_shape()[2].is_static() &&
+               dst.get_partial_shape()[3].is_static());
         int64_t dim2 = dst.get_partial_shape()[2].get_length();
         int64_t dim3 = dst.get_partial_shape()[3].get_length();
         data = std::make_shared<ov::op::v1::Reshape>(

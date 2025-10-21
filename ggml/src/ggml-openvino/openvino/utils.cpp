@@ -1,5 +1,7 @@
 #include "utils.hpp"
 
+#include "ggml-impl.h"
+
 #include <cstddef>
 #include <ctime>
 #include <memory>
@@ -17,8 +19,6 @@
 #include <openvino/op/transpose.hpp>
 #include <string>
 
-#include "ggml-impl.h"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
@@ -30,7 +30,7 @@ std::string getCurrentTime() {
     return buf;
 }
 
-void num_inputs_check(const NodeContext& context, size_t min_inputs, size_t max_inputs) {
+void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs) {
     auto input_size = context.get_input_size();
     FRONT_END_OP_CONVERSION_CHECK(input_size >= min_inputs, "Got less inputs than expected");
     FRONT_END_OP_CONVERSION_CHECK(input_size <= max_inputs, "Got more inputs than expected");
@@ -48,20 +48,20 @@ int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb) {
     return 0;
 }
 
-std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf>& shape,
-                                         const std::vector<int>& dims) {
+std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf> & shape,
+                                         const std::vector<int> & dims) {
     using namespace ov::op;
     const auto zero = v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
     const auto dims_const = v0::Constant::create(ov::element::i32, ov::Shape{dims.size()}, dims);
     return std::make_shared<v8::Gather>(shape, dims_const, zero);
 }
 
-std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node>& node, const std::vector<int>& dims) {
+std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node> & node, const std::vector<int> & dims) {
     return get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(node), dims);
 }
 
-OutputVector rename_outputs_with_suffix(const OutputVector& outputs, const std::string& suffix) {
-    for (const auto& output : outputs) {
+OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std::string & suffix) {
+    for (const auto & output : outputs) {
         auto node = output.get_node_shared_ptr();
         std::string name = node->get_friendly_name();
         name += "_";
@@ -111,7 +111,7 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 }
 }  // namespace
 
-std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t* rope_params,
+std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight) {
     inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
@@ -179,11 +179,11 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t* rope_params,
     return std::make_pair(sin_theta, cos_theta);
 }
 
-ov::Output<ov::Node> process_view_input(const NodeContext& context, int input_index, int slice_len) {
+ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len) {
     // Only works for VIEW operations that slice at the lowest dimension
     // If the VIEW also reshape the result, `slice_len` should be provided
     auto input = context.get_input(input_index);
-    int32_t* op_params = context.get_input_op_params(input_index);
+    int32_t * op_params = context.get_input_op_params(input_index);
     auto src1_stride = context.get_input_stride(input_index);
 
     int64_t split_addr = op_params[0] / src1_stride[2];

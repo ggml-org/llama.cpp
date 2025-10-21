@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <memory>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
@@ -8,24 +12,20 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <string>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_flash_attn_ext(const NodeContext& context) {
+OutputVector translate_flash_attn_ext(const NodeContext & context) {
     num_inputs_check(context, 4, 4);
     auto q_f32 = context.get_input(0);
     auto k = context.get_input(1);
     auto v = context.get_input(2);
     auto mask = context.get_input(3);
 
-    float* params = reinterpret_cast<float*>(context.get_output_op_params(0));
-    float scale         = params[0];
+    float * params = reinterpret_cast<float *>(context.get_output_op_params(0));
+    float scale = params[0];
     // float max_bias      = params[1];
     // float logit_softcap = params[2];
 
@@ -43,15 +43,14 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
         auto token_len = get_dimensions(q, {2});
         auto kv_len = get_dimensions(k.get_node_shared_ptr(), {2});
 
-        auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
-        auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
+        auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 0});
+        auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 1});
         auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,2});
+        auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2});
 
         auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, kv_len}, 0);
-        mask_sliced =
-            std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+        mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
         mask_sliced = std::make_shared<ov::op::v0::Unsqueeze>(mask_sliced, zero_1d);
     }
 
@@ -72,8 +71,8 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
                 kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 
                 auto kv_last_two_dims = get_dimensions(kv.get_node_shared_ptr(), {1, 2});
-                kv_broadcast_shape =
-                    std::make_shared<ov::op::v0::Concat>(ov::OutputVector{kv_batch_node, factor_node, kv_last_two_dims}, 0);
+                kv_broadcast_shape = std::make_shared<ov::op::v0::Concat>(
+                    ov::OutputVector{kv_batch_node, factor_node, kv_last_two_dims}, 0);
                 new_kv_shape =
                     std::make_shared<ov::op::v0::Concat>(ov::OutputVector{q_batch_node, kv_last_two_dims}, 0);
             } else {
@@ -82,8 +81,8 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
                 kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 
                 auto kv_last_two_dims = get_dimensions(kv.get_node_shared_ptr(), {2, 3});
-                kv_broadcast_shape =
-                    std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one_1d, kv_batch_node, factor_node, kv_last_two_dims}, 0);
+                kv_broadcast_shape = std::make_shared<ov::op::v0::Concat>(
+                    ov::OutputVector{one_1d, kv_batch_node, factor_node, kv_last_two_dims}, 0);
                 new_kv_shape =
                     std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one_1d, q_batch_node, kv_last_two_dims}, 0);
             }
@@ -105,8 +104,8 @@ OutputVector translate_flash_attn_ext(const NodeContext& context) {
         res = std::make_shared<ov::op::v1::Transpose>(sdpa_f32,
                                                       ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
     } else {
-        res = std::make_shared<ov::op::v1::Transpose>(sdpa_f32,
-                                                      ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+        res = std::make_shared<ov::op::v1::Transpose>(
+            sdpa_f32, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }

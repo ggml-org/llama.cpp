@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/constant.hpp>
@@ -7,16 +11,12 @@
 #include <openvino/op/reduce_mean.hpp>
 #include <openvino/op/sqrt.hpp>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_rms_norm(const NodeContext& context) {
+OutputVector translate_rms_norm(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     auto input_node = context.get_input(0);

@@ -1,5 +1,11 @@
 #include "translate_session.hpp"
 
+#include "ggml-openvino/openvino/node_context.hpp"
+#include "ggml-openvino/openvino/utils.hpp"
+#include "input_model.hpp"
+#include "pass/eliminate_zp.hpp"
+#include "pass/mark_decompression_convert_constant_folding.hpp"
+
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -25,12 +31,6 @@
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
 
-#include "ggml-openvino/openvino/node_context.hpp"
-#include "ggml-openvino/openvino/utils.hpp"
-#include "input_model.hpp"
-#include "pass/eliminate_zp.hpp"
-#include "pass/mark_decompression_convert_constant_folding.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
@@ -40,16 +40,17 @@ using namespace ov::op;
 namespace {
 
 ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
-    const std::shared_ptr<ov::Model>& model, const std::map<std::string, std::string>& kv_param_res_names) {
+    const std::shared_ptr<ov::Model> & model,
+    const std::map<std::string, std::string> & kv_param_res_names) {
     ov::pass::MakeStateful::ParamResPairs pairs;
-    const auto& params = model->get_parameters();
-    const auto& results = model->get_results();
+    const auto & params = model->get_parameters();
+    const auto & results = model->get_results();
 
-    for (const auto& param_res : kv_param_res_names) {
-        const auto& param_name = param_res.first;
-        const auto& res_name = param_res.second;
+    for (const auto & param_res : kv_param_res_names) {
+        const auto & param_name = param_res.first;
+        const auto & res_name = param_res.second;
 
-        auto param_it = std::find_if(params.begin(), params.end(), [&](const std::shared_ptr<v0::Parameter>& node) {
+        auto param_it = std::find_if(params.begin(), params.end(), [&](const std::shared_ptr<v0::Parameter> & node) {
             return node->get_friendly_name() == param_name;
         });
 
@@ -57,7 +58,7 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
                         " is not associated with any of "
                         "Parameters in the network.");
 
-        auto res_it = std::find_if(results.begin(), results.end(), [&](const std::shared_ptr<v0::Result>& node) {
+        auto res_it = std::find_if(results.begin(), results.end(), [&](const std::shared_ptr<v0::Result> & node) {
             return node->get_friendly_name() == res_name;
         });
 
@@ -72,17 +73,17 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     return pairs;
 }
 
-void add_token_len(TensorMap& tensor_map) {
+void add_token_len(TensorMap & tensor_map) {
     auto inp_tokens = tensor_map.at("inp_tokens").get_node_shared_ptr();
     auto token_len = get_dimensions(inp_tokens, {2});
     token_len->set_friendly_name("token_len");
     tensor_map.insert({"token_len", token_len->output(0)});
 }
 
-void add_sliced_mask(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
+void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
 
-    auto create_sliced_mask = [&](const std::string& mask_name, const std::string& sliced_name, bool is_static) {
+    auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name, bool is_static) {
         if (tensor_map.find(mask_name) != tensor_map.end()) {
             auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
             std::shared_ptr<ov::Node> mask_sliced;
@@ -110,8 +111,7 @@ void add_sliced_mask(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
                 kv_len = std::make_shared<ov::op::v1::Add>(kv_len, one_1d);
                 auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, kv_len}, 0);
 
-                mask_sliced =
-                    std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
                 mask_sliced = std::make_shared<ov::op::v0::Unsqueeze>(mask_sliced, zero_1d);
                 mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
                 mask_sliced->set_friendly_name(sliced_name);
@@ -125,8 +125,8 @@ void add_sliced_mask(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     // create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
 }
 
-void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
-    int32_t* rope_params = ggml_model_decoder.get_rope_params();
+void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
+    int32_t * rope_params = ggml_model_decoder.get_rope_params();
     auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
     std::shared_ptr<ov::Node> rope_freqs_weight;
     if (tensor_map.find("rope_freqs_weight") != tensor_map.end()) {
@@ -144,7 +144,7 @@ void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 }
 
 // Create common patterns
-void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
+void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     add_token_len(tensor_map);
     add_sliced_mask(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
@@ -152,8 +152,8 @@ void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 
 }  // namespace
 
-TranslateSession::TranslateSession(const frontend::InputModel::Ptr& input_model,
-                                   const std::unordered_map<std::string, CreatorFunction>& translator_map,
+TranslateSession::TranslateSession(const frontend::InputModel::Ptr & input_model,
+                                   const std::unordered_map<std::string, CreatorFunction> & translator_map,
                                    bool naive) :
     m_input_model(input_model),
     m_translator_map(translator_map),
@@ -168,26 +168,26 @@ std::shared_ptr<Model> TranslateSession::get_converted_model() {
     return m_ov_model;
 }
 
-std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputModel::Ptr& input_model) {
+std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputModel::Ptr & input_model) {
     ov::ParameterVector params;
     ov::ResultVector results;
     auto tensor_map = std::make_shared<TensorMap>();
     std::shared_ptr<Model> resulting_model;
 
-    const auto& ggml_model = std::dynamic_pointer_cast<InputModel>(input_model);
+    const auto & ggml_model = std::dynamic_pointer_cast<InputModel>(input_model);
     std::shared_ptr<GgmlDecoder> ggml_model_decoder = ggml_model->get_model_decoder();
 
-    for (const auto& it : ggml_model_decoder->get_model_inputs()) {
+    for (const auto & it : ggml_model_decoder->get_model_inputs()) {
         params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second));
         (*tensor_map)[it.first] = it.second;
     }
 
-    for (const auto& it : ggml_model_decoder->get_model_extra_inputs()) {
+    for (const auto & it : ggml_model_decoder->get_model_extra_inputs()) {
         params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second));
         (*tensor_map)[it.first] = it.second;
     }
 
-    for (const auto& it : ggml_model_decoder->get_model_weights()) {
+    for (const auto & it : ggml_model_decoder->get_model_weights()) {
         (*tensor_map)[it.first] = it.second;
     }
 
@@ -199,22 +199,15 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
 
         ov::OutputVector converted_outputs;
         auto it = m_translator_map.find(operation_type);
-        FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(),
-                                      "Translation for operation type ",
-                                      operation_type,
+        FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
         NodeContext node_context(node, tensor_map, this);
         converted_outputs = it->second(node_context);
 
-        const auto& node_output_names = node->get_output_names();
-        FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(),
-                                      "Number of ",
-                                      operation_type,
-                                      " outputs greater than number of converted outputs, which are ",
-                                      node_output_names.size(),
-                                      " and ",
-                                      converted_outputs.size(),
-                                      " respectively.");
+        const auto & node_output_names = node->get_output_names();
+        FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(), "Number of ",
+                                      operation_type, " outputs greater than number of converted outputs, which are ",
+                                      node_output_names.size(), " and ", converted_outputs.size(), " respectively.");
 
         for (size_t i = 0; i < node_output_names.size(); ++i) {
             auto output_name = node_output_names[i];
@@ -229,10 +222,9 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     }
     ggml_model_decoder->visit_subgraph(node_visitor);
 
-    for (const auto& name : ggml_model_decoder->get_model_output_names()) {
+    for (const auto & name : ggml_model_decoder->get_model_output_names()) {
         FRONT_END_GENERAL_CHECK(tensor_map->find(name) != tensor_map->end(),
-                                "Output name not found in tensor map: ",
-                                name);
+                                "Output name not found in tensor map: ", name);
         auto result = std::make_shared<v0::Result>(tensor_map->at(name));
         result->set_friendly_name(name);
         results.push_back(result);

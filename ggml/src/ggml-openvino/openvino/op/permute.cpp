@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -9,16 +13,12 @@
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_permute(const NodeContext& context) {
+OutputVector translate_permute(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     int op_case = context.get_op_case();
@@ -28,15 +28,15 @@ OutputVector translate_permute(const NodeContext& context) {
 
     if (op_case == 1) {
         if (context.is_static()) {
-            res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
-                                                          ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+            res = std::make_shared<ov::op::v1::Transpose>(
+                context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
         } else {
             auto src = context.get_input(0);
             if (src.get_partial_shape().rank() == 3) {
                 src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);
             }
-            res = std::make_shared<ov::op::v1::Transpose>(src,
-                                                          ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+            res = std::make_shared<ov::op::v1::Transpose>(
+                src, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         }
     } else {
         auto src = context.get_input(0);
@@ -47,7 +47,8 @@ OutputVector translate_permute(const NodeContext& context) {
             std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
                 src,
-                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
+                ov::op::v0::Constant::create(ov::element::i64, {3},
+                                             std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
                 false);
             res = std::make_shared<ov::op::v1::Transpose>(
                 src_reshaped, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
@@ -55,8 +56,8 @@ OutputVector translate_permute(const NodeContext& context) {
             if (src.get_partial_shape().rank() == 3) {
                 src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);
             }
-            res = std::make_shared<ov::op::v1::Transpose>(src,
-                                                          ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+            res = std::make_shared<ov::op::v1::Transpose>(
+                src, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         }
     }
     return rename_outputs_with_suffix({res}, context.get_name());

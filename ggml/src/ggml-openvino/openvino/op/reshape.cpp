@@ -1,3 +1,7 @@
+#include "../node_context.hpp"
+#include "../op_table.hpp"
+#include "../utils.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -7,16 +11,12 @@
 #include <openvino/op/reshape.hpp>
 #include <vector>
 
-#include "../node_context.hpp"
-#include "../op_table.hpp"
-#include "../utils.hpp"
-
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
 
-OutputVector translate_reshape(const NodeContext& context) {
+OutputVector translate_reshape(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
     if (context.get_input_shape(0) == context.get_output_shape(0)) {
         return {context.get_input(0)};
@@ -29,15 +29,11 @@ OutputVector translate_reshape(const NodeContext& context) {
     auto output_shape = context.get_output_shape(0).to_shape();
     std::shared_ptr<ov::Node> new_shape_node;
     if (op_case == 1) {
-        new_shape_node =
-            ov::op::v0::Constant::create(ov::element::i64,
-                                         {3},
-                                         std::vector<int64_t>{-1, (int64_t)output_shape[1], (int64_t)output_shape[2]});
+        new_shape_node = ov::op::v0::Constant::create(
+            ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[1], (int64_t) output_shape[2]});
     } else if (op_case == 2) {
-        new_shape_node =
-            ov::op::v0::Constant::create(ov::element::i64,
-                                         {3},
-                                         std::vector<int64_t>{(int64_t)output_shape[0], -1, (int64_t)output_shape[2]});
+        new_shape_node = ov::op::v0::Constant::create(
+            ov::element::i64, {3}, std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2]});
     } else if (op_case == 3) {
         new_shape_node =
             ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{(int64_t) output_shape[0], -1, 1});
