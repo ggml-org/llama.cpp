@@ -208,6 +208,19 @@ It is attached to the document object. Some of these can also be updated using t
     bCompletionInsertStandardRolePrefix - whether Completion mode inserts role related prefix wrt the
     messages that get inserted into prompt field wrt /Completion endpoint.
 
+    bTrimGarbage - whether garbage repeatation at the end of the generated ai response, should be
+    trimmed or left as is. If enabled, it will be trimmed so that it wont be sent back as part of
+    subsequent chat history. At the same time the actual trimmed text is shown to the user, once
+    when it was generated, so user can check if any useful info/data was there in the response.
+
+      One may be able to request the ai-model to continue (wrt the last response) (if chat-history
+      is enabled as part of the chat-history-in-context setting), and chances are the ai-model will
+      continue starting from the trimmed part, thus allows long response to be recovered/continued
+      indirectly, in many cases.
+
+      The histogram/freq based trimming logic is currently tuned for english language wrt its
+      is-it-a-alpabetic|numeral-char regex match logic.
+
   tools - contains controls related to tool calling
 
     enabled - control whether tool calling is enabled or not
@@ -226,19 +239,6 @@ It is attached to the document object. Some of these can also be updated using t
     chatting with ai models with tool support.
 
   apiEP - select between /completions and /chat/completions endpoint provided by the server/ai-model.
-
-  bTrimGarbage - whether garbage repeatation at the end of the generated ai response, should be
-  trimmed or left as is. If enabled, it will be trimmed so that it wont be sent back as part of
-  subsequent chat history. At the same time the actual trimmed text is shown to the user, once
-  when it was generated, so user can check if any useful info/data was there in the response.
-
-    One may be able to request the ai-model to continue (wrt the last response) (if chat-history
-    is enabled as part of the chat-history-in-context setting), and chances are the ai-model will
-    continue starting from the trimmed part, thus allows long response to be recovered/continued
-    indirectly, in many cases.
-
-    The histogram/freq based trimming logic is currently tuned for english language wrt its
-    is-it-a-alpabetic|numeral-char regex match logic.
 
   apiRequestOptions - maintains the list of options/fields to send along with api request,
   irrespective of whether /chat/completions or /completions endpoint.

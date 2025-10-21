@@ -636,7 +636,7 @@ class SimpleChat {
         } else {
             theResp = await this.handle_response_oneshot(resp, apiEP);
         }
-        if (gMe.bTrimGarbage) {
+        if (gMe.chatProps.bTrimGarbage) {
             let origMsg = theResp.ns.content;
             theResp.ns.content = du.trim_garbage_at_end(origMsg);
             theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
@@ -1024,8 +1024,8 @@ class Me {
             iRecentUserMsgCnt: 10,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
+            bTrimGarbage: true,
         };
-        this.bTrimGarbage = true;
         /** @type {Object<string, number>} */
         this.sRecentUserMsgCnt = {
             "Full": -1,
@@ -1094,9 +1094,9 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage"];
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps"];
         if (!bAll) {
-            props = [ "baseURL", "modelInfo", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps" ];
+            props = [ "baseURL", "modelInfo", "tools", "apiEP", "chatProps" ];
         }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
@@ -1112,7 +1112,7 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
