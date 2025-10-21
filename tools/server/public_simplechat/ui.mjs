@@ -245,7 +245,7 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * * prefix the prop name in lProps with sTrapTag
  * * fTrapper will be called with the parent ui element
  *   into which the new ui elements created for editting the prop, if any, should be attached
- * @param {HTMLDivElement|HTMLFieldSetElement} elDiv
+ * @param {HTMLDivElement|HTMLFieldSetElement} elParent
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
@@ -253,7 +253,7 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {string | undefined} sTrapTag
  * @param {((tagPlusProp: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
  */
-export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=undefined, sTrapTag=undefined, fTrapper=undefined) {
+export function ui_show_obj_props_edit(elParent, oObj, lProps, sLegend, fRefiner=undefined, sTrapTag=undefined, fTrapper=undefined) {
     let typeDict = {
         "string": "text",
         "number": "number",
@@ -262,7 +262,7 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
     let elLegend = document.createElement("legend");
     elLegend.innerText = sLegend;
     elFS.appendChild(elLegend);
-    elDiv.appendChild(elFS);
+    elParent.appendChild(elFS);
     for(const k of lProps) {
         if (sTrapTag) {
             if (k.startsWith(sTrapTag)) {
@@ -344,7 +344,7 @@ export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset=
             el_create_append_p(`${kPrint}: ${oObj[k]}`, elS)
         } else {
             ui_show_obj_props_info(elS, val, Object.keys(val), kPrint, `>${sOffset}`)
-            //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elDiv);
+            //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elS);
         }
     }
 }
