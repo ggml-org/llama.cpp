@@ -24,7 +24,7 @@ target_link_libraries(cpu-detector
         log)
 
 # --------------------------------------------------------------------------
-# 2. Kleidi Llama library
+# 2. AI Chat library
 # --------------------------------------------------------------------------
 
 if(DEFINED ANDROID_ABI)
@@ -46,7 +46,7 @@ set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../../../)
 add_subdirectory(${LLAMA_SRC} build-llama)
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
-        kleidi_llama.cpp)
+        ai_chat.cpp)
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}

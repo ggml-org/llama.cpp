@@ -39,7 +39,7 @@ import java.io.IOException
  *
  * State transitions are managed automatically and validated at each operation.
  *
- * @see kleidi-llama.cpp for the native implementation details
+ * @see ai_chat.cpp for the native implementation details
  */
 internal class InferenceEngineImpl private constructor(
     private val nativeLibDir: String
@@ -75,7 +75,7 @@ internal class InferenceEngineImpl private constructor(
 
     /**
      * JNI methods
-     * @see kleidi-llama.cpp
+     * @see ai_chat.cpp
      */
     @FastNative
     private external fun init(nativeLibDir: String)
