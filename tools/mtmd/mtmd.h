@@ -112,6 +112,14 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_bitrate(mtmd_context * ctx);
 
+// get vision image size in pixels, for example 1024
+// return -1 if vision is not supported
+MTMD_API int mtmd_get_vision_image_size(mtmd_context * ctx);
+
+// get vision patch size, for example 14
+// return -1 if vision is not supported
+MTMD_API int mtmd_get_vision_patch_size(mtmd_context * ctx);
+
 // mtmd_bitmap
 //
 // if bitmap is image:

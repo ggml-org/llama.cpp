@@ -834,6 +834,22 @@ int mtmd_get_audio_bitrate(mtmd_context * ctx) {
     return 16000; // 16kHz
 }
 
+int mtmd_get_vision_image_size(mtmd_context * ctx) {
+    if (!ctx->ctx_v) {
+        return -1;
+    }
+
+    return clip_get_image_size(ctx->ctx_v);
+}
+
+int mtmd_get_vision_patch_size(mtmd_context * ctx) {
+    if (!ctx->ctx_v) {
+        return -1;
+    }
+
+    return clip_get_patch_size(ctx->ctx_v);
+}
+
 //
 // public API functions
 //
