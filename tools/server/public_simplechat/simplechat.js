@@ -462,7 +462,7 @@ class SimpleChat {
         if (gMe.bStream) {
             obj["stream"] = true;
         }
-        if (gMe.bTools) {
+        if (gMe.tools.enabled) {
             obj["tools"] = tools.meta();
         }
         return JSON.stringify(obj);
@@ -1016,7 +1016,10 @@ class Me {
         this.defaultChatIds = [ "Default", "Other" ];
         this.multiChat = new MultiChatUI();
         this.bStream = true;
-        this.bTools = false;
+        this.tools = {
+            enabled: false,
+            fetchProxyUrl: "http://127.0.0.1:3128"
+        };
         this.bCompletionFreshChatAlways = true;
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
@@ -1049,7 +1052,6 @@ class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
-        this.toolFetchProxyUrl = "http://127.0.0.1:3128"
     }
 
     /**
@@ -1090,9 +1092,9 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
+        let props = ["baseURL", "modelInfo","headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
         if (!bAll) {
-            props = [ "baseURL", "modelInfo", "headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt" ];
+            props = [ "baseURL", "modelInfo", "headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt" ];
         }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
@@ -1108,7 +1110,7 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "bTools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, this, ["baseURL", "headers", "bStream", "tools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";

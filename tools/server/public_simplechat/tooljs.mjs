@@ -116,7 +116,7 @@ let fetchweburlraw_meta = {
 function fetchweburlraw_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         // @ts-ignore
-        let newUrl = `${document['gMe'].toolFetchProxyUrl}/urlraw?url=${encodeURIComponent(obj.url)}`
+        let newUrl = `${document['gMe'].tools.fetchProxyUrl}/urlraw?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);
@@ -138,7 +138,7 @@ function fetchweburlraw_run(toolcallid, toolname, obj) {
  */
 async function fetchweburlraw_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(`${document["gMe"].toolFetchProxyUrl}/aum?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
+    let got = await fetch(`${document["gMe"].tools.fetchProxyUrl}/aum?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log("WARN:ToolJS:FetchWebUrlRaw:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
             return
@@ -190,7 +190,7 @@ let fetchweburltext_meta = {
 function fetchweburltext_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         // @ts-ignore
-        let newUrl = `${document['gMe'].toolFetchProxyUrl}/urltext?url=${encodeURIComponent(obj.url)}`
+        let newUrl = `${document['gMe'].tools.fetchProxyUrl}/urltext?url=${encodeURIComponent(obj.url)}`
         fetch(newUrl).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);
@@ -212,7 +212,7 @@ function fetchweburltext_run(toolcallid, toolname, obj) {
  */
 async function fetchweburltext_setup(tcs) {
     // @ts-ignore
-    let got = await fetch(`${document["gMe"].toolFetchProxyUrl}/aum?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+    let got = await fetch(`${document["gMe"].tools.fetchProxyUrl}/aum?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log("WARN:ToolJS:FetchWebUrlText:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
             return
