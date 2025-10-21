@@ -80,7 +80,7 @@
 			return message.model ?? null;
 		}
 
-		return serverModel ?? message.model ?? null;
+		return serverModel;
 	});
 	const handleCopyModel = () => {
 		const model = displayedModel();
