@@ -1,17 +1,7 @@
 import { ModelsService } from '$lib/services/models';
 import { persisted } from '$lib/stores/persisted.svelte';
-import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
 import { SELECTED_MODEL_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys';
-
-export interface ModelOption {
-	id: string;
-	name: string;
-	model: string;
-	description?: string;
-	capabilities: string[];
-	details?: ApiModelDetails['details'];
-	meta?: ApiModelDataEntry['meta'];
-}
+import type { ModelOption } from '$lib/types/models';
 
 type PersistedModelSelection = {
 	id: string;

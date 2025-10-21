@@ -12,7 +12,7 @@
 		selectModel,
 		selectedModelId
 	} from '$lib/stores/models.svelte';
-	import type { ModelOption } from '$lib/stores/models.svelte';
+	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
 		class?: string;
