@@ -74,9 +74,14 @@ remember to
 
 * pass --jinja to llama-server to enable tool calling support from the server ai engine end.
 
-* enable bTools in the settings page of the client side gui.
+* set tools.enabled to true in the settings page of the client side gui.
 
 * use a GenAi/LLM model which supports tool calling.
+
+* if fetch web url / page tool call is needed, remember to run the bundled local.tools/simpleproxy.py helper
+
+  * remember that this is a relatively dumb proxy logic along with optional stripping of scripts/styles/headers/footers/...,
+    Be careful if trying to fetch web pages, and use it only with known safe sites.
 
 ### using the front end
 
@@ -184,9 +189,13 @@ It is attached to the document object. Some of these can also be updated using t
       inturn the machine goes into power saving mode or so, the platform may stop network connection,
       leading to exception.
 
-  bTools - control whether tool calling is enabled or not
+  tools - contains controls related to tool calling
 
-    remember to enable this only for GenAi/LLM models which support tool/function calling.
+    enabled - control whether tool calling is enabled or not
+
+      remember to enable this only for GenAi/LLM models which support tool/function calling.
+
+    fetchProxyUrl - specify the address for the running instance of bundled local.tools/simpleproxy.py
 
     the builtin tools' meta data is sent to the ai model in the requests sent to it.
 
@@ -351,7 +360,7 @@ browser js runtime environment. Depending on the path specified wrt the proxy se
 (and not urlraw), it additionally tries to convert html content into equivalent text to some extent
 in a simple minded manner by dropping head block as well as all scripts/styles/footers/headers/nav.
 May add support for white list of allowed sites to access or so.
-* the logic does a simple check to see if the bundled simpleproxy is running at specified proxyUrl
+* the logic does a simple check to see if the bundled simpleproxy is running at specified fetchProxyUrl
   before enabling fetch web related tool calls.
 * The bundled simple proxy can be found at
   * tools/server/public_simplechat/local.tools/simpleproxy.py
