@@ -177,17 +177,19 @@ It is attached to the document object. Some of these can also be updated using t
 
   baseURL - the domain-name/ip-address and inturn the port to send the request.
 
-  bStream - control between oneshot-at-end and live-stream-as-its-generated collating and showing
-  of the generated response.
+  chatProps - maintain a set of properties which manipulate chatting with ai engine
 
-    the logic assumes that the text sent from the server follows utf-8 encoding.
+    stream - control between oneshot-at-end and live-stream-as-its-generated collating and showing
+    of the generated response.
 
-    in streaming mode - if there is any exception, the logic traps the same and tries to ensure
-    that text generated till then is not lost.
+      the logic assumes that the text sent from the server follows utf-8 encoding.
 
-      if a very long text is being generated, which leads to no user interaction for sometime and
-      inturn the machine goes into power saving mode or so, the platform may stop network connection,
-      leading to exception.
+      in streaming mode - if there is any exception, the logic traps the same and tries to ensure
+      that text generated till then is not lost.
+
+        if a very long text is being generated, which leads to no user interaction for sometime and
+        inturn the machine goes into power saving mode or so, the platform may stop network connection,
+        leading to exception.
 
   tools - contains controls related to tool calling
 
