@@ -145,6 +145,7 @@ class ModelsStore {
 	private toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);
 		const candidate = segments.pop();
+
 		return candidate && candidate.trim().length > 0 ? candidate : id;
 	}
 
