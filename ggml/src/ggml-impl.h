@@ -663,6 +663,7 @@ static inline bool ggml_can_fuse_subgraph(const struct ggml_cgraph * cgraph,
                                           const enum ggml_op *       ops,
                                           const int *                outputs,
                                           int                        num_outputs) {
+    GGML_ASSERT(count < 32);
     if (node_idx + count > cgraph->n_nodes) {
         return false;
     }

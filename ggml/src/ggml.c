@@ -6991,7 +6991,6 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
     GGML_ASSERT(outputs && num_outputs > 0);
 
     for (int i = 0; i < count; ++i) {
-
         if (node_idxs[i] >= cgraph->n_nodes) {
             return false;
         }
