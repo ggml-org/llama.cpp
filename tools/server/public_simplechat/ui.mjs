@@ -258,16 +258,16 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
         "string": "text",
         "number": "number",
     };
-    let fs = document.createElement("fieldset");
-    let legend = document.createElement("legend");
-    legend.innerText = sLegend;
-    fs.appendChild(legend);
-    elDiv.appendChild(fs);
+    let elFS = document.createElement("fieldset");
+    let elLegend = document.createElement("legend");
+    elLegend.innerText = sLegend;
+    elFS.appendChild(elLegend);
+    elDiv.appendChild(elFS);
     for(const k of lProps) {
         if (sTrapTag) {
             if (k.startsWith(sTrapTag)) {
                 if (fTrapper) {
-                    fTrapper(k, fs)
+                    fTrapper(k, elFS)
                 }
                 continue
             }
@@ -284,7 +284,7 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
             if (fRefiner) {
                 fRefiner(k, inp.el)
             }
-            fs.appendChild(inp.div);
+            elFS.appendChild(inp.div);
         } else if (type == "boolean") {
             let bbtn = el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
                 oObj[k] = userVal;
@@ -292,9 +292,9 @@ export function ui_show_obj_props_edit(elDiv, oObj, lProps, sLegend, fRefiner=un
             if (fRefiner) {
                 fRefiner(k, bbtn.el)
             }
-            fs.appendChild(bbtn.div);
+            elFS.appendChild(bbtn.div);
         } else if (type == "object") {
-            ui_show_obj_props_edit(fs, val, Object.keys(val), k, (prop, elProp)=>{
+            ui_show_obj_props_edit(elFS, val, Object.keys(val), k, (prop, elProp)=>{
                 if (fRefiner) {
                     let theProp = `${k}:${prop}`
                     fRefiner(theProp, elProp)
