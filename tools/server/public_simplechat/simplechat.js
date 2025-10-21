@@ -1000,7 +1000,7 @@ class MultiChatUI {
         }
         this.elInSystem.value = chat.get_system_latest().ns.content;
         this.elInUser.value = "";
-        chat.show(this.elDivChat);
+        chat.show(this.elDivChat, true, true);
         this.elInUser.focus();
         this.curChatId = chatId;
         console.log(`INFO:SimpleChat:MCUI:HandleSessionSwitch:${chatId} entered...`);

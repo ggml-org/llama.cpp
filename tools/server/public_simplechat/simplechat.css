@@ -69,9 +69,19 @@ button {
     padding-inline-start: 2vw;
 }
 
+
+.DivObjPropsInfoL0 {
+    margin: 0%;
+}
+[class^=SectionObjPropsInfoL] {
+    margin-left: 2vmin;
+}
+
+
 * {
     margin: 0.6vmin;
 }
+
 
 @media print {
 
