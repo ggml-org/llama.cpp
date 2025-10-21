@@ -205,6 +205,9 @@ It is attached to the document object. Some of these can also be updated using t
     bCompletionFreshChatAlways - whether Completion mode collates complete/sliding-window history when
     communicating with the server or only sends the latest user query/message.
 
+    bCompletionInsertStandardRolePrefix - whether Completion mode inserts role related prefix wrt the
+    messages that get inserted into prompt field wrt /Completion endpoint.
+
   tools - contains controls related to tool calling
 
     enabled - control whether tool calling is enabled or not
@@ -223,9 +226,6 @@ It is attached to the document object. Some of these can also be updated using t
     chatting with ai models with tool support.
 
   apiEP - select between /completions and /chat/completions endpoint provided by the server/ai-model.
-
-  bCompletionInsertStandardRolePrefix - whether Completion mode inserts role related prefix wrt the
-  messages that get inserted into prompt field wrt /Completion endpoint.
 
   bTrimGarbage - whether garbage repeatation at the end of the generated ai response, should be
   trimmed or left as is. If enabled, it will be trimmed so that it wont be sent back as part of

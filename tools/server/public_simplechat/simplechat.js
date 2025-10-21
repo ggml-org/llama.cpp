@@ -509,7 +509,7 @@ class SimpleChat {
         if (apiEP == ApiEP.Type.Chat) {
             return this.request_messages_jsonstr();
         } else {
-            return this.request_prompt_jsonstr(gMe.bCompletionInsertStandardRolePrefix);
+            return this.request_prompt_jsonstr(gMe.chatProps.bCompletionInsertStandardRolePrefix);
         }
     }
 
@@ -1023,8 +1023,8 @@ class Me {
             stream: true,
             iRecentUserMsgCnt: 10,
             bCompletionFreshChatAlways: true,
+            bCompletionInsertStandardRolePrefix: false,
         };
-        this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
         /** @type {Object<string, number>} */
         this.sRecentUserMsgCnt = {
@@ -1094,7 +1094,7 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage", "bCompletionInsertStandardRolePrefix"];
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage"];
         if (!bAll) {
             props = [ "baseURL", "modelInfo", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps" ];
         }
@@ -1112,7 +1112,7 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "bTrimGarbage"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
