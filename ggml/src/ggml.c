@@ -6964,7 +6964,7 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     GGML_LOG_INFO("========================================\n");
 }
 
-static int ggml_find_tensor_node_list(const struct ggml_cgraph * cgraph,
+static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,
                                       const int *                idxs,
                                       int                        count,
                                       const struct ggml_tensor * tensor) {
@@ -6988,16 +6988,21 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
                                 const enum ggml_op *       ops,
                                 const int *                outputs,
                                 int                        num_outputs) {
-    GGML_ASSERT(count < 32 && outputs && num_outputs > 0);
+    GGML_ASSERT(outputs && num_outputs > 0);
 
     for (int i = 0; i < count; ++i) {
-        if (node_idxs[i] >= cgraph->n_nodes || cgraph->nodes[node_idxs[i]]->op != ops[i]) {
+
+        if (node_idxs[i] >= cgraph->n_nodes) {
             return false;
         }
 
         const struct ggml_tensor * node = cgraph->nodes[node_idxs[i]];
 
-        if (ggml_find_tensor_node_list(cgraph, outputs, num_outputs, node) != -1) {
+        if (node->op != ops[i]) {
+            return false;
+        }
+
+        if (ggml_node_list_find_tensor(cgraph, outputs, num_outputs, node) != -1) {
             continue;
         }
 
@@ -7022,7 +7027,7 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
         // if node is a view, check if the view_src and all it's parent view_srcs are within the subgraph
         struct ggml_tensor * view_src = node->view_src;
         while (view_src) {
-            if (ggml_find_tensor_node_list(cgraph, node_idxs, count, view_src) == -1) {
+            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1) {
                 return false;
             }
             view_src = view_src->view_src;
