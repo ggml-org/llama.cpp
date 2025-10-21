@@ -1091,7 +1091,7 @@ class Me {
                 modelPath: json["model_path"],
                 ctxSize: json["default_generation_settings"]["n_ctx"]
             }
-            ui.ui_show_obj_props_info(elDiv, this, ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings/Info (devel-tools-console document[gMe])")
+            ui.ui_show_obj_props_info(elDiv, this, ["baseURL", "modelInfo","headers", "bStream", "bTools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "toolFetchProxyUrl", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings/Info (devel-tools-console document[gMe])", "", { legend: 'role-system' })
         }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
