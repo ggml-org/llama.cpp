@@ -242,9 +242,13 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * The fRefiner callback even helps work with Obj with-in Obj scenarios.
  *
  * For some reason if caller wants to handle certain properties on their own
- * * prefix the prop name in lProps with sTrapTag
+ * * specify the prop name of interest along with its prop-tree-hierarchy in lTrapThese
+ *   * always start with : when ever refering to propWithPath,
+ *     as it indirectly signifies root of properties tree
+ *   * remember to seperate the properties tree hierarchy members using :
  * * fTrapper will be called with the parent ui element
- *   into which the new ui elements created for editting the prop, if any, should be attached
+ *   into which the new ui elements created for editting the prop, if any, should be attached,
+ *   along with the current prop of interest and its full propWithPath representation.
  * @param {HTMLDivElement|HTMLFieldSetElement} elParent
  * @param {string} propsTreeRoot
  * @param {any} oObj
@@ -267,7 +271,7 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
     for(const k of lProps) {
         let propsTreeRootNew = `${propsTreeRoot}:${k}`
         if (lTrapThese) {
-            if (propsTreeRootNew in lTrapThese) {
+            if (lTrapThese.indexOf(propsTreeRootNew) != -1) {
                 if (fTrapper) {
                     fTrapper(propsTreeRootNew, k, elFS)
                 }
