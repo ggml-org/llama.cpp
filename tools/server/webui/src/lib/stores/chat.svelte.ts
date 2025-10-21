@@ -358,28 +358,44 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
+
+		const normalizeModelName = (modelName: string): string => {
+			const trimmed = modelName.trim();
+			if (!trimmed) {
+				return '';
+			}
+
+			const segments = trimmed.split(/[\\/]/);
+			const candidate = segments.pop();
+			const normalized = candidate?.trim();
+
+			return normalized && normalized.length > 0 ? normalized : trimmed;
+		};
+
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 
 		const recordModel = (modelName: string, persistImmediately = true): void => {
-			const trimmedModel = modelName.trim();
+			const normalizedModel = normalizeModelName(modelName);
 
-			if (!trimmedModel || trimmedModel === resolvedModel) {
+			if (!normalizedModel || normalizedModel === resolvedModel) {
 				return;
 			}
 
-			resolvedModel = trimmedModel;
+			resolvedModel = normalizedModel;
 
 			const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-			this.updateMessageAtIndex(messageIndex, { model: trimmedModel });
+			this.updateMessageAtIndex(messageIndex, { model: normalizedModel });
 
 			if (persistImmediately && !modelPersisted) {
 				modelPersisted = true;
-				DatabaseStore.updateMessage(assistantMessage.id, { model: trimmedModel }).catch((error) => {
-					console.error('Failed to persist model name:', error);
-					modelPersisted = false;
-				});
+				DatabaseStore.updateMessage(assistantMessage.id, { model: normalizedModel }).catch(
+					(error) => {
+						console.error('Failed to persist model name:', error);
+						modelPersisted = false;
+					}
+				);
 			}
 		};
 

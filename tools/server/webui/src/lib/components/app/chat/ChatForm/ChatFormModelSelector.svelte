@@ -378,7 +378,9 @@
 								aria-selected={option.id === selectedOption?.id}
 								onclick={() => handleOptionSelect(option.id)}
 							>
-								<span class="font-medium">{option.name}</span>
+								<span class="block w-full truncate font-medium" title={option.name}>
+									{option.name}
+								</span>
 
 								{#if option.description}
 									<span class="text-xs text-muted-foreground">{option.description}</span>
