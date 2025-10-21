@@ -197,9 +197,6 @@ void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     case GGML_TYPE_F32:
         concat_impl_sycl<float>(ctx, dst);
         break;
-    case GGML_TYPE_I16:
-        concat_impl_sycl<int16_t>(ctx, dst);
-        break;
     case GGML_TYPE_I32:
         concat_impl_sycl<int32_t>(ctx, dst);
         break;
