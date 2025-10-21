@@ -246,14 +246,15 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * * fTrapper will be called with the parent ui element
  *   into which the new ui elements created for editting the prop, if any, should be attached
  * @param {HTMLDivElement|HTMLFieldSetElement} elParent
+ * @param {string} propsTreeRoot
  * @param {any} oObj
  * @param {Array<string>} lProps
  * @param {string} sLegend
  * @param {((prop:string, elProp: HTMLElement)=>void)| undefined} fRefiner
- * @param {string | undefined} sTrapTag
- * @param {((tagPlusProp: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
+ * @param {Array<string> | undefined} lTrapThese
+ * @param {((propWithPath: string, prop: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
  */
-export function ui_show_obj_props_edit(elParent, oObj, lProps, sLegend, fRefiner=undefined, sTrapTag=undefined, fTrapper=undefined) {
+export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sLegend, fRefiner=undefined, lTrapThese=undefined, fTrapper=undefined) {
     let typeDict = {
         "string": "text",
         "number": "number",
@@ -264,10 +265,11 @@ export function ui_show_obj_props_edit(elParent, oObj, lProps, sLegend, fRefiner
     elFS.appendChild(elLegend);
     elParent.appendChild(elFS);
     for(const k of lProps) {
-        if (sTrapTag) {
-            if (k.startsWith(sTrapTag)) {
+        let propsTreeRootNew = `${propsTreeRoot}:${k}`
+        if (lTrapThese) {
+            if (propsTreeRootNew in lTrapThese) {
                 if (fTrapper) {
-                    fTrapper(k, elFS)
+                    fTrapper(propsTreeRootNew, k, elFS)
                 }
                 continue
             }
@@ -294,12 +296,12 @@ export function ui_show_obj_props_edit(elParent, oObj, lProps, sLegend, fRefiner
             }
             elFS.appendChild(bbtn.div);
         } else if (type == "object") {
-            ui_show_obj_props_edit(elFS, val, Object.keys(val), k, (prop, elProp)=>{
+            ui_show_obj_props_edit(elFS, propsTreeRootNew, val, Object.keys(val), k, (prop, elProp)=>{
                 if (fRefiner) {
                     let theProp = `${k}:${prop}`
                     fRefiner(theProp, elProp)
                 }
-            })
+            }, lTrapThese, fTrapper)
         }
     }
 }
