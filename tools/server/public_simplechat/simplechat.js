@@ -1110,20 +1110,20 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "bStream", "tools", "apiRequestOptions", "TRAPME-apiEP", "TRAPME-iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
             }
-        }, ["apiEP", "iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
-            if (propWithPath == "apiEP") {
+        }, [":apiEP", ":iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
+            if (propWithPath == ":apiEP") {
                 let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
                     // @ts-ignore
                     this.apiEP = ApiEP.Type[val];
                 });
                 elParent.appendChild(sel.div);
             }
-            if (propWithPath == "iRecentUserMsgCnt") {
+            if (propWithPath == ":iRecentUserMsgCnt") {
                 let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
                     this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
                 });
