@@ -1,6 +1,7 @@
 import {
 	CODE_BLOCK_REGEXP,
 	LATEX_MATH_AND_CODE_PATTERN,
+	LATEX_LINEBREAK_REGEXP,
 	MHCHEM_PATTERN_MAP
 } from '$lib/constants/latex-protection';
 
@@ -198,7 +199,17 @@ export function preprocessLaTeX(content: string): string {
 
 	// Step 4: Restore protected LaTeX expressions (they are valid)
 	content = content.replace(/<<LATEX_(\d+)>>/g, (_, index) => {
-		return latexExpressions[parseInt(index)];
+		let expr = latexExpressions[parseInt(index)];
+		const match = expr.match(LATEX_LINEBREAK_REGEXP);
+		if (match) {
+			// Katex: The $$-delimiters should be in their own line
+			// if there are \\-line-breaks.
+			const formula = match[1];
+			const prefix = formula.startsWith('\n') ? '' : '\n';
+			const suffix = formula.endsWith('\n') ? '' : '\n';
+			expr = '$$' + prefix + formula + suffix + '$$';
+		}
+		return expr;
 	});
 
 	// Step 5: Restore code blocks
