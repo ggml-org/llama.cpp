@@ -459,7 +459,7 @@ class SimpleChat {
         for(let k in gMe.apiRequestOptions) {
             obj[k] = gMe.apiRequestOptions[k];
         }
-        if (gMe.bStream) {
+        if (gMe.chatProps.stream) {
             obj["stream"] = true;
         }
         if (gMe.tools.enabled) {
@@ -622,7 +622,7 @@ class SimpleChat {
      */
     async handle_response(resp, apiEP, elDiv) {
         let theResp = null;
-        if (gMe.bStream) {
+        if (gMe.chatProps.stream) {
             try {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
                 this.latestResponse.clear();
@@ -1015,11 +1015,13 @@ class Me {
         this.baseURL = "http://127.0.0.1:8080";
         this.defaultChatIds = [ "Default", "Other" ];
         this.multiChat = new MultiChatUI();
-        this.bStream = true;
         this.tools = {
             enabled: false,
             fetchProxyUrl: "http://127.0.0.1:3128"
         };
+        this.chatProps = {
+            stream: true,
+        }
         this.bCompletionFreshChatAlways = true;
         this.bCompletionInsertStandardRolePrefix = false;
         this.bTrimGarbage = true;
@@ -1092,9 +1094,9 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"];
         if (!bAll) {
-            props = [ "baseURL", "modelInfo", "headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt" ];
+            props = [ "baseURL", "modelInfo", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt" ];
         }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
@@ -1110,7 +1112,7 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "bStream", "tools", "apiRequestOptions", "apiEP", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps", "iRecentUserMsgCnt", "bTrimGarbage", "bCompletionFreshChatAlways", "bCompletionInsertStandardRolePrefix"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
