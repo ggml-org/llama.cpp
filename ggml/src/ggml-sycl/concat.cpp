@@ -16,6 +16,7 @@
 static inline size_t elem_size(ggml_type t) {
     return ggml_type_size(t) / ggml_blck_size(t);
 }
+
 template <typename T>
 static void concat_T_dim0(const T *x, const T *y, T *dst,
                             const int ne0, const int ne00,
