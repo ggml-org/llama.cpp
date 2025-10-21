@@ -119,43 +119,6 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(in
     GGML_UNUSED(device);
 }
 
-// split tensor buffer that splits matrices by rows across multiple devices
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_split_buffer_type(const float * tensor_split) {
-    GGML_ASSERT(tensor_split != nullptr);
-    return nullptr;
-}
-
-// pinned host buffer for use with the CPU backend for faster copies between CPU
-// and GPU
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_type(void) {
-    return nullptr;
-}
-
-struct ggml_backend_openvino_buffer_type_context {
-    int device;
-    std::string name;
-};
-
-static const char * ggml_backend_openvino_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    ggml_backend_openvino_buffer_type_context * ctx = (ggml_backend_openvino_buffer_type_context *) buft->context;
-
-    return ctx->name.c_str();
-}
-
-static bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_openvino_buffer_type_get_name;
-}
-
-static const char * ggml_backend_openvino_split_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    return GGML_OPENVINO_NAME "_Split";
-
-    GGML_UNUSED(buft);
-}
-
-static bool ggml_backend_buft_is_openvino_split(ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_openvino_split_buffer_type_get_name;
-}
-
 struct ggml_backend_openvino_device_context {
     int device;
     std::string name;
@@ -172,14 +135,10 @@ static const char * ggml_backend_openvino_device_get_description(ggml_backend_de
     return ctx->description.c_str();
 }
 
-// TODO
 static void ggml_backend_openvino_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     GGML_ASSERT(dev->context != nullptr);
     GGML_ASSERT(free != nullptr);
     GGML_ASSERT(total != nullptr);
-    ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
-    GGML_ASSERT(ctx->device >= 0);
-    // ggml_openvino_set_device(ctx->device);
     *total = 1;
     *free = 1;
 }
@@ -195,18 +154,11 @@ static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_
     props->type = ggml_backend_openvino_device_get_type(dev);
     ggml_backend_openvino_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
-    bool host_buffer = getenv("GGML_OPENVINO_NO_PINNED") == nullptr;
-#ifdef GGML_OPENVINO_NO_PEER_COPY
-    bool events = false;
-#else
-    bool events = true;
-#endif
-
     props->caps = {
-        /* .async                 = */ true,
-        /* .host_buffer           = */ host_buffer,
+        /* .async                 = */ false,
+        /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ events,
+        /* .events                = */ false,
     };
 }
 
@@ -219,33 +171,6 @@ static ggml_backend_t ggml_backend_openvino_device_init(ggml_backend_dev_t dev, 
 static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_buffer_type(ggml_backend_dev_t dev) {
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
     return ggml_backend_openvino_buffer_type(ctx->device);
-}
-
-static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_host_buffer_type(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
-    return ggml_backend_openvino_host_buffer_type();
-}
-
-static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_ptr(ggml_backend_dev_t dev,
-                                                                          void * ptr,
-                                                                          size_t size,
-                                                                          size_t max_tensor_size) {
-    GGML_UNUSED(dev);
-    GGML_UNUSED(ptr);
-    GGML_UNUSED(size);
-    GGML_UNUSED(max_tensor_size);
-    return nullptr;
-}
-
-static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(ggml_backend_dev_t dev,
-                                                                               void * ptr,
-                                                                               size_t size,
-                                                                               size_t max_tensor_size) {
-    GGML_UNUSED(dev);
-    GGML_UNUSED(ptr);
-    GGML_UNUSED(size);
-    GGML_UNUSED(max_tensor_size);
-    return nullptr;
 }
 
 static bool is_op_unsupported_case(const ggml_tensor * op) {
@@ -447,7 +372,7 @@ static const struct ggml_backend_device_i ggml_backend_openvino_device_interface
     /* .init_backend         = */ ggml_backend_openvino_device_init,
     /* .get_buffer_type      = */ ggml_backend_openvino_device_get_buffer_type,
     /* .get_host_buffer_type = */ NULL,
-    /* .buffer_from_host_ptr = */ ggml_backend_openvino_device_buffer_from_ptr,
+    /* .buffer_from_host_ptr = */ NULL,
     /* .supports_op          = */ ggml_backend_openvino_device_supports_op,
     /* .supports_buft        = */ ggml_backend_openvino_device_supports_buft,
     /* .offload_op           = */ NULL,
@@ -466,44 +391,19 @@ static const char * ggml_backend_openvino_reg_get_name(ggml_backend_reg_t reg) {
 }
 
 static size_t ggml_backend_openvino_reg_get_device_count(ggml_backend_reg_t reg) {
-    return ggml_openvino_info().device_count;
     GGML_UNUSED(reg);
-
-    // TODO
-    ggml_backend_openvino_reg_context * ctx = (ggml_backend_openvino_reg_context *) reg->context;
-
-    return ctx->devices.size();
+    return ggml_openvino_info().device_count;
 }
 
 static ggml_backend_dev_t ggml_backend_openvino_reg_get_device(ggml_backend_reg_t reg, size_t index) {
     ggml_backend_openvino_reg_context * ctx = (ggml_backend_openvino_reg_context *) reg->context;
     GGML_ASSERT(index < ctx->devices.size());
     return ctx->devices[index];
-    // GGML_ASSERT(index == 0);
-
-    // static ggml_backend_device ggml_backend_openvino_device = {
-    //     /* .iface   = */ ggml_backend_openvino_device_interface,
-    //     /* .reg     = */ reg,
-    //     /* .context = */ nullptr,
-    // };
-
-    // return &ggml_backend_openvino_device;
-
-    // GGML_UNUSED(reg);
-    // GGML_UNUSED(index);
 }
 
 static void * ggml_backend_openvino_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
-    if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
-        return (void *) ggml_backend_openvino_split_buffer_type;
-    }
-    // if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
-    //     return (void *)ggml_backend_openvino_register_host_buffer;
-    // }
-    // if (strcmp(name, "ggml_backend_unregister_host_buffer") == 0) {
-    //     return (void *)ggml_backend_openvino_unregister_host_buffer;
-    // }
+    GGML_UNUSED(name);
     return nullptr;
 }
 
@@ -515,15 +415,11 @@ static const struct ggml_backend_reg_i ggml_backend_openvino_reg_interface = {
 };
 
 static int get_openvino_device_count() {
-    ov::Core core;
-    auto devices = core.get_available_devices();
-    // return devices.size();
     return 1;
 }
 
 static ggml_openvino_device_info ggml_openvino_init() {
     ggml_openvino_device_info info = {};
-    // TODO
     info.device_count = get_openvino_device_count();
     return info;
 }
@@ -543,13 +439,11 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
         if (!initialized) {
             ggml_backend_openvino_reg_context * ctx = new ggml_backend_openvino_reg_context;
 
-            // GGML_LOG_DEBUG("ggml_openvino_info().device_count = %d \n", ggml_openvino_info().device_count);
             for (int i = 0; i < ggml_openvino_info().device_count; i++) {
                 ggml_backend_openvino_device_context * dev_ctx = new ggml_backend_openvino_device_context;
                 dev_ctx->device = i;
                 dev_ctx->name = GGML_OPENVINO_NAME + std::to_string(i);
 
-                // ggml_openvino_set_device(i);
                 dev_ctx->description = ov::get_openvino_version().description;
 
                 ggml_backend_dev_t dev =
