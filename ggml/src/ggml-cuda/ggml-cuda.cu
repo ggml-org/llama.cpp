@@ -2845,16 +2845,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     }
 
     if (ops.size() == topk_moe_ops_delayed_softmax.size() &&
-        std::equal(ops.begin(), ops.end(), topk_moe_ops_delayed_softmax.begin())) {
-        if (node_idx + topk_moe_ops_delayed_softmax.size() > (size_t) cgraph->n_nodes) {
-            return false;
-        }
-        for (size_t i = 0; i < topk_moe_ops_delayed_softmax.size(); i++) {
-            if (cgraph->nodes[node_idx + i]->op != topk_moe_ops_delayed_softmax.begin()[i]) {
-                return false;
-            }
-        }
-
+        ggml_can_fuse_subgraph(cgraph, node_idx, topk_moe_ops_delayed_softmax, { node_idx + 2, node_idx + 5 })) {
         ggml_tensor * softmax = cgraph->nodes[node_idx + 4];
         ggml_tensor * weights = cgraph->nodes[node_idx + 5];
 
