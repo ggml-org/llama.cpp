@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
+	import { portalToBody } from '$lib/utils/portal-to-body';
 	import {
 		fetchModels,
 		modelOptions,
@@ -37,64 +38,45 @@
 		placement: 'top' | 'bottom';
 		maxHeight: number;
 	} | null>(null);
-	let removePositionListeners: (() => void) | null = null;
 	let lockedWidth: number | null = null;
 
-	function portalToBody(node: HTMLElement) {
-		if (typeof document === 'undefined') return;
-
-		const target = document.body;
-		if (!target) return;
-
-		target.appendChild(node);
-
-		return {
-			destroy() {
-				if (node.parentNode === target) {
-					target.removeChild(node);
-				}
-			}
-		};
-	}
-
 	onMount(async () => {
-		let disposed = false;
-
 		try {
 			await fetchModels();
 		} catch (error) {
 			console.error('Unable to load models:', error);
 		} finally {
-			if (!disposed) {
-				isMounted = true;
-			}
+			isMounted = true;
+		}
+	});
+
+	function handlePointerDown(event: PointerEvent) {
+		if (!container) return;
+
+		const target = event.target as Node | null;
+
+		if (target && !container.contains(target) && !(menuRef && menuRef.contains(target))) {
+			closeMenu();
 		}
 	}
 
-		function handlePointerDown(event: PointerEvent) {
-			if (!container) return;
-
-			const target = event.target as Node | null;
-			if (target && !container.contains(target) && !(menuRef && menuRef.contains(target))) {
-				closeMenu();
-			}
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			closeMenu();
 		}
+	}
 
-		function handleKeydown(event: KeyboardEvent) {
-			if (event.key === 'Escape') {
-				closeMenu();
-			}
+	function handleResize() {
+		if (isOpen) {
+			updateMenuPosition();
 		}
+	}
 
-		document.addEventListener('pointerdown', handlePointerDown);
-		document.addEventListener('keydown', handleKeydown);
-
-		return () => {
-			disposed = true;
-			document.removeEventListener('pointerdown', handlePointerDown);
-			document.removeEventListener('keydown', handleKeydown);
-		};
-	});
+	function handleScroll() {
+		if (isOpen) {
+			updateMenuPosition();
+		}
+	}
 
 	async function handleSelect(value: string | undefined) {
 		if (!value) return;
@@ -116,27 +98,6 @@
 	const MENU_OFFSET = 6;
 	const MENU_MAX_WIDTH = 320;
 
-	function cleanupPositionListeners() {
-		removePositionListeners?.();
-		removePositionListeners = null;
-	}
-
-	function setupPositionListeners() {
-		cleanupPositionListeners();
-
-		const handleResize = () => updateMenuPosition();
-		const handleScroll = () => updateMenuPosition();
-
-		window.addEventListener('resize', handleResize);
-		window.addEventListener('scroll', handleScroll, true);
-
-		removePositionListeners = () => {
-			window.removeEventListener('resize', handleResize);
-			window.removeEventListener('scroll', handleScroll, true);
-			removePositionListeners = null;
-		};
-	}
-
 	async function openMenu() {
 		if (loading || updating) return;
 
@@ -144,7 +105,6 @@
 		await tick();
 		updateMenuPosition();
 		requestAnimationFrame(() => updateMenuPosition());
-		setupPositionListeners();
 	}
 
 	function toggleOpen() {
@@ -163,7 +123,6 @@
 		isOpen = false;
 		menuPosition = null;
 		lockedWidth = null;
-		cleanupPositionListeners();
 	}
 
 	async function handleOptionSelect(optionId: string) {
@@ -290,10 +249,6 @@
 		};
 	}
 
-	onDestroy(() => {
-		cleanupPositionListeners();
-	});
-
 	function getDisplayOption(): ModelOption | undefined {
 		if (activeId) {
 			return options.find((option) => option.id === activeId);
@@ -302,6 +257,10 @@
 		return options[0];
 	}
 </script>
+
+<svelte:window onresize={handleResize} onscroll={handleScroll} />
+
+<svelte:document onpointerdown={handlePointerDown} onkeydown={handleKeydown} />
 
 <div
 	class={cn('relative z-10 flex max-w-[200px] min-w-[120px] flex-col items-end gap-1', className)}

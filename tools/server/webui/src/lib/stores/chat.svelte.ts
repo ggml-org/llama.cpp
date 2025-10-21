@@ -1,6 +1,7 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
+import { normalizeModelName } from '$lib/utils/model-names';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
@@ -359,19 +360,6 @@ class ChatStore {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
 
-		const normalizeModelName = (modelName: string): string => {
-			const trimmed = modelName.trim();
-			if (!trimmed) {
-				return '';
-			}
-
-			const segments = trimmed.split(/[\\/]/);
-			const candidate = segments.pop();
-			const normalized = candidate?.trim();
-
-			return normalized && normalized.length > 0 ? normalized : trimmed;
-		};
-
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 
@@ -394,6 +382,7 @@ class ChatStore {
 					(error) => {
 						console.error('Failed to persist model name:', error);
 						modelPersisted = false;
+						resolvedModel = null;
 					}
 				);
 			}

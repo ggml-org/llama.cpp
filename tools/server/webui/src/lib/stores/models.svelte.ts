@@ -1,5 +1,5 @@
-import { browser } from '$app/environment';
 import { ModelsService } from '$lib/services/models';
+import { persisted } from '$lib/stores/persisted.svelte';
 import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
 import { SELECTED_MODEL_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys';
 
@@ -25,9 +25,13 @@ class ModelsStore {
 	private _error = $state<string | null>(null);
 	private _selectedModelId = $state<string | null>(null);
 	private _selectedModelName = $state<string | null>(null);
+	private _persistedSelection = persisted<PersistedModelSelection | null>(
+		SELECTED_MODEL_LOCALSTORAGE_KEY,
+		null
+	);
 
 	constructor() {
-		const persisted = this.readPersistedSelection();
+		const persisted = this._persistedSelection.value;
 		if (persisted) {
 			this._selectedModelId = persisted.id;
 			this._selectedModelName = persisted.model;
@@ -100,9 +104,8 @@ class ModelsStore {
 
 			this._selectedModelId = selection.id;
 			this._selectedModelName = selection.model;
-			this.persistSelection(
-				selection.id && selection.model ? { id: selection.id, model: selection.model } : null
-			);
+			this._persistedSelection.value =
+				selection.id && selection.model ? { id: selection.id, model: selection.model } : null;
 		} catch (error) {
 			this._models = [];
 			this._error = error instanceof Error ? error.message : 'Failed to load models';
@@ -133,7 +136,7 @@ class ModelsStore {
 		try {
 			this._selectedModelId = option.id;
 			this._selectedModelName = option.model;
-			this.persistSelection({ id: option.id, model: option.model });
+			this._persistedSelection.value = { id: option.id, model: option.model };
 		} finally {
 			this._updating = false;
 		}
@@ -153,7 +156,7 @@ class ModelsStore {
 		id: string | null;
 		model: string | null;
 	} {
-		const persisted = this.readPersistedSelection();
+		const persisted = this._persistedSelection.value;
 		let nextSelectionId = this._selectedModelId ?? persisted?.id ?? null;
 		let nextSelectionName = this._selectedModelName ?? persisted?.model ?? null;
 
@@ -175,48 +178,6 @@ class ModelsStore {
 		}
 
 		return { id: nextSelectionId, model: nextSelectionName };
-	}
-
-	private readPersistedSelection(): PersistedModelSelection | null {
-		if (!browser) {
-			return null;
-		}
-
-		try {
-			const raw = localStorage.getItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
-			if (!raw) {
-				return null;
-			}
-
-			const parsed = JSON.parse(raw);
-			if (parsed && typeof parsed.id === 'string') {
-				const id = parsed.id;
-				const model =
-					typeof parsed.model === 'string' && parsed.model.length > 0 ? parsed.model : id;
-
-				return { id, model };
-			}
-		} catch (error) {
-			console.warn('Failed to read model selection from localStorage:', error);
-		}
-
-		return null;
-	}
-
-	private persistSelection(selection: PersistedModelSelection | null): void {
-		if (!browser) {
-			return;
-		}
-
-		try {
-			if (selection) {
-				localStorage.setItem(SELECTED_MODEL_LOCALSTORAGE_KEY, JSON.stringify(selection));
-			} else {
-				localStorage.removeItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
-			}
-		} catch (error) {
-			console.warn('Failed to persist model selection to localStorage:', error);
-		}
 	}
 }
 
