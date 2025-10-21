@@ -690,7 +690,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 #endif
     };
 
-    const double epsilon = 1e-12;
+    constexpr double epsilon = 1e-12;
     constexpr double infinity = std::numeric_limits<double>::infinity();
     constexpr uint32_t file_magic = 0x42505731;  // BPW1
     const char * func = __func__;
