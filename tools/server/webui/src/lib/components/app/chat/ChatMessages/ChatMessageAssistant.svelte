@@ -10,6 +10,7 @@
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { modelName as serverModelName } from '$lib/stores/server.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
 
 	interface Props {
@@ -70,6 +71,23 @@
 	}: Props = $props();
 
 	const processingState = useProcessingState();
+	let currentConfig = $derived(config());
+	let serverModel = $derived(serverModelName());
+	let displayedModel = $derived((): string | null => {
+		if (!currentConfig.showModelInfo) return null;
+
+		if (currentConfig.modelSelectorEnabled) {
+			return message.model ?? null;
+		}
+
+		return serverModel;
+	});
+
+	function handleCopyModel() {
+		const model = displayedModel();
+
+		void copyToClipboard(model ?? '');
+	}
 </script>
 
 <div
@@ -142,7 +160,7 @@
 		</div>
 	{/if}
 
-	{#if config().showModelInfo && message.model}
+	{#if displayedModel()}
 		<span class="mt-6 mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground">
 			<Package class="h-3.5 w-3.5" />
 
@@ -150,9 +168,9 @@
 
 			<button
 				class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-				onclick={() => copyToClipboard(message.model)}
+				onclick={handleCopyModel}
 			>
-				{message.model}
+				{displayedModel()}
 
 				<Copy class="ml-1 h-3 w-3 " />
 			</button>

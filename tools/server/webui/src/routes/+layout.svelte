@@ -165,10 +165,10 @@
 		</Sidebar.Root>
 
 		<Sidebar.Trigger
-			class="transition-left absolute h-8 w-8 duration-200 ease-linear {sidebarOpen
+			class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
 				? 'md:left-[var(--sidebar-width)]'
-				: 'left-0'}"
-			style="translate: 1rem 1rem; z-index: 99999;"
+				: ''}"
+			style="translate: 1rem 1rem;"
 		/>
 
 		<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
