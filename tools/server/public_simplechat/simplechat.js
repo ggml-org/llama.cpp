@@ -774,7 +774,7 @@ class MultiChatUI {
             if (this.elInUser.disabled) {
                 return;
             }
-            this.handle_user_submit(this.curChatId, gMe.apiEP).catch((/** @type{Error} */reason)=>{
+            this.handle_user_submit(this.curChatId, gMe.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
                 let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
@@ -1020,6 +1020,7 @@ class Me {
             fetchProxyUrl: "http://127.0.0.1:3128"
         };
         this.chatProps = {
+            apiEP: ApiEP.Type.Chat,
             stream: true,
             iRecentUserMsgCnt: 10,
             bCompletionFreshChatAlways: true,
@@ -1035,7 +1036,6 @@ class Me {
             "Last4": 5,
             "Last9": 10,
         };
-        this.apiEP = ApiEP.Type.Chat;
         /** @type {Object<string, string>} */
         this.headers = {
             "Content-Type": "application/json",
@@ -1094,9 +1094,9 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "apiEP", "chatProps"];
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "chatProps"];
         if (!bAll) {
-            props = [ "baseURL", "modelInfo", "tools", "apiEP", "chatProps" ];
+            props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
         }
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
@@ -1112,16 +1112,16 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "apiEP", "chatProps"], "Settings", (prop, elProp)=>{
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], "Settings", (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
             }
-        }, [":apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
-            if (propWithPath == ":apiEP") {
-                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
+        }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
+            if (propWithPath == ":chatProps:apiEP") {
+                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
                     // @ts-ignore
-                    this.apiEP = ApiEP.Type[val];
+                    this.chatProps.apiEP = ApiEP.Type[val];
                 });
                 elParent.appendChild(sel.div);
             }
