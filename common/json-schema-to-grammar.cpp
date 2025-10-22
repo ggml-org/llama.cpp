@@ -617,10 +617,9 @@ private:
         const std::string & name,
         const json & additional_properties)
     {
-        std::vector<std::string> required_props;
-        std::vector<std::string> optional_props;
-        std::unordered_map<std::string, std::string> prop_kv_rule_names;
         std::vector<std::string> prop_names;
+        prop_names.reserve(properties.size() + 1);
+        std::unordered_map<std::string, std::string> prop_kv_rule_names;
         for (const auto & kv : properties) {
             const auto &prop_name = kv.first;
             const auto &prop_schema = kv.second;
@@ -630,11 +629,6 @@ private:
                 name + (name.empty() ? "" : "-") + prop_name + "-kv",
                 format_literal(json(prop_name).dump()) + " space \":\" space " + prop_rule_name
             );
-            if (required.find(prop_name) != required.end()) {
-                required_props.push_back(prop_name);
-            } else {
-                optional_props.push_back(prop_name);
-            }
             prop_names.push_back(prop_name);
         }
         if ((additional_properties.is_boolean() && additional_properties.get<bool>()) || additional_properties.is_object()) {
@@ -648,23 +642,11 @@ private:
                 : _add_rule(sub_name + "-k", _not_strings(prop_names));
             std::string kv_rule = _add_rule(sub_name + "-kv", key_rule + " \":\" space " + value_rule);
             prop_kv_rule_names["*"] = kv_rule;
-            optional_props.push_back("*");
+            prop_names.push_back("*");
         }
 
         std::string rule = "\"{\" space ";
-        for (size_t i = 0; i < required_props.size(); i++) {
-            if (i > 0) {
-                rule += " \",\" space ";
-            }
-            rule += prop_kv_rule_names[required_props[i]];
-        }
-
-        if (!optional_props.empty()) {
-            rule += " (";
-            if (!required_props.empty()) {
-                rule += " \",\" space ( ";
-            }
-
+        if (!prop_kv_rule_names.empty()) {
             std::function<std::string(const std::vector<std::string> &, bool)> get_recursive_refs = [&](const std::vector<std::string> & ks, bool first_is_optional) {
                 std::string res;
                 if (ks.empty()) {
@@ -672,11 +654,15 @@ private:
                 }
                 std::string k = ks[0];
                 std::string kv_rule_name = prop_kv_rule_names[k];
-                std::string comma_ref = "( \",\" space " + kv_rule_name + " )";
+                std::string comma_ref = "\",\" space " + kv_rule_name;
                 if (first_is_optional) {
-                    res = comma_ref + (k == "*" ? "*" : "?");
+                    if (required.find(k) == required.end()) {
+                        res = "( " + comma_ref + (k == "*" ? " )*" : " )?");
+                    } else {
+                        res = comma_ref;
+                    }
                 } else {
-                    res = kv_rule_name + (k == "*" ? " " + comma_ref + "*" : "");
+                    res = kv_rule_name + (k == "*" ? " ( " + comma_ref + " )*" : "");
                 }
                 if (ks.size() > 1) {
                     res += " " + _add_rule(
@@ -687,16 +673,21 @@ private:
                 return res;
             };
 
-            for (size_t i = 0; i < optional_props.size(); i++) {
-                if (i > 0) {
-                    rule += " | ";
+            std::vector<std::string> alternatives;
+            auto has_required = false;
+            for (size_t i = 0; i < prop_names.size(); i++) {
+                alternatives.push_back(get_recursive_refs(std::vector<std::string>(prop_names.begin() + i, prop_names.end()), false));
+                if (required.find(prop_names[i]) != required.end()) {
+                    has_required = true;
+                    break;
                 }
-                rule += get_recursive_refs(std::vector<std::string>(optional_props.begin() + i, optional_props.end()), false);
             }
-            if (!required_props.empty()) {
-                rule += " )";
+            auto alts = string_join(alternatives, " | ");
+            if (alternatives.size() > 1 || !has_required) {
+                rule += "( " + alts + (has_required ? " )" : " )?");
+            } else {
+                rule += alts;
             }
-            rule += " )?";
         }
 
         rule += " \"}\" space";

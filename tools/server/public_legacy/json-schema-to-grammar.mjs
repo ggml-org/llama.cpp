@@ -748,24 +748,26 @@ export class SchemaConverter {
   }
 
   _buildObjectRule(properties, required, name, additionalProperties) {
-    const propOrder = this._propOrder;
-    // sort by position in prop_order (if specified) then by original order
-    const sortedProps = properties.map(([k]) => k).sort((a, b) => {
-      const orderA = propOrder[a] || Infinity;
-      const orderB = propOrder[b] || Infinity;
-      return orderA - orderB || properties.findIndex(([k]) => k === a) - properties.findIndex(([k]) => k === b);
-    });
-
     const propKvRuleNames = {};
+    const propNames = []
     for (const [propName, propSchema] of properties) {
       const propRuleName = this.visit(propSchema, `${name ?? ''}${name ? '-' : ''}${propName}`);
       propKvRuleNames[propName] = this._addRule(
         `${name ?? ''}${name ? '-' : ''}${propName}-kv`,
         `${this._formatLiteral(JSON.stringify(propName))} space ":" space ${propRuleName}`
       );
+      propNames.push(propName);
     }
-    const requiredProps = sortedProps.filter(k => required.has(k));
-    const optionalProps = sortedProps.filter(k => !required.has(k));
+
+    const propOrder = this._propOrder;
+    if (Object.keys(propOrder).length > 0) {
+      // sort by position in prop_order (if specified) then by original order
+      propNames.sort((a, b) => {
+        const orderA = propOrder[a] || Infinity;
+        const orderB = propOrder[b] || Infinity;
+        return orderA - orderB || properties.findIndex(([k]) => k === a) - properties.findIndex(([k]) => k === b);
+      });
+    }
 
     if (additionalProperties) {
       const subName = `${name ?? ''}${name ? '-' : ''}additional`;
@@ -774,33 +776,32 @@ export class SchemaConverter {
         : this._addPrimitive('value', PRIMITIVE_RULES['value']);
 
       const key_rule =
-        sortedProps.length === 0 ? this._addPrimitive('string', PRIMITIVE_RULES['string'])
-        : this._addRule(`${subName}-k`, this._notStrings(sortedProps));
+        propNames.length === 0 ? this._addPrimitive('string', PRIMITIVE_RULES['string'])
+        : this._addRule(`${subName}-k`, this._notStrings(propNames));
 
       propKvRuleNames['*'] = this._addRule(
         `${subName}-kv`,
         `${key_rule} ":" space ${valueRule}`);
-      optionalProps.push('*');
+      propNames.push('*');
     }
 
     let rule = '"{" space ';
-    rule += requiredProps.map(k => propKvRuleNames[k]).join(' "," space ');
 
-    if (optionalProps.length > 0) {
-      rule += ' (';
-      if (requiredProps.length > 0) {
-        rule += ' "," space ( ';
-      }
-
+    if (propNames.length > 0) {
       const getRecursiveRefs = (ks, firstIsOptional) => {
         const [k, ...rest] = ks;
         const kvRuleName = propKvRuleNames[k];
         let res;
-        const commaRef = `( "," space ${kvRuleName} )`;
+        const commaRef = `"," space ${kvRuleName}`;
         if (firstIsOptional) {
-          res = commaRef + (k === '*' ? '*' : '?');
+          // res = commaRef + (k === '*' ? '*' : '?');
+          if (!required.has(k)) {
+            res = `( ${commaRef} )${k === '*' ? '*' : '?'}`;
+          } else {
+            res = commaRef;
+          }
         } else {
-          res = kvRuleName + (k === '*' ? ' ' + commaRef + '*' : '');
+          res = kvRuleName + (k === '*' ? ' ( ' + commaRef + ' )*' : '');
         }
         if (rest.length > 0) {
           res += ' ' + this._addRule(
@@ -811,11 +812,22 @@ export class SchemaConverter {
         return res;
       };
 
-      rule += optionalProps.map((_, i) => getRecursiveRefs(optionalProps.slice(i), false)).join(' | ');
-      if (requiredProps.length > 0) {
-        rule += ' )';
+      let hasRequired = false;
+      const alternatives = [];
+      for (let i = 0; i < propNames.length; i++) {
+        alternatives.push(getRecursiveRefs(propNames.slice(i), false));
+        if (required.has(propNames[i])) {
+          hasRequired = true;
+          break;
+        }
       }
-      rule += ' )?';
+
+      const alts = alternatives.join(' | ');
+      if (alternatives.length > 1 || !hasRequired) {
+        rule += `( ${alts} )${hasRequired ? '' : '?'}`;
+      } else {
+        rule += alts;
+      }
     }
 
     rule += ' "}" space';

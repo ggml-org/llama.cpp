@@ -8,6 +8,7 @@ import re
 import sys
 from typing import Any, List, Optional, Set, Tuple, Union
 
+
 def _build_repetition(item_rule, min_items, max_items, separator_rule=None):
 
     if max_items == 0:
@@ -695,49 +696,48 @@ class SchemaConverter:
         return n
 
     def _build_object_rule(self, properties: List[Tuple[str, Any]], required: Set[str], name: str, additional_properties: Optional[Union[bool, Any]]):
-        prop_order = self._prop_order
-        # sort by position in prop_order (if specified) then by original order
-        sorted_props = [kv[0] for _, kv in sorted(enumerate(properties), key=lambda ikv: (prop_order.get(ikv[1][0], len(prop_order)), ikv[0]))]
-
         prop_kv_rule_names = {}
+        prop_names = []
         for prop_name, prop_schema in properties:
             prop_rule_name = self.visit(prop_schema, f'{name}{"-" if name else ""}{prop_name}')
             prop_kv_rule_names[prop_name] = self._add_rule(
                 f'{name}{"-" if name else ""}{prop_name}-kv',
                 fr'{self._format_literal(json.dumps(prop_name))} space ":" space {prop_rule_name}'
             )
-        required_props = [k for k in sorted_props if k in required]
-        optional_props = [k for k in sorted_props if k not in required]
+            prop_names.append(prop_name)
+
+        prop_order = self._prop_order
+        if prop_order:
+            # sort by position in prop_order (if specified) then by original order
+            prop_names.sort(key=lambda k: (prop_order.get(k, float('inf')), prop_names.index(k)))
 
         if additional_properties is not None and additional_properties != False:
             sub_name = f'{name}{"-" if name else ""}additional'
             value_rule = self.visit(additional_properties, f'{sub_name}-value') if isinstance(additional_properties, dict) else \
                 self._add_primitive('value', PRIMITIVE_RULES['value'])
-            key_rule = self._add_primitive('string', PRIMITIVE_RULES['string']) if not sorted_props \
-                else self._add_rule(f'{sub_name}-k', self._not_strings(sorted_props))
+            key_rule = self._add_primitive('string', PRIMITIVE_RULES['string']) if not prop_names \
+                else self._add_rule(f'{sub_name}-k', self._not_strings(prop_names))
 
             prop_kv_rule_names["*"] = self._add_rule(
                 f'{sub_name}-kv',
                 f'{key_rule} ":" space {value_rule}'
             )
-            optional_props.append("*")
+            prop_names.append("*")
 
         rule = '"{" space '
-        rule += ' "," space '.join(prop_kv_rule_names[k] for k in required_props)
 
-        if optional_props:
-            rule += ' ('
-            if required_props:
-                rule += ' "," space ( '
-
+        if prop_kv_rule_names:
             def get_recursive_refs(ks, first_is_optional):
                 [k, *rest] = ks
                 kv_rule_name = prop_kv_rule_names[k]
-                comma_ref = f'( "," space {kv_rule_name} )'
+                comma_ref = f'"," space {kv_rule_name}'
                 if first_is_optional:
-                    res = comma_ref + ('*' if k == '*' else '?')
+                    if k not in required:
+                        res = '( ' + comma_ref + (' )*' if k == '*' else ' )?')
+                    else:
+                        res = comma_ref
                 else:
-                    res = kv_rule_name + (' ' + comma_ref + "*" if k == '*' else '')
+                    res = kv_rule_name + (' ( ' + comma_ref + " )*" if k == '*' else '')
                 if len(rest) > 0:
                     res += ' ' + self._add_rule(
                         f'{name}{"-" if name else ""}{k}-rest',
@@ -745,13 +745,19 @@ class SchemaConverter:
                     )
                 return res
 
-            rule += ' | '.join(
-                get_recursive_refs(optional_props[i:], first_is_optional=False)
-                for i in range(len(optional_props))
-            )
-            if required_props:
-                rule += ' )'
-            rule += ' )?'
+            alternatives = []
+            has_required = False
+            for i, k in enumerate(prop_names):
+                alternatives.append(get_recursive_refs(prop_names[i:], first_is_optional=False))
+                if k in required:
+                    has_required = True
+                    break
+
+            alts = ' | '.join(alternatives)
+            if len(alternatives) > 1 or not has_required:
+                rule += '( ' + alts + (' )' if has_required else ' )?')
+            else:
+                rule += alts
 
         rule += ' "}" space'
 
