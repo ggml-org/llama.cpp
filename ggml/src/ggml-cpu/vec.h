@@ -77,16 +77,85 @@ inline static void ggml_vec_add_f16 (const int n, ggml_fp16_t * z, const ggml_fp
         z[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(x[i]) + GGML_CPU_FP16_TO_FP32(y[i]));
     }
 }
-inline static void ggml_vec_add1_f32(const int n, float * z, const float * x, const float   v) { for (int i = 0; i < n; ++i) z[i]  = x[i] + v;    }
-inline static void ggml_vec_acc_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i] += x[i];        }
-inline static void ggml_vec_acc1_f32(const int n, float * y, const float   v)                  { for (int i = 0; i < n; ++i) y[i] += v;           }
+inline static void ggml_vec_add1_f32(const int n, float * z, const float * x, const float v) {
+    int i = 0;
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vv = GGML_F32_VEC_SET1(v);
+
+    for (; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; ++j) {
+            GGML_F32_VEC ax = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+            GGML_F32_VEC az = GGML_F32_VEC_ADD(ax, vv);
+            GGML_F32_VEC_STORE(z + i + j*GGML_F32_EPR, az);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        z[i] = x[i] + v;
+    }
+}
+inline static void ggml_vec_acc_f32 (const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    for (; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; ++j) {
+            GGML_F32_VEC ay = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            GGML_F32_VEC ax = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+            ay = GGML_F32_VEC_ADD(ay, ax);
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] += x[i];
+    }
+}
+inline static void ggml_vec_acc1_f32(const int n, float * y, const float v) {
+    int i = 0;
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vv = GGML_F32_VEC_SET1(v);
+
+    for (; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; ++j) {
+            GGML_F32_VEC ay = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            ay = GGML_F32_VEC_ADD(ay, vv);
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] += v;
+    }
+}
 inline static void ggml_vec_sub_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i] - y[i]; }
 inline static void ggml_vec_sub_f16 (const int n, ggml_fp16_t * z, const ggml_fp16_t * x, const ggml_fp16_t * y) {
     for (int i = 0; i < n; ++i) {
         z[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(x[i]) - GGML_CPU_FP16_TO_FP32(y[i]));
     }
 }
-inline static void ggml_vec_set_f32 (const int n, float * x, const float   v)                  { for (int i = 0; i < n; ++i) x[i]  = v;           }
+inline static void ggml_vec_set_f32 (const int n, float * x, const float v) {
+    int i = 0;
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
+
+    for (; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; ++j) {
+            GGML_F32_VEC_STORE(x + i + j*GGML_F32_EPR, vx);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        x[i] = v;
+    }
+}
 inline static void ggml_vec_cpy_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = x[i];        }
 inline static void ggml_vec_neg_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = -x[i];       }
 inline static void ggml_vec_neg_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
@@ -95,7 +164,24 @@ inline static void ggml_vec_neg_f16 (const int n, ggml_fp16_t * y, const ggml_fp
     }
 }
 
-inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i]*y[i];   }
+inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) {
+    int i = 0;
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    for (; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; ++j) {
+            GGML_F32_VEC ax = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+            GGML_F32_VEC ay = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            GGML_F32_VEC az = GGML_F32_VEC_MUL(ax, ay);
+            GGML_F32_VEC_STORE(z + i + j*GGML_F32_EPR, az);
+        }
+    }
+#endif
+    for (; i < n; ++i) {
+        z[i] = x[i]*y[i];
+    }
+}
 inline static void ggml_vec_mul_f16 (const int n, ggml_fp16_t * z, const ggml_fp16_t * x, const ggml_fp16_t * y) {
     for (int i = 0; i < n; ++i) {
         z[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(x[i]) * GGML_CPU_FP16_TO_FP32(y[i]));
