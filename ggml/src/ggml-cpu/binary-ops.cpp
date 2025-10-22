@@ -48,19 +48,17 @@ static inline float op_ifairy_add(float a, float b) {
 }
 
 static inline float op_ifairy_mul(float a, float b) {
-    complex_union ca, cb; // a is active and b is gate
-    ca.f = a;
-    cb.f = b;
-    float ra = GGML_BF16_TO_FP32(ca.complex.real);
-    float ia = GGML_BF16_TO_FP32(ca.complex.imag);
-    float rg = GGML_BF16_TO_FP32(cb.complex.real);
-    float ig = GGML_BF16_TO_FP32(cb.complex.imag);
+    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
     // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
     float r = ra*rg + ia*ig;
     float i = ra*ig - ia*rg;
-    ca.complex.real = GGML_FP32_TO_BF16(r);
-    ca.complex.imag = GGML_FP32_TO_BF16(i);
-    return ca.f;
+    float ret;
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+    return ret;
 }
 
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
