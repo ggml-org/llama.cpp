@@ -27,6 +27,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#ifdef GGML_TSAVORITE
+#include "ggml-tsavorite.h"
+#endif /* GGML_TSAVORITE */
+
 
 // backend buffer type
 
@@ -2208,4 +2212,12 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
 ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+}
+
+void ggml_backend_cleanup()
+{
+    #ifdef GGML_TSAVORITE
+        tsi_cleanup();
+    #endif /* GGML_TSAVORITE */
+    return;
 }

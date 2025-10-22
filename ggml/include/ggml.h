@@ -2591,7 +2591,7 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
 const char * ggml_backend_type(enum ggml_compute_backend_type backend);
 
 #endif /* GML_PERF-related flags */
-void ggml_cleanup();
+void ggml_backend_cleanup();
 
 #ifdef  __cplusplus
 }

@@ -730,7 +730,7 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
 }
 
 void
-ggml_tsi_finalize() {
+tsi_cleanup() {
     if (runtime_initialized != true)
         return;
     tsi_finalize();
