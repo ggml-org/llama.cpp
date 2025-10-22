@@ -3818,7 +3818,7 @@ struct server_context {
 
                                 // when the prompt prefix does not match, print the tokens around the mismatch
                                 // this is useful for debugging prompt caching
-                                {
+                                if (GGML_LOG_LEVEL_DEBUG <= common_log_verbosity_thold) {
                                     const int np0 = std::max<int>(slot.n_past - 4, 0);
                                     const int np1 = std::min<int>(slot.n_past + 6, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
 
@@ -3852,11 +3852,11 @@ struct server_context {
                                         }
                                     }
 
-                                    SLT_WRN(slot, "%s\n", ss0.str().c_str());
-                                    SLT_WRN(slot, "%s\n", ss1.str().c_str());
+                                    SLT_DBG(slot, "%s\n", ss0.str().c_str());
+                                    SLT_DBG(slot, "%s\n", ss1.str().c_str());
 
-                                    SLT_WRN(slot, "%s\n", st0.str().c_str());
-                                    SLT_WRN(slot, "%s\n", st1.str().c_str());
+                                    SLT_DBG(slot, "%s\n", st0.str().c_str());
+                                    SLT_DBG(slot, "%s\n", st1.str().c_str());
                                 }
 
                                 if (pos_min > pos_min_thold) {
