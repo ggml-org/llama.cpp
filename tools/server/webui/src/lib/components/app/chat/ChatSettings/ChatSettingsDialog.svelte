@@ -217,6 +217,11 @@
 			icon: Code,
 			fields: [
 				{
+					key: 'modelSelectorEnabled',
+					label: 'Enable model selector',
+					type: 'checkbox'
+				},
+				{
 					key: 'disableReasoningFormat',
 					label: 'Show raw LLM output',
 					type: 'checkbox'
