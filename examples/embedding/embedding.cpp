@@ -396,9 +396,7 @@ int main(int argc, char ** argv) {
         }
 
         if (notArray) LOG("\n}\n");
-    }
-
-    if (params.embd_out == "raw") {
+    } else if (params.embd_out == "raw") {
         print_raw_embeddings(emb, n_embd_count, n_embd, model, pooling_type, params.embd_normalize);
     }
 
