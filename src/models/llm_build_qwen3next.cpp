@@ -604,7 +604,7 @@ ggml_tensor * llm_build_qwen3next::build_qwen3next_linear_attn_layer(llm_graph_i
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-    bool use_precomputed_states = n_seq_tokens == 1 && mctx_cur->has_previous_state();
+    bool use_precomputed_states = mctx_cur->has_previous_state(); // use chunked version if no previous state even for n_seq > 1
 
     // Build the convolution states tensor
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
