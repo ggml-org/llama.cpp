@@ -2,6 +2,7 @@
 #include "ggml.h"
 #include "topk-moe.cuh"
 
+#include <cmath>
 #include <initializer_list>
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
@@ -253,6 +254,8 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
     if (with_norm) {
         if (clamp) {
             clamp_val = ggml_get_op_params_f32(clamp, 0);
+            float max_val = ggml_get_op_params_f32(clamp, 1);
+            GGML_ASSERT(max_val == INFINITY);
         }
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, n_rows, n_experts, n_expert_used, clamp_val);
     } else {
