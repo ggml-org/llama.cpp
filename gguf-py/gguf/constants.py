@@ -3057,6 +3057,7 @@ class VisionProjectorType:
     QWEN25VL = "qwen2.5vl_merger"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
+    JINACLIP2 = "jinaclip2"
     QWEN2A = "qwen2a" # audio
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
