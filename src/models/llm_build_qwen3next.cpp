@@ -280,19 +280,19 @@ struct ggml_tensor * llm_build_qwen3next::delta_net(
     q = ggml_cont_4d(ctx, ggml_permute(ctx, q, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
     k = ggml_cont_4d(ctx, ggml_permute(ctx, k, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
     v = ggml_cont_4d(ctx, ggml_permute(ctx, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 0, 2, 1, 3));
 
     q = ggml_pad(ctx, q, 0, pad_size, 0, 0); 
     k = ggml_pad(ctx, k, 0, pad_size, 0, 0);
     v = ggml_pad(ctx, v, 0, pad_size, 0, 0);
-    
-    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 1, 2, 0, 3));
+    beta = ggml_pad(ctx, beta, 0, pad_size, 0, 0);
+
+    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 2, 1, 0, 3));
     cb(beta, "beta_reshape", il);
 
     g = ggml_cont(ctx, ggml_permute(ctx, g, 2, 0, 3, 1));
     cb(g, "g_permute", il);
     
-    // ... except for beta and g, where we pad the last dimension
-    beta = ggml_pad(ctx, beta, pad_size, 0, 0, 0);
     g = ggml_pad(ctx, g, pad_size, 0, 0, 0);
 
     cb(q, "q_pad", il);
@@ -307,15 +307,10 @@ struct ggml_tensor * llm_build_qwen3next::delta_net(
     GGML_ASSERT(beta->ne[0] % GGML_DELTA_NET_CHUNK == 0 && beta->ne[1] == H_k && beta->ne[2] == 1 && beta->ne[3] == n_seqs);
     GGML_ASSERT(g->ne[0] % GGML_DELTA_NET_CHUNK == 0 && g->ne[2] == H_k && g->ne[1] == 1 && g->ne[3] == n_seqs);
 
-    ggml_tensor * beta_unsq = ggml_cont_4d(ctx, beta, 1, GGML_DELTA_NET_CHUNK * num_chunks, H_k, n_seqs);
-    ggml_tensor * beta_bcast = ggml_repeat_4d(ctx, beta_unsq, S_v, GGML_DELTA_NET_CHUNK * num_chunks, H_k, n_seqs);
-    cb(beta_unsq, "beta_unsq", il);
-    cb(beta_bcast, "beta_bcast", il);
-
-    struct ggml_tensor * v_beta = ggml_mul(ctx, v, beta_bcast);
+    struct ggml_tensor * v_beta = ggml_mul(ctx, v, beta);
     v_beta = ggml_reshape_4d(ctx, v_beta, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
     cb(v_beta, "v_beta", il);
-    struct ggml_tensor * k_beta = ggml_mul(ctx, k, beta_bcast);
+    struct ggml_tensor * k_beta = ggml_mul(ctx, k, beta);
     k_beta = ggml_reshape_4d(ctx, k_beta, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
     cb(k_beta, "k_beta", il);
     k = ggml_reshape_4d(ctx, k, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
