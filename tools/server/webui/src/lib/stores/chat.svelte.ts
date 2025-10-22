@@ -570,7 +570,8 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: []
+				children: [],
+				model: null
 			},
 			parentId || null
 		);
@@ -1538,7 +1539,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				parentMessage.id
 			);
@@ -1595,7 +1597,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				userMessageId
 			);

@@ -652,65 +652,35 @@ export class ChatService {
 	}
 
 	private extractModelName(data: unknown): string | undefined {
-		if (!data || typeof data !== 'object') {
-			return undefined;
-		}
-
-		const record = data as Record<string, unknown>;
-		const normalize = (value: unknown): string | undefined => {
-			if (typeof value !== 'string') {
-				return undefined;
-			}
-
-			const trimmed = value.trim();
-
-			return trimmed.length > 0 ? trimmed : undefined;
+		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+			return typeof value === 'object' && value !== null
+				? (value as Record<string, unknown>)
+				: undefined;
 		};
 
-		const rootModel = normalize(record['model']);
-		if (rootModel) {
-			return rootModel;
-		}
+		const getTrimmedString = (value: unknown): string | undefined => {
+			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+		};
 
-		const choices = record['choices'];
-		if (!Array.isArray(choices) || choices.length === 0) {
-			return undefined;
-		}
+		const root = asRecord(data);
+		if (!root) return undefined;
 
-		const firstChoice = choices[0] as Record<string, unknown> | undefined;
-		if (!firstChoice) {
-			return undefined;
-		}
+		// 1) root (some implementations provide `model` at the top level)
+		const rootModel = getTrimmedString(root.model);
+		if (rootModel) return rootModel;
 
-		const choiceModel = normalize(firstChoice['model']);
-		if (choiceModel) {
-			return choiceModel;
-		}
+		// 2) streaming choice (delta) or final response (message)
+		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+		if (!firstChoice) return undefined;
 
-		const delta = firstChoice['delta'] as Record<string, unknown> | undefined;
-		if (delta) {
-			const deltaModel = normalize(delta['model']);
-			if (deltaModel) {
-				return deltaModel;
-			}
-		}
+		// priority: delta.model (first chunk) else message.model (final response)
+		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+		if (deltaModel) return deltaModel;
 
-		const message = firstChoice['message'] as Record<string, unknown> | undefined;
-		if (message) {
-			const messageModel = normalize(message['model']);
-			if (messageModel) {
-				return messageModel;
-			}
-		}
+		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+		if (messageModel) return messageModel;
 
-		const metadata = firstChoice['metadata'] as Record<string, unknown> | undefined;
-		if (metadata) {
-			const metadataModel = normalize(metadata['model']);
-			if (metadataModel) {
-				return metadataModel;
-			}
-		}
-
+		// avoid guessing from non-standard locations (metadata, etc.)
 		return undefined;
 	}
 

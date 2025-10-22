@@ -142,7 +142,7 @@
 	$effect(() => {
 		const optionCount = options.length;
 
-		if (!isOpen || optionCount < 0) return;
+		if (!isOpen || optionCount <= 0) return;
 
 		queueMicrotask(() => updateMenuPosition());
 	});
