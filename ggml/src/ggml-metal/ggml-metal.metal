@@ -8149,17 +8149,6 @@ kernel void kernel_set_rows_f(
 constant bool FC_mul_mm_bc_inp [[function_constant(FC_MUL_MM + 0)]];
 constant bool FC_mul_mm_bc_out [[function_constant(FC_MUL_MM + 1)]];
 
-#define BLOCK_SIZE_M 64 // 8 simdgroup matrices from matrix A
-#define BLOCK_SIZE_N 32 // 4 simdgroup matrices from matrix B
-#define BLOCK_SIZE_K 32
-#define THREAD_MAT_M 4 // each thread take 4 simdgroup matrices from matrix A
-#define THREAD_MAT_N 2 // each thread take 2 simdgroup matrices from matrix B
-#define THREAD_PER_BLOCK 128
-#define THREAD_PER_ROW 2 // 2 thread for each row in matrix A to load numbers
-#define THREAD_PER_COL 4 // 4 thread for each row in matrix B to load numbers
-#define SG_MAT_SIZE 64 // simdgroup matrix is of shape 8x8
-#define SG_MAT_ROW 8
-
 // each block_q contains 16*nl weights
 template<typename S0, typename S0_4x4, typename S0_8x8, typename S1, typename S1_2x4, typename S1_8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &), typename T0, typename T0_4x4, typename T1, typename T1_2x4>
 kernel void kernel_mul_mm(
