@@ -18,8 +18,14 @@ const GUIDE_FOR_FRONTEND = `
 
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
-// true: embed KaTeX-fonts into index.html, false: don't embed fonts.
-const DO_EMBED_FONTS = true;
+/**
+ * the maximum size of an embedded asset in bytes,
+ * e.g. maximum size of embedded font (see node_modules/katex/dist/fonts/*.woff2)
+ */
+const MAX_ASSET_SIZE = 32000;
+
+/** public/index.html.gz minified flag */
+const ENABLE_JS_MINIFICATION = true;
 
 function llamaCppBuildPlugin() {
 	return {
@@ -38,49 +44,18 @@ function llamaCppBuildPlugin() {
 
 					let content = readFileSync(indexPath, 'utf-8');
 
-					// Inline KaTeX fonts directly from node_modules
-					const katexFonts = [
-						'KaTeX_AMS-Regular',
-						'KaTeX_Caligraphic-Bold',
-						'KaTeX_Caligraphic-Regular',
-						'KaTeX_Fraktur-Bold',
-						'KaTeX_Fraktur-Regular',
-						'KaTeX_Main-BoldItalic',
-						'KaTeX_Main-Bold',
-						'KaTeX_Main-Italic',
-						'KaTeX_Main-Regular',
-						'KaTeX_Math-BoldItalic',
-						'KaTeX_Math-Italic',
-						'KaTeX_SansSerif-Bold',
-						'KaTeX_SansSerif-Italic',
-						'KaTeX_SansSerif-Regular',
-						'KaTeX_Script-Regular',
-						'KaTeX_Size1-Regular',
-						'KaTeX_Size2-Regular',
-						'KaTeX_Size3-Regular',
-						'KaTeX_Size4-Regular',
-						'KaTeX_Typewriter-Regular'
-					];
+					// Remove non-embedded font-URLs of KaTeX.
+					content = content.replace(
+						new RegExp(/src:(?:,?url\(.\/KaTeX_[^)]+\) format\("[a-z0-9]+"\))+/, 'g'),
+						''
+					);
 
-					katexFonts.forEach((font) => {
-						const fontPath = resolve('node_modules/katex/dist/fonts', font + '.woff2');
-						let srcUrl = '';
-						if (existsSync(fontPath)) {
-							const fontContent = readFileSync(fontPath);
-							if (DO_EMBED_FONTS) {
-								// Replace both the original and hashed references
-								// e.g. url(./KaTeX_Math-Italic.flOr_0UB.ttf) has to be replaces by a base64 data url.
-								const bufData = Buffer.from(fontContent).toString('base64');
-								srcUrl = `src:url(data:application/font-woff2;base64,${bufData}) format("woff2")`;
-							}
-						} else {
-							console.log('Missing font file', fontPath);
-						}
-						content = content.replace(
-							new RegExp(`src:(?:,?url\\(./${font}[.][^)]+\\) format\\("[a-z0-9]+"\\))+`),
-							srcUrl
-						);
-					});
+					// Remove embedded ttf- and woff-fonts.
+					// See ./node_modules/katex/src/styles/fonts.scss.
+					content = content.replace(
+						new RegExp(/,?url\(data:font\/(?:ttf|woff);base64,[^)]+\) format\("[a-z0-9]+"\)/, 'g'),
+						''
+					);
 
 					const faviconPath = resolve('static/favicon.svg');
 					if (existsSync(faviconPath)) {
@@ -123,8 +98,9 @@ function llamaCppBuildPlugin() {
 
 export default defineConfig({
 	build: {
+		assetsInlineLimit: MAX_ASSET_SIZE,
 		chunkSizeWarningLimit: 3072,
-		minify: true // enable JS minification
+		minify: ENABLE_JS_MINIFICATION
 	},
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
 	test: {
