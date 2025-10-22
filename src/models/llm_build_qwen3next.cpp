@@ -304,7 +304,7 @@ struct ggml_tensor * llm_build_qwen3next::delta_net(
     GGML_ASSERT(q->ne[1] % GGML_DELTA_NET_CHUNK == 0 && q->ne[0] == S_k && q->ne[2] == H_k && q->ne[3] == n_seqs);
     GGML_ASSERT(k->ne[1] % GGML_DELTA_NET_CHUNK == 0 && k->ne[0] == S_k && k->ne[2] == H_k && k->ne[3] == n_seqs);
     GGML_ASSERT(v->ne[1] % GGML_DELTA_NET_CHUNK == 0 && v->ne[0] == S_v && v->ne[2] == H_k && v->ne[3] == n_seqs);
-    GGML_ASSERT(beta->ne[0] % GGML_DELTA_NET_CHUNK == 0 && beta->ne[1] == H_k && beta->ne[2] == 1 && beta->ne[3] == n_seqs);
+    GGML_ASSERT(beta->ne[1] % GGML_DELTA_NET_CHUNK == 0 && beta->ne[2] == H_k && beta->ne[0] == 1 && beta->ne[3] == n_seqs);
     GGML_ASSERT(g->ne[0] % GGML_DELTA_NET_CHUNK == 0 && g->ne[2] == H_k && g->ne[1] == 1 && g->ne[3] == n_seqs);
 
     struct ggml_tensor * v_beta = ggml_mul(ctx, v, beta);
@@ -317,7 +317,7 @@ struct ggml_tensor * llm_build_qwen3next::delta_net(
     cb(k_beta, "k_reshape", il);
     q = ggml_reshape_4d(ctx, q, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
     cb(q, "q_reshape", il);
-    v = ggml_reshape_4d(ctx, q, S_v, GGML_DELTA_NET_CHUNK, H_v * num_chunks, n_seqs);
+    v = ggml_reshape_4d(ctx, v, S_v, GGML_DELTA_NET_CHUNK, H_v * num_chunks, n_seqs);
     cb(v, "v_reshape", il);
     g = ggml_reshape_4d(ctx, g, GGML_DELTA_NET_CHUNK, 1, H_k * num_chunks, n_seqs);
     cb(g, "g_reshape", il);
