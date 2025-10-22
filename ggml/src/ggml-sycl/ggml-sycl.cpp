@@ -3049,26 +3049,28 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
 }
 
 // Helper functions to unify device memory allocation for both async and sync paths
-static inline void * sycl_ext_malloc_device(dpct::queue_ptr stream, size_t size, bool use_async) {
+static inline void * sycl_ext_malloc_device(dpct::queue_ptr stream, size_t size) {
+    bool use_async = g_ggml_sycl_use_async_mem_op;
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
     if (use_async) {
         return syclex::async_malloc(*stream, sycl::usm::alloc::device, size);
     }
 #else
-    // If async allocation extension is not available, we should have never passed use_async=true
+    // If async allocation extension is not available, use_async should always be false.
     GGML_ASSERT(!use_async);
 #endif
     return sycl::malloc(size, *stream, sycl::usm::alloc::device);
 }
 
-static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr, bool use_async) {
+static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr) {
+    bool use_async = g_ggml_sycl_use_async_mem_op;
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
     if (use_async) {
         syclex::async_free(*stream, ptr);
         return;
     }
 #else
-    // If async allocation extension is not available, we should have never passed use_async=true
+    // If async allocation extension is not available, use_async should always be false.
     GGML_ASSERT(!use_async);
 #endif
     sycl::free(ptr, *stream);
@@ -3076,7 +3078,7 @@ static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr, bool use_as
 
 static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
                             dpct::queue_ptr stream) {
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size, g_ggml_sycl_use_async_mem_op));
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3105,7 +3107,7 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf, g_ggml_sycl_use_async_mem_op);
+    sycl_ext_free(stream, tmp_buf);
 }
 
 static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
@@ -3114,7 +3116,7 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
 
     const int nblocks = size / sizeof(block_q4_K);
 
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size, g_ggml_sycl_use_async_mem_op));
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3143,7 +3145,7 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf, g_ggml_sycl_use_async_mem_op);
+    sycl_ext_free(stream, tmp_buf);
 }
 
 static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
@@ -3152,7 +3154,7 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
 
     const int nblocks = size / sizeof(block_q6_K);
 
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size, g_ggml_sycl_use_async_mem_op));
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3191,7 +3193,7 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf, g_ggml_sycl_use_async_mem_op);
+    sycl_ext_free(stream, tmp_buf);
 }
 
 static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
