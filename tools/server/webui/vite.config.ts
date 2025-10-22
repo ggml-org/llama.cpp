@@ -44,11 +44,8 @@ function llamaCppBuildPlugin() {
 
 					let content = readFileSync(indexPath, 'utf-8');
 
-					// Remove non-embedded font-URLs of KaTeX.
-					content = content.replace(
-						new RegExp(/src:(?:,?url\(.\/KaTeX_[^)]+\) format\("[a-z0-9]+"\))+/, 'g'),
-						''
-					);
+					// A non-embedded KaTeX-font (/src:(?:,?url\(.\/KaTeX_[^)]+\) format\("[a-z0-9]+"\))+/)
+					// will be mentionend by a 404 error, see MAX_ASSET_SIZE.
 
 					// Remove embedded ttf- and woff-fonts.
 					// See ./node_modules/katex/src/styles/fonts.scss.
