@@ -18,6 +18,8 @@ const GUIDE_FOR_FRONTEND = `
 
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
+const DO_EMBED_FONTS = false; // The embedded mode is not yet ready :-(.
+
 function llamaCppBuildPlugin() {
 	return {
 		name: 'llamacpp:build',
@@ -37,48 +39,46 @@ function llamaCppBuildPlugin() {
 
 					// Inline KaTeX fonts directly from node_modules
 					const katexFonts = [
-						'KaTeX_AMS-Regular.woff2',
-						'KaTeX_Caligraphic-Bold.woff2',
-						'KaTeX_Caligraphic-Regular.woff2',
-						'KaTeX_Fraktur-Bold.woff2',
-						'KaTeX_Fraktur-Regular.woff2',
-						'KaTeX_Main-BoldItalic.woff2',
-						'KaTeX_Main-Bold.woff2',
-						'KaTeX_Main-Italic.woff2',
-						'KaTeX_Main-Regular.woff2',
-						'KaTeX_Math-BoldItalic.woff2',
-						'KaTeX_Math-Italic.woff2',
-						'KaTeX_SansSerif-Bold.woff2',
-						'KaTeX_SansSerif-Italic.woff2',
-						'KaTeX_SansSerif-Regular.woff2',
-						'KaTeX_Script-Regular.woff2',
-						'KaTeX_Size1-Regular.woff2',
-						'KaTeX_Size2-Regular.woff2',
-						'KaTeX_Size3-Regular.woff2',
-						'KaTeX_Size4-Regular.woff2',
-						'KaTeX_Typewriter-Regular.woff2'
+						'KaTeX_AMS-Regular',
+						'KaTeX_Caligraphic-Bold',
+						'KaTeX_Caligraphic-Regular',
+						'KaTeX_Fraktur-Bold',
+						'KaTeX_Fraktur-Regular',
+						'KaTeX_Main-BoldItalic',
+						'KaTeX_Main-Bold',
+						'KaTeX_Main-Italic',
+						'KaTeX_Main-Regular',
+						'KaTeX_Math-BoldItalic',
+						'KaTeX_Math-Italic',
+						'KaTeX_SansSerif-Bold',
+						'KaTeX_SansSerif-Italic',
+						'KaTeX_SansSerif-Regular',
+						'KaTeX_Script-Regular',
+						'KaTeX_Size1-Regular',
+						'KaTeX_Size2-Regular',
+						'KaTeX_Size3-Regular',
+						'KaTeX_Size4-Regular',
+						'KaTeX_Typewriter-Regular'
 					];
 
 					katexFonts.forEach((font) => {
-						const fontPath = resolve('node_modules/katex/dist/fonts', font);
+						const fontPath = resolve('node_modules/katex/dist/fonts', font + '.woff2');
+						let srcUrl = '';
 						if (existsSync(fontPath)) {
-							const fontContent = readFileSync(fontPath, 'utf-8');
-							// Replace both the original and hashed references
-							// e.g. url(./KaTeX_Math-Italic.flOr_0UB.ttf) has to be replaces by a base64 data url.
-							content = content.replace(
-								new RegExp(`url\\(./${font.split('.')[0]}[.][^.]*[.]woff2\\)`, 'g'),
-								`url('data:application/font-woff2;base64,${Buffer.from(fontContent).toString('base64')}')`
-							);
-							// Remove ttf- and woff-URLs. See node_modules/katex/src/styles/fonts.scss.
-							content = content.replace(
-								new RegExp(`,url\\(./${font.split('.')[0]}[.][^.]*[.]woff\\)`, 'g'),
-								``
-							);
-							content = content.replace(
-								new RegExp(`,url\\(./${font.split('.')[0]}[.][^.]*[.]ttf\\)`, 'g'),
-								``
-							);
+							const fontContent = readFileSync(fontPath);
+							if (DO_EMBED_FONTS) {
+								// Replace both the original and hashed references
+								// e.g. url(./KaTeX_Math-Italic.flOr_0UB.ttf) has to be replaces by a base64 data url.
+								const bufData = Buffer.from(fontContent).toString('base64');
+								srcUrl = `src:url('data:application/font-woff2;base64,${bufData}') format("woff2")`;
+							}
+						} else {
+							console.log('Missing font file', fontPath);
 						}
+						content = content.replace(
+							new RegExp(`src:(?:,?url\\(./${font}[.][^)]+\\) format\\("[a-z0-9]+"\\))+`),
+							srcUrl
+						);
 					});
 
 					const faviconPath = resolve('static/favicon.svg');
