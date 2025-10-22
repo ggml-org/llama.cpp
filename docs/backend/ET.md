@@ -10,7 +10,7 @@
 ## Background
 
 **ET** is a llama.cpp backend targeting the fully open source manycore
-RISC-V accelerator platform [ET-SOC](TODO).
+RISC-V accelerator platform [ET-SOC](https://github.com/aifoundry-org/et-man).
 
 
 ## Limitations
