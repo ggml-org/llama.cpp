@@ -1665,9 +1665,7 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_ifairy_split(
         struct ggml_context * ctx,
-        struct ggml_tensor * a,
-        int n_dim,
-        bool want_real
+        struct ggml_tensor * a
     );
 
     GGML_API struct ggml_tensor * ggml_ifairy_merge(

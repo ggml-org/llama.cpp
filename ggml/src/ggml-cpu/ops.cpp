@@ -6021,10 +6021,6 @@ static void ggml_compute_forward_ifairy_split_impl(
 
     const ggml_tensor * src0 = dst->src[0];
 
-    const int n_dims     = ((int32_t *) dst->op_params)[0];
-    const int want_real = ((int32_t *) dst->op_params)[1];
-
-
     GGML_TENSOR_UNARY_OP_LOCALS
 
     GGML_ASSERT(nb00 == sizeof(float));
@@ -6034,8 +6030,7 @@ static void ggml_compute_forward_ifairy_split_impl(
 
     const int nr = ggml_nrows(dst);
 
-    GGML_ASSERT(n_dims == ne0 / 2);
-    GGML_ASSERT(n_dims % 2 == 0);
+    const int n_dims = ne0 / 2;
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -6054,27 +6049,17 @@ static void ggml_compute_forward_ifairy_split_impl(
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;
 
-                // 可以优化，当nb0==4的时候完全可以用memcpy代替
-                if(want_real) {
-                    for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
+                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                          float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                        const float x0 = src[0];
+                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[1]); //real
+                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[0]); //imag
 
-                        dst_data[0]      = x0;
-                    }
-                }else{
-                
-                    for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
-
-                        const float x0 = src[n_dims];
-
-                        dst_data[0]      = x0;
-                    }
+                    dst_data[0]      = x0;
+                    dst_data[n_dims] = x1;
                 }
+                
             }
         }
     }
