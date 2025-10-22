@@ -14,7 +14,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <ggml-tsavorite.h>
+#include <ggml.h>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -94,6 +94,7 @@ int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
+        ggml_backend_cleanup();
         return 1;
     }
 
@@ -110,6 +111,7 @@ int main(int argc, char ** argv) {
         LOG_ERR("************\n");
         LOG_ERR("%s: please use the 'embedding' tool for embedding calculations\n", __func__);
         LOG_ERR("************\n\n");
+        ggml_backend_cleanup();
 
         return 0;
     }
@@ -154,7 +156,8 @@ int main(int argc, char ** argv) {
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
-        ggml_tsi_finalize();
+	printf("\n Unable to load Model\n");
+        ggml_backend_cleanup();
         return 1;
     }
 
@@ -168,6 +171,7 @@ int main(int argc, char ** argv) {
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
         LOG_ERR("%s: no CPU backend found\n", __func__);
+        ggml_backend_cleanup();
         return 1;
     }
     auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
@@ -186,6 +190,7 @@ int main(int argc, char ** argv) {
         threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
         if (!threadpool_batch) {
             LOG_ERR("%s: batch threadpool create failed : n_threads %d\n", __func__, tpp_batch.n_threads);
+            ggml_backend_cleanup();
             return 1;
         }
 
@@ -196,6 +201,7 @@ int main(int argc, char ** argv) {
     struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
     if (!threadpool) {
         LOG_ERR("%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
+        ggml_backend_cleanup();
         return 1;
     }
 
@@ -259,6 +265,7 @@ int main(int argc, char ** argv) {
             size_t n_token_count_out = 0;
             if (!llama_state_load_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.capacity(), &n_token_count_out)) {
                 LOG_ERR("%s: failed to load session file '%s'\n", __func__, path_session.c_str());
+                ggml_backend_cleanup();
                 return 1;
             }
             session_tokens.resize(n_token_count_out);
@@ -283,6 +290,7 @@ int main(int argc, char ** argv) {
         auto formatted = common_chat_format_single(chat_templates.get(), chat_msgs, new_msg, role == "user", g_params->use_jinja);
         chat_msgs.push_back(new_msg);
         LOG_DBG("formatted: '%s'\n", formatted.c_str());
+        ggml_backend_cleanup();
         return formatted;
     };
 
@@ -333,6 +341,7 @@ int main(int argc, char ** argv) {
             LOG_WRN("embd_inp was considered empty and bos was added: %s\n", string_from(ctx, embd_inp).c_str());
         } else {
             LOG_ERR("input is empty\n");
+            ggml_backend_cleanup();
             return -1;
         }
     }
@@ -340,6 +349,7 @@ int main(int argc, char ** argv) {
     // Tokenize negative prompt
     if ((int) embd_inp.size() > n_ctx - 4) {
         LOG_ERR("%s: prompt is too long (%d tokens, max %d)\n", __func__, (int) embd_inp.size(), n_ctx - 4);
+        ggml_backend_cleanup();
         return 1;
     }
 
@@ -427,6 +437,7 @@ int main(int argc, char ** argv) {
         sigaction(SIGINT, &sigint_action, NULL);
 #elif defined (_WIN32)
         auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            ggml_backend_cleanup();
             return (ctrl_type == CTRL_C_EVENT) ? (sigint_handler(SIGINT), true) : false;
         };
         SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
@@ -476,6 +487,7 @@ int main(int argc, char ** argv) {
     smpl = common_sampler_init(model, sparams);
     if (!smpl) {
         LOG_ERR("%s: failed to initialize sampling subsystem\n", __func__);
+        ggml_backend_cleanup();
         return 1;
     }
 
@@ -561,6 +573,7 @@ int main(int argc, char ** argv) {
 
         if (llama_encode(ctx, llama_batch_get_one(enc_input_buf, enc_input_size))) {
             LOG_ERR("%s : failed to eval\n", __func__);
+            ggml_backend_cleanup();
             return 1;
         }
 
