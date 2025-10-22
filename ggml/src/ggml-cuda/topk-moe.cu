@@ -254,8 +254,6 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
     if (with_norm) {
         if (clamp) {
             clamp_val = ggml_get_op_params_f32(clamp, 0);
-            float max_val = ggml_get_op_params_f32(clamp, 1);
-            GGML_ASSERT(max_val == INFINITY);
         }
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, n_rows, n_experts, n_expert_used, clamp_val);
     } else {
@@ -269,7 +267,7 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
     }
 }
 
-bool ggml_cuda_should_use_topk_moe(const ggml_tensor * softmax, const ggml_tensor * weights) {
+bool ggml_cuda_should_use_topk_moe(const ggml_tensor * softmax, const ggml_tensor * weights, const ggml_tensor * clamp) {
     float scale    = 1.0f;
     float max_bias = 0.0f;
 
@@ -294,6 +292,18 @@ bool ggml_cuda_should_use_topk_moe(const ggml_tensor * softmax, const ggml_tenso
     if ((n_expert & (n_expert - 1)) != 0 || n_expert > 512) {
         return false;
     }
+
+    if (clamp) {
+        if (clamp->op != GGML_OP_CLAMP) {
+            return false;
+        }
+        float max_val = ggml_get_op_params_f32(clamp, 1);
+
+        if (max_val != INFINITY) {
+            return false;
+        }
+    }
+
 
     return true;
 }
