@@ -1017,7 +1017,8 @@ class Me {
         this.multiChat = new MultiChatUI();
         this.tools = {
             enabled: false,
-            fetchProxyUrl: "http://127.0.0.1:3128"
+            fetchProxyUrl: "http://127.0.0.1:3128",
+            toolNames: /** @type {Array<string>} */([])
         };
         this.chatProps = {
             apiEP: ApiEP.Type.Chat,
@@ -1117,6 +1118,9 @@ class Me {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
             }
+            if (prop.startsWith("tools:toolName")) {
+                /** @type {HTMLInputElement} */(elProp).disabled = true
+            }
         }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
             if (propWithPath == ":chatProps:apiEP") {
                 let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
@@ -1150,7 +1154,7 @@ function startme() {
     document["du"] = du;
     // @ts-ignore
     document["tools"] = tools;
-    tools.init()
+    tools.init().then((toolNames)=>gMe.tools.toolNames=toolNames)
     for (let cid of gMe.defaultChatIds) {
         gMe.multiChat.new_chat_session(cid);
     }
