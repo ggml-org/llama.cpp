@@ -87,7 +87,7 @@
 		const model = displayedModel();
 
 		void copyToClipboard(model ?? '');
-	};
+	}
 </script>
 
 <div
