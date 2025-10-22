@@ -10466,6 +10466,7 @@ void ggml_compute_forward_gla(
 }
 
 static void print_debug_info(float * data, size_t size, const char * name, int64_t token) {
+#ifdef MR_CHUNKY_TALKS
     GGML_LOG_INFO("\nggml-debug: %s (%ld) first 5 values: [%.6f, %.6f, %.6f, %.6f, %.6f, ...]\n", 
         name, token, data[0], data[1], data[2], data[3], data[4]);
     double sum = 0.0;
@@ -10473,6 +10474,7 @@ static void print_debug_info(float * data, size_t size, const char * name, int64
         sum += data[i];
     }
     GGML_LOG_INFO("total elements: %ld, sum = %.10f\n", size, sum);
+#endif MR_CHUNKY_TALKS
 }
 
 // Helper function to compute cumulative sum
