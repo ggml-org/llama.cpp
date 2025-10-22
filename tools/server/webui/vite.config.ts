@@ -18,7 +18,8 @@ const GUIDE_FOR_FRONTEND = `
 
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
-const DO_EMBED_FONTS = false; // The embedded mode is not yet ready :-(.
+// true: embed KaTeX-fonts into index.html, false: don't embed fonts.
+const DO_EMBED_FONTS = true;
 
 function llamaCppBuildPlugin() {
 	return {
@@ -70,7 +71,7 @@ function llamaCppBuildPlugin() {
 								// Replace both the original and hashed references
 								// e.g. url(./KaTeX_Math-Italic.flOr_0UB.ttf) has to be replaces by a base64 data url.
 								const bufData = Buffer.from(fontContent).toString('base64');
-								srcUrl = `src:url('data:application/font-woff2;base64,${bufData}') format("woff2")`;
+								srcUrl = `src:url(data:application/font-woff2;base64,${bufData}) format("woff2")`;
 							}
 						} else {
 							console.log('Missing font file', fontPath);
