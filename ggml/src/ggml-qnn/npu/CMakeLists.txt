@@ -188,14 +188,12 @@ else()
     file(GLOB common_srcs "${CMAKE_CURRENT_LIST_DIR}/common/*.cpp")
     file(GLOB device_srcs "${CMAKE_CURRENT_LIST_DIR}/device/*.cpp")
     file(GLOB device_op_srcs "${CMAKE_CURRENT_LIST_DIR}/device/op/*.cpp")
-    file(GLOB dma_srcs "${HEXAGON_SDK_ROOT}/addons/compute/libs/userdma/utils_lib/src/*.c")
     set(skel_srcs "${CMAKE_CURRENT_BINARY_DIR}/npu_device_skel.c")
     add_library(hexagon_npu_skel_OBJS OBJECT
         ${common_srcs}
         ${device_srcs}
         ${device_op_srcs}
         ${skel_srcs}
-        ${dma_srcs}
     )
 
     if(CMAKE_BUILD_TYPE MATCHES "Debug|Dbg")
@@ -243,8 +241,6 @@ else()
         ${HEXAGON_SDK_ROOT}/libs/qprintf/inc/
 
         # TODO: find a better way to include these
-        ${HEXAGON_SDK_ROOT}/addons/compute/libs/userdma/utils_lib/api/
-        ${HEXAGON_SDK_ROOT}/addons/compute/libs/userdma/utils_lib/inc/
         ${CMAKE_CURRENT_LIST_DIR}/device/
         ${CMAKE_CURRENT_LIST_DIR}/device/op/
     )

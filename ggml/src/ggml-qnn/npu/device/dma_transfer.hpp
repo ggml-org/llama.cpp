@@ -2,9 +2,10 @@
 
 #include "util.hpp"
 
-#include <dma_utils.h>
-
 namespace hexagon::dma {
+
+constexpr const size_t kDmaDescSize1D = 16;
+constexpr const size_t kDmaDescSize2D = 32;
 
 class dma_transfer {
   public:
@@ -32,12 +33,14 @@ class dma_transfer {
   private:
     static bool       is_desc_done(uint8_t * desc);  // TODO: should we use void * here?
     static qurt_mutex _dma_desc_mutex;
+    static void *     _dma_last_desc;
 
-    bool submit_impl(void ** desc_batch, int batch_len);
+    // TODO: can we avoid the void ** here?
+    bool submit_impl(void ** desc_batch, size_t batch_len);
 
-    alignas(DMA_DESC_SIZE_1D) uint8_t _dma_1d_desc0[DMA_DESC_SIZE_1D] = {};
-    alignas(DMA_DESC_SIZE_1D) uint8_t _dma_1d_desc1[DMA_DESC_SIZE_1D] = {};
-    alignas(DMA_DESC_SIZE_2D) uint8_t _dma_2d_desc0[DMA_DESC_SIZE_2D] = {};
+    alignas(kDmaDescSize1D) uint8_t _dma_1d_desc0[kDmaDescSize1D] = {};
+    alignas(kDmaDescSize1D) uint8_t _dma_1d_desc1[kDmaDescSize1D] = {};
+    alignas(kDmaDescSize2D) uint8_t _dma_2d_desc0[kDmaDescSize2D] = {};
 
     DISABLE_COPY_AND_MOVE(dma_transfer);
 };
