@@ -2260,7 +2260,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
                 for (int i = 0; i < q8_k_blocklen; i++) {
                     for (int j = 0; j < 2; j++) {
-                        // TODO: Change to a single vmul
                         float32x4_t q8_d = vdupq_n_f32(q8_ptr[b].d[i]);
                         float32x4_t q4_dmin = vcvt_f32_f16(vld1_f16((const __fp16 *)(q4_ptr[b].dmin + j * 4)));
                         const float32x4_t dmins = vmulq_f32(q4_dmin, q8_d);
