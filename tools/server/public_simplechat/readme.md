@@ -179,6 +179,8 @@ It is attached to the document object. Some of these can also be updated using t
 
   chatProps - maintain a set of properties which manipulate chatting with ai engine
 
+    apiEP - select between /completions and /chat/completions endpoint provided by the server/ai-model.
+
     stream - control between oneshot-at-end and live-stream-as-its-generated collating and showing
     of the generated response.
 
@@ -237,8 +239,6 @@ It is attached to the document object. Some of these can also be updated using t
     as tool calling will involve a bit of back and forth between ai assistant and end user, it is
     recommended to set iRecentUserMsgCnt to 10 or more, so that enough context is retained during
     chatting with ai models with tool support.
-
-  apiEP - select between /completions and /chat/completions endpoint provided by the server/ai-model.
 
   apiRequestOptions - maintains the list of options/fields to send along with api request,
   irrespective of whether /chat/completions or /completions endpoint.
