@@ -141,7 +141,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         wt_sum              = warp_reduce_sum(wt_sum);
         const float inv_sum = 1.0f / wt_sum;
 
-        for (int i = threadIdx.x; i < n_expert_used; i += WARP_SIZE) {
+        for (int i = 0; i < experts_per_thread; i++) {
             output_weights[i] *= inv_sum;
         }
     }
