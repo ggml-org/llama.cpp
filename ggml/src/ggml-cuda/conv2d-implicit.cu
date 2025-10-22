@@ -732,6 +732,236 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
 
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
+template <unsigned int mma_tiles_per_warp_m, unsigned int mma_tiles_per_warp_k, unsigned int smem_stride>
+__device__ __forceinline__ void ldmatrix_a(
+  const half* src,
+  half (&reg)[mma_tiles_per_warp_m][mma_tiles_per_warp_k][4]
+)
+{
+  static_assert(mma_tiles_per_warp_m == 8, "mma_tiles_per_warp_m must be 4");
+  static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
+
+  uint32_t (&reg_) [mma_tiles_per_warp_m][mma_tiles_per_warp_k][2] = reinterpret_cast<uint32_t(&)[mma_tiles_per_warp_m][mma_tiles_per_warp_k][2]>(reg);
+  unsigned int logical_offset = (threadIdx.x % 32) * smem_stride;
+  unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b10000000) >> 4);
+  swizzled_offset = swizzled_offset ^ ((swizzled_offset & 0b1100000) >> 2);
+  uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
+  constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
+    
+    // 0
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[0][0][0]), "=r"(reg_[0][0][1]), "=r"(reg_[1][0][0]), "=r"(reg_[1][0][1])
+      : "r"(src_addr)
+    );
+
+    // 0
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[2][0][0]), "=r"(reg_[2][0][1]), "=r"(reg_[3][0][0]), "=r"(reg_[3][0][1])
+      : "r"(src_addr + 32 * smem_stride_)
+    );
+
+    // 0
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[4][0][0]), "=r"(reg_[4][0][1]), "=r"(reg_[5][0][0]), "=r"(reg_[5][0][1])
+      : "r"(src_addr + 64 * smem_stride_)
+    );
+
+    // 0
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[6][0][0]), "=r"(reg_[6][0][1]), "=r"(reg_[7][0][0]), "=r"(reg_[7][0][1])
+      : "r"(src_addr + 96 * smem_stride_)
+    );
+
+    src_addr ^= 0b10000;
+    
+    // 1
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[0][1][0]), "=r"(reg_[0][1][1]), "=r"(reg_[1][1][0]), "=r"(reg_[1][1][1])
+      : "r"(src_addr)
+    );
+
+    // 1
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[2][1][0]), "=r"(reg_[2][1][1]), "=r"(reg_[3][1][0]), "=r"(reg_[3][1][1])
+      : "r"(src_addr + 32 * smem_stride_)
+    );
+
+    // 1
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[4][1][0]), "=r"(reg_[4][1][1]), "=r"(reg_[5][1][0]), "=r"(reg_[5][1][1])
+      : "r"(src_addr + 64 * smem_stride_)
+    );
+
+    // 1
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[6][1][0]), "=r"(reg_[6][1][1]), "=r"(reg_[7][1][0]), "=r"(reg_[7][1][1])
+      : "r"(src_addr + 96 * smem_stride_)
+    );
+    
+    src_addr ^= 0b110000;
+
+    // 2
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[0][2][0]), "=r"(reg_[0][2][1]), "=r"(reg_[1][2][0]), "=r"(reg_[1][2][1])
+      : "r"(src_addr)
+    );
+
+    // 2
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[2][2][0]), "=r"(reg_[2][2][1]), "=r"(reg_[3][2][0]), "=r"(reg_[3][2][1])
+      : "r"(src_addr + 32 * smem_stride_)
+    );
+
+    // 2
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[4][2][0]), "=r"(reg_[4][2][1]), "=r"(reg_[5][2][0]), "=r"(reg_[5][2][1])
+      : "r"(src_addr + 64 * smem_stride_)
+    );
+
+    // 2
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[6][2][0]), "=r"(reg_[6][2][1]), "=r"(reg_[7][2][0]), "=r"(reg_[7][2][1])
+      : "r"(src_addr + 96 * smem_stride_)
+    );
+    src_addr ^= 0b10000;
+
+    // 3
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[0][3][0]), "=r"(reg_[0][3][1]), "=r"(reg_[1][3][0]), "=r"(reg_[1][3][1])
+      : "r"(src_addr)
+    );
+
+    // 3
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[2][3][0]), "=r"(reg_[2][3][1]), "=r"(reg_[3][3][0]), "=r"(reg_[3][3][1])
+      : "r"(src_addr + 32 * smem_stride_)
+    );
+
+    // 3
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[4][3][0]), "=r"(reg_[4][3][1]), "=r"(reg_[5][3][0]), "=r"(reg_[5][3][1])
+      : "r"(src_addr + 64 * smem_stride_)
+    );
+
+    // 3
+    asm volatile (
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[6][3][0]), "=r"(reg_[6][3][1]), "=r"(reg_[7][3][0]), "=r"(reg_[7][3][1])
+      : "r"(src_addr + 96 * smem_stride_)
+    );
+
+}
+
+template <unsigned int mma_tiles_per_warp_k, unsigned int mma_tiles_per_warp_n, unsigned int smem_stride>
+__device__ __forceinline__ void ldmatrix_b(
+  const half* src,
+  half (&reg)[mma_tiles_per_warp_k][mma_tiles_per_warp_n][2]
+)
+{
+  static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
+  static_assert(mma_tiles_per_warp_n == 8, "mma_tiles_per_warp_n must be 8");
+  
+  uint32_t (&reg_) [4][8] = reinterpret_cast<uint32_t(&)[4][8]>(reg);
+  const unsigned int logical_offset = ((threadIdx.x % 8) * smem_stride) +  (((threadIdx.x % 32) / 8) * 8);
+  unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b11100000000) >> 5);
+  uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
+  constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[0][0]), "=r"(reg_[0][1]), "=r"(reg_[0][2]), "=r"(reg_[0][3])
+    : "r"(src_addr)
+  );
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[0][4]), "=r"(reg_[0][5]), "=r"(reg_[0][6]), "=r"(reg_[0][7])
+    : "r"(src_addr ^ 0b1000000)
+  );
+
+  src_addr += 8 * smem_stride_;
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[1][0]), "=r"(reg_[1][1]), "=r"(reg_[1][2]), "=r"(reg_[1][3])
+    : "r"(src_addr)
+  );
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[1][4]), "=r"(reg_[1][5]), "=r"(reg_[1][6]), "=r"(reg_[1][7])
+    : "r"(src_addr ^ 0b1000000)
+  );
+
+  src_addr += 8 * smem_stride_;
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[2][0]), "=r"(reg_[2][1]), "=r"(reg_[2][2]), "=r"(reg_[2][3])
+    : "r"(src_addr)
+  );
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[2][4]), "=r"(reg_[2][5]), "=r"(reg_[2][6]), "=r"(reg_[2][7])
+    : "r"(src_addr ^ 0b1000000)
+  );
+
+  src_addr += 8 * smem_stride_;
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[3][0]), "=r"(reg_[3][1]), "=r"(reg_[3][2]), "=r"(reg_[3][3])
+    : "r"(src_addr)
+  );
+
+  asm volatile (
+    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+    "{%0, %1, %2, %3}, [%4];"
+    : "=r"(reg_[3][4]), "=r"(reg_[3][5]), "=r"(reg_[3][6]), "=r"(reg_[3][7])
+    : "r"(src_addr ^ 0b1000000)
+  );
+
+}
+
 template<const int BM, const int BN, const int BK, const int WM, const int WN,
         const int WK,  const int NUM_THREADS>
 static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
@@ -742,6 +972,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int MMA_N = 8;
 
   const unsigned int K = param.c * param.r * param.s;
+  const uint PQ = param.Oh * param.Ow;
+  const uint inChannelOffset = param.c * param.w;
+  const uint weightKOffset = param.c * param.r * param.s;
 
   // for convenience/readability in index calculations
   const unsigned int A_stride = K;
@@ -801,12 +1034,13 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   static_assert(NUM_THREADS == 256);
   float4 A_gmem_cache_reg[4];
   float4 B_gmem_cache_reg[4];
-    
+
   // prefetch the first block tile of A,B into shared memory
-  half* A_block_gmem = input + (block_m * BM * A_stride);
-  half* B_block_gmem = weight + (block_n * BN);
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, K);
-  tileMemcpySwizzle<BK, BN, NUM_THREADS, SWIZZLE_BITS_B>(B_block_gmem, B_block_smem, N);
+//   half* A_block_gmem = input + (block_m * BM * A_stride);
+  half* A_block_gmem = input;
+  half* B_block_gmem = weight + (block_n * weightKOffset);
+  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inChannelOffset, param);
+  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
 
   // construct const pointers to warp tiles for use inside the inner loop
 
@@ -864,7 +1098,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       offset_direction = -1 * offset_direction;
 
       tileMemcpySwizzleStoreA<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem);
-      tileMemcpySwizzleStore<BK, BN, NUM_THREADS, SWIZZLE_BITS_B, 4>(B_gmem_cache_reg, B_block_smem);
+      tileMemcpySwizzleStoreB<BN, NUM_THREADS> (B_gmem_cache_reg, B_block_smem);
     }
   }
 
@@ -1026,6 +1260,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW };
     params.SC_fastdiv = init_fastdiv_values(KW*IC);
     params.OW_fastdiv = init_fastdiv_values(OW);
+    params.OHOW_fastdiv = init_fastdiv_values(OW*OH);
     params.C_fastdiv = init_fastdiv_values(IC);
     params.RS_fastdiv = init_fastdiv_values(KW*KH);
     params.S_fastdiv = init_fastdiv_values(KW);
