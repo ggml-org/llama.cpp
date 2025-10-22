@@ -22,29 +22,27 @@ static inline float op_div(float a, float b) {
     return a / b;
 }
 
-
-typedef struct {
-    ggml_bf16_t imag;
-    ggml_bf16_t real;
-} ifairy_complex;
-
-typedef union {
-    float f;
-    ifairy_complex complex;
-} complex_union;
-
-
+/**
+ * @brief 两个以 float 位模式存储的 BF16 复数相加
+ * 
+ * @warning 输入的 float 不是常规浮点数，而是打包的复数位模式
+ * @param a 第一个复数（实部和虚部各为 BF16）
+ * @param b 第二个复数
+ * @return float 结果复数的位模式（以 float 返回）
+ * 
+ * 内存布局（假设小端序）：
+ *   Bits 0-15:  imag (BF16)
+ *   Bits 16-31: real (BF16)
+ */
 static inline float op_ifairy_add(float a, float b) {
-    complex_union ca, cb;
-    ca.f = a;
-    cb.f = b;
-    float r = GGML_BF16_TO_FP32(ca.complex.real);
-    float i = GGML_BF16_TO_FP32(ca.complex.imag);
-    r = r + GGML_BF16_TO_FP32(cb.complex.real);
-    i = i + GGML_BF16_TO_FP32(cb.complex.imag);
-    ca.complex.real = GGML_FP32_TO_BF16(r);
-    ca.complex.imag = GGML_FP32_TO_BF16(i);
-    return ca.f;
+    float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    r = r + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    i = i + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    float ret;
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+    return ret;
 }
 
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
