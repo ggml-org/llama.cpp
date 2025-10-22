@@ -24,6 +24,30 @@
 
 #define UNUSED GGML_UNUSED
 
+static inline void decode_q4_Kx8_scales_mins(const uint8_t * scales_in,
+                                             int16x8_t *     out_mins,
+                                             int8_t *        out_scales) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f;
+    constexpr uint32_t kmask2 = 0x0f0f0f0f;
+    constexpr uint32_t kmask3 = 0x03030303;
+    constexpr uint8_t  scales_size = 12;
+
+    uint32_t sm[3];
+    memcpy(sm, scales_in, scales_size);
+
+    const uint32_t   mins_0_3 = sm[1] & kmask1;
+    const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
+    const uint32x2_t mins_u32 = { mins_0_3, mins_4_7 };
+
+    *out_mins = vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins_u32)));
+
+    uint32_t scales_u32[2];
+    scales_u32[0] = sm[0] & kmask1;
+    scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
+    memcpy(out_scales, scales_u32, 8);
+}
+
+
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -1890,29 +1914,6 @@ void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     ggml_gemm_iq4_nl_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-static inline void decode_q4_Kx8_scales_mins(const uint8_t * scales_in,
-                                             int16x8_t *     out_mins,
-                                             int8_t *        out_scales) {
-    constexpr uint32_t kmask1 = 0x3f3f3f3f;
-    constexpr uint32_t kmask2 = 0x0f0f0f0f;
-    constexpr uint32_t kmask3 = 0x03030303;
-    constexpr uint8_t  scales_size = 12;
-
-    uint32_t sm[3];
-    memcpy(sm, scales_in, scales_size);
-
-    const uint32_t   mins_0_3 = sm[1] & kmask1;
-    const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
-    const uint32x2_t mins_u32 = { mins_0_3, mins_4_7 };
-
-    *out_mins = vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins_u32)));
-
-    uint32_t scales_u32[2];
-    scales_u32[0] = sm[0] & kmask1;
-    scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
-    memcpy(out_scales, scales_u32, 8);
-}
-
 
 void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                              float * GGML_RESTRICT      s,
@@ -1943,6 +1944,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     const uint8x16_t m4b = vdupq_n_u8(0x0f);
 
     // 8 accumulators: 2 row pairs × 4 col pairs
@@ -1960,17 +1962,21 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
             for (int b = 0; b < nb; b++) {
                 // bsums pairs belongs to the same q8_k subblock
-                const int16x8_t y_bsums[4]{
+                const int16x8_t bsums[4]{
                     vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 0), vld1q_s16(q8_ptr[b].bsums + 16 * 0 + 8)),
                     vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 1), vld1q_s16(q8_ptr[b].bsums + 16 * 1 + 8)),
                     vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 2), vld1q_s16(q8_ptr[b].bsums + 16 * 2 + 8)),
                     vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 3), vld1q_s16(q8_ptr[b].bsums + 16 * 3 + 8)),
                 };
+                int16_t bsums_arr[4][8];
+                for (int q8_row = 0; q8_row < 4; q8_row++) {
+                    vst1q_s16(bsums_arr[q8_row], bsums[q8_row]);
+                }
 
                 int32x4_t sb_acc[4];   // Aux accumulators to store subblock (partial) results
                 int32x4_t acc[8];      // rows 01 stored in [0][1][2][3] rows 23 stored in [4][5][6][7]
                 int32x4_t bias_acc[8]; // interleaved bias_acc: [0]->r0 0123, [1]->r0 4567, [2]->r1 0123 ...
-                for (int i = 0; i < 8; ++i) {
+                for (int i = 0; i < 8; i++) {
                     acc[i]      = vdupq_n_s32(0);
                     bias_acc[i] = vdupq_n_s32(0);
                 }
@@ -1992,7 +1998,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     int8x16_t q8_qs_23[8];
 
                     // Load 32-byte per row pair, 1 subblock each time
-                    for (int i = 0; i < 8; ++i) {
+                    for (int i = 0; i < 8; i++) {
                         const int offset = i * 32;  // 16 for row 01, 16 for row 23
                         q8_qs_01[i] = vld1q_s8(q8_base + offset);
                         q8_qs_23[i] = vld1q_s8(q8_base + offset + 16);
@@ -2007,7 +2013,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
                     // Q4s columns iterated in pairs (01, 23, 45, 67)
                     for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
-                        for (int i = 0; i < 4; ++i) {
+                        for (int i = 0; i < 4; i++) {
                             sb_acc[i] = vdupq_n_s32(0);
                         }
 
@@ -2063,16 +2069,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     for (int q8_row = 0; q8_row < 4; q8_row++) {
                         // Each pair of subblocks share the same bsums
                         // Load scalar bsum → broadcast to a vector (vdupq_n_s16(s)).
-                        int16x8_t bsums_vec_lo = vdupq_n_s16(y_bsums[sb][q8_row * 2]);
-                        int16x8_t bsums_vec_hi = vdupq_n_s16(y_bsums[sb][q8_row * 2 + 1]);
+                        int16x4_t bsums_vec_lo = vdup_n_s16(bsums_arr[sb][q8_row * 2]);
+                        int16x4_t bsums_vec_hi = vdup_n_s16(bsums_arr[sb][q8_row * 2 + 1]);
 
                         bias_acc[2 * q8_row] =
-                            vmlal_s16(bias_acc[2 * q8_row], vget_low_s16(bsums_vec_lo), vget_low_s16(q4sb_mins[0]));
+                            vmlal_s16(bias_acc[2 * q8_row], bsums_vec_lo, vget_low_s16(q4sb_mins[0]));
                         bias_acc[2 * q8_row] =
-                            vmlal_s16(bias_acc[2 * q8_row], vget_low_s16(bsums_vec_hi), vget_low_s16(q4sb_mins[1]));
-                        bias_acc[2 * q8_row + 1] = vmlal_s16(bias_acc[2 * q8_row + 1], vget_high_s16(bsums_vec_lo),
+                            vmlal_s16(bias_acc[2 * q8_row], bsums_vec_hi, vget_low_s16(q4sb_mins[1]));
+                        bias_acc[2 * q8_row + 1] = vmlal_s16(bias_acc[2 * q8_row + 1], bsums_vec_lo,
                                                              vget_high_s16(q4sb_mins[0]));
-                        bias_acc[2 * q8_row + 1] = vmlal_s16(bias_acc[2 * q8_row + 1], vget_high_s16(bsums_vec_hi),
+                        bias_acc[2 * q8_row + 1] = vmlal_s16(bias_acc[2 * q8_row + 1], bsums_vec_hi,
                                                              vget_high_s16(q4sb_mins[1]));
                     }
                 }  // for sb
@@ -2095,19 +2101,13 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
                 for (int i = 0; i < q8_k_blocklen; i++) {
                     for (int j = 0; j < 2; j++) {
-                        const float32x4_t dmins = {
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].dmin[j * 4 + 0]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].dmin[j * 4 + 1]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].dmin[j * 4 + 2]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].dmin[j * 4 + 3]),
-                        };
+                        // TODO: Change to a single vmul
+                        float32x4_t q8_d = vdupq_n_f32(q8_ptr[b].d[i]);
+                        float32x4_t q4_dmin = vcvt_f32_f16(vld1_f16((const __fp16 *)(q4_ptr[b].dmin + j * 4)));
+                        const float32x4_t dmins = vmulq_f32(q4_dmin, q8_d);
 
-                        const float32x4_t scale = {
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].d[j * 4 + 0]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].d[j * 4 + 1]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].d[j * 4 + 2]),
-                            q8_ptr[b].d[i] * GGML_CPU_FP16_TO_FP32(q4_ptr[b].d[j * 4 + 3]),
-                        };
+                        float32x4_t q4_d = vcvt_f32_f16(vld1_f16((const __fp16 *)(q4_ptr[b].d + j * 4)));
+                        const float32x4_t scale = vmulq_f32(q4_d, q8_d);
 
                         acc_f32[2 * i + j] = vmlsq_f32(acc_f32[2 * i + j], vcvtq_f32_s32(bias_acc[2 * i + j]), dmins);
                         acc_f32[2 * i + j] =
@@ -2127,5 +2127,8 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
             }
         }  // for x
     }  // for y
+    return;
+#endif
+    ggml_gemm_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
