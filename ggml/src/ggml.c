@@ -43,6 +43,10 @@
 #include <TargetConditionals.h>
 #endif
 
+#ifdef GGML_TSAVORITE
+#include "ggml-tsavorite.h"
+#endif /* GGML_TSAVORITE */
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -7331,3 +7335,14 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
     fprintf(fp, "--------------------------------------------------------------------------------------------------------\n\n");
 }
 #endif /* GGML_PERF_DETAIL */
+
+void ggml_cleanup()
+{
+#if 0
+    #ifdef GGML_TSAVORITE
+        tsi_cleanup();
+    #endif /* GGML_TSAVORITE */
+#endif
+    return;
+}
+
