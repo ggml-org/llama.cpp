@@ -250,7 +250,7 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
 
     const int n_expert_used = weights->ne[1];
 
-    float clamp_val = 0.0f;
+    float clamp_val = -INFINITY;
     if (with_norm) {
         if (clamp) {
             clamp_val = ggml_get_op_params_f32(clamp, 0);
