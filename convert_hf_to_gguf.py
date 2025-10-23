@@ -7,7 +7,6 @@ import ast
 import logging
 import argparse
 import contextlib
-import importlib.util
 import json
 import os
 import re
@@ -31,7 +30,7 @@ if 'NO_LOCAL_GGUF' not in os.environ:
 import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
-if importlib.util.find_spec("mistral_common") is not None:
+try:
     from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports]
     from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports]
     from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
@@ -41,7 +40,7 @@ if importlib.util.find_spec("mistral_common") is not None:
 
     _mistral_common_installed = True
     _mistral_import_error_msg = ""
-else:
+except ImportError:
     _MISTRAL_COMMON_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
     _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
