@@ -1,5 +1,6 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
+	import { Dialog as DialogPrimitive } from 'bits-ui';
+	import XIcon from '@lucide/svelte/icons/x';
 
 	interface Props {
 		open: boolean;
@@ -13,12 +14,12 @@
 	let iframeRef = $state<HTMLIFrameElement | null>(null);
 
 	$effect(() => {
-		if (iframeRef) {
-			if (open) {
-				iframeRef.srcdoc = code;
-			} else {
-				iframeRef.srcdoc = '';
-			}
+		if (!iframeRef) return;
+
+		if (open) {
+			iframeRef.srcdoc = code;
+		} else {
+			iframeRef.srcdoc = '';
 		}
 	});
 
@@ -28,27 +29,65 @@
 	}
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="max-w-[calc(100%-1rem)] sm:max-w-4xl md:max-w-5xl">
-		<Dialog.Header>
-			<Dialog.Title>HTML Preview</Dialog.Title>
-		</Dialog.Header>
+<DialogPrimitive.Root {open} onOpenChange={handleOpenChange}>
+	<DialogPrimitive.Portal>
+		<DialogPrimitive.Overlay class="code-preview-overlay" />
 
-		<div class="preview-container mt-2">
+		<DialogPrimitive.Content class="code-preview-content">
 			<iframe
 				bind:this={iframeRef}
 				title={`Preview ${language}`}
 				sandbox="allow-scripts"
-				class="h-[70vh] w-full rounded-md border border-border/40 bg-background"
+				class="code-preview-iframe"
 			></iframe>
-		</div>
-	</Dialog.Content>
-</Dialog.Root>
 
-<style>
-	.preview-container {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
+			<DialogPrimitive.Close
+				class="code-preview-close absolute top-4 right-6 rounded-xs text-white opacity-70 mix-blend-difference ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-8"
+				aria-label="Close preview"
+			>
+				<XIcon />
+				<span class="sr-only">Close preview</span>
+			</DialogPrimitive.Close>
+		</DialogPrimitive.Content>
+	</DialogPrimitive.Portal>
+</DialogPrimitive.Root>
+
+<style lang="postcss">
+	:global(.code-preview-overlay) {
+		position: fixed;
+		inset: 0;
+		background-color: transparent;
+		z-index: 100000;
+	}
+
+	:global(.code-preview-content) {
+		position: fixed;
+		inset: 0;
+		top: 0 !important;
+		left: 0 !important;
+		width: 100dvw;
+		height: 100dvh;
+		margin: 0;
+		padding: 0;
+		border: none;
+		border-radius: 0;
+		background-color: transparent;
+		box-shadow: none;
+		display: block;
+		overflow: hidden;
+		transform: none !important;
+		z-index: 100001;
+	}
+
+	:global(.code-preview-iframe) {
+		display: block;
+		width: 100dvw;
+		height: 100dvh;
+		border: 0;
+	}
+
+	:global(.code-preview-close) {
+		position: absolute;
+		z-index: 100002;
 	}
 </style>
