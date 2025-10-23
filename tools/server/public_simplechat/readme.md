@@ -42,8 +42,9 @@ any adaptive culling of old messages nor of replacing them with summary of their
 is a optional sliding window based chat logic, which provides a simple minded culling of old messages from
 the chat history before sending to the ai model.
 
-NOTE: Wrt options sent with the request, it mainly sets temperature, max_tokens and optionaly stream for now.
-However if someone wants they can update the js file or equivalent member in gMe as needed.
+NOTE: Wrt options sent with the request, it mainly sets temperature, max_tokens and optionaly stream as well
+as tool_calls mainly for now. However if someone wants they can update the js file or equivalent member in
+gMe as needed.
 
 NOTE: One may be able to use this to chat with openai api web-service /chat/completions endpoint, in a very
 limited / minimal way. One will need to set model, openai url and authorization bearer key in settings ui.
@@ -55,7 +56,7 @@ One could run this web frontend directly using server itself or if anyone is thi
 frontend to configure the server over http(s) or so, then run this web frontend using something like python's
 http module.
 
-### running using tools/server
+### running directly using tools/server
 
 ./llama-server -m path/model.gguf --path tools/server/public_simplechat [--port PORT]
 
@@ -78,10 +79,15 @@ remember to
 
 * use a GenAi/LLM model which supports tool calling.
 
-* if fetch web url / page tool call is needed, remember to run the bundled local.tools/simpleproxy.py helper
+* if fetch web url / page tool call is needed remember to run the bundled local.tools/simpleproxy.py
+  helper along with its config file
 
-  * remember that this is a relatively dumb proxy logic along with optional stripping of scripts/styles/headers/footers/...,
-    Be careful if trying to fetch web pages, and use it only with known safe sites.
+  * cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
+
+  * remember that this is a relatively dumb proxy logic along with optional stripping of scripts / styles
+    / headers / footers /..., Be careful if trying to fetch web pages, and use it only with known safe sites.
+
+  * it allows one to specify a white list of allowed.domains, look into local.tools/simpleproxy.json
 
 ### using the front end
 
@@ -312,7 +318,9 @@ wrt repeatations in general in the generated text response.
 A end-user can change these behaviour by editing gMe from browser's devel-tool/console or by
 using the provided settings ui (for settings exposed through the ui). The logic uses a generic
 helper which autocreates property edit ui elements for the specified set of properties. If the
-new property is a number or text or boolean, the autocreate logic will handle it.
+new property is a number or text or boolean or a object with properties within it, autocreate
+logic will try handle it automatically. A developer can trap this autocreation flow and change
+things if needed.
 
 
 ### OpenAi / Equivalent API WebService
@@ -362,11 +370,11 @@ server logic, this helps bypass the CORS restrictions applied if trying to direc
 browser js runtime environment. Depending on the path specified wrt the proxy server, if urltext
 (and not urlraw), it additionally tries to convert html content into equivalent text to some extent
 in a simple minded manner by dropping head block as well as all scripts/styles/footers/headers/nav.
-May add support for white list of allowed sites to access or so.
 * the logic does a simple check to see if the bundled simpleproxy is running at specified fetchProxyUrl
   before enabling fetch web related tool calls.
 * The bundled simple proxy can be found at
   * tools/server/public_simplechat/local.tools/simpleproxy.py
+* it provides for a basic white list of allowed domains to access or so
 
 
 #### Extending with new tools
@@ -374,10 +382,10 @@ May add support for white list of allowed sites to access or so.
 Provide a descriptive meta data explaining the tool / function being provided for tool calling,
 as well as its arguments.
 
-Provide a handler which should implement the specified tool / function call or rather constructs
-the code to be run to get the tool / function call job done, and inturn pass the same to the
-provided web worker to get it executed. Remember to use console.log while generating any response
-that should be sent back to the ai model, in your constructed code.
+Provide a handler which should implement the specified tool / function call or rather for many
+cases constructs the code to be run to get the tool / function call job done, and inturn pass
+the same to the provided web worker to get it executed. Remember to use console.log while
+generating any response that should be sent back to the ai model, in your constructed code.
 
 Update the tc_switch to include a object entry for the tool, which inturn includes
 * the meta data as well as
@@ -415,13 +423,16 @@ so that any scheduled asynchronous code or related async error handling using pr
 gets executed, before tool calling returns and thus data / error generated by those async code also
 get incorporated in result sent to ai engine on the server side.
 
-#### ToDo
 
-Is the promise land trap deep enough, need to think through and explore around this once later.
+### ToDo
+
+Is the tool call promise land trap deep enough, need to think through and explore around this once later.
 
 Trap error responses.
 
 Handle reasoning/thinking responses from ai models.
+
+Handle multimodal handshaking with ai models.
 
 
 ### Debuging the handshake
