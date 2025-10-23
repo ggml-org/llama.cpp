@@ -22,11 +22,13 @@ import urllib.request
 from dataclasses import dataclass
 import html.parser
 import re
+import time
 
 
 gMe = {
     '--port': 3128,
     '--config': '/dev/null',
+    '--debug': False,
     'server': None
 }
 
@@ -105,6 +107,18 @@ class UrlReqResp:
     contentData: str = ""
 
 
+def debug_dump(meta: dict, data: dict):
+    if not gMe['--debug']:
+        return
+    timeTag = f"{time.time():0.12f}"
+    with open(f"/tmp/simpleproxy.{timeTag}.meta", '+w') as f:
+        for k in meta:
+            f.write(f"\n\n\n\n{k}:{meta[k]}\n\n\n\n")
+    with open(f"/tmp/simpleproxy.{timeTag}.data", '+w') as f:
+        for k in data:
+            f.write(f"\n\n\n\n{k}:{data[k]}\n\n\n\n")
+
+
 def validate_url(url: str, tag: str):
     """
     Implement a re based filter logic on the specified url.
@@ -152,7 +166,7 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
         return gotVU
     try:
         hUA = ph.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0')
-        hAL = ph.headers.get('Accept-Language', "en-US,en")
+        hAL = ph.headers.get('Accept-Language', "en-US,en;q=0.9")
         hA = ph.headers.get('Accept', "text/html,*/*")
         headers = {
             'User-Agent': hUA,
@@ -166,6 +180,7 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
             contentData = response.read().decode('utf-8')
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
+            debug_dump({ 'url': req.full_url, 'headers': req.headers, 'ctype': contentType }, { 'cdata': contentData })
         return UrlReqResp(True, statusCode, "", contentType, contentData)
     except Exception as exc:
         return UrlReqResp(False, 502, f"WARN:{tag}:Failed:{exc}")
@@ -283,6 +298,7 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
         ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
+        debug_dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
 
@@ -333,6 +349,10 @@ def process_args(args: list[str]):
                 iArg += 1
                 load_config()
             case '--allowed.domains':
+                iArg += 1
+                gMe[cArg] = ast.literal_eval(args[iArg])
+                iArg += 1
+            case '--debug':
                 iArg += 1
                 gMe[cArg] = ast.literal_eval(args[iArg])
                 iArg += 1
