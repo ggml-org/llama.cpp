@@ -2379,10 +2379,6 @@ struct server_context {
         llama_batch_free(batch);
     }
 
-    int32_t n_ctx_slot() const {
-        return params_base.kv_unified ? n_ctx : n_ctx / params_base.n_parallel;
-    }
-
     bool load_model(const common_params & params) {
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
@@ -2411,7 +2407,7 @@ struct server_context {
 
             params_dft.devices      = params_base.speculative.devices;
             params_dft.model        = params_base.speculative.model;
-            params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? n_ctx_slot() : params_base.speculative.n_ctx;
+            params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_base.speculative.n_ctx;
             params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
             params_dft.n_parallel   = 1;
             params_dft.cache_type_k = params_base.speculative.cache_type_k;
@@ -2506,7 +2502,7 @@ struct server_context {
 
             slot.id = i;
             slot.ctx = ctx;
-            slot.n_ctx = n_ctx_slot();
+            slot.n_ctx = llama_n_ctx_seq(ctx);
             slot.mctx = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
