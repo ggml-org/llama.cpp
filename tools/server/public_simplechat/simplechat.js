@@ -79,12 +79,21 @@ class ChatMessageEx {
 
     /**
      * Create a all in one tool call result string
+     * Use browser's dom logic to handle strings in a xml/html safe way by escaping things where needed,
+     * so that extracting the same later doesnt create any problems.
      * @param {string} toolCallId
      * @param {string} toolName
      * @param {string} toolResult
      */
     static createToolCallResultAllInOne(toolCallId, toolName, toolResult) {
-        return `<tool_response> <id>${toolCallId}</id> <name>${toolName}</name> <content>${toolResult}</content> </tool_response>`;
+        let dp = new DOMParser()
+        let doc = dp.parseFromString("<tool_response></tool_response>", "text/xml")
+        for (const k of [["id", toolCallId], ["name", toolName], ["content", toolResult]]) {
+            let el = doc.createElement(k[0])
+            el.appendChild(doc.createTextNode(k[1]))
+            doc.documentElement.appendChild(el)
+        }
+        return new XMLSerializer().serializeToString(doc);
     }
 
     /**
