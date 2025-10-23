@@ -941,6 +941,7 @@ struct ggml_cuda_graph {
     std::vector<cudaGraphNode_t> nodes;
     std::vector<cudaKernelNodeParams> params;
     int number_consecutive_updates = 0;
+    int number_consecutive_computes = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 #endif
 };

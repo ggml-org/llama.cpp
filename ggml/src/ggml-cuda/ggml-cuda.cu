@@ -3149,8 +3149,7 @@ static void ggml_backend_cuda_graph_plan_update(ggml_backend_t backend, ggml_bac
         } else {
             cuda_graph_update_required = true;
         }
-    } else {
-        cuda_graph->number_consecutive_updates = 0;
+        cuda_graph->number_consecutive_computes = 0;
     }
 
     if (use_cuda_graph && cuda_graph_update_required) {
@@ -3174,6 +3173,11 @@ static enum ggml_status ggml_backend_cuda_graph_plan_compute(ggml_backend_t back
     ggml_cuda_graph * cuda_graph = (ggml_cuda_graph *) plan;
 
     ggml_cuda_set_device(cuda_ctx->device);
+
+    cuda_graph->number_consecutive_computes++;
+    if (cuda_graph->number_consecutive_computes > 1) {
+        cuda_graph->number_consecutive_updates = 0;
+    }
 
     if (cuda_graph->instance) {
         CUDA_CHECK(cudaGraphLaunch(cuda_graph->instance, cuda_ctx->stream()));
