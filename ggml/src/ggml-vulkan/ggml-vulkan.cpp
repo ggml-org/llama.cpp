@@ -1478,14 +1478,15 @@ class vk_perf_logger {
         if (timings.empty()) {
             return;
         }
+        std::stringstream ss;
         uint64_t total_all_op_times = 0;
-        std::cerr << "----------------\nVulkan Timings:" << std::endl;
+        ss << "----------------\nVulkan Timings:" << std::endl;
         for (const auto & t : timings) {
             uint64_t total_op_times = 0;
             for (const auto & time : t.second) {
                 total_op_times += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
+            ss << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
                       << " us";
 
             // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
@@ -1495,7 +1496,7 @@ class vk_perf_logger {
                 for (const auto & elem : it->second) {
                     total_op_flops += elem;
                 }
-                std::cerr << " ("
+                ss << " ("
                           << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
                                  (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
                           << " GFLOPS/s)";
@@ -1503,13 +1504,14 @@ class vk_perf_logger {
 
             total_all_op_times += total_op_times;
 
-            std::cerr << std::endl;
+            ss << std::endl;
         }
 
         if (timings.size() > 0) {
-            std::cerr << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
+            ss << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
         }
-
+        auto ssStr = ss.str();
+        GGML_LOG_DEBUG("%s", ssStr.c_str());
         timings.clear();
         flops.clear();
     }
