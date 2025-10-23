@@ -123,9 +123,18 @@ def validate_url(url: str, tag: str):
     return UrlReqResp(True, 200)
 
 
-def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
+def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
     """
     Common part of the url request handling used by both urlraw and urltext.
+
+    Verify the url being requested is allowed.
+
+    Include User-Agent, Accept-Language and Accept in the generated request using
+    equivalent values got in the request being proxied, so as to try mimic the
+    real client, whose request we are proxying. In case a header is missing in the
+    got request, fallback to using some possibly ok enough defaults.
+
+    Fetch the requested url.
     """
     print(f"DBUG:{tag}:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
@@ -140,8 +149,17 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
     if not gotVU.callOk:
         return gotVU
     try:
+        hUA = ph.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0')
+        hAL = ph.headers.get('Accept-Language', "en-US,en")
+        hA = ph.headers.get('Accept', "text/html,*/*")
+        headers = {
+            'User-Agent': hUA,
+            'Accept': hA,
+            'Accept-Language': hAL
+        }
+        req = urllib.request.Request(url, headers=headers)
         # Get requested url
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             contentData = response.read().decode('utf-8')
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
@@ -153,7 +171,7 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
 def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     try:
         # Get requested url
-        got = handle_urlreq(pr, "HandleUrlRaw")
+        got = handle_urlreq(ph, pr, "HandleUrlRaw")
         if not got.callOk:
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
@@ -248,7 +266,7 @@ class TextHtmlParser(html.parser.HTMLParser):
 def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     try:
         # Get requested url
-        got = handle_urlreq(pr, "HandleUrlText")
+        got = handle_urlreq(ph, pr, "HandleUrlText")
         if not got.callOk:
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
