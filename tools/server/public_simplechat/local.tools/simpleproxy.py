@@ -154,7 +154,6 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
     Fetch the requested url.
     """
     tag=f"UrlReq:{tag}"
-    print(f"DBUG:{tag}:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url']
     print(f"DBUG:{tag}:Url:{url}")
