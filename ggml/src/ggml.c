@@ -4089,6 +4089,29 @@ struct ggml_tensor * ggml_ifairy_merge(
     return ggml_ifairy_merge_impl(ctx, a);
 }
 
+static struct ggml_tensor * ggml_ifairy_rms_norm_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 eps,
+        bool                  inplace) {
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params(result, &eps, sizeof(eps));
+
+    result->op     = GGML_OP_IFAIRY_RMSNORM;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_ifairy_rms_norm(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 eps) {
+    return ggml_ifairy_rms_norm_impl(ctx, a, eps, false);
+}
+
+
 struct ggml_tensor * ggml_rope(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,

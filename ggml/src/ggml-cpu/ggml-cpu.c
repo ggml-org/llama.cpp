@@ -1866,6 +1866,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_soft_max_ext_back(params, tensor);
             } break;
+        case GGML_OP_IFAIRY_RMSNORM:
+            {
+                ggml_compute_forward_ifairy_rmsnorm(params, tensor);
+            } break;
         case GGML_OP_IFAIRY_ROPE:
             {
                 ggml_compute_forward_ifairy_rope(params, tensor);
@@ -2242,6 +2246,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DIV:
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
+        case GGML_OP_IFAIRY_RMSNORM:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_L2_NORM:
         case GGML_OP_GROUP_NORM:
