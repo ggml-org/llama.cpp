@@ -136,14 +136,23 @@ public:
           params_(params) {}
 
     std::string operator()(const std::string & role, const std::string & content) {
+        if (role == "user") {
+            formatted_cumulative_.clear(); // Needed if template strips reasoning
+        }
+
         common_chat_msg new_msg;
+        if (syntax_) {
+            new_msg = common_chat_parse(content, false, *syntax_);
+        } else {
+            new_msg.content = content;
+        }
         new_msg.role = role;
-        new_msg.content = content;
+
         chat_msgs_.push_back(new_msg);
 
         common_chat_templates_inputs cinputs;
+        cinputs.messages.assign(chat_msgs_.cbegin(), chat_msgs_.cend());
         cinputs.use_jinja = params_.use_jinja;
-        cinputs.messages = chat_msgs_;
         cinputs.add_generation_prompt = (role == "user");
         cinputs.reasoning_format = params_.reasoning_format;
 
@@ -154,16 +163,29 @@ public:
 
         common_chat_params cparams = common_chat_templates_apply(chat_templates_.get(), cinputs);
 
-        if (!partial_formatter_ptr_ && params_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
-            common_chat_syntax chat_syntax;
-            chat_syntax.format = cparams.format;
-            chat_syntax.reasoning_format = params_.reasoning_format;
-            chat_syntax.thinking_forced_open = cparams.thinking_forced_open;
-            chat_syntax.parse_tool_calls = false;
-            partial_formatter_ptr_ = std::make_unique<partial_formatter>(chat_syntax);
+        if (!syntax_) {
+            syntax_.reset(new common_chat_syntax);
+            syntax_->format = cparams.format;
+            syntax_->reasoning_format = params_.reasoning_format;
+            syntax_->thinking_forced_open = cparams.thinking_forced_open;
+            syntax_->parse_tool_calls = false;
         }
 
-        std::string formatted = cparams.prompt.substr(formatted_cumulative_.size());
+        bool use_partial_formatter = params_.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+        if (!partial_formatter_ptr_ && use_partial_formatter) {
+            partial_formatter_ptr_ = std::make_unique<partial_formatter>(*syntax_);
+        }
+
+        std::string formatted;
+        if (formatted_cumulative_.size() > cparams.prompt.size()) {
+            LOG_WRN("template cumulative size was reduced from \"%zu\" to \"%zu\" "
+                    "likely due to template's removal of message reasoning.\n",
+                    formatted_cumulative_.size(), cparams.prompt.size());
+
+        } else {
+            formatted = cparams.prompt.substr(formatted_cumulative_.size());
+        }
+
         formatted_cumulative_ = cparams.prompt;
 
         LOG_DBG("formatted: '%s'\n", formatted.c_str());
@@ -177,6 +199,7 @@ private:
     std::vector<common_chat_msg> & chat_msgs_;
     const common_chat_templates_ptr & chat_templates_;
     const common_params & params_;
+    std::unique_ptr<common_chat_syntax> syntax_;
     std::unique_ptr<partial_formatter> partial_formatter_ptr_;
     std::string formatted_cumulative_;
 };
