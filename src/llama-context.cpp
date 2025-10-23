@@ -112,11 +112,9 @@ llama_context::llama_context(
         }
     }
 
-    const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
-
     LLAMA_LOG_INFO("%s: n_seq_max     = %u\n",   __func__, cparams.n_seq_max);
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",   __func__, cparams.n_ctx);
-    LLAMA_LOG_INFO("%s: n_ctx_per_seq = %u\n",   __func__, n_ctx_per_seq);
+    LLAMA_LOG_INFO("%s: n_ctx_per_seq = %u\n",   __func__, n_ctx_per_seq());
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",   __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",   __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: causal_attn   = %d\n",   __func__, cparams.causal_attn);
@@ -125,14 +123,14 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
 
-    if (n_ctx_per_seq < hparams.n_ctx_train) {
+    if (n_ctx_per_seq() < hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_per_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
-                __func__, n_ctx_per_seq, hparams.n_ctx_train);
+                __func__, n_ctx_per_seq(), hparams.n_ctx_train);
     }
 
-    if (n_ctx_per_seq > hparams.n_ctx_train) {
+    if (n_ctx_per_seq() > hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_per_seq (%u) > n_ctx_train (%u) -- possible training context overflow\n",
-                __func__, n_ctx_per_seq, hparams.n_ctx_train);
+                __func__, n_ctx_per_seq(), hparams.n_ctx_train);
     }
 
     if (!hparams.vocab_only) {
@@ -454,7 +452,7 @@ uint32_t llama_context::n_ctx() const {
 }
 
 uint32_t llama_context::n_ctx_per_seq() const {
-    return cparams.n_ctx / cparams.n_seq_max;
+    return cparams.kv_unified ? cparams.n_ctx : cparams.n_ctx / cparams.n_seq_max;
 }
 
 uint32_t llama_context::n_batch() const {

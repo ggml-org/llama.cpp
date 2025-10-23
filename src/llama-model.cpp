@@ -6712,7 +6712,7 @@ float llama_model::get_rope_freq_scale(const llama_cparams & cparams, int il) co
 }
 
 ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int il) const {
-    const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
+    const uint32_t n_ctx_per_seq = cparams.kv_unified ? cparams.n_ctx : cparams.n_ctx / cparams.n_seq_max;
 
     // choose long/short freq factors based on the context size
     if (layers[il].rope_freqs != nullptr) {
