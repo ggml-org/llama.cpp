@@ -93,6 +93,8 @@ extern "C" {
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
 
+    GGML_API bool                      ggml_backend_supports_graph_plan(ggml_backend_t backend);
+    GGML_API bool                      ggml_backend_supports_graph_plan_update(ggml_backend_t backend);
     GGML_API ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph);
     GGML_API void                      ggml_backend_graph_plan_free  (ggml_backend_t backend, ggml_backend_graph_plan_t plan);
     GGML_API void                      ggml_backend_graph_plan_update(ggml_backend_t backend, ggml_backend_graph_plan_t plan, const struct ggml_cgraph * cgraph);
