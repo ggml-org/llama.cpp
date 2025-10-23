@@ -717,9 +717,6 @@ int main(int argc, char ** argv) {
 
             embd.push_back(id);
 
-            // Print cache statistics after each token generation
-            token_count++;
-
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
             }
