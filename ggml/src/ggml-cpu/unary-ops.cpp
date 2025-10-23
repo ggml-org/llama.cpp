@@ -25,7 +25,7 @@ static inline float op_elu(float x) {
 }
 
 static inline float op_ifairy_relu2(float x) {
-    if(((ggml_fp16_t*)(&x))[0]&((ggml_fp16_t*)(&x))[1]){
+    if((((ggml_fp16_t*)(&x))[0]&((ggml_fp16_t*)(&x))[1]) >> 15){
         // both real and imag are negative
         return 0.f;
     }else{
