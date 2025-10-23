@@ -732,7 +732,7 @@ struct ggml_backend_sched {
     struct ggml_backend_sched_plan * plans;
     int n_plans;
     int plans_capacity;
-    bool plan_dirty;
+    bool plan_needs_update;
 
     // pipeline parallelism support
     int n_copies;
@@ -1412,7 +1412,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         assert(graph_copy->size > graph_copy->n_leafs);
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
     }
-    sched->plan_dirty = true;
+    sched->plan_needs_update = true;
 }
 
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
@@ -1456,7 +1456,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 
 static void ggml_backend_sched_update_plans(ggml_backend_sched_t sched) {
     // create graph plans
-    if (sched->plan_dirty) {
+    if (sched->plan_needs_update) {
         bool create_new_plans;
         if (sched->n_plans == sched->n_splits) {
             create_new_plans = false;
@@ -1506,7 +1506,7 @@ static void ggml_backend_sched_update_plans(ggml_backend_sched_t sched) {
                 }
             }
         }
-        sched->plan_dirty = false;
+        sched->plan_needs_update = false;
     }
 }
 
