@@ -131,7 +131,7 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
     url = url[0]
     if (not url) or (len(url) == 0):
         return UrlReqResp(False, 400, f"WARN:{tag}:MissingUrl")
-    if (not gMe['--allowed.domains']):
+    if (not gMe.get('--allowed.domains')):
         return UrlReqResp(False, 400, f"DBUG:{tag}:MissingAllowedDomains")
     gotVU = validate_url(url, tag)
     if not gotVU.callOk:
@@ -144,7 +144,7 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
             contentType = response.getheader('Content-Type') or 'text/html'
         return UrlReqResp(True, statusCode, "", contentType, contentData)
     except Exception as exc:
-        return UrlReqResp(False, 502, f"WARN:UrlFetchFailed:{exc}")
+        return UrlReqResp(False, 502, f"WARN:UrlReqFailed:{exc}")
 
 
 def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
@@ -162,7 +162,7 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.end_headers()
         ph.wfile.write(got.contentData.encode('utf-8'))
     except Exception as exc:
-        ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
+        ph.send_error(502, f"WARN:UrlRawFailed:{exc}")
 
 
 class TextHtmlParser(html.parser.HTMLParser):
@@ -260,7 +260,7 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.end_headers()
         ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
     except Exception as exc:
-        ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
+        ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
 
 
 def load_config():
