@@ -107,12 +107,18 @@ class ChatMessageEx {
 
     /**
      * Extract the elements of the all in one tool call result string
-     * This should potentially account for content tag having xml content within to an extent.
+     * This should potentially account for content tag having xml/html content within to an extent.
+     *
+     * NOTE: Rather text/html is a more relaxed/tolarent mode for parseFromString than text/xml.
+     * NOTE: Maybe better to switch to a json string format or use a more intelligent xml encoder
+     * in createToolCallResultAllInOne so that extractor like this dont have to worry about special
+     * xml chars like & as is, in the AllInOne content. For now text/html tolarence seems ok enough.
+     *
      * @param {string} allInOne
      */
     static extractToolCallResultAllInOne(allInOne) {
         const dParser = new DOMParser();
-        const got = dParser.parseFromString(allInOne, 'text/xml');
+        const got = dParser.parseFromString(allInOne, 'text/html');
         const parseErrors = got.querySelector('parseerror')
         if (parseErrors) {
             console.debug("WARN:ChatMessageEx:ExtractToolCallResultAllInOne:", parseErrors.textContent.trim())
