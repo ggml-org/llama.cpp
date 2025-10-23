@@ -76,9 +76,11 @@ struct mtmd_cli_context {
 
     mtmd::bitmaps bitmaps;
 
-    // note: we know that gemma3 template is "linear", meaning each turn is completely separated to another
-    // so here we don't need to keep track of chat history
+    // chat template
     common_chat_templates_ptr tmpls;
+    std::vector<common_chat_msg> chat_history;
+    bool use_jinja = false;
+    // TODO: support for --system-prompt with /clear command
 
     // support for legacy templates (models not having EOT token)
     llama_tokens antiprompt_tokens;
@@ -108,6 +110,8 @@ struct mtmd_cli_context {
         }
 
         tmpls = common_chat_templates_init(model, params.chat_template);
+        use_jinja = params.use_jinja;
+        chat_history.clear();
         LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
 
         init_vision_context(params);
@@ -193,19 +197,33 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
             return 1;
         }
     }
+
+    std::string generated_text = common_detokenize(ctx.lctx, generated_tokens);
+    common_chat_msg msg;
+    msg.role    = "assistant";
+    msg.content = generated_text;
+    ctx.chat_history.push_back(std::move(msg));
+
     return 0;
 }
 
-static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_bos = false) {
-    common_chat_templates_inputs tmpl_inputs;
-    tmpl_inputs.messages = {msg};
-    tmpl_inputs.add_generation_prompt = true;
-    tmpl_inputs.use_jinja = false; // jinja is buggy here
-    auto formatted_chat = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
-    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
+static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
+    LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
+        new_msg.role.c_str(), new_msg.content.c_str());
+    auto formatted = common_chat_format_single(ctx.tmpls.get(), ctx.chat_history,
+        new_msg, new_msg.role == "user",
+        ctx.use_jinja);
+    ctx.chat_history.push_back(new_msg);
+    return formatted;
+}
+
+static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
+    bool add_bos = ctx.chat_history.empty();
+    auto formatted_chat = chat_add_and_format(ctx, msg);
+    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;
-    text.text          = formatted_chat.prompt.c_str();
+    text.text          = formatted_chat.c_str();
     text.add_special   = add_bos;
     text.parse_special = true;
 
@@ -303,7 +321,7 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
-        if (eval_message(ctx, msg, true)) {
+        if (eval_message(ctx, msg)) {
             return 1;
         }
         if (!g_is_interrupted && generate_response(ctx, n_predict)) {
@@ -322,7 +340,6 @@ int main(int argc, char ** argv) {
         LOG("\n   /quit or /exit   exit the program");
         LOG("\n");
 
-        bool is_first_msg = true;
         std::string content;
 
         while (!g_is_interrupted) {
@@ -342,7 +359,8 @@ int main(int argc, char ** argv) {
             }
             if (line == "/clear") {
                 ctx.n_past = 0;
-                llama_memory_seq_rm(llama_get_memory(ctx.lctx), 0, 1, -1); // keep BOS
+                ctx.chat_history.clear();
+                llama_memory_clear(llama_get_memory(ctx.lctx), true);
                 LOG("Chat history cleared\n\n");
                 continue;
             }
@@ -367,7 +385,7 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
-            int ret = eval_message(ctx, msg, is_first_msg);
+            int ret = eval_message(ctx, msg);
             if (ret) {
                 return 1;
             }
@@ -376,7 +394,6 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             content.clear();
-            is_first_msg = false;
         }
     }
     if (g_is_interrupted) LOG("\nInterrupted by user\n");
