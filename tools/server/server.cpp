@@ -4593,6 +4593,12 @@ int main(int argc, char ** argv) {
         res_ok(res, health);
     };
 
+    const auto handle_version = [&](const httplib::Request &, httplib::Response & res) {
+        // returns the build number
+        json version = {{"version", std::to_string(LLAMA_BUILD_NUMBER)}};
+        res_ok(res, version);
+    };
+
     const auto handle_slots = [&](const httplib::Request & req, httplib::Response & res) {
         if (!params.endpoint_slots) {
             res_error(res, format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
@@ -5582,6 +5588,7 @@ int main(int argc, char ** argv) {
     svr->Get (params.api_prefix + "/models",              handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/v1/models",           handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/api/version",         handle_version); // ollama endpoint, for compatibility with vscode
     svr->Post(params.api_prefix + "/completion",          handle_completions); // legacy
     svr->Post(params.api_prefix + "/completions",         handle_completions);
     svr->Post(params.api_prefix + "/v1/completions",      handle_completions_oai);
