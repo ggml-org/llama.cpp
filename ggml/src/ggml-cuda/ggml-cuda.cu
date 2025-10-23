@@ -3128,7 +3128,7 @@ static void ggml_backend_cuda_graph_plan_free(ggml_backend_t backend, ggml_backe
 
 static void ggml_backend_cuda_graph_plan_update(ggml_backend_t backend, ggml_backend_graph_plan_t plan, const ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
-    
+
     ggml_cuda_set_device(cuda_ctx->device);
 
     ggml_cuda_graph * cuda_graph = (ggml_cuda_graph *) plan;
