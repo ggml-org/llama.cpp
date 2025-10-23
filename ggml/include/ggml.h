@@ -559,6 +559,7 @@ extern "C" {
         GGML_OP_IFAIRY_ROPE,
         GGML_OP_IFAIRY_SPLIT,
         GGML_OP_IFAIRY_MERGE,
+        GGML_OP_IFAIRY_ADD, // 残差要用
 
         GGML_OP_COUNT,
     };
@@ -1672,6 +1673,11 @@ extern "C" {
         struct ggml_context * ctx,
         struct ggml_tensor * a
     );
+
+    GGML_API struct ggml_tensor * ggml_ifairy_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // in-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_rope_inplace(

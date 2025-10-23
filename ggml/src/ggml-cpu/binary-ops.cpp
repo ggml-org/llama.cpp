@@ -22,6 +22,29 @@ static inline float op_div(float a, float b) {
     return a / b;
 }
 
+/**
+ * @brief 两个以 float 位模式存储的 BF16 复数相加
+ * 
+ * @warning 输入的 float 不是常规浮点数，而是打包的复数位模式
+ * @param a 第一个复数（实部和虚部各为 BF16）
+ * @param b 第二个复数
+ * @return float 结果复数的位模式（以 float 返回）
+ * 
+ * 内存布局（假设小端序）：
+ *   Bits 0-15:  imag (BF16)
+ *   Bits 16-31: real (BF16)
+ */
+static inline float op_ifairy_add(float a, float b) {
+    float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    r = r + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    i = i + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    float ret;
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+    return ret;
+}
+
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
 static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const src0_t * x, const src1_t * y) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
@@ -155,4 +178,8 @@ void ggml_compute_forward_mul(const ggml_compute_params * params, ggml_tensor * 
 
 void ggml_compute_forward_div(const ggml_compute_params * params, ggml_tensor * dst) {
     binary_op<op_div>(params, dst);
+}
+
+void ggml_compute_forward_ifairy_add(const ggml_compute_params * params, ggml_tensor * dst) {
+    binary_op<op_ifairy_add>(params, dst);
 }
