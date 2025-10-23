@@ -155,6 +155,10 @@ namespace console {
                     break;
                 case error:
                     fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
+                    break;
+                case reasoning:
+                    fprintf(out, ANSI_COLOR_BLUE);
+                    break;
             }
             current_display = display;
             fflush(out);

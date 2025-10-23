@@ -9,7 +9,8 @@ namespace console {
         reset = 0,
         prompt,
         user_input,
-        error
+        error,
+        reasoning
     };
 
     void init(bool use_simple_io, bool use_advanced_display);

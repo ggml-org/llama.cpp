@@ -828,8 +828,15 @@ int main(int argc, char ** argv) {
                 if (auto * formatter = chat_add_and_format.get_partial_formatter()) {
                     auto outputs = (*formatter)(assistant_ss.str());
                     for (const auto & out : outputs) {
-                        LOG("%s", out.formatted.c_str());
+                        if (out.type == partial_formatter::REASONING) {
+                            console::set_display(console::reasoning);
+                        } else {
+                            console::set_display(console::reset);
+                        }
+                        fprintf(stdout, "%s", out.formatted.c_str());
+                        fflush(stdout);
                     }
+                    console::set_display(console::reset);
                 }
             }
 
