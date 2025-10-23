@@ -95,34 +95,34 @@ public:
         output_type type;
     };
 
-    partial_formatter(const common_chat_syntax & syntax) : syntax_(syntax), had_reasoning_(false) {}
+    partial_formatter(const common_chat_syntax & syntax) : syntax(syntax), had_reasoning(false) {}
 
     std::vector<output> operator()(const std::string & accumulated) {
-        common_chat_msg next = common_chat_parse(accumulated, true, syntax_);
+        common_chat_msg next = common_chat_parse(accumulated, true, syntax);
 
-        auto diffs = common_chat_msg_diff::compute_diffs(previous_, next);
+        auto diffs = common_chat_msg_diff::compute_diffs(previous, next);
         std::vector<output> result;
         for (const auto & diff : diffs) {
             if (!diff.reasoning_content_delta.empty()) {
                 result.push_back({diff.reasoning_content_delta, REASONING});
-                had_reasoning_ = true;
+                had_reasoning = true;
             }
             if (!diff.content_delta.empty()) {
-                if (had_reasoning_) {
+                if (had_reasoning) {
                     result.push_back({"\n", REASONING});
-                    had_reasoning_ = false;
+                    had_reasoning = false;
                 }
                 result.push_back({diff.content_delta, CONTENT});
             }
         }
-        previous_ = next;
+        previous = next;
         return result;
     }
 
 private:
-    common_chat_syntax syntax_;
-    common_chat_msg previous_;
-    bool had_reasoning_;
+    common_chat_syntax syntax;
+    common_chat_msg previous;
+    bool had_reasoning;
 };
 
 class chat_formatter {
@@ -131,77 +131,77 @@ public:
         std::vector<common_chat_msg> & chat_msgs,
         const common_chat_templates_ptr & chat_templates,
         const common_params & params)
-        : chat_msgs_(chat_msgs),
-          chat_templates_(chat_templates),
-          params_(params) {}
+        : chat_msgs(chat_msgs),
+          chat_templates(chat_templates),
+          params(params) {}
 
     std::string operator()(const std::string & role, const std::string & content) {
         if (role == "user") {
-            formatted_cumulative_.clear(); // Needed if template strips reasoning
+            formatted_cumulative.clear(); // Needed if template strips reasoning
         }
 
         common_chat_msg new_msg;
-        if (syntax_) {
-            new_msg = common_chat_parse(content, false, *syntax_);
+        if (syntax) {
+            new_msg = common_chat_parse(content, false, *syntax);
         } else {
             new_msg.content = content;
         }
         new_msg.role = role;
 
-        chat_msgs_.push_back(new_msg);
+        chat_msgs.push_back(new_msg);
 
         common_chat_templates_inputs cinputs;
-        cinputs.messages.assign(chat_msgs_.cbegin(), chat_msgs_.cend());
-        cinputs.use_jinja = params_.use_jinja;
+        cinputs.messages.assign(chat_msgs.cbegin(), chat_msgs.cend());
+        cinputs.use_jinja = params.use_jinja;
         cinputs.add_generation_prompt = (role == "user");
-        cinputs.reasoning_format = params_.reasoning_format;
+        cinputs.reasoning_format = params.reasoning_format;
 
         cinputs.enable_thinking =
-            params_.use_jinja &&
-            params_.reasoning_budget != 0 &&
-            common_chat_templates_support_enable_thinking(chat_templates_.get());
+            params.use_jinja &&
+            params.reasoning_budget != 0 &&
+            common_chat_templates_support_enable_thinking(chat_templates.get());
 
-        common_chat_params cparams = common_chat_templates_apply(chat_templates_.get(), cinputs);
+        common_chat_params cparams = common_chat_templates_apply(chat_templates.get(), cinputs);
 
-        if (!syntax_) {
-            syntax_.reset(new common_chat_syntax);
-            syntax_->format = cparams.format;
-            syntax_->reasoning_format = params_.reasoning_format;
-            syntax_->thinking_forced_open = cparams.thinking_forced_open;
-            syntax_->parse_tool_calls = false;
+        if (!syntax) {
+            syntax.reset(new common_chat_syntax);
+            syntax->format = cparams.format;
+            syntax->reasoning_format = params.reasoning_format;
+            syntax->thinking_forced_open = cparams.thinking_forced_open;
+            syntax->parse_tool_calls = false;
         }
 
-        bool use_partial_formatter = params_.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-        if (!partial_formatter_ptr_ && use_partial_formatter) {
-            partial_formatter_ptr_ = std::make_unique<partial_formatter>(*syntax_);
+        bool use_partial_formatter = params.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+        if (!partial_formatter_ptr && use_partial_formatter) {
+            partial_formatter_ptr = std::make_unique<partial_formatter>(*syntax);
         }
 
         std::string formatted;
-        if (formatted_cumulative_.size() > cparams.prompt.size()) {
+        if (formatted_cumulative.size() > cparams.prompt.size()) {
             LOG_WRN("template cumulative size was reduced from \"%zu\" to \"%zu\" "
                     "likely due to template's removal of message reasoning.\n",
-                    formatted_cumulative_.size(), cparams.prompt.size());
+                    formatted_cumulative.size(), cparams.prompt.size());
 
         } else {
-            formatted = cparams.prompt.substr(formatted_cumulative_.size());
+            formatted = cparams.prompt.substr(formatted_cumulative.size());
         }
 
-        formatted_cumulative_ = cparams.prompt;
+        formatted_cumulative = cparams.prompt;
 
         LOG_DBG("formatted: '%s'\n", formatted.c_str());
         return formatted;
     }
 
-    partial_formatter * get_partial_formatter() { return partial_formatter_ptr_.get(); }
-    const std::string & get_full_prompt() const { return formatted_cumulative_; }
+    partial_formatter * get_partial_formatter() { return partial_formatter_ptr.get(); }
+    const std::string & get_full_prompt() const { return formatted_cumulative; }
 
 private:
-    std::vector<common_chat_msg> & chat_msgs_;
-    const common_chat_templates_ptr & chat_templates_;
-    const common_params & params_;
-    std::unique_ptr<common_chat_syntax> syntax_;
-    std::unique_ptr<partial_formatter> partial_formatter_ptr_;
-    std::string formatted_cumulative_;
+    std::vector<common_chat_msg> & chat_msgs;
+    const common_chat_templates_ptr & chat_templates;
+    const common_params & params;
+    std::unique_ptr<common_chat_syntax> syntax;
+    std::unique_ptr<partial_formatter> partial_formatter_ptr;
+    std::string formatted_cumulative;
 };
 
 int main(int argc, char ** argv) {
