@@ -257,6 +257,7 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context & ctx,
         }
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, n_rows, n_experts, n_expert_used, clamp_val);
     } else {
+        GGML_ASSERT(clamp == nullptr);
         if (delayed_softmax) {
             launch_topk_moe_cuda<false, true>(ctx, logits_d, weights_d, ids_d, n_rows, n_experts, n_expert_used,
                                               clamp_val);
