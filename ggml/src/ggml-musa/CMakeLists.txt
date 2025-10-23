@@ -36,9 +36,6 @@ if (MUSAToolkit_FOUND)
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
     file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
-    file(GLOB   SRCS "../ggml-cuda/template-instances/mmv*.cu")
-    list(APPEND GGML_SOURCES_MUSA ${SRCS})
-
 
     if (GGML_MUSA_MUDNN_COPY)
         file(GLOB   SRCS "../ggml-musa/*.cu")

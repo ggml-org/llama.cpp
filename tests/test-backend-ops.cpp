@@ -4721,7 +4721,7 @@ struct test_topk_moe: public test_case {
     }
 };
 
-struct test_fused_ffn_gate : public test_case {
+struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
     const int64_t m;
@@ -4734,7 +4734,7 @@ struct test_fused_ffn_gate : public test_case {
     const bool with_bias;
     const bool with_gate;
 
-    test_fused_ffn_gate(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
+    test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true)
     : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias), with_gate(with_gate) {
         if (use_id) {
@@ -4748,7 +4748,7 @@ struct test_fused_ffn_gate : public test_case {
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "FUSED_FFN_GATE";
+        return "MUL_MAT_VEC_FUSION";
     }
 
     bool run_whole_graph() override { return true; }
@@ -7135,7 +7135,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             if (!with_gate && glu_op != GGML_GLU_OP_SWIGLU) {
                                 continue;
                             }
-                            test_cases.emplace_back(new test_fused_ffn_gate(type, glu_op, 1, 32, 256, use_id, 16, 8, b, with_bias, with_gate));
+                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                use_id, 16, 8, b, with_bias, with_gate));
                         }
                     }
                 }
