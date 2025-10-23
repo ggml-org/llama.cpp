@@ -2,8 +2,16 @@
 # by Humans for All
 #
 # Listens on the specified port (defaults to squids 3128)
-# * if a url query is got (http://localhost:3128/?url=http://site.of.interest/path/of/interest)
+# * if a url query is got wrt urlraw path
+#   http://localhost:3128/urlraw?url=http://site.of.interest/path/of/interest
 #   fetches the contents of the specified url and returns the same to the requester
+# * if a url query is got wrt urltext path
+#   http://localhost:3128/urltext?url=http://site.of.interest/path/of/interest
+#   fetches the contents of the specified url and returns the same to the requester
+#   after removing html tags in general as well as contents of tags like style
+#   script, header, footer, nav ...
+# * any request to aum path is used to respond with a predefined text response
+#   which can help identify this server, in a simple way.
 #
 
 
@@ -23,23 +31,32 @@ gMe = {
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
+    """
+    Implements the logic for handling requests sent to this server.
+    """
 
-    # Common headers to include in responses from this server
     def send_headers_common(self):
+        """
+        Common headers to include in responses from this server
+        """
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
         self.end_headers()
 
-    # overrides the SendError helper
-    # so that the common headers mentioned above can get added to them
-    # else CORS failure will be triggered by the browser on fetch from browser.
     def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        """
+        Overrides the SendError helper
+        so that the common headers mentioned above can get added to them
+        else CORS failure will be triggered by the browser on fetch from browser.
+        """
         self.send_response(code, message)
         self.send_headers_common()
 
-    # Handle GET requests
     def do_GET(self):
+        """
+        Handle GET requests
+        """
         print(f"DBUG:ProxyHandler:GET:{self.path}")
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
@@ -54,14 +71,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 print(f"WARN:ProxyHandler:GET:UnknownPath{pr.path}")
                 self.send_error(400, f"WARN:UnknownPath:{pr.path}")
 
-    # Handle OPTIONS for CORS preflights (just in case from browser)
     def do_OPTIONS(self):
+        """
+        Handle OPTIONS for CORS preflights (just in case from browser)
+        """
         print(f"DBUG:ProxyHandler:OPTIONS:{self.path}")
         self.send_response(200)
         self.send_headers_common()
 
 
 def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    """
+    Handle requests to aum path, which is used in a simple way to
+    verify that one is communicating with this proxy server
+    """
     ph.send_response_only(200, "bharatavarshe")
     ph.send_header('Access-Control-Allow-Origin', '*')
     ph.end_headers()
@@ -69,6 +92,9 @@ def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
 
 @dataclass(frozen=True)
 class UrlReqResp:
+    """
+    Used to return result wrt urlreq helper below.
+    """
     callOk: bool
     httpStatus: int
     httpStatusMsg: str = ""
@@ -77,6 +103,9 @@ class UrlReqResp:
 
 
 def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
+    """
+    Common part of the url request handling used by both urlraw and urltext.
+    """
     print(f"DBUG:{tag}:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url']
@@ -114,6 +143,17 @@ def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
 
 
 class TextHtmlParser(html.parser.HTMLParser):
+    """
+    A simple minded logic used to strip html content of
+    * all the html tags as well as
+    * all the contents belonging to below predefined tags like script, style, header, ...
+
+    NOTE: if the html content/page uses any javascript for client side manipulation/generation of
+    html content, that logic wont be triggered, so also such client side dynamic content wont be
+    got.
+
+    This helps return a relatively clean textual representation of the html file/content being parsed.
+    """
 
     def __init__(self):
         super().__init__()
@@ -131,6 +171,9 @@ class TextHtmlParser(html.parser.HTMLParser):
         self.textStripped = ""
 
     def do_capture(self):
+        """
+        Helps decide whether to capture contents or discard them.
+        """
         if self.inside['body'] and not (self.inside['script'] or self.inside['style'] or self.inside['header'] or self.inside['footer'] or self.inside['nav']):
             return True
         return False
@@ -217,6 +260,9 @@ def load_config():
 
 
 def process_args(args: list[str]):
+    """
+    Helper to process command line arguments
+    """
     global gMe
     gMe['INTERNAL.ProcessArgs.Malformed'] = []
     gMe['INTERNAL.ProcessArgs.Unknown'] = []
