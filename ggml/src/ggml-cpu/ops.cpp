@@ -10465,15 +10465,19 @@ void ggml_compute_forward_gla(
     }
 }
 
-static void print_debug_info(float * data, size_t size, const char * name, int64_t token) {
-#ifdef MR_CHUNKY_TALKS
-    GGML_LOG_INFO("\nggml-debug: %s (%ld) first 5 values: [%.6f, %.6f, %.6f, %.6f, %.6f, ...]\n", 
-        name, token, data[0], data[1], data[2], data[3], data[4]);
+static double debug_sum(float * data, size_t size) {
     double sum = 0.0;
     for (unsigned int i = 0; i < size; i++) {
         sum += data[i];
     }
-    GGML_LOG_INFO("total elements: %ld, sum = %.10f\n", size, sum);
+    return sum;
+}
+
+static void print_debug_info(float * data, size_t size, const char * name, int64_t token) {
+#ifdef MR_CHUNKY_TALKS
+    GGML_LOG_INFO("\nggml-debug: %s (%ld) first 5 values: [%.6f, %.6f, %.6f, %.6f, %.6f, ...]\n", 
+        name, token, data[0], data[1], data[2], data[3], data[4]);
+    GGML_LOG_INFO("total elements: %ld, sum = %.10f\n", size, debug_sum(data, size));
 #endif MR_CHUNKY_TALKS
 }
 
@@ -11246,7 +11250,9 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 float * core_attn_out_ptr = pc_core_attn_out + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
 
                 // Compute number of tokens for this chunk (chunk_size unless this is the last chunk)
-                int64_t n_tokens_chunk = chunk == num_chunks - 1 ? n_tokens % chunk_size : chunk_size;
+                // With last chunk, the ideal fit needs special handling because otherwise we copy 0 tokens...
+                int64_t remainder = n_tokens % chunk_size;
+                int64_t n_tokens_chunk = chunk == num_chunks - 1 ? (remainder == 0 ? chunk_size : remainder) : chunk_size;
                 
                 // Store output for this chunk
                 for (int64_t i = 0; i < n_tokens_chunk; i++) {
@@ -11282,6 +11288,7 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
     }
 
     GGML_ASSERT(output + S_v * H_v * n_tokens * n_seqs == new_state);
+
     free(attn);
     free(value);
     free(k_cumdecay);
