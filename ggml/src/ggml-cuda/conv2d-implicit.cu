@@ -892,27 +892,43 @@ __device__ __forceinline__ void ldmatrix_b(
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
   static_assert(mma_tiles_per_warp_n == 8, "mma_tiles_per_warp_n must be 8");
   
-  uint32_t (&reg_) [4][8] = reinterpret_cast<uint32_t(&)[4][8]>(reg);
-  const unsigned int logical_offset = ((threadIdx.x % 8) * smem_stride) +  (((threadIdx.x % 32) / 8) * 8);
-  unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b11100000000) >> 5);
+//   uint32_t (&reg_) [4][8] = reinterpret_cast<uint32_t(&)[4][8]>(reg);
+//   const unsigned int logical_offset = ((threadIdx.x % 8) * smem_stride) +  (((threadIdx.x % 32) / 8) * 8);
+//   unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b11100000000) >> 5);
+//   uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
+//   constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
+  unsigned int logical_offset = (threadIdx.x % 32) * smem_stride;
+  unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b10000000) >> 4);
+  swizzled_offset = swizzled_offset ^ ((swizzled_offset & 0b1100000) >> 2);
   uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
   constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
 
+
+//   asm volatile (
+//     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
+//     "{%0, %1, %2, %3}, [%4];"
+//     : "=r"(reg_[0][0]), "=r"(reg_[0][1]), "=r"(reg_[0][2]), "=r"(reg_[0][3])
+//     : "r"(src_addr)
+//   );
+
+    // 0
   asm volatile (
-    "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
-    "{%0, %1, %2, %3}, [%4];"
-    : "=r"(reg_[0][0]), "=r"(reg_[0][1]), "=r"(reg_[0][2]), "=r"(reg_[0][3])
-    : "r"(src_addr)
-  );
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 "
+      "{%0, %1, %2, %3}, [%4];"
+      : "=r"(reg_[0][0]), "=r"(reg_[0][1]), "=r"(reg_[0][2]), "=r"(reg_[0][3])
+      : "r"(src_addr)
+    );
+
 
   asm volatile (
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
     "{%0, %1, %2, %3}, [%4];"
     : "=r"(reg_[0][4]), "=r"(reg_[0][5]), "=r"(reg_[0][6]), "=r"(reg_[0][7])
-    : "r"(src_addr ^ 0b1000000)
+    // : "r"(src_addr ^ 0b1000000)
+    : "r"(src_addr + 32 * smem_stride_)
   );
 
-  src_addr += 8 * smem_stride_;
+  src_addr ^= 0b10000;
 
   asm volatile (
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
@@ -925,10 +941,12 @@ __device__ __forceinline__ void ldmatrix_b(
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
     "{%0, %1, %2, %3}, [%4];"
     : "=r"(reg_[1][4]), "=r"(reg_[1][5]), "=r"(reg_[1][6]), "=r"(reg_[1][7])
-    : "r"(src_addr ^ 0b1000000)
+    // : "r"(src_addr ^ 0b1000000)
+    : "r"(src_addr + 32 * smem_stride_)
   );
 
-  src_addr += 8 * smem_stride_;
+//   src_addr += 8 * smem_stride_;
+  src_addr ^= 0b110000;
 
   asm volatile (
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
@@ -941,10 +959,11 @@ __device__ __forceinline__ void ldmatrix_b(
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
     "{%0, %1, %2, %3}, [%4];"
     : "=r"(reg_[2][4]), "=r"(reg_[2][5]), "=r"(reg_[2][6]), "=r"(reg_[2][7])
-    : "r"(src_addr ^ 0b1000000)
+    // : "r"(src_addr ^ 0b1000000)
+    : "r"(src_addr + 32 * smem_stride_)
   );
 
-  src_addr += 8 * smem_stride_;
+  src_addr ^= 0b10000;
 
   asm volatile (
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
@@ -957,7 +976,8 @@ __device__ __forceinline__ void ldmatrix_b(
     "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 "
     "{%0, %1, %2, %3}, [%4];"
     : "=r"(reg_[3][4]), "=r"(reg_[3][5]), "=r"(reg_[3][6]), "=r"(reg_[3][7])
-    : "r"(src_addr ^ 0b1000000)
+    // : "r"(src_addr ^ 0b1000000)
+    : "r"(src_addr + 32 * smem_stride_)
   );
 
 }
@@ -1038,7 +1058,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   // prefetch the first block tile of A,B into shared memory
 //   half* A_block_gmem = input + (block_m * BM * A_stride);
   half* A_block_gmem = input;
-  half* B_block_gmem = weight + (block_n * weightKOffset);
+  half* B_block_gmem = kernel + (block_n * weightKOffset);
   tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inChannelOffset, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
 
@@ -1053,16 +1073,17 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
     if (block_k != num_block_tiles_k)
     {
-      half* A_block_gmem = A + (block_m * BM * A_stride) + (block_k * BK);
-      half* B_block_gmem = B + (block_k * BK * B_stride) + (block_n * BN);
-      tileMemcpyLoad<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, K);
-      tileMemcpyLoad<BK, BN, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, N);
+    //   half* A_block_gmem = A + (block_m * BM * A_stride) + (block_k * BK);
+      half* A_block_gmem = input;
+      half* B_block_gmem = kernel + (block_n * weightKOffset);
+      tileMemcpyLoad<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, inChannelOffset, param);
+      tileMemcpyLoad<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, weightKOffset, param);
     }
     half* A_warp_tile = A_block_smem + (warp_m * WM * BK);
-    half* B_warp_tile = B_block_smem + (warp_n * WN);
+    half* B_warp_tile = B_block_smem + (warp_n * WN * BK);
 
     ldmatrix_a<mma_tiles_per_warp_m, mma_tiles_per_warp_k, BK>(A_warp_tile, A_register_);
-    ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BN>(B_warp_tile, B_register_);
+    ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BK>(B_warp_tile, B_register_);
 
     // outer product between mma tiles
     #pragma unroll
@@ -1097,47 +1118,47 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       B_block_smem = B_block_smem + BUFFER_SIZE * offset_direction;
       offset_direction = -1 * offset_direction;
 
-      tileMemcpySwizzleStoreA<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem);
-      tileMemcpySwizzleStoreB<BN, NUM_THREADS> (B_gmem_cache_reg, B_block_smem);
+      tileMemcpySwizzleStore<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem);
+      tileMemcpySwizzleStore<BN, NUM_THREADS, 4>(B_gmem_cache_reg, B_block_smem);
     }
   }
 
   //////////////
   // epilogue //
   //////////////
-  half alpha_ = (half)alpha;
-  half beta_ = (half)beta;
-  half C_register[mma_tiles_per_warp_m][mma_tiles_per_warp_n][4];
+//   half alpha_ = (half)alpha;
+//   half beta_ = (half)beta;
+//   half C_register[mma_tiles_per_warp_m][mma_tiles_per_warp_n][4];
   
-  // calculate pointers for this warps C and D tiles
-  half* C_block_gmem = C + (block_m * BM_dim * CD_stride) + (block_n * BN_dim);
-  half* C_warp_gmem = C_block_gmem + (warp_m * WM_dim * CD_stride) + (warp_n * WN_dim);
-  half* D_block_gmem = D + (block_m * BM_dim * CD_stride) + (block_n * BN_dim);
-  half* D_warp_gmem = D_block_gmem + (warp_m * WM_dim * CD_stride) + (warp_n * WN_dim);
+//   // calculate pointers for this warps C and D tiles
+//   half* C_block_gmem = C + (block_m * BM_dim * CD_stride) + (block_n * BN_dim);
+//   half* C_warp_gmem = C_block_gmem + (warp_m * WM_dim * CD_stride) + (warp_n * WN_dim);
+//   half* D_block_gmem = D + (block_m * BM_dim * CD_stride) + (block_n * BN_dim);
+//   half* D_warp_gmem = D_block_gmem + (warp_m * WM_dim * CD_stride) + (warp_n * WN_dim);
 
-  for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
-  {
-      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++)
-      {
-        half* C_mma_tile = C_warp_gmem + (mma_m * MMA_M_dim * CD_stride) + (mma_n * MMA_N_dim);
-        ldmatrix_m16n8_gmem(C_mma_tile, C_register[mma_m][mma_n], N * sizeof(half));
+//   for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
+//   {
+//       for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++)
+//       {
+//         half* C_mma_tile = C_warp_gmem + (mma_m * MMA_M_dim * CD_stride) + (mma_n * MMA_N_dim);
+//         ldmatrix_m16n8_gmem(C_mma_tile, C_register[mma_m][mma_n], N * sizeof(half));
           
-        // scale C by beta
-        acc_register_[mma_m][mma_n][0] = acc_register_[mma_m][mma_n][0] * alpha_ + C_register[mma_m][mma_n][0] * beta_;
-        acc_register_[mma_m][mma_n][1] = acc_register_[mma_m][mma_n][1] * alpha_ + C_register[mma_m][mma_n][1] * beta_;
-        acc_register_[mma_m][mma_n][2] = acc_register_[mma_m][mma_n][2] * alpha_ + C_register[mma_m][mma_n][2] * beta_;
-        acc_register_[mma_m][mma_n][3] = acc_register_[mma_m][mma_n][3] * alpha_ + C_register[mma_m][mma_n][3] * beta_;
-      }
-  }
+//         // scale C by beta
+//         acc_register_[mma_m][mma_n][0] = acc_register_[mma_m][mma_n][0] * alpha_ + C_register[mma_m][mma_n][0] * beta_;
+//         acc_register_[mma_m][mma_n][1] = acc_register_[mma_m][mma_n][1] * alpha_ + C_register[mma_m][mma_n][1] * beta_;
+//         acc_register_[mma_m][mma_n][2] = acc_register_[mma_m][mma_n][2] * alpha_ + C_register[mma_m][mma_n][2] * beta_;
+//         acc_register_[mma_m][mma_n][3] = acc_register_[mma_m][mma_n][3] * alpha_ + C_register[mma_m][mma_n][3] * beta_;
+//       }
+//   }
 
-  for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
-  {
-      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++)
-      {
-        half* D_mma_tile = D_warp_gmem + (mma_m * MMA_M_dim * CD_stride) + (mma_n * MMA_N_dim);
-        stmatrix_m16n8(D_mma_tile, acc_register_[mma_m][mma_n], N * sizeof(half));
-      }
-  }
+//   for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
+//   {
+//       for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++)
+//       {
+//         half* D_mma_tile = D_warp_gmem + (mma_m * MMA_M_dim * CD_stride) + (mma_n * MMA_N_dim);
+//         stmatrix_m16n8(D_mma_tile, acc_register_[mma_m][mma_n], N * sizeof(half));
+//       }
+//   }
 
 }
 
