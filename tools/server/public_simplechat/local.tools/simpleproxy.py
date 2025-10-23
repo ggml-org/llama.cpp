@@ -51,6 +51,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         so that the common headers mentioned above can get added to them
         else CORS failure will be triggered by the browser on fetch from browser.
         """
+        print(f"WARN:PH:SendError:{code}:{message}")
         self.send_response(code, message)
         self.send_headers_common()
 
@@ -58,7 +59,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         Handle GET requests
         """
-        print(f"DBUG:ProxyHandler:GET:{self.path}")
+        print(f"\n\n\nDBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
+        print(f"DBUG:PH:Get:Headers:{self.headers}")
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
         match pr.path:
