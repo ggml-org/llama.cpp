@@ -1305,6 +1305,81 @@ jobs:
           cd examples/llama.android
           ./gradlew build --no-daemon
 
+  android-ndk-build:
+    runs-on: ubuntu-latest
+
+    env:
+      OPENCL_VERSION: 2025.07.22
+
+    strategy:
+      matrix:
+        include:
+          - build: 'arm64-cpu'
+            defines: '-D ANDROID_ABI=arm64-v8a -D ANDROID_PLATFORM=android-31 -D CMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -D GGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm -G Ninja -D LLAMA_CURL=OFF -D GGML_OPENMP=OFF'
+          - build: 'arm64-snapdragon'
+            defines: '--preset arm64-android-snapdragon-release'
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Install OpenCL Headers and Libs
+        id: install_opencl
+        if: ${{ matrix.build == 'arm64-snapdragon' }}
+        run: |
+          mkdir opencl
+          curl -L -o opencl/clhpp.tar.gz      https://github.com/KhronosGroup/OpenCL-CLHPP/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
+          curl -L -o opencl/headers.tar.gz    https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
+          curl -L -o opencl/icd-loader.tar.gz https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v${OPENCL_VERSION}.tar.gz
+          tar -xaf opencl/headers.tar.gz    -C opencl
+          tar -xaf opencl/clhpp.tar.gz      -C opencl
+          tar -xaf opencl/icd-loader.tar.gz -C opencl
+          sudo cp -r opencl/OpenCL-Headers-${OPENCL_VERSION}/CL         ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+          sudo cp -r opencl/OpenCL-CLHPP-${OPENCL_VERSION}/include/CL/* ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/CL
+          cd opencl/OpenCL-ICD-Loader-${OPENCL_VERSION}
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -DOPENCL_ICD_LOADER_HEADERS_DIR=${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=31 -DANDROID_STL=c++_shared
+          cmake --build build
+          sudo cp build/libOpenCL.so ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+          rm -rf opencl
+
+      - name: Install Hexagon SDK
+        id: install_hexsdk
+        if: ${{ matrix.build == 'arm64-snapdragon' }}
+        env:
+          HEXSDK_VER: 6.4.0.2
+          HEXTLS_VER: 19.0.04
+        run: |
+          curl -L -o hex-sdk.tar.gz https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v$HEXSDK_VER/hexagon-sdk-v$HEXSDK_VER-amd64-lnx.tar.xz
+          mkdir hex-sdk
+          tar -xaf hex-sdk.tar.gz -C hex-sdk
+          ls -l hex-sdk
+          sudo mv hex-sdk /opt/hexagon
+          echo "HEXAGON_SDK_ROOT=/opt/hexagon/$HEXSDK_VER"                                     >> "$GITHUB_ENV"
+          echo "HEXAGON_TOOLS_ROOT=/opt/hexagon/$HEXSDK_VER/tools/HEXAGON_Tools/$HEXTLS_VER"   >> "$GITHUB_ENV"
+          echo "DEFAULT_HLOS_ARCH=64"                                                          >> "$GITHUB_ENV"
+          echo "DEFAULT_TOOLS_VARIANT=toolv19"                                                 >> "$GITHUB_ENV"
+          echo "DEFAULT_NO_QURT_INC=0"                                                         >> "$GITHUB_ENV"
+          echo "DEFAULT_DSP_ARCH=v73"                                                          >> "$GITHUB_ENV"
+
+      - name: Update CMake presets
+        id: update_presets
+        if: ${{ matrix.build == 'arm64-snapdragon' }}
+        run: |
+          cp docs/backend/hexagon/CMakeUserPresets.json .
+
+      - name: Build
+        id: ndk_build
+        run: |
+          cmake ${{ matrix.defines }} -B build
+          cmake --build build
+          cmake --install build --prefix pkg-adb/llama.cpp
+
+      - name: Test
+        id: cmake_test
+        run: |
+          echo "FIXME: test on devices"
+
   openEuler-latest-cmake-cann:
     if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
     defaults:

@@ -26,6 +26,7 @@
 		MimeTypeImage,
 		MimeTypeText
 	} from '$lib/enums/files';
+	import { isIMEComposing } from '$lib/utils/is-ime-composing';
 
 	interface Props {
 		class?: string;
@@ -97,7 +98,7 @@
 	}
 
 	async function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;

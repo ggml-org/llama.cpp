@@ -3759,6 +3759,130 @@ struct test_clamp : public test_case {
     }
 };
 
+// GGML_OP_FLOOR
+struct test_floor : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_floor(ggml_type type = GGML_TYPE_F32,
+               std::array<int64_t, 4> ne = {10, 2, 2, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_floor(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.0f, 10.0f);
+        }
+    }
+};
+
+// GGML_OP_CEIL
+struct test_ceil : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_ceil(ggml_type type = GGML_TYPE_F32,
+              std::array<int64_t, 4> ne = {10, 2, 2, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_ceil(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.0f, 10.0f);
+        }
+    }
+};
+
+// GGML_OP_ROUND
+struct test_round : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_round(ggml_type type = GGML_TYPE_F32,
+               std::array<int64_t, 4> ne = {10, 2, 2, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_round(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.0f, 10.0f);
+        }
+    }
+};
+
+// GGML_OP_TRUNC
+struct test_trunc : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_trunc(ggml_type type = GGML_TYPE_F32,
+               std::array<int64_t, 4> ne = {10, 2, 2, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_trunc(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.0f, 10.0f);
+        }
+    }
+};
+
 // GGML_OP_DIAG_MASK_INF
 struct test_diag_mask_inf : public test_case {
     const ggml_type type;
@@ -4545,14 +4669,21 @@ struct test_topk_moe: public test_case {
     const std::array<int64_t, 4> ne;
     const int n_expert_used;
     const bool with_norm;
-    test_topk_moe(std::array<int64_t, 4> ne = {10, 5, 1, 1}, int n_expert_used = 1, bool with_norm = false)
-    : ne(ne), n_expert_used(n_expert_used), with_norm(with_norm) {
+    const bool                   delayed_softmax;
+
+    test_topk_moe(std::array<int64_t, 4> ne              = { 10, 5, 1, 1 },
+                  int                    n_expert_used   = 1,
+                  bool                   with_norm       = false,
+                  bool                   delayed_softmax = false) :
+        ne(ne),
+        n_expert_used(n_expert_used),
+        with_norm(with_norm),
+        delayed_softmax(delayed_softmax) {
         GGML_ASSERT(n_expert_used <= ne[0]);
+        GGML_ASSERT(!(with_norm && delayed_softmax));
     }
 
-    std::string vars() override {
-        return VARS_TO_STR3(ne, n_expert_used, with_norm);
-    }
+    std::string vars() override { return VARS_TO_STR4(ne, n_expert_used, with_norm, delayed_softmax); }
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4566,10 +4697,16 @@ struct test_topk_moe: public test_case {
         const int n_tokens = ne[1];
 
         ggml_tensor * logits = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
-        ggml_tensor * probs  = ggml_soft_max(ctx, logits);
+        ggml_tensor * probs            = delayed_softmax ? logits : ggml_soft_max(ctx, logits);
         ggml_tensor * selected_experts = ggml_top_k(ctx, probs, n_expert_used); // [n_expert_used, n_tokens]
 
         ggml_tensor * out = ggml_get_rows(ctx, ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
+
+        if (delayed_softmax) {
+            out = ggml_reshape_2d(ctx, out, n_expert_used, n_tokens);
+            out = ggml_soft_max(ctx, out);  // [n_expert_used, n_tokens]
+            out = ggml_reshape_3d(ctx, out, 1, n_expert_used, n_tokens);
+        }
 
         if (with_norm) {
             out = ggml_reshape_2d(ctx, out, n_expert_used, n_tokens);
@@ -6585,6 +6722,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_cos       (type));
         test_cases.emplace_back(new test_clamp     (type));
         test_cases.emplace_back(new test_leaky_relu(type));
+        test_cases.emplace_back(new test_floor     (type));
+        test_cases.emplace_back(new test_ceil      (type));
+        test_cases.emplace_back(new test_round     (type));
+        test_cases.emplace_back(new test_trunc     (type));
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
@@ -6592,6 +6733,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_cos       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_clamp     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
     }
 
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
@@ -6843,6 +6988,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 128, with_norm));
     }
 
+    test_cases.emplace_back(new test_topk_moe({ 8, 22, 1, 1 }, 4, /*with_norm*/ false, /*delayed_softmax*/ true));
+    test_cases.emplace_back(new test_topk_moe({ 32, 22, 1, 1 }, 8, /*with_norm*/ false, /*delayed_softmax*/ true));
+
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
     test_cases.emplace_back(new test_llama(2, true));
@@ -6989,6 +7137,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, true));
 
     test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1));
+    test_cases.emplace_back(new test_conv_transpose_2d({16, 16, 16, 1}, {3, 3, 8, 16}, 1));
+    test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2));
 
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, {256, 256, 3, 1}));
 

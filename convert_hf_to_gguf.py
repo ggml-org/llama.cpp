@@ -29,12 +29,29 @@ if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
-from mistral_common.tokens.tokenizers.base import TokenizerVersion
-from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
-from mistral_common.tokens.tokenizers.tekken import Tekkenizer
-from mistral_common.tokens.tokenizers.sentencepiece import (
-    SentencePieceTokenizer,
-)
+
+try:
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+        SentencePieceTokenizer,
+    )
+
+    _mistral_common_installed = True
+    _mistral_import_error_msg = ""
+except ImportError:
+    _MISTRAL_COMMON_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
+    _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
+
+    _mistral_common_installed = False
+    TokenizerVersion = None
+    Tekkenizer = None
+    SentencePieceTokenizer = None
+    _mistral_import_error_msg = (
+        "Mistral format requires `mistral-common` to be installed. Please run "
+        "`pip install mistral-common[image,audio]` to install it."
+    )
 
 
 logger = logging.getLogger("hf-to-gguf")
@@ -106,6 +123,9 @@ class ModelBase:
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
+
+        if self.is_mistral_format and not _mistral_common_installed:
+            raise ImportError(_mistral_import_error_msg)
 
         self.dir_model = dir_model
         self.ftype = ftype
@@ -892,8 +912,8 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/JetBrains/Mellum-4b-base
             res = "mellum"
         if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
-            # ref: https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Base
-            res = "llada-moe"
+            # ref: https://huggingface.co/inclusionAI/Ling-mini-base-2.0
+            res = "bailingmoe2"
         if chkhsh == "53e325976a6e142379c19b09afcae354f2f496f147afa8f9e189a33fe4e3024e":
             # ref: https://huggingface.co/ibm-granite/granite-docling-258M
             res = "granite-docling"
@@ -1363,8 +1383,8 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads"]))
 
             # preprocessor config
-            image_mean = DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
-            image_std = DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
+            image_mean = _MISTRAL_COMMON_DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
+            image_std = _MISTRAL_COMMON_DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
 
             self.gguf_writer.add_vision_image_mean(image_mean)
             self.gguf_writer.add_vision_image_std(image_std)
@@ -2033,6 +2053,9 @@ class LlamaModel(TextModel):
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def _set_vocab_mistral(self):
+        if not _mistral_common_installed:
+            raise ImportError(_mistral_import_error_msg)
+
         vocab = MistralVocab(self.dir_model)
         logger.info(
             f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
@@ -8055,6 +8078,103 @@ class BailingMoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("BailingMoeV2ForCausalLM")
+class BailingMoeV2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if nextn_layers := self.hparams.get("num_nextn_predict_layers", 0):
+            self.block_count = self.hparams["num_hidden_layers"] + nextn_layers
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        else:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(hparams.get("moe_shared_expert_intermediate_size", hparams["moe_intermediate_size"] * hparams["num_shared_experts"]))
+        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_group_count(hparams["n_group"])
+        self.gguf_writer.add_expert_group_used_count(hparams["topk_group"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+
+        if hparams["score_function"] == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif hparams["score_function"] == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported score_function value: {hparams['score_function']}")
+
+        if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(nextn_layers)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "mlp.experts" in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            tensors: list[tuple[str, Tensor]] = []
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+
+            return tensors
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
 class GroveMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GROVEMOE
@@ -9115,7 +9235,7 @@ class MistralModel(LlamaModel):
 
     @staticmethod
     def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
-        assert TokenizerVersion is not None, "mistral_common is not installed"
+        assert TokenizerVersion is not None and Tekkenizer is not None and SentencePieceTokenizer is not None, _mistral_import_error_msg
         assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
             f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
         )
@@ -9497,6 +9617,8 @@ def main() -> None:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     is_mistral_format = args.mistral_format
+    if is_mistral_format and not _mistral_common_installed:
+        raise ImportError(_mistral_import_error_msg)
     disable_mistral_community_chat_template = args.disable_mistral_community_chat_template
 
     with torch.inference_mode():
