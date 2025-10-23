@@ -165,6 +165,10 @@ namespace console {
         }
     }
 
+    FILE* get_output_handle() {
+        return out;
+    }
+
     static char32_t getchar32() {
 #if defined(_WIN32)
         HANDLE hConsole = GetStdHandle(STD_INPUT_HANDLE);

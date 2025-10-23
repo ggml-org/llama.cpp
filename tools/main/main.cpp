@@ -44,10 +44,10 @@ static bool need_insert_eot = false;
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
-    LOG("\nexample usage:\n");
-    LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
-    LOG("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
-    LOG("\n");
+    console::write("\nexample usage:\n");
+    console::write("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
+    console::write("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
+    console::write("\n");
 }
 
 static bool file_exists(const std::string & path) {
@@ -70,11 +70,11 @@ static void sigint_handler(int signo) {
             need_insert_eot = true;
         } else {
             console::cleanup();
-            LOG("\n");
+            console::write("\n");
             common_perf_print(*g_ctx, *g_smpl);
 
             // make sure all logs are flushed
-            LOG("Interrupted by user\n");
+            console::write("Interrupted by user\n");
             common_log_pause(common_log_main());
 
             _exit(130);
@@ -673,7 +673,7 @@ int main(int argc, char ** argv) {
 
     if (chat_add_and_format.get_partial_formatter()) {
         for (const auto & msg : chat_msgs) {
-            LOG("%s\n", msg.content.c_str());
+            console::write(msg.content + "\n");
         }
     }
 
@@ -833,8 +833,7 @@ int main(int argc, char ** argv) {
                         } else {
                             console::set_display(console::reset);
                         }
-                        fprintf(stdout, "%s", out.formatted.c_str());
-                        fflush(stdout);
+                        console::write(out.formatted);
                     }
                     console::set_display(console::reset);
                 }
@@ -870,7 +869,7 @@ int main(int argc, char ** argv) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                 if (!chat_add_and_format.get_partial_formatter()) {
-                    LOG("%s", token_str.c_str());
+                    console::write(token_str);
                 }
 
                 // Record Displayed Tokens To Log
@@ -954,7 +953,7 @@ int main(int argc, char ** argv) {
                         chat_add_and_format("assistant", assistant_ss.str());
                     }
                     is_interacting = true;
-                    LOG("\n");
+                    console::write("\n");
                 }
             }
 
@@ -968,8 +967,12 @@ int main(int argc, char ** argv) {
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
+                // color user input only
+                console::set_display(console::user_input);
+                display = params.display_prompt;
+
                 if (params.conversation_mode) {
-                    LOG("\n> ");
+                    console::write("\n> ");
                 }
 
                 if (params.input_prefix_bos) {
@@ -980,12 +983,8 @@ int main(int argc, char ** argv) {
                 std::string buffer;
                 if (!params.input_prefix.empty() && !params.conversation_mode) {
                     LOG_DBG("appending input prefix: '%s'\n", params.input_prefix.c_str());
-                    LOG("%s", params.input_prefix.c_str());
+                    console::write(params.input_prefix);
                 }
-
-                // color user input only
-                console::set_display(console::user_input);
-                display = params.display_prompt;
 
                 std::string line;
                 bool another_line = true;
@@ -999,7 +998,7 @@ int main(int argc, char ** argv) {
                 display = true;
 
                 if (buffer.empty()) { // Ctrl+D on empty line exits
-                    LOG("EOF by user\n");
+                    console::write("EOF by user\n");
                     break;
                 }
 
@@ -1017,7 +1016,7 @@ int main(int argc, char ** argv) {
                     // append input suffix if any
                     if (!params.input_suffix.empty() && !params.conversation_mode) {
                         LOG_DBG("appending input suffix: '%s'\n", params.input_suffix.c_str());
-                        LOG("%s", params.input_suffix.c_str());
+                        console::write(params.input_suffix);
                     }
 
                     LOG_DBG("buffer: '%s'\n", buffer.c_str());
@@ -1091,7 +1090,7 @@ int main(int argc, char ** argv) {
 
         // end of generation
         if (!embd.empty() && llama_vocab_is_eog(vocab, embd.back()) && !(params.interactive)) {
-            LOG(" [end of text]\n");
+            console::write(" [end of text]\n");
             break;
         }
 
@@ -1104,11 +1103,11 @@ int main(int argc, char ** argv) {
     }
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
-        LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        LOG_INF("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
 
-    LOG("\n\n");
+    console::write("\n\n");
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
