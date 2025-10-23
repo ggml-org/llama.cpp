@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 import html.parser
+import re
 
 
 gMe = {
@@ -102,6 +103,23 @@ class UrlReqResp:
     contentData: str = ""
 
 
+def validate_url(url: str, tag: str):
+    """
+    Implement a re based filter logic on the specified url.
+    """
+    urlParts = urllib.parse.urlparse(url)
+    urlHName = urlParts.hostname
+    if not urlHName:
+        return UrlReqResp(False, 400, f"WARN:{tag}:Missing hostname in Url")
+    bMatched = False
+    for filter in gMe['--allowed.domains']:
+        if re.match(filter, urlHName):
+            bMatched = True
+    if not bMatched:
+        return UrlReqResp(False, 400, f"WARN:{tag}:requested hostname not allowed")
+    return UrlReqResp(True, 200)
+
+
 def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
     """
     Common part of the url request handling used by both urlraw and urltext.
@@ -113,6 +131,11 @@ def handle_urlreq(pr: urllib.parse.ParseResult, tag: str):
     url = url[0]
     if (not url) or (len(url) == 0):
         return UrlReqResp(False, 400, f"WARN:{tag}:MissingUrl")
+    if (not gMe['--allowed.domains']):
+        return UrlReqResp(False, 400, f"DBUG:{tag}:MissingAllowedDomains")
+    gotVU = validate_url(url, tag)
+    if not gotVU.callOk:
+        return gotVU
     try:
         # Get requested url
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -260,6 +283,7 @@ def load_config():
 
 
 def process_args(args: list[str]):
+    import ast
     """
     Helper to process command line arguments
     """
@@ -284,6 +308,10 @@ def process_args(args: list[str]):
                 gMe[cArg] = args[iArg]
                 iArg += 1
                 load_config()
+            case '--allowed.domains':
+                iArg += 1
+                gMe[cArg] = ast.literal_eval(args[iArg])
+                iArg += 1
             case _:
                 gMe['INTERNAL.ProcessArgs.Unknown'].append(cArg)
                 print(f"WARN:ProcessArgs:{iArg}:IgnoringUnknownCommand:{cArg}")
