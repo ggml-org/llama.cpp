@@ -6,7 +6,6 @@
   "reportDuplicateImport": "error",
   "reportDeprecated": "warning",
   "reportUnnecessaryTypeIgnoreComment": "information",
-  "reportAttributeAccessIssue": "warning",
   "disableBytesTypePromotions": false, // TODO: change once Python 3.12 is the minimum
   "executionEnvironments": [
     {

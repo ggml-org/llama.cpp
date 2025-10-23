@@ -2011,13 +2011,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_rwkv_wkv7(params, tensor);
             } break;
-        case GGML_OP_DELTA_NET:
+        case GGML_OP_SOLVE_TRI:
             {
-                ggml_compute_forward_delta_net_f32(params, tensor);
-            } break;
-        case GGML_OP_DELTA_NET_RECURRENT:
-            {
-                ggml_compute_forward_delta_net_recurrent_f32(params, tensor);
+                ggml_compute_forward_solve_tri(params, tensor);
             } break;
         case GGML_OP_MAP_CUSTOM1:
             {
@@ -2180,6 +2176,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = 1;
             } break;
         case GGML_OP_COUNT_EQUAL:
+        case GGML_OP_SOLVE_TRI:
             {
                 n_tasks = n_threads;
             } break;
@@ -2304,8 +2301,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_POOL_1D:
         case GGML_OP_POOL_2D:
         case GGML_OP_POOL_2D_BACK:
-        case GGML_OP_DELTA_NET_RECURRENT:
-        case GGML_OP_DELTA_NET:
             {
                 n_tasks = 1;
             } break;

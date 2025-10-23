@@ -45,8 +45,6 @@ static std::ostringstream       * g_output_ss;
 static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
-static bool print_cache_stats = false;
-static int token_count = 0;
 
 static void print_usage(int argc, char ** argv) {
     (void) argc;
@@ -96,9 +94,6 @@ int main(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
         return 1;
     }
-
-    // Check if cache statistics printing is enabled
-    print_cache_stats = params.dump_cache;
 
     common_init();
 

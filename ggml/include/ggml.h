@@ -245,8 +245,6 @@
 
 #define GGML_MROPE_SECTIONS   4
 
-#define GGML_DELTA_NET_CHUNK    64
-
 #define GGML_UNUSED(x) (void)(x)
 #ifdef __CUDACC__
 template<typename... Args>
@@ -545,8 +543,7 @@ extern "C" {
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
-        GGML_OP_DELTA_NET,
-        GGML_OP_DELTA_NET_RECURRENT,
+        GGML_OP_SOLVE_TRI,
 
         GGML_OP_UNARY,
 
@@ -2497,6 +2494,11 @@ extern "C" {
         struct ggml_tensor  * state,
         bool                  use_qk_l2norm,
         float                 eps_norm);
+
+    GGML_API struct ggml_tensor * ggml_solve_tri(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * x);
 
     // custom operators
 
