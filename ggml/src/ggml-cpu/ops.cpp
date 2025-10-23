@@ -8728,7 +8728,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const float dA = expf(dt_soft_plus * A[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
@@ -8825,7 +8825,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
                     // dim
@@ -9712,22 +9712,6 @@ void ggml_compute_forward_gla(
     }
 }
 
-static double debug_sum(float * data, size_t size) {
-    double sum = 0.0;
-    for (unsigned int i = 0; i < size; i++) {
-        sum += data[i];
-    }
-    return sum;
-}
-
-static void print_debug_info(float * data, size_t size, const char * name, int64_t token) {
-#ifdef MR_CHUNKY_TALKS
-    GGML_LOG_INFO("\nggml-debug: %s (%ld) first 5 values: [%.6f, %.6f, %.6f, %.6f, %.6f, ...]\n", 
-        name, token, data[0], data[1], data[2], data[3], data[4]);
-    GGML_LOG_INFO("total elements: %ld, sum = %.10f\n", size, debug_sum(data, size));
-#endif MR_CHUNKY_TALKS
-}
-
 // Helper function to compute cumulative sum
 static void delta_cumsum_f32(const float * x, float * dst, const int64_t n) {
     float cumsum = 0.0f;
@@ -9837,33 +9821,8 @@ static void delta_apply_triangular_updates_chunk_f32(float *       attn,
                         attn_ptr[i * chunk_size + j] = row[j] + sum_val;
                     }
 
-                    if (i % 10 == 0) {
-                        if (seq == 1 && head == 0 && chunk == 0) {
-                            print_debug_info(row, i, "row[1, 0, 0]", i);
-                            print_debug_info(sub, i * i, "sub[1, 0, 0]", i);
-                        }
-                        if (seq == 0 && head == 1 && chunk == 0) {
-                            print_debug_info(row, i, "row[0, 1, 0]", i);
-                            print_debug_info(sub, i * i, "sub[0, 1, 0]", i);
-                        }
-                        if (seq == 0 && head == 0 && chunk == 1) {
-                            print_debug_info(row, i, "row[0, 0, 1]", i);
-                            print_debug_info(sub, i * i, "sub[0, 0, 1]", i);
-                        }
-                    }
-
                     free(row);
                     free(sub);
-                }
-
-                if (seq == 1 && head == 0 && chunk == 0) {
-                    print_debug_info(attn_ptr, chunk_size * chunk_size, "attn[1, 0, 0]", 0);
-                }
-                if (seq == 0 && head == 1 && chunk == 0) {
-                    print_debug_info(attn_ptr, chunk_size * chunk_size, "attn[0, 1, 0]", 0);
-                }
-                if (seq == 0 && head == 0 && chunk == 1) {
-                    print_debug_info(attn_ptr, chunk_size * chunk_size, "attn[0, 0, 1]", 0);
                 }
             }
         }
@@ -10191,8 +10150,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             }
         }
     }
-    print_debug_info(new_state, S_v * S_v * H_v * n_seqs, "init_state", -1);
-
 
     GGML_ASSERT(ggml_is_contiguous(src0));
     GGML_ASSERT(ggml_is_contiguous(src1));
@@ -10229,13 +10186,10 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
     // for i in range(1, chunk_size): attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
     // attn = attn + torch.eye(chunk_size)
     delta_apply_triangular_updates_chunk_f32(attn, chunk_size, n_seqs, H_v, num_chunks);
-    print_debug_info(attn, chunk_size * chunk_size * H_v * num_chunks * n_seqs, "attn_chunk", -1);
     delta_add_identity_matrix_chunk_f32(attn, chunk_size, n_seqs, H_v, num_chunks);
-    print_debug_info(attn, chunk_size * chunk_size * H_v * num_chunks * n_seqs, "attn_eye", -1);
 
     // Compute value = attn @ v_beta
     delta_compute_value_f32(attn, (const float *) src6->data, value, chunk_size, S_v, H_v, n_seqs, num_chunks);
-    print_debug_info(value, chunk_size * S_v * H_v * num_chunks * n_seqs, "value", -1);
 
     for (int64_t seq = 0; seq < n_seqs; seq++) {
         for (int i = 0; i < num_chunks; i++) {
@@ -10248,7 +10202,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             } 
         }
     }
-    print_debug_info(k_cumdecay, chunk_size * S_v * H_v * num_chunks * n_seqs, "k_cumdecay", -1);
 
     // Process each chunk with all sequences and heads together
     for (int64_t chunk = 0; chunk < num_chunks; chunk++) {
@@ -10304,9 +10257,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             }
         }
 
-        print_debug_info(pc_q_chunk_data, chunk_size * S_v * H_v * n_seqs, "q_i_chunk", chunk);
-        print_debug_info(pc_k_chunk_data, chunk_size * S_v * H_v * n_seqs, "k_i_chunk", chunk);
-
         // Step 4: Compute NEW attention matrix for this chunk: attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
         // Note: decay_mask[:, :, i] means we need to use the decay_mask for this specific chunk
         // The mask applied is the simple causal attention mask: torch.triu(torch.ones(chunk_size, chunk_size), diagonal=1)
@@ -10328,7 +10278,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 delta_matmul_f32(q_ptr, k_trans, attn_ptr, chunk_size, chunk_size, S_v);
             }
         }
-        print_debug_info(attn, chunk_size * chunk_size * num_chunks * H_v * n_seqs, "attn_q_k_trans", chunk);
 
         for (int64_t seq = 0; seq < n_seqs; seq++) {
             for (int64_t head = 0; head < H_v; head++) {
@@ -10348,20 +10297,15 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             }
         }
         
-        print_debug_info(attn, chunk_size * chunk_size * num_chunks * H_v * n_seqs, "attn_step4_new_chunk", chunk);
-
         // v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
         // k_cumdecay has shape [chunk_size, v_head_dim], state has shape [v_head_dim, v_head_dim]
         delta_matmul_state_chunk_f32(k_cumdecay, new_state, pc_v_prime, chunk_size, S_v, S_v, n_seqs, H_v, chunk, num_chunks);
-        print_debug_info(pc_v_prime, chunk_size * S_v * H_v * n_seqs, "v_prime_chunk", chunk);
 
         // v_new = v_i - v_prime
         delta_tensor_subtract_chunk_f32(value, pc_v_prime, pc_v_new, chunk_size * S_v, n_seqs, H_v, num_chunks, chunk);
-        print_debug_info(pc_v_new, chunk_size * S_v * H_v * n_seqs, "v_new_chunk", chunk);
 
         // attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
         delta_matmul_state_chunk_f32(pc_q_g_exp, new_state, pc_attn_inter, chunk_size, S_v, S_v, n_seqs, H_v, -1, -1);
-        print_debug_info(pc_attn_inter, chunk_size * S_v * H_v * n_seqs, "attn_inter_chunk", chunk);
 
         // core_attn_out[:, :, i] = attn_inter + attn @ v_new
         // Use regular matrix multiplication for attn @ v_new
@@ -10375,9 +10319,7 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 delta_matmul_f32(attn_ptr, v_new_ptr, attn_v_new_ptr, chunk_size, S_v, chunk_size);
             }
         }
-        print_debug_info(pc_attn_v_new, chunk_size * S_v * H_v * n_seqs, "attn_v_new_chunk", chunk);
         delta_tensor_add_chunk_f32(pc_attn_inter, pc_attn_v_new, pc_core_attn_out, chunk_size * S_v, n_seqs, H_v);
-        print_debug_info(pc_core_attn_out, chunk_size * S_v * H_v * n_seqs, "core_attn_out_chunk", chunk);
 
         // Prepare g_last and g_diff_exp for state update
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10394,9 +10336,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             }
         }
 
-        print_debug_info(pc_g_last, H_v * n_seqs, "g_last_chunk", chunk);
-        print_debug_info(pc_g_diff_exp, chunk_size * H_v * n_seqs, "g_diff_exp", chunk);
-
         float * k_g_diffexp = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
         for (int64_t seq = 0; seq < n_seqs; seq++) {
             for (int64_t head = 0; head < H_v; head++) {
@@ -10408,7 +10347,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 }
             }
         }
-        print_debug_info(k_g_diffexp, chunk_size * S_v * H_v * n_seqs, "k_g_diffexp", chunk);
         float * k_g_diffexp_T = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
         for (int64_t seq = 0; seq < n_seqs; seq++) {
             for (int64_t head = 0; head < H_v; head++) {
@@ -10421,25 +10359,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
             }
         }
 
-        // for (int64_t seq = 0; seq < n_seqs; seq++) {
-        //     for (int64_t head = 0; head < H_v; head++) {
-        //         GGML_LOG_INFO("Sequence %ld, head %ld: \n[ ", seq, head);
-        //         for (int i = 0; i < chunk_size; i++) {
-        //             GGML_LOG_INFO("[ ");
-        //             for (int j = 0; j < S_v; j++) {
-        //                 GGML_LOG_INFO("%.6f", k_g_diffexp[(chunk_size * S_v * H_v) * seq + (chunk_size * S_v) * head + i * S_v + j]);
-        //                 if (j < chunk_size - 1) {
-        //                     GGML_LOG_INFO(", ");
-        //                 }
-        //             }
-        //             GGML_LOG_INFO("], \n");
-        //         }
-        //         GGML_LOG_INFO("]\n");
-        //     }
-        // }
-
-        print_debug_info(k_g_diffexp_T, chunk_size * S_v * H_v * n_seqs, "k_g_diffexp_T", chunk);
-
         float * kgd_mul_vnew = (float *) malloc(S_v * S_v * H_v * n_seqs * sizeof(float));
 
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10450,24 +10369,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                     S_v, S_v, chunk_size);
             }
         }
-        print_debug_info(kgd_mul_vnew, S_v * S_v * H_v * n_seqs, "kgd_mul_vnew", chunk);
-        
-        // for (int64_t seq = 0; seq < n_seqs; seq++) {
-        //     for (int64_t head = 0; head < H_v; head++) {
-        //         GGML_LOG_INFO("Sequence %ld, head %ld: \n[ ", seq, head);
-        //         for (int i = 0; i < S_v; i++) {
-        //             GGML_LOG_INFO("[ ");
-        //             for (int j = 0; j < S_v; j++) {
-        //                 GGML_LOG_INFO("%.6f", kgd_mul_vnew[(S_v * S_v * H_v) * seq + (S_v * S_v) * head + i * S_v + j]);
-        //                 if (j < S_v - 1) {
-        //                     GGML_LOG_INFO(", ");
-        //                 }
-        //             }
-        //             GGML_LOG_INFO("], \n");
-        //         }
-        //         GGML_LOG_INFO("]\n");
-        //     }
-        // }
 
         for (int64_t seq = 0; seq < n_seqs; seq++) {
             for (int64_t head = 0; head < H_v; head++) {
@@ -10480,7 +10381,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 }
             }
         }
-        print_debug_info(new_state, S_v * S_v * H_v * n_seqs, "state_end_chunk", chunk);
 
         // Free temporary memory
         free(pc_q_chunk_data);
@@ -10511,21 +10411,6 @@ void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml
                 }
             }
         }
-        print_debug_info(output, S_v * H_v * n_tokens * n_seqs, "output", chunk);
-        // GGML_LOG_INFO("\nFull output tensor: \n\n");
-        // for (int64_t seq = 0; seq < n_seqs; seq++) {
-        //     for (int64_t head = 0; head < H_v; head++) {
-        //         GGML_LOG_INFO("\n[ ");
-        //         for (int64_t i = 0; i < n_tokens; i++) {
-        //             for (int64_t d = 0; d < S_v; d++) {
-        //                 GGML_LOG_INFO("%.4f  ", output[seq * (n_tokens * S_v * H_v) + head * (n_tokens * S_v) + (chunk * chunk_size + i) * S_v + d]);
-        //             }
-        //         }
-        //         GGML_LOG_INFO(" ]");
-        //     }
-        // }
-        print_debug_info(new_state, S_v * S_v * H_v * n_seqs, "new_state", chunk);
-
         free(pc_core_attn_out);
         free(pc_attn_inter);
         free(pc_v_new);
@@ -10622,7 +10507,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(temp_state, n_seqs * H_v * S_v * S_v, "temp_state_copy", token);
 
         // 1. last_recurrent_state = last_recurrent_state * g_t (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10636,7 +10520,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(temp_state, n_seqs * H_v * S_v * S_v, "temp_state_times_g_t", token);
         
         // 2. kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2) (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10651,7 +10534,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(kv_mem, n_seqs * H_v * S_v, "kv_mem", token);
         
         // 3. delta = (v_t - kv_mem) * beta_t (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10663,7 +10545,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(delta, n_seqs * H_v * S_v, "delta", token);
         
         // 4. last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2) (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10677,7 +10558,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(temp_state, n_seqs * H_v * S_v * S_v, "temp_state", token);
         
         // 5. core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2) (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
@@ -10691,7 +10571,6 @@ void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * pa
                 }
             }
         }
-        print_debug_info(attn_out_t, n_seqs * S_v * H_v, "attn_out_t", token);
         
         // Store the output for this token (for all seqs and heads)
         for (int64_t seq = 0; seq < n_seqs; seq++) {
