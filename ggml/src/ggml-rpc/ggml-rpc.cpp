@@ -387,10 +387,20 @@ static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
 }
 
 static bool send_msg(sockfd_t sockfd, const void * msg, size_t msg_size) {
-    if (!send_data(sockfd, &msg_size, sizeof(msg_size))) {
-        return false;
+    const size_t header_size = sizeof(msg_size);
+    std::vector<uint8_t> buf;
+    buf.resize(header_size + msg_size);
+
+    // header
+    memcpy(buf.data(), &msg_size, sizeof(msg_size));
+
+    // payload
+    if (msg_size > 0) {
+        memcpy(buf.data() + header_size, msg, msg_size);
     }
-    return send_data(sockfd, msg, msg_size);
+
+    // single send
+    return send_data(sockfd, buf.data(), buf.size());
 }
 
 static bool recv_msg(sockfd_t sockfd, void * msg, size_t msg_size) {
@@ -431,17 +441,21 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
-    uint8_t cmd_byte = cmd;
-    if (!send_data(sock->fd, &cmd_byte, sizeof(cmd_byte))) {
-        return false;
+    const size_t header_size = 1 + sizeof(input_size);
+    std::vector<uint8_t> buf;
+    buf.resize(header_size + input_size);
+
+    // header
+    buf[0] = static_cast<uint8_t>(cmd);
+    memcpy(buf.data() + 1, &input_size, sizeof(input_size));
+
+    // payload
+    if (input_size > 0) {
+        memcpy(buf.data() + header_size, input, input_size);
     }
-    if (!send_data(sock->fd, &input_size, sizeof(input_size))) {
-        return false;
-    }
-    if (!send_data(sock->fd, input, input_size)) {
-        return false;
-    }
-    return true;
+
+    // single send (send_data may still chunk very large buffers, which is fine)
+    return send_data(sock->fd, buf.data(), buf.size());
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
