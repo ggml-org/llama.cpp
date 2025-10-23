@@ -108,6 +108,7 @@ def validate_url(url: str, tag: str):
     Implement a re based filter logic on the specified url.
     """
     urlParts = urllib.parse.urlparse(url)
+    print(f"DBUG:ValidateUrl:{urlParts}, {urlParts.hostname}")
     urlHName = urlParts.hostname
     if not urlHName:
         return UrlReqResp(False, 400, f"WARN:{tag}:Missing hostname in Url")
