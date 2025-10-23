@@ -561,6 +561,7 @@ extern "C" {
         GGML_OP_IFAIRY_MERGE,
         GGML_OP_IFAIRY_ADD, // 残差要用
         GGML_OP_IFAIRY_RMSNORM,
+        GGML_OP_IFAIRY_MUL, // 逐元素相乘，mlp中gate要用
 
         GGML_OP_COUNT,
     };
@@ -1676,6 +1677,11 @@ extern "C" {
     );
 
     GGML_API struct ggml_tensor * ggml_ifairy_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_ifairy_mul(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);

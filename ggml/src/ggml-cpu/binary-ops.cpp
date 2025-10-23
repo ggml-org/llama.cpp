@@ -45,6 +45,20 @@ static inline float op_ifairy_add(float a, float b) {
     return ret;
 }
 
+static inline float op_ifairy_mul(float a, float b) {
+    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
+    float r = ra*rg + ia*ig;
+    float i = ra*ig - ia*rg;
+    float ret;
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+    return ret;
+}
+
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
 static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const src0_t * x, const src1_t * y) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
@@ -182,4 +196,8 @@ void ggml_compute_forward_div(const ggml_compute_params * params, ggml_tensor * 
 
 void ggml_compute_forward_ifairy_add(const ggml_compute_params * params, ggml_tensor * dst) {
     binary_op<op_ifairy_add>(params, dst);
+}
+
+void ggml_compute_forward_ifairy_mul(const ggml_compute_params * params, ggml_tensor * dst) {
+    binary_op<op_ifairy_mul>(params, dst);
 }

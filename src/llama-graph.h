@@ -612,6 +612,11 @@ struct llm_graph_context {
            llm_norm_type   type,
                      int   il) const;
 
+    ggml_tensor * ifairy_build_norm(
+             ggml_tensor * cur,
+             ggml_tensor * mw, // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+                     int   il) const;
+
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
              ggml_tensor * up,
@@ -626,6 +631,14 @@ struct llm_graph_context {
              ggml_tensor * act_scales,
          llm_ffn_op_type   type_op,
        llm_ffn_gate_type   type_gate,
+                     int   il) const;
+
+    ggml_tensor * ifairy_build_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * up,
+             ggml_tensor * gate,
+             ggml_tensor * down,
+             ggml_tensor * norm_weight, // norm_weight should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
                      int   il) const;
 
     // build MoE FFN without bias tensors

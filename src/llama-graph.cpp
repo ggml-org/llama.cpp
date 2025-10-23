@@ -635,6 +635,18 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
+ggml_tensor * llm_graph_context::ifairy_build_norm(
+             ggml_tensor * cur,
+             ggml_tensor * mw,
+                     int   il) const{
+    cur = ggml_ifairy_split(ctx0, cur);
+    cur = ggml_ifairy_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+    cb(cur, "norm", il);
+    cur = ggml_mul(ctx0, cur, mw); // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+    cur = ggml_ifairy_merge(ctx0, cur);
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_norm(
          ggml_tensor * cur,
          ggml_tensor * mw,
@@ -667,6 +679,25 @@ ggml_tensor * llm_graph_context::build_norm(
         cur = ggml_add(ctx0, cur, mb);
     }
 
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::ifairy_build_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * up,
+             ggml_tensor * gate,
+             ggml_tensor * down,
+             ggml_tensor * norm_weight,
+                     int   il) const{
+    ggml_tensor * gate_res = build_lora_mm(gate, cur);
+    cb(gate_res, "ffn_gate", il);
+    gate_res = ggml_ifairy_relu2(ctx0, gate_res);
+    cur = build_lora_mm(up, cur);
+    cb(cur, "ffn_up", il);
+    cur = ggml_ifairy_mul(ctx0, cur, gate_res);
+    cur = ifairy_build_norm(cur, norm_weight, il);
+    cur = build_lora_mm(down, cur);
+    cb(cur, "ffn_down", il);
     return cur;
 }
 
