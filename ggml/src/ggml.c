@@ -5083,7 +5083,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_tensor * a,
     float constant,
     enum ggml_tri_type tritype) {
-    
+
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_i32(result, 0, tritype);
@@ -6152,7 +6152,7 @@ struct ggml_tensor * ggml_delta_net_recurrent(
     result->src[3] = g_tokens_exp;
     result->src[4] = beta_tokens;
     result->src[5] = state;
-    
+
     return result;
 }
 

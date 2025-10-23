@@ -90,201 +90,13 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-struct callback_data {
-    std::vector<uint8_t> data;
-    std::map<std::string, int32_t> tensors;
-    std::mutex mutex;
-};
-
-
-static std::string ggml_ne_string(const ggml_tensor * t) {
-    std::string str;
-    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        str += std::to_string(t->ne[i]);
-        if (i + 1 < GGML_MAX_DIMS) {
-            str += ", ";
-        }
-    }
-    return str;
-}
-
-static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
-    union {
-        float f;
-        uint32_t i;
-    } u;
-    u.i = (uint32_t)h.bits << 16;
-    return u.f;
-}
-
-static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
-    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-    float v;
-    if (type == GGML_TYPE_F16) {
-        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
-    } else if (type == GGML_TYPE_F32) {
-        v = *(float *) &data[i];
-    } else if (type == GGML_TYPE_I64) {
-        v = (float) *(int64_t *) &data[i];
-    } else if (type == GGML_TYPE_I32) {
-        v = (float) *(int32_t *) &data[i];
-    } else if (type == GGML_TYPE_I16) {
-        v = (float) *(int16_t *) &data[i];
-    } else if (type == GGML_TYPE_I8) {
-        v = (float) *(int8_t *) &data[i];
-    } else if (type == GGML_TYPE_BF16) {
-        v = ggml_compute_bf16_to_fp32(*(ggml_bf16_t *) &data[i]);
-    } else {
-        GGML_ABORT("fatal error");
-    }
-    return v;
-}
-
-// Function to save a tensor to binary file
-static void save_tensor(struct ggml_tensor * tensor, uint8_t * data, const char * filename) {
-    FILE* f = fopen((std::string("reference/tensors/conv/") + std::string(filename)).c_str(), "wb");
-    if (!f) {
-        fprintf(stderr, "Failed to create file: %s\n", filename);
-        return;
-    }
-    
-    // Write shape
-    fwrite(tensor->ne, sizeof(int64_t), 4, f);
-    
-    // Calculate total elements
-    int64_t total_elements = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
-    
-    // Write data
-    fwrite(data, sizeof(float), total_elements, f);
-    fclose(f);
-}
-
-static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
-    GGML_ASSERT(n > 0);
-    double sum = 0;
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    sum += v;
-                }
-            }
-        }
-    }
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LOG("                                     [\n");
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n && ne[2] > 2*n) {
-                LOG("                                      ..., \n");
-                i2 = ne[2] - n;
-            }
-            LOG("                                      [\n");
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n && ne[1] > 2*n) {
-                    LOG("                                       ..., \n");
-                    i1 = ne[1] - n;
-                }
-                LOG("                                       [");
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n && ne[0] > 2*n) {
-                        LOG("..., ");
-                        i0 = ne[0] - n;
-                    }
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    LOG("%12.4f", v);
-                    if (i0 < ne[0] - 1) LOG(", ");
-                }
-                LOG("],\n");
-            }
-            LOG("                                      ],\n");
-        }
-        LOG("                                     ]\n");
-        LOG("                                     sum = %f\n", sum);
-    }
-
-    // TODO: make this abort configurable/optional?
-    if (std::isnan(sum)) {
-        LOG_ERR("encountered NaN - aborting\n");
-        exit(0);
-    }
-}
-
-static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
-    auto * cb_data = (callback_data *) user_data;
-    std::lock_guard<std::mutex> lock(cb_data->mutex);
-
-    const struct ggml_tensor * src0 = t->src[0];
-    const struct ggml_tensor * src1 = t->src[1];
-
-    if (ask) {
-        return true; // Always retrieve data
-    }
-
-    char src1_str[128] = {0};
-    if (src1) {
-        snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
-    }
-
-    LOG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
-         t->name, ggml_type_name(t->type), ggml_op_desc(t),
-         src0->name, ggml_ne_string(src0).c_str(),
-         src1 ? src1_str : "",
-         ggml_ne_string(t).c_str());
-
-
-    // copy the data from the GPU memory if needed
-    const bool is_host = ggml_backend_buffer_is_host(t->buffer);
-
-    if (!is_host) {
-        auto n_bytes = ggml_nbytes(t);
-        cb_data->data.resize(n_bytes);
-        ggml_backend_tensor_get(t, cb_data->data.data(), 0, n_bytes);
-    }
-
-    if (!ggml_is_quantized(t->type)) {
-        uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
-        std::string tensor_name(t->name);
-        if (std::string(tensor_name).substr(0, std::string("post_moe-").size()) == "post_moe-" || 
-            std::string(tensor_name).substr(0, std::string("k_pad-").size()) == "k_pad-" || 
-            std::string(tensor_name).substr(0, std::string("q_pad-").size()) == "q_pad-" || 
-            std::string(tensor_name).substr(0, std::string("v_pad-").size()) == "v_pad-" || 
-            std::string(tensor_name).substr(0, std::string("state_1d-").size()) == "state_1d-") {
-                
-            if (cb_data->tensors.count(tensor_name) == 0) {
-                cb_data->tensors[tensor_name] = 1;
-            } else {
-                cb_data->tensors[tensor_name]++;
-            }
-            save_tensor(t, data, (tensor_name + "_" + std::to_string(cb_data->tensors[t->name]) + ".bin").c_str());
-        }
-        ggml_print_tensor(data, t->type, t->ne, t->nb, 4);
-        if (std::string(tensor_name) == std::string("attn_out_reshaped-0")) {
-            LOG("\nFull output tensor: \n[ ");
-            for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
-                for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
-                    for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
-                        for (int64_t i0 = 0; i0 < t->ne[0]; i0++) {
-                            const float v = ggml_get_float_value(data, t->type, t->nb, i0, i1, i2, i3);
-                            LOG("%.4f  ", v);
-                        }
-                    }
-                }
-            }
-            LOG(" ]");
-        }
-    }
-
-    return true;
-}
-
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
         return 1;
     }
-    
+
     // Check if cache statistics printing is enabled
     print_cache_stats = params.dump_cache;
 
@@ -334,12 +146,6 @@ int main(int argc, char ** argv) {
     std::vector<common_chat_msg> chat_msgs;
 
     // load the model and apply lora adapter, if any
-    callback_data cb_data;
-    if (params.n_predict > 0 && params.n_predict < 50) {
-        // enable debug prints if we print small number of tokens
-        params.cb_eval = ggml_debug;
-        params.cb_eval_user_data = &cb_data;
-    }
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
 
@@ -910,7 +716,7 @@ int main(int argc, char ** argv) {
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
-            
+
             // Print cache statistics after each token generation
             token_count++;
 

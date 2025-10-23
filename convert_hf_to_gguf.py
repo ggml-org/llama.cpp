@@ -3875,7 +3875,7 @@ class Qwen3NextModel(Qwen3MoeModel):
             data_torch = data_torch.squeeze()
         elif name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
             data_torch = data_torch + 1
-            
+
         yield from Qwen2MoeModel.modify_tensors(self, data_torch, name, bid)
 
 

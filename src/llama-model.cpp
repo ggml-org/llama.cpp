@@ -19807,9 +19807,9 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
         // EDIT: we moved the shifting part to the conversion, so we just call normal build_norm
         return build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
     }
-   
+
     ggml_tensor * build_q3n_gated_norm(struct ggml_tensor * input, struct ggml_tensor * weights, struct ggml_tensor * gate, int layer) {
-        ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);    
+        ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
         ggml_tensor * gated_silu = ggml_silu(ctx0, gate);
         return ggml_mul(ctx0, normalized, gated_silu);
     }
@@ -19900,14 +19900,11 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
         const auto * mctx_cur = inp->mctx;
 
         const int64_t d_inner  = hparams.ssm_d_inner;
-        
         const int64_t n_seqs   = ubatch.n_seqs;
-
         const int64_t head_k_dim  = hparams.ssm_d_state;
         const int64_t num_k_heads = hparams.ssm_n_group;
         const int64_t num_v_heads = hparams.ssm_dt_rank;
         const int64_t head_v_dim  = d_inner / num_v_heads;
-
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         const auto kv_head = mctx_cur->get_head();
@@ -19941,7 +19938,7 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
         cb(b, "b", il);
 
         ggml_tensor * a = ggml_view_4d(ctx0, mixed_ba_reshaped, split_sizes_ba[1], num_k_heads, n_seq_tokens, n_seqs,
-                            mixed_ba_reshaped->nb[1], mixed_ba_reshaped->nb[2], mixed_ba_reshaped->nb[3], 
+                            mixed_ba_reshaped->nb[1], mixed_ba_reshaped->nb[2], mixed_ba_reshaped->nb[3],
                             split_sizes_ba[0] * ggml_element_size(mixed_ba_reshaped));
         cb(a, "a", il);
 
@@ -19965,7 +19962,7 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
             head_v_dim * num_v_heads / num_k_heads   // z size
         };
 
-        ggml_tensor * query = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[0], num_k_heads, n_seq_tokens, n_seqs, 
+        ggml_tensor * query = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[0], num_k_heads, n_seq_tokens, n_seqs,
                                                 mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3], 0);
         cb(query, "q", il);
 
@@ -20029,7 +20026,7 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
         conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
         cb(conv_states, "conv_states_reshaped", il);
 
-        ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);    
+        ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);
         cb(conv_input, "conv_input", il);
 
         // Update convolution state cache
@@ -20063,13 +20060,13 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
         ggml_tensor * q_conv = ggml_view_2d(ctx0, conv_qkv_mix, head_k_dim * num_k_heads, n_seq_tokens * n_seqs,
             conv_qkv_mix->nb[1], 0);
         cb(q_conv, "q_conv", il);
-        ggml_tensor * k_conv = ggml_view_2d(ctx0, conv_qkv_mix, head_k_dim * num_k_heads, n_seq_tokens * n_seqs, 
+        ggml_tensor * k_conv = ggml_view_2d(ctx0, conv_qkv_mix, head_k_dim * num_k_heads, n_seq_tokens * n_seqs,
             conv_qkv_mix->nb[1], head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
         cb(k_conv, "k_conv", il);
-        ggml_tensor * v_conv = ggml_view_2d(ctx0, conv_qkv_mix, head_v_dim * num_v_heads, n_seq_tokens * n_seqs, 
+        ggml_tensor * v_conv = ggml_view_2d(ctx0, conv_qkv_mix, head_v_dim * num_v_heads, n_seq_tokens * n_seqs,
             conv_qkv_mix->nb[1], 2 * head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
         cb(v_conv, "v_conv", il);
-        
+
         // Unsqueeze them
         q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
         k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
@@ -20089,11 +20086,11 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
             // repeat interleave: reshape to (repeat part, 1, remaining part), do repeat, then reshape back
             ggml_tensor * q_reshaped = ggml_reshape_3d(ctx0, q_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
             ggml_tensor * k_reshaped = ggml_reshape_3d(ctx0, k_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
-            
+
             // Repeat along the third dimension (the new dimension with size 1)
             ggml_tensor * q_repeated = ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
             ggml_tensor * k_repeated = ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
-            
+
             // Reshape back to merge the head and repeat dimensions
             // From [head_dim, num_k_heads, repeat_factor, n_seq_tokens * n_seqs]
             // Back to [head_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs]
@@ -20124,19 +20121,19 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
 
         ggml_tensor * attn_out_reshaped = ggml_cont_4d(ctx0, attn_out_1d, head_v_dim, n_seq_tokens, num_v_heads, n_seqs);
         cb(attn_out_1d, "attn_out_reshaped", il);
-        
+
         ggml_tensor * attn_out_final = ggml_cont(ctx0, ggml_permute(ctx0, attn_out_reshaped, 0, 2, 1, 3));
         cb(attn_out_final, "attn_out_final", il);
-    
+
         // Extract the state part (second part of the concatenated tensor)
         // State starts after n_tokens elements along dimension 1
         const int64_t state_flat_size = head_v_dim * head_v_dim * num_v_heads * n_seqs;
-        
+
         ggml_tensor * state_1d = ggml_view_1d(ctx0, attn_out, state_flat_size, output_flat_size * ggml_element_size(attn_out));
         cb(state_1d, "state_1d", il);
-        
+
         // Update the recurrent states
-        ggml_build_forward_expand(gf, 
+        ggml_build_forward_expand(gf,
             ggml_cpy(ctx0, state_1d, ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
                 kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
 
@@ -20151,7 +20148,7 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
 
         // Apply gated normalization: self.norm(core_attn_out, z)
         ggml_tensor * attn_out_norm = build_q3n_gated_norm(attn_out_2d_final, model.layers[il].ssm_norm, z_2d, il);
-        
+
         // Reshape back to original dimensions: [n_heads * n_tokens * n_seqs, head_dim] -> [head_dim, n_heads, n_tokens, n_seqs]
         ggml_tensor * gated_output_4d = ggml_reshape_4d(ctx0, attn_out_norm, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
@@ -20191,17 +20188,17 @@ struct llm_build_qwen3next : public llm_graph_context_mamba {
                 // Note: ffn_gate_inp_shexp is the shared expert gate (outputs 1 value per token)
                 ggml_tensor * shared_gate = build_lora_mm(model.layers[il].ffn_gate_inp_shexp, cur);
                 cb(shared_gate, "shared_expert_gate", il);
-                
+
                 // Apply sigmoid to the gate
                 shared_gate = ggml_sigmoid(ctx0, shared_gate);
                 cb(shared_gate, "shared_expert_gate_sigmoid", il);
-                
+
                 // The gate needs to be broadcast to match the dimensions of ffn_shexp
                 // ffn_shexp is [n_embd, n_tokens, 1, 1] and shared_gate is [1, n_tokens, 1, 1]
                 // We need to repeat the gate along the feature dimension
                 shared_gate = ggml_repeat(ctx0, shared_gate, ffn_shexp);
                 cb(shared_gate, "shared_expert_gate_broadcast", il);
-                
+
                 // Apply the gate to the shared expert output
                 ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
                 cb(ffn_shexp, "ffn_shexp_gated", il);
