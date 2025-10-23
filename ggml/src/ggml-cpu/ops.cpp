@@ -9108,22 +9108,6 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_xielu(params, dst);
             } break;
-        case GGML_UNARY_OP_FLOOR:
-            {
-                ggml_compute_forward_floor(params, dst);
-            } break;
-        case GGML_UNARY_OP_CEIL:
-            {
-                ggml_compute_forward_ceil(params, dst);
-            } break;
-        case GGML_UNARY_OP_ROUND:
-            {
-                ggml_compute_forward_round(params, dst);
-            } break;
-        case GGML_UNARY_OP_TRUNC:
-            {
-                ggml_compute_forward_trunc(params, dst);
-            } break;
         case GGML_UNARY_OP_EXPM1:
             {
                 ggml_compute_forward_expm1(params, dst);
@@ -9131,10 +9115,6 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_SOFTPLUS:
             {
                 ggml_compute_forward_softplus(params, dst);
-            } break;
-        case GGML_UNARY_OP_XIELU:
-            {
-                ggml_compute_forward_xielu(params, dst);
             } break;
         default:
             {
