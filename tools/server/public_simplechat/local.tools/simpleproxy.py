@@ -17,6 +17,7 @@ import html.parser
 
 gMe = {
     '--port': 3128,
+    '--config': '/dev/null',
     'server': None
 }
 
@@ -196,6 +197,25 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_error(502, f"WARN:UrlFetchFailed:{exc}")
 
 
+def load_config():
+    """
+    Allow loading of a json based config file
+
+    The config entries should be named same as their equivalent cmdline argument
+    entries but without the -- prefix. They will be loaded into gMe after adding
+    -- prefix.
+
+    As far as the program is concerned the entries could either come from cmdline
+    or from a json based config file.
+    """
+    global gMe
+    import json
+    with open(gMe['--config']) as f:
+        cfg = json.load(f)
+        for k in cfg:
+            gMe[f"--{k}"] = cfg[k]
+
+
 def process_args(args: list[str]):
     global gMe
     gMe['INTERNAL.ProcessArgs.Malformed'] = []
@@ -213,10 +233,16 @@ def process_args(args: list[str]):
                 iArg += 1
                 gMe[cArg] = int(args[iArg])
                 iArg += 1
+            case '--config':
+                iArg += 1
+                gMe[cArg] = args[iArg]
+                iArg += 1
+                load_config()
             case _:
                 gMe['INTERNAL.ProcessArgs.Unknown'].append(cArg)
                 print(f"WARN:ProcessArgs:{iArg}:IgnoringUnknownCommand:{cArg}")
                 iArg += 1
+    print(gMe)
 
 
 def run():
