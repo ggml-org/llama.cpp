@@ -741,6 +741,11 @@ class MultiChatUI {
             this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
+            if (gMe.tools.auto > 0) {
+                setTimeout(()=>{
+                    this.elBtnTool.click()
+                }, gMe.tools.auto*1000)
+            }
         } else {
             this.elDivTool.hidden = true
             this.elInToolName.value = ""
@@ -808,6 +813,11 @@ class MultiChatUI {
             clearTimeout(this.idTimeOut)
             this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(id, name, data);
             this.ui_reset_userinput(false)
+            if (gMe.tools.auto > 0) {
+                setTimeout(()=>{
+                    this.elBtnUser.click()
+                }, gMe.tools.auto*1000)
+            }
         })
 
         this.elInUser.addEventListener("keyup", (ev)=> {
@@ -1033,7 +1043,8 @@ class Me {
         this.tools = {
             enabled: false,
             fetchProxyUrl: "http://127.0.0.1:3128",
-            toolNames: /** @type {Array<string>} */([])
+            toolNames: /** @type {Array<string>} */([]),
+            auto: 0
         };
         this.chatProps = {
             apiEP: ApiEP.Type.Chat,
