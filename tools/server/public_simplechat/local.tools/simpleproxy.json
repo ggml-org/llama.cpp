@@ -6,6 +6,7 @@
 		"^search\\.yahoo\\.com$",
 		".*\\.brave\\.com$",
 		"^search\\.brave\\.com$",
+		"^brave\\.com$",
 		".*\\.duckduckgo\\.com$",
 		"^duckduckgo\\.com$",
 		".*\\.google\\.com$",
