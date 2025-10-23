@@ -4,20 +4,16 @@
 #include "common.hpp"
 
 void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     const float * src0_dd = (const float *) dst->src[0]->data;
     float *       dst_dd  = (float *) dst->data;
 
-    const int64_t ne0  = dst->ne[0];
-    const int64_t ne1  = dst->ne[1];
-    const int64_t ne2  = dst->ne[2];
-    const int64_t ne3  = dst->ne[3];
-    const int64_t ne00 = dst->src[0]->ne[0];
-    const int64_t ne01 = dst->src[0]->ne[1];
-    const int64_t ne02 = dst->src[0]->ne[2];
-    const int64_t ne03 = dst->src[0]->ne[3];
+    const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
+    const int64_t ne00 = dst->src[0]->ne[0], ne01 = dst->src[0]->ne[1], ne02 = dst->src[0]->ne[2],
+                  ne03 = dst->src[0]->ne[3];
 
     const int nr0 = (int) (ne00 / ne0);
     const int nr1 = (int) (ne01 / ne1);
@@ -29,7 +25,6 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     const int    num_blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     queue_ptr stream = ctx.stream();
-    stream->memset(dst_dd, 0, total * sizeof(float));
 
     stream->parallel_for(
         sycl::nd_range<1>(sycl::range<1>(num_blocks * BLOCK_SIZE), sycl::range<1>(BLOCK_SIZE)),
