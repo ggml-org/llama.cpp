@@ -374,7 +374,11 @@ in a simple minded manner by dropping head block as well as all scripts/styles/f
   before enabling fetch web related tool calls.
 * The bundled simple proxy can be found at
   * tools/server/public_simplechat/local.tools/simpleproxy.py
-* it provides for a basic white list of allowed domains to access or so
+  * it provides for a basic white list of allowed domains to access, to an extent
+  * it tries to mimic the client/browser making the request to it by propogating header entries like
+    user-agent, accept and accept-language from the got request to the generated request during proxying
+    so that websites will hopefully respect the request rather than blindly rejecting it as coming from
+    a non-browser entity.
 
 
 #### Extending with new tools
