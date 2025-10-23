@@ -682,6 +682,25 @@ ggml_tensor * llm_graph_context::build_norm(
     return cur;
 }
 
+ggml_tensor * llm_graph_context::ifairy_build_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * up,
+             ggml_tensor * gate,
+             ggml_tensor * down,
+             ggml_tensor * norm_weight,
+                     int   il) const{
+    ggml_tensor * gate_res = build_lora_mm(gate, cur);
+    cb(gate_res, "ffn_gate", il);
+    gate_res = ggml_ifairy_relu2(ctx0, gate_res);
+    cur = build_lora_mm(up, cur);
+    cb(cur, "ffn_up", il);
+    cur = ggml_ifairy_mul(ctx0, cur, gate_res);
+    cur = ifairy_build_norm(cur, norm_weight, il);
+    cur = build_lora_mm(down, cur);
+    cb(cur, "ffn_down", il);
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * cur,
          ggml_tensor * up,
