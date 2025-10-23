@@ -109,6 +109,9 @@ def validate_url(url: str, tag: str):
     """
     Implement a re based filter logic on the specified url.
     """
+    tag=f"VU:{tag}"
+    if (not gMe.get('--allowed.domains')):
+        return UrlReqResp(False, 400, f"DBUG:{tag}:MissingAllowedDomains")
     urlParts = urllib.parse.urlparse(url)
     print(f"DBUG:ValidateUrl:{urlParts}, {urlParts.hostname}")
     urlHName = urlParts.hostname
@@ -136,6 +139,7 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
 
     Fetch the requested url.
     """
+    tag=f"UrlReq:{tag}"
     print(f"DBUG:{tag}:{pr}")
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url']
@@ -143,8 +147,6 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
     url = url[0]
     if (not url) or (len(url) == 0):
         return UrlReqResp(False, 400, f"WARN:{tag}:MissingUrl")
-    if (not gMe.get('--allowed.domains')):
-        return UrlReqResp(False, 400, f"DBUG:{tag}:MissingAllowedDomains")
     gotVU = validate_url(url, tag)
     if not gotVU.callOk:
         return gotVU
@@ -159,13 +161,14 @@ def handle_urlreq(ph: ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
         }
         req = urllib.request.Request(url, headers=headers)
         # Get requested url
+        print(f"DBUG:{tag}:Req:{req.full_url}:{req.headers}")
         with urllib.request.urlopen(req, timeout=10) as response:
             contentData = response.read().decode('utf-8')
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
         return UrlReqResp(True, statusCode, "", contentType, contentData)
     except Exception as exc:
-        return UrlReqResp(False, 502, f"WARN:UrlReqFailed:{exc}")
+        return UrlReqResp(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
 def handle_urlraw(ph: ProxyHandler, pr: urllib.parse.ParseResult):
