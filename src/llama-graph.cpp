@@ -635,6 +635,18 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
+ggml_tensor * llm_graph_context::ifairy_build_norm(
+             ggml_tensor * cur,
+             ggml_tensor * mw,
+                     int   il) const{
+    cur = ggml_ifairy_split(ctx0, cur);
+    cur = ggml_ifairy_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+    cb(cur, "norm", il);
+    cur = ggml_mul(ctx0, cur, mw); // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+    cur = ggml_ifairy_merge(ctx0, cur);
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_norm(
          ggml_tensor * cur,
          ggml_tensor * mw,

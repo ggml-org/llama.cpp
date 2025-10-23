@@ -612,6 +612,11 @@ struct llm_graph_context {
            llm_norm_type   type,
                      int   il) const;
 
+    ggml_tensor * ifairy_build_norm(
+             ggml_tensor * cur,
+             ggml_tensor * mw,
+                     int   il) const;
+
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
              ggml_tensor * up,
