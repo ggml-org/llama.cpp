@@ -12,9 +12,13 @@ from pathlib import Path
 
 import gguf
 import torch
+import tensorflow as tf
 from safetensors import safe_open
 from transformers import AutoConfig, AutoModel
 import numpy as np
+
+
+bf16 = tf.bfloat16.as_numpy_dtype
 
 # 从hf上直接扒下来的
 def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
@@ -53,6 +57,10 @@ def combine_complex_tensors(imag_part, real_part):
     返回:
         merged_tensor: float32合并张量
     """
+    # 转换成bf16
+    imag_part = imag_part.to(torch.bfloat16)
+    real_part = real_part.to(torch.bfloat16)
+
     # 将float16转换为16位整数表示
     imag_int = imag_part.view(torch.int16)
     real_int = real_part.view(torch.int16)
@@ -87,8 +95,8 @@ def split_complex_tensors(merged_tensor):
     real_int = (merged_int & 0xFFFF).to(torch.int16)
     
     # 将整数重新解释为float16
-    imag_part = imag_int.view(torch.float16)
-    real_part = real_int.view(torch.float16)
+    imag_part = imag_int.view(torch.bfloat16)
+    real_part = real_int.view(torch.bfloat16)
     
     return imag_part, real_part
 
@@ -99,9 +107,9 @@ def quant_and_merge(key, tensor, f, weight_map):
         f_name = weight_map.get(imag_key)
         if f_name is not None:
             with safe_open(f_name, framework="pt") as f1:
-                imag_tensor = f1.get_tensor(imag_key).to(torch.float16)
+                imag_tensor = f1.get_tensor(imag_key).to(torch.float32)
         else:
-            imag_tensor = f.get_tensor(imag_key).to(torch.float16)
+            imag_tensor = f.get_tensor(imag_key).to(torch.float32)
         q_real, q_imag = forward(tensor, imag_tensor)
         return combine_complex_tensors(q_imag, q_real)
     elif 'imag' in key:
@@ -109,11 +117,61 @@ def quant_and_merge(key, tensor, f, weight_map):
         f_name = weight_map.get(real_key)
         if f_name is not None:
             with safe_open(f_name, framework="pt") as f1:
-                real_tensor = f1.get_tensor(real_key).to(torch.float16)
+                real_tensor = f1.get_tensor(real_key).to(torch.float32)
         else:
-            real_tensor = f.get_tensor(real_key).to(torch.float16)
+            real_tensor = f.get_tensor(real_key).to(torch.float32)
         q_real, q_imag = forward(real_tensor, tensor)   
         return combine_complex_tensors(q_imag, q_real)
+    else:
+        return tensor
+
+# 接收key和对应的tensor，返回合并merge后的tensor
+def noquant_and_merge(key, tensor, f, weight_map):
+    if 'real' in key:
+        imag_key = key.replace('real', 'imag')
+        f_name = weight_map.get(imag_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                imag_tensor = f1.get_tensor(imag_key).to(torch.float32)
+        else:
+            imag_tensor = f.get_tensor(imag_key).to(torch.float32)
+        q_real, q_imag = tensor, imag_tensor
+        return combine_complex_tensors(q_imag, q_real)
+    elif 'imag' in key:
+        real_key = key.replace('imag', 'real')
+        f_name = weight_map.get(real_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                real_tensor = f1.get_tensor(real_key).to(torch.float32)
+        else:
+            real_tensor = f.get_tensor(real_key).to(torch.float32)
+        q_real, q_imag = real_tensor, tensor  
+        return combine_complex_tensors(q_imag, q_real)
+    else:
+        return tensor
+
+# 接收key和对应的tensor，返回合并concat后的tensor
+def noquant_and_cat(key, tensor, f, weight_map):
+    if 'real' in key:
+        imag_key = key.replace('real', 'imag')
+        f_name = weight_map.get(imag_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                imag_tensor = f1.get_tensor(imag_key).to(torch.float32)
+        else:
+            imag_tensor = f.get_tensor(imag_key).to(torch.float32)
+        q_real, q_imag = tensor, imag_tensor
+        return torch.cat([q_real, q_imag], dim=-1)
+    elif 'imag' in key:
+        real_key = key.replace('imag', 'real')
+        f_name = weight_map.get(real_key)
+        if f_name is not None:
+            with safe_open(f_name, framework="pt") as f1:
+                real_tensor = f1.get_tensor(real_key).to(torch.float32)
+        else:
+            real_tensor = f.get_tensor(real_key).to(torch.float32)
+        q_real, q_imag = real_tensor, tensor  
+        return torch.cat([q_real, q_imag], dim=-1)
     else:
         return tensor
 
@@ -191,9 +249,13 @@ def main():
                     print(f"找到 {len(tensor_keys)} 个张量")
 
                 for key in tensor_keys:
-                    if 'lm_head' in key or 'embeddings' in key or 'norm' in key:
-                        tensor_data = f.get_tensor(key).to(torch.float16)
-                        numpy_array = tensor_data.cpu().numpy().astype(np.float16)
+                    # 对于embedding，直接在这里转换成激活的格式imag16 real16合一个32位的格式
+                    if 'embeddings' in key and 'real' in key:
+                        tensor_data = f.get_tensor(key).to(torch.float32)
+                        tensor_data = noquant_and_merge(key, tensor_data, f, weight_map)
+                        numpy_array = tensor_data.cpu().numpy()
+                        if '_real' in key or '_imag' in key:
+                            key = key.replace('_real', '').replace('_imag', '')
                         model_arch = gguf.MODEL_ARCH.IFAIRY
                         mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
                         try:
@@ -204,15 +266,56 @@ def main():
                         except Exception as e:
                             print(f"Error mapping tensor name '{key}': {e}")
                             exit(1)
-                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16)
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F32)
                         if verbose:
                             print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
                         continue
+                    # 这个不做量化，直接bf16存储
+                    if 'lm_head' in key :
+                        tensor_data = f.get_tensor(key).to(torch.float32)
+                        numpy_array = tensor_data.cpu().numpy().astype(bf16)
+                        model_arch = gguf.MODEL_ARCH.IFAIRY
+                        mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
+                        try:
+                            mapped_name = mapper.get_name(key)
+                            if mapped_name is None:
+                                # 直接报错
+                                raise Exception(f"No mapping found for tensor '{key}'")
+                        except Exception as e:
+                            print(f"Error mapping tensor name '{key}': {e}")
+                            exit(1)
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.BF16)
+                        if verbose:
+                            print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
+                        continue
+                    # 这个直接concat，实部在前虚部在后，不量化
+                    if 'norm' in key and 'real' in key:
+                        tensor_data = f.get_tensor(key).to(torch.float32)
+                        tensor_data = noquant_and_cat(key, tensor_data, f, weight_map)
+                        numpy_array = tensor_data.cpu().numpy().astype(np.float32) # f32这个要求源自 llama.cpp/ggml/src/ggml-cpu/binary-ops.cpp的binary_op，不支持第一个参数是F32而第二个不是。但是完全没有这个必要吧，感觉以后可以改到都支持，这样这里就可以用bf16了
+                        if '_real' in key or '_imag' in key:
+                            key = key.replace('_real', '').replace('_imag', '')
+                        model_arch = gguf.MODEL_ARCH.IFAIRY
+                        mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
+                        try:
+                            mapped_name = mapper.get_name(key)
+                            if mapped_name is None:
+                                # 直接报错
+                                raise Exception(f"No mapping found for tensor '{key}'")
+                        except Exception as e:
+                            print(f"Error mapping tensor name '{key}': {e}")
+                            exit(1)
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F32)
+                        if verbose:
+                            print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
+                        continue
+                    # 虚部在实部的时候处理
                     if '_imag' in key:
                         continue
-                    tensor_data = f.get_tensor(key).to(torch.float16)
+                    # 对于一般的权重，需要量化，然后直接拼起来
+                    tensor_data = f.get_tensor(key).to(torch.float32)
                     tensor_data = quant_and_merge(key, tensor_data, f, weight_map)
-                    numpy_array = tensor_data.cpu().numpy().astype(np.float32)
+                    numpy_array = tensor_data.cpu().numpy()
 
                     model_arch = gguf.MODEL_ARCH.IFAIRY
 
@@ -236,6 +339,7 @@ def main():
                         print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
 
     except Exception as e:
+        raise e
         print(f"处理张量时出错: {e}")
         sys.exit(1)
 

@@ -35,6 +35,7 @@ class TensorNameMap:
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
+            "token_embeddings.weight",                   # ifairy
         ),
 
         # ifairy
@@ -922,6 +923,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
+            "layer.{bid}.mlp.ffn_layernorm.weight",  # ifairy
         ),
         
         # ifairy
@@ -1487,7 +1489,9 @@ class TensorNameMap:
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
         ),
-
+        MODEL_TENSOR.FINAL_NORM: (
+            "final_norm.weight",
+        ),
         # ifairy newly added
         MODEL_TENSOR.FINAL_NORM_REAL:(
             "final_norm.weight_real",
@@ -1495,17 +1499,26 @@ class TensorNameMap:
         MODEL_TENSOR.FINAL_NORM_IMAG:(
             "final_norm.weight_imag",
         ),
+        MODEL_TENSOR.POST_NORM:(
+            "layer.{bid}.post_layernorm.weight",
+        ),
         MODEL_TENSOR.POST_NORM_IMAG:(
             "layer.{bid}.post_layernorm.weight_imag",
         ),
         MODEL_TENSOR.POST_NORM_REAL:(
             "layer.{bid}.post_layernorm.weight_real",
         ),
+        MODEL_TENSOR.PRE_NORM:(
+            "layer.{bid}.pre_layernorm.weight",
+        ),
         MODEL_TENSOR.PRE_NORM_IMAG: (
             "layer.{bid}.pre_layernorm.weight_imag",
         ),
         MODEL_TENSOR.PRE_NORM_REAL: (
             "layer.{bid}.pre_layernorm.weight_real",
+        ),
+        MODEL_TENSOR.ATTN_LAYERNORM:(
+            "layer.{bid}.self_attn.attn_layernorm.weight",
         ),
         MODEL_TENSOR.ATTN_LAYERNORM_REAL: (
             "layer.{bid}.self_attn.attn_layernorm.weight_real",
