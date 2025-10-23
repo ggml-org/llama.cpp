@@ -633,12 +633,12 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
                 // cols 0-3 bias
                 bias_acc[0] =
                     vmlal_s16(bias_acc[0], bsums_vec_lo, vget_low_s16(q4sb_mins[0]));
-                bias_acc[1] = vmlal_s16(bias_acc[1], bsums_vec_lo,
-                        vget_high_s16(q4sb_mins[0]));
-
-                // cols 4-7 bias
                 bias_acc[0] =
                     vmlal_s16(bias_acc[0], bsums_vec_hi, vget_low_s16(q4sb_mins[1]));
+
+                // cols 4-7 bias
+                bias_acc[1] = vmlal_s16(bias_acc[1], bsums_vec_lo,
+                        vget_high_s16(q4sb_mins[0]));
                 bias_acc[1] = vmlal_s16(bias_acc[1], bsums_vec_hi,
                         vget_high_s16(q4sb_mins[1]));
             }  // for sb
