@@ -14,12 +14,12 @@ except ImportError:
     SentencePieceProcessor = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer
-    from mistral_common.tokens.tokenizers.utils import (
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import (
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
         SentencePieceTokenizer,
     )
 except ImportError:

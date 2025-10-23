@@ -29,12 +29,29 @@ if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
-from mistral_common.tokens.tokenizers.base import TokenizerVersion
-from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
-from mistral_common.tokens.tokenizers.tekken import Tekkenizer
-from mistral_common.tokens.tokenizers.sentencepiece import (
-    SentencePieceTokenizer,
-)
+
+try:
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+        SentencePieceTokenizer,
+    )
+
+    _mistral_common_installed = True
+    _mistral_import_error_msg = ""
+except ImportError:
+    _MISTRAL_COMMON_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
+    _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
+
+    _mistral_common_installed = False
+    TokenizerVersion = None
+    Tekkenizer = None
+    SentencePieceTokenizer = None
+    _mistral_import_error_msg = (
+        "Mistral format requires `mistral-common` to be installed. Please run "
+        "`pip install mistral-common[image,audio]` to install it."
+    )
 
 
 logger = logging.getLogger("hf-to-gguf")
@@ -106,6 +123,9 @@ class ModelBase:
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
+
+        if self.is_mistral_format and not _mistral_common_installed:
+            raise ImportError(_mistral_import_error_msg)
 
         self.dir_model = dir_model
         self.ftype = ftype
@@ -1363,8 +1383,8 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads"]))
 
             # preprocessor config
-            image_mean = DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
-            image_std = DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
+            image_mean = _MISTRAL_COMMON_DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
+            image_std = _MISTRAL_COMMON_DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
 
             self.gguf_writer.add_vision_image_mean(image_mean)
             self.gguf_writer.add_vision_image_std(image_std)
@@ -2033,6 +2053,9 @@ class LlamaModel(TextModel):
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def _set_vocab_mistral(self):
+        if not _mistral_common_installed:
+            raise ImportError(_mistral_import_error_msg)
+
         vocab = MistralVocab(self.dir_model)
         logger.info(
             f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
@@ -9212,7 +9235,7 @@ class MistralModel(LlamaModel):
 
     @staticmethod
     def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
-        assert TokenizerVersion is not None, "mistral_common is not installed"
+        assert TokenizerVersion is not None and Tekkenizer is not None and SentencePieceTokenizer is not None, _mistral_import_error_msg
         assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
             f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
         )
@@ -9594,6 +9617,8 @@ def main() -> None:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     is_mistral_format = args.mistral_format
+    if is_mistral_format and not _mistral_common_installed:
+        raise ImportError(_mistral_import_error_msg)
     disable_mistral_community_chat_template = args.disable_mistral_community_chat_template
 
     with torch.inference_mode():
