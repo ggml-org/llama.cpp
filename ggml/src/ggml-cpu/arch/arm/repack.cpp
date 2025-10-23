@@ -2086,8 +2086,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
     constexpr int ncols_interleaved = 8;
     constexpr int blocklen          = 8;
-    constexpr int q8_k_blocklen     = 4;
-
 
     assert(n % qk == 0);
     assert(nr % 4 == 0);
@@ -2104,6 +2102,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     UNUSED(blocklen);
 
 #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+    constexpr int q8_k_blocklen     = 4;
     const uint8x16_t m4b = vdupq_n_u8(0x0f);
 
     // 8 accumulators: 2 row pairs × 4 col pairs
