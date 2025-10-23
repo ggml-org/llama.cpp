@@ -24,30 +24,19 @@ static inline float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
 }
 
-typedef struct {
-    ggml_bf16_t imag;
-    ggml_bf16_t real;
-} ifairy_complex;
-
-typedef union {
-    float f;
-    ifairy_complex complex;
-} complex_union;
-
 static inline float op_ifairy_relu2(float x) {
-    complex_union u;
-    u.f = x;
-    if((u.complex.imag.bits & u.complex.real.bits) >> 15) {
+    if(((ggml_fp16_t*)(&x))[0]&((ggml_fp16_t*)(&x))[1]){
         // both real and imag are negative
         return 0.f;
-    } else {
-        float r = GGML_BF16_TO_FP32(u.complex.real);
-        float i = GGML_BF16_TO_FP32(u.complex.imag);
+    }else{
+        float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&x))[1]);
+        float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&x))[0]);
         r = r*r;
         i = i*i;
-        u.complex.real = GGML_FP32_TO_BF16(r);
-        u.complex.imag = GGML_FP32_TO_BF16(i);
-        return u.f;
+        float ret;
+        ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+        ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+        return ret;
     }
 }
 
