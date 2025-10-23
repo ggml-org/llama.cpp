@@ -141,8 +141,8 @@ public:
         }
 
         common_chat_msg new_msg;
-        if (syntax) {
-            new_msg = common_chat_parse(content, false, *syntax);
+        if (syntax_ptr) {
+            new_msg = common_chat_parse(content, false, *syntax_ptr);
         } else {
             new_msg.content = content;
         }
@@ -163,17 +163,17 @@ public:
 
         common_chat_params cparams = common_chat_templates_apply(chat_templates.get(), cinputs);
 
-        if (!syntax) {
-            syntax.reset(new common_chat_syntax);
-            syntax->format = cparams.format;
-            syntax->reasoning_format = params.reasoning_format;
-            syntax->thinking_forced_open = cparams.thinking_forced_open;
-            syntax->parse_tool_calls = false;
+        if (!syntax_ptr) {
+            syntax_ptr.reset(new common_chat_syntax);
+            syntax_ptr->format = cparams.format;
+            syntax_ptr->reasoning_format = params.reasoning_format;
+            syntax_ptr->thinking_forced_open = cparams.thinking_forced_open;
+            syntax_ptr->parse_tool_calls = false;
         }
 
         bool use_partial_formatter = params.reasoning_format != COMMON_REASONING_FORMAT_NONE;
         if (!partial_formatter_ptr && use_partial_formatter) {
-            partial_formatter_ptr = std::make_unique<partial_formatter>(*syntax);
+            partial_formatter_ptr = std::make_unique<partial_formatter>(*syntax_ptr);
         }
 
         std::string formatted;
@@ -199,7 +199,7 @@ private:
     std::vector<common_chat_msg> & chat_msgs;
     const common_chat_templates_ptr & chat_templates;
     const common_params & params;
-    std::unique_ptr<common_chat_syntax> syntax;
+    std::unique_ptr<common_chat_syntax> syntax_ptr;
     std::unique_ptr<partial_formatter> partial_formatter_ptr;
     std::string formatted_cumulative;
 };
