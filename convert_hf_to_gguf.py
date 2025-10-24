@@ -5170,6 +5170,19 @@ class Gemma2Model(TextModel):
         self._set_vocab_sentencepiece()
 
         self.gguf_writer.add_add_space_prefix(False)
+        # 清洗 Gemma3 的 chat template：将视觉/音频占位符统一为 MTMD 标记
+        try:
+            from transformers import AutoTokenizer  # type: ignore
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            chat_template = getattr(tokenizer, "chat_template", None)
+            if isinstance(chat_template, str):
+                cleaned = chat_template.replace("<start_of_image>", "<__media__>")                                        .replace("<end_of_image>", "")                                        .replace("<start_of_audio>", "<__media__>")                                        .replace("<end_of_audio>", "")
+                if cleaned != chat_template:
+                    logger.info("gguf: clean Gemma vision/audio markers to <__media__>")
+                    self.gguf_writer.add_chat_template(cleaned)
+        except Exception as e:
+            logger.warning(f"gguf: failed to clean chat_template: {e}")
+
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -5218,6 +5231,19 @@ class Gemma3Model(TextModel):
         self._set_vocab_sentencepiece()
 
         self.gguf_writer.add_add_space_prefix(False)
+        # 清洗 Gemma3 的 chat template：将视觉/音频占位符统一为 MTMD 标记
+        try:
+            from transformers import AutoTokenizer  # type: ignore
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            chat_template = getattr(tokenizer, "chat_template", None)
+            if isinstance(chat_template, str):
+                cleaned = chat_template.replace("<start_of_image>", "<__media__>")                                        .replace("<end_of_image>", "")                                        .replace("<start_of_audio>", "<__media__>")                                        .replace("<end_of_audio>", "")
+                if cleaned != chat_template:
+                    logger.info("gguf: clean Gemma vision/audio markers to <__media__>")
+                    self.gguf_writer.add_chat_template(cleaned)
+        except Exception as e:
+            logger.warning(f"gguf: failed to clean chat_template: {e}")
+
 
     def set_gguf_parameters(self):
         hparams = self.hparams
