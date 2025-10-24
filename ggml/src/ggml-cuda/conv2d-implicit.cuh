@@ -31,9 +31,10 @@ typedef struct{
 template<unsigned int TILE_ROWS,
 unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleB(
-    half* src,
+    const half* src,
     half* dst,
-    const unsigned int src_stride
+    const unsigned int src_stride,
+    param_t param
 )
 {
     // constexpr unsigned int SWIZZLE_MASK = 0b111 << SWIZZLE_BITS;
@@ -109,7 +110,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (thread_row < param.k && curR < param.R && curS < param.S && curC < param.c){
+        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c){
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -123,7 +124,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
 template<unsigned int TILE_ROWS,
 unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleA(
-    half* src,
+    const half* src,
     half* dst,
     // const unsigned int src_stride,
     const unsigned int inChannelOffset,
@@ -175,7 +176,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && 
-            curR < param.R && curS < param.S && curC < param.c){
+            curR < param.r && curS < param.s && curC < param.c){
             // const unsigned int src_index = thread_row * src_stride_vectorized + thread_col;
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
@@ -191,7 +192,7 @@ unsigned int TILE_COLS,
 unsigned int NUM_THREADS,
 unsigned int ELEMENTS_PER_THREAD>
 __device__ __forceinline__ void tileMemcpyLoadA(
-    half* src,
+    const half* src,
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     // const unsigned int src_stride,
     const unsigned int block_k,
@@ -200,7 +201,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
 )
 {
     // reinterpret input/output as float4
-    float4* src_float4 = reinterpret_cast<float4*>(src);
+    // const float4* src_float4 = reinterpret_cast<const float4*>(src);
     // const unsigned int src_stride_vectorized = src_stride / 8;
 
     // # of threads is multiple of # of columns in the tile
@@ -239,7 +240,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && 
-            curR < param.R && curS < param.S && curC < param.c){
+            curR < param.r && curS < param.s && curC < param.c){
             // const unsigned int src_index = thread_row * src_stride_vectorized + thread_col;
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
@@ -256,7 +257,7 @@ unsigned int TILE_COLS,
 unsigned int NUM_THREADS,
 unsigned int ELEMENTS_PER_THREAD>
 __device__ __forceinline__ void tileMemcpyLoadB(
-    half* src,
+    const half* src,
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     const unsigned int block_k,
     const unsigned int src_stride,
@@ -264,7 +265,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
 )
 {
     // reinterpret input/output as float4
-    float4* src_float4 = reinterpret_cast<float4*>(src);
+    // const float4* src_float4 = reinterpret_cast<const float4*>(src);
     // const unsigned int src_stride_vectorized = src_stride / 8;
 
     // # of threads is multiple of # of columns in the tile
@@ -295,7 +296,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
         // dst_reg[i] = src_float4[src_index];
         // thread_row += ROW_STEP;
         const unsigned int src_index = thread_row * src_stride + block_k + thread_col * 8;
-        if (thread_row < param.k && curR < param.R && curS < param.S && curC < param.c){
+        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -448,6 +449,16 @@ __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
 }
 
 #endif
+
+// constexpr unsigned int int_log2(unsigned int x)
+// {
+//     unsigned int result = 0;
+//     while (x >>= 1)
+//     {
+//         result++;
+//     }
+//     return result;
+// }
 
 #define CUDA_CONV2D_IMPLICT_BLOCK_SIZE 256
 void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
