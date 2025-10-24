@@ -154,9 +154,20 @@
 		return mutated ? tempDiv.innerHTML : html;
 	}
 
+	function normalizeMathDelimiters(text: string): string {
+		return text
+			.replace(/(^|[^\\])\\\[((?:\\.|[\s\S])*?)\\\]/g, (_, prefix: string, content: string) => {
+				return `${prefix}$$${content}$$`;
+			})
+			.replace(/(^|[^\\])\\\(((?:\\.|[\s\S])*?)\\\)/g, (_, prefix: string, content: string) => {
+				return `${prefix}$${content}$`;
+			});
+	}
+
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const result = await processor().process(text);
+			const normalized = normalizeMathDelimiters(text);
+			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
 

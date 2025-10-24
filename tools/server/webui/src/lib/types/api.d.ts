@@ -36,6 +36,41 @@ export interface ApiChatMessageData {
 	timestamp?: number;
 }
 
+export interface ApiModelDataEntry {
+	id: string;
+	object: string;
+	created: number;
+	owned_by: string;
+	meta?: Record<string, unknown> | null;
+}
+
+export interface ApiModelDetails {
+	name: string;
+	model: string;
+	modified_at?: string;
+	size?: string | number;
+	digest?: string;
+	type?: string;
+	description?: string;
+	tags?: string[];
+	capabilities?: string[];
+	parameters?: string;
+	details?: {
+		parent_model?: string;
+		format?: string;
+		family?: string;
+		families?: string[];
+		parameter_size?: string;
+		quantization_level?: string;
+	};
+}
+
+export interface ApiModelListResponse {
+	object: string;
+	data: ApiModelDataEntry[];
+	models?: ApiModelDetails[];
+}
+
 export interface ApiLlamaCppServerProps {
 	default_generation_settings: {
 		id: number;
@@ -120,6 +155,7 @@ export interface ApiChatCompletionRequest {
 		content: string | ApiChatMessageContentPart[];
 	}>;
 	stream?: boolean;
+	model?: string;
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -150,10 +186,14 @@ export interface ApiChatCompletionRequest {
 }
 
 export interface ApiChatCompletionStreamChunk {
+	model?: string;
 	choices: Array<{
+		model?: string;
+		metadata?: { model?: string };
 		delta: {
 			content?: string;
 			reasoning_content?: string;
+			model?: string;
 		};
 	}>;
 	timings?: {
@@ -167,10 +207,14 @@ export interface ApiChatCompletionStreamChunk {
 }
 
 export interface ApiChatCompletionResponse {
+	model?: string;
 	choices: Array<{
+		model?: string;
+		metadata?: { model?: string };
 		message: {
 			content: string;
 			reasoning_content?: string;
+			model?: string;
 		};
 	}>;
 }
