@@ -9,6 +9,7 @@
 #include <sstream>
 #include <vector>
 #include <numeric>
+#include <limits>
 
 // verbosity flag set via the params.verbosity CLI flag. This is used for two
 // things:
@@ -165,7 +166,7 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     }
 
     if (!ggml_is_quantized(t->type)) {
-        const int print_width = verbosity > 1 ? INT_MAX : 3;
+        const int print_width = verbosity > 1 ? std::numeric_limits<int>::max() : 3;
         uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
         ggml_print_tensor(data, t->type, t->ne, t->nb, print_width);
     }
