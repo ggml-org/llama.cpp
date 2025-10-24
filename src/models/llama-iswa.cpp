@@ -1,4 +1,3 @@
-
 #include "models.h"
 
 llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {

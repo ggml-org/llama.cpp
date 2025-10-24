@@ -1,4 +1,3 @@
-
 #include "models.h"
 
 llm_build_rwkv6::llm_build_rwkv6(const llama_model & model, const llm_graph_params & params) : llm_build_rwkv6_base(model, params) {
