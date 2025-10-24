@@ -1081,7 +1081,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
 
   // construct const pointers to warp tiles for use inside the inner loop
-
+//   if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x ==0 && blockIdx.y ==0){
+//     for(int i = 0; i < 32; ++i)
+//         printf("%.2f,", __half2float(A_block_smem[i]));
+//     printf("\n");
+//   }
 
   int offset_direction = 1;
 
@@ -1127,6 +1131,14 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
         }
       }
     }
+    if(threadIdx.x == 0 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
+     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(acc_register_[0][0][0]), __half2float(acc_register_[0][0][1]), 
+     __half2float(acc_register_[0][0][2]), __half2float(acc_register_[0][0][3]));
+     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(A_register_[0][0][0]), __half2float(A_register_[0][0][1]), 
+     __half2float(A_register_[0][0][2]), __half2float(A_register_[0][0][3]));
+     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(B_register_[0][0][0]), __half2float(B_register_[0][0][1]), 
+     __half2float(B_register_[0][0][2]), __half2float(B_register_[0][0][3]));
+    }
 
 
     if (block_k != num_block_tiles_k)
@@ -1141,6 +1153,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     }
   }
 
+  
     // reuse smem
     half *smemoutput = shmem;
     const uint lane_id = threadIdx.x % WARPSIZE;  

@@ -48,7 +48,7 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     // Initialize adata
     std::vector<float> adata(KW * KH * IC * OC);
     for (int i = 0; i < KW * KH * IC * OC; i++) {
-        adata[i] = 2.5f;
+        adata[i] = 2.f;
     }
 
     // Convert adata to fp16 format
@@ -344,7 +344,7 @@ int main(void)
         // std::make_tuple(640,640,52,76),
         // std::make_tuple(640,640,104,152),
         // std::make_tuple(960,320,104,152),
-        std::make_tuple(160,1280,26,38),
+        std::make_tuple(128,1280,26,38),
         // std::make_tuple(1280,640,52,76),
         // std::make_tuple(1920,1280,26,38),
         // std::make_tuple(2560,1280,26,38),
@@ -398,7 +398,8 @@ int main(void)
         struct ggml_cgraph * gf_res_1 = NULL;    
 
         double run_time1;
-        std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
+        // std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
+        conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
 
 
         ggml_gallocr_free(allocr);
@@ -419,7 +420,7 @@ int main(void)
         struct ggml_cgraph * gf_res_2 = NULL;
 
         double run_time2;
-        wino_data = compute_graph(model, allocr, build_graph_2, iterations, &run_time2);
+        std::vector<float> wino_data = compute_graph(model, allocr, build_graph_2, iterations, &run_time2);
 
 
         if(k==0) { 
@@ -436,15 +437,15 @@ int main(void)
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        for(int i = 0; i < 26*38; i++) {
-            float diff = fabs(conv2d_data[i] - wino_data[i]);
-            // if(diff > 1.e-4) {
-                  printf("(%f, %f, %f, %d) \n",
-                  conv2d_data[i],
-                  wino_data[i], diff, i);
-                // break;
-            // }
-        }
+        // for(int i = 0; i < 26*38; i++) {
+        //     float diff = fabs(conv2d_data[i] - wino_data[i]);
+        //     // if(diff > 1.e-4) {
+        //           printf("(%f, %f, %f, %d) \n",
+        //           conv2d_data[i],
+        //           wino_data[i], diff, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

@@ -159,7 +159,8 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++)
     {
-        unsigned int gemm_i = blockDim.y * TILE_ROWS + thread_row;
+        // unsigned int gemm_i = blockDim.y * TILE_ROWS + thread_row;
+        unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
         unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
         unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
         int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
@@ -227,7 +228,8 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         // const unsigned int src_index = thread_row * src_stride_vectorized + thread_col;
         // dst_reg[i] = src_float4[src_index];
         // thread_row += ROW_STEP;
-        unsigned int gemm_i = blockDim.y * TILE_ROWS + thread_row;
+        // unsigned int gemm_i = blockDim.y * TILE_ROWS + thread_row;
+        unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
         unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
         unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
         int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
