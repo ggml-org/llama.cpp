@@ -257,8 +257,9 @@ option(GGML_HEXAGON                         "ggml: enable Hexagon backend"      
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
 # extra artifacts
-option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
-option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
+option(GGML_BUILD_TESTS     "ggml: build tests"    ${GGML_STANDALONE})
+option(GGML_CPU_REF_BACKEND "ggml: build reference CPU backend for testing" OFF)
+option(GGML_BUILD_EXAMPLES  "ggml: build examples" ${GGML_STANDALONE})
 
 #
 # dependencies
@@ -288,7 +289,9 @@ add_subdirectory(src)
 
 if (GGML_BUILD_TESTS)
     enable_testing()
-    add_subdirectory(tests)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        add_subdirectory(tests)
+    endif ()
 endif ()
 
 if (GGML_BUILD_EXAMPLES)
