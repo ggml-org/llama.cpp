@@ -1497,6 +1497,20 @@ class MmprojModel(ModelBase):
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MMPROJ)
 
+    def prepare_metadata(self, vocab_only: bool):
+        super().prepare_metadata(vocab_only)
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        # Filename Output
+        if self.fname_out.is_dir():
+            fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=output_type, model_type="mmproj")
+
+            # Use the default filename
+            self.fname_out = self.fname_out / f"{fname_default}.gguf"
+        else:
+            # Process templated file name with the output ftype, useful with the "auto" ftype
+            self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
+
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
 
@@ -9721,10 +9735,6 @@ def main() -> None:
         fname_out = dir_model
 
     logger.info(f"Loading model: {dir_model.name}")
-
-    if args.mmproj:
-        if "mmproj" not in fname_out.name:
-            fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     is_mistral_format = args.mistral_format
     if is_mistral_format and not _mistral_common_installed:
