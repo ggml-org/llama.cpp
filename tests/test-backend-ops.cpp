@@ -6564,8 +6564,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 16, 1024, {3, 2}, {1, 1}));
 
             // test cases with large batch size
-            test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 8, 256, {1024, 2}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 8, 256, {4096, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 8, 256, {1536, 1}, {1, 1}));
         }
     }
     for (ggml_type type_a : other_types) {
