@@ -2,6 +2,9 @@
 	import { ChatScreen } from '$lib/components/app';
 	import { chatStore, isInitialized } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+
+	let qParam = $derived(page.url.searchParams.get('q'));
 
 	onMount(async () => {
 		if (!isInitialized) {
@@ -9,6 +12,11 @@
 		}
 
 		chatStore.clearActiveConversation();
+
+		if (qParam !== null) {
+			await chatStore.createConversation();
+			await chatStore.sendMessage(qParam);
+		}
 	});
 </script>
 
