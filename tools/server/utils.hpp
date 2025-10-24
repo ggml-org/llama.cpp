@@ -756,13 +756,7 @@ static json oaicompat_chat_params_parse(
     }
 
     llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    if (!out_files.empty()) {
-        std::string prompt_mm = chat_params.prompt;
-        string_replace_all(prompt_mm, "<start_of_image><end_of_image>", mtmd_default_marker());
-        llama_params["prompt"] = std::move(prompt_mm);
-    } else {
-        llama_params["prompt"] = chat_params.prompt;
-    }
+    llama_params["prompt"]           = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;
     }
