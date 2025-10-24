@@ -1,11 +1,12 @@
-#include "llm_build_gemma_embedding_iswa.h"
+#include "llm_build_gemma_embedding.h"
 
 #include "../llama-graph.h"
 #include "../llama-model.h"
 
 #include <cmath>
 
-llm_build_gemma_embedding_iswa::llm_build_gemma_embedding_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llm_build_gemma_embedding::llm_build_gemma_embedding(const llama_model & model, const llm_graph_params & params) :
+    llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k;
 
     ggml_tensor * cur;
@@ -17,12 +18,12 @@ llm_build_gemma_embedding_iswa::llm_build_gemma_embedding_iswa(const llama_model
     if (ubatch.token) {
         inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
         cb(inpL, "inp_scaled", -1);
-    };
+    }
+
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    // TODO: support cacheless iSWA embeddings [TAG_NO_CACHE_ISWA]
-    auto * inp_attn = build_attn_inp_kv_iswa();
+    auto * inp_attn = build_attn_inp_no_cache();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -71,11 +72,13 @@ llm_build_gemma_embedding_iswa::llm_build_gemma_embedding_iswa(const llama_model
 
             cur =
                 build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
-        };
+        }
+
         if (il == n_layer - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-        };
+        }
+
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);
 
@@ -90,7 +93,8 @@ llm_build_gemma_embedding_iswa::llm_build_gemma_embedding_iswa(const llama_model
             cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
                             model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_GELU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
-        };
+        }
+
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "ffn_post_norm", -1);
 
@@ -101,7 +105,8 @@ llm_build_gemma_embedding_iswa::llm_build_gemma_embedding_iswa(const llama_model
 
         // input for next layer
         inpL = cur;
-    };
+    }
+
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

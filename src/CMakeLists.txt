@@ -35,11 +35,13 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            models/llm_build_apertus.cpp
             models/llm_build_arcee.cpp
             models/llm_build_arctic.cpp
             models/llm_build_arwkv7.cpp
             models/llm_build_baichuan.cpp
             models/llm_build_bailingmoe.cpp
+            models/llm_build_bailingmoe2.cpp
             models/llm_build_bert.cpp
             models/llm_build_bitnet.cpp
             models/llm_build_bloom.cpp
@@ -60,7 +62,7 @@ add_library(llama
             models/llm_build_exaone4.cpp
             models/llm_build_falcon_h1.cpp
             models/llm_build_falcon.cpp
-            models/llm_build_gemma_embedding_iswa.cpp
+            models/llm_build_gemma_embedding.cpp
             models/llm_build_gemma.cpp
             models/llm_build_gemma2_iswa.cpp
             models/llm_build_gemma3_iswa.cpp
@@ -72,6 +74,7 @@ add_library(llama
             models/llm_build_granite_hybrid.cpp
             models/llm_build_granite.cpp
             models/llm_build_grok.cpp
+            models/llm_build_grovemoe.cpp
             models/llm_build_hunyuan_dense.cpp
             models/llm_build_hunyuan_moe.cpp
             models/llm_build_internlm2.cpp

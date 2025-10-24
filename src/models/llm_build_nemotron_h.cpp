@@ -1,8 +1,8 @@
-#include "llm_graph_context_mamba.h"
 #include "llm_build_nemotron_h.h"
 
 #include "../llama-graph.h"
 #include "../llama-model.h"
+#include "llm_graph_context_mamba.h"
 
 #include <cmath>
 
@@ -15,6 +15,7 @@ llm_build_nemotron_h::llm_build_nemotron_h(const llama_model & model, const llm_
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
+    ggml_build_forward_expand(gf, inpL);
 
     auto * inp = build_inp_mem_hybrid();
 
@@ -44,7 +45,7 @@ llm_build_nemotron_h::llm_build_nemotron_h(const llama_model & model, const llm_
 
         // add residual
         cur = ggml_add(ctx0, cur, inpSA);
-        cb(cur, "block_out", il);
+        cb(cur, "nemotron_h_block_out", il);
 
         // input for next layer
         inpL = cur;

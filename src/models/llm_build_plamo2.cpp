@@ -1,9 +1,10 @@
 
+#include "llm_build_plamo2.h"
+
 #include "../llama-graph.h"
 #include "../llama-model.h"
 
 #include "llm_graph_context_mamba.h"
-#include "llm_build_plamo2.h"
 
 #include <cmath>
 
@@ -109,6 +110,7 @@ ggml_tensor * llm_build_plamo2::build_plamo2_attn_layer(llm_graph_input_attn_kv 
         const int64_t n_embd_head_q = hparams.n_embd_head_k;
         const int64_t n_embd_head_k = hparams.n_embd_head_k;
         const int64_t n_embd_head_v = hparams.n_embd_head_v;
+        int32_t       n_head        = hparams.n_head(il);
         int32_t       n_head_kv     = hparams.n_head_kv(il);
 
         const int64_t q_offset = 0;

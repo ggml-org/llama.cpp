@@ -3,6 +3,8 @@
 #include "../llama-model.h"
 #include "../llama-graph.h"
 
+#include "llm_graph_context_mamba.h"
+
 #include <cmath>
 
 struct llm_build_nemotron_h : public llm_graph_context_mamba {

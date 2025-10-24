@@ -8,8 +8,10 @@ ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * in
                                                          const llama_ubatch & ubatch,
                                                          int                  il) {
     const auto * mctx_cur = inp->mctx;
-    const auto   kv_head  = mctx_cur->get_head();
-    const auto & layer    = model.layers[il];
+
+    const auto kv_head = mctx_cur->get_head();
+
+    const auto & layer = model.layers[il];
 
     const int64_t d_conv         = hparams.ssm_d_conv;
     const int64_t d_inner        = hparams.ssm_d_inner;
@@ -73,7 +75,7 @@ ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * in
         x = ggml_add(ctx0, x, layer.ssm_conv1d_b);
 
         x = ggml_silu(ctx0, x);
-    };
+    }
 
     // ssm
     {
@@ -93,7 +95,8 @@ ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * in
             dt = build_norm(dt, layer.ssm_dt_norm, NULL, LLM_NORM_RMS, il);
             B  = build_norm(B, layer.ssm_b_norm, NULL, LLM_NORM_RMS, il);
             C  = build_norm(C, layer.ssm_c_norm, NULL, LLM_NORM_RMS, il);
-        };
+        }
+
         // {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
         dt = build_lora_mm(layer.ssm_dt, dt);
         dt = ggml_add(ctx0, dt, layer.ssm_dt_b);
@@ -132,12 +135,13 @@ ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * in
 
         // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
         cur = build_lora_mm(layer.ssm_out, y);
-    };
+    }
+
     // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
     cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
 
     return cur;
-};
+}
 
 ggml_tensor * llm_graph_context_mamba::build_mamba2_layer(llm_graph_input_rs * inp,
                                                           ggml_tensor *        cur,
@@ -214,7 +218,8 @@ ggml_tensor * llm_graph_context_mamba::build_mamba2_layer(llm_graph_input_rs * i
         xBC = ggml_add(ctx0, xBC, model.layers[il].ssm_conv1d_b);
 
         xBC = ggml_silu(ctx0, xBC);
-    };
+    }
+
     // ssm
     {
         // These correspond to V K Q in SSM/attention duality
@@ -255,18 +260,21 @@ ggml_tensor * llm_graph_context_mamba::build_mamba2_layer(llm_graph_input_rs * i
         // TODO: skip computing output earlier for unused tokens
 
         y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
+        cb(y, "mamba2_y_add_d", il);
         y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
         // grouped RMS norm
         if (model.layers[il].ssm_norm) {
             y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
             y = build_norm(y, model.layers[il].ssm_norm, NULL, LLM_NORM_RMS, il);
-        };
+        }
+
         y = ggml_reshape_3d(ctx0, y, d_inner, n_seq_tokens, n_seqs);
 
         // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
         cur = build_lora_mm(model.layers[il].ssm_out, y);
-    };
+    }
+
     // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
     cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
     cb(cur, "mamba_out", il);

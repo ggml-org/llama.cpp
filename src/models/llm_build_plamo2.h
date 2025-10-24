@@ -3,6 +3,8 @@
 #include "../llama-model.h"
 #include "../llama-graph.h"
 
+#include "llm_graph_context_mamba.h"
+
 #include <cmath>
 
 struct llm_build_plamo2 : public llm_graph_context_mamba {
