@@ -67,8 +67,8 @@
     GGML_ABORT("CANN error");
 }
 
-// Global variable to record the current device of this process.
-static int g_current_cann_device = -1;
+// Thread-local variable to record the current device of this thread.
+thread_local int g_current_cann_device = -1;
 
 /**
  * @brief Set the CANN device to be used.
