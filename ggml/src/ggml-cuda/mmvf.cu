@@ -2,6 +2,7 @@
 #include "common.cuh"
 #include "unary.cuh"
 #include "mmvf.cuh"
+#include "convert.cuh"
 
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false>
 static __global__ void mul_mat_vec_f(
