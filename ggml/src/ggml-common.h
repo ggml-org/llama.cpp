@@ -378,8 +378,8 @@ typedef struct {
 } block_iq3_xxs;
 static_assert(sizeof(block_iq3_xxs) == sizeof(ggml_half) + 3*(QK_K/8), "wrong iq3_xxs block size/padding");
 
-// 3.4375 bpw
 #define IQ3S_N_SCALE QK_K/64
+// 3.4375 bpw
 typedef struct {
     ggml_half d;
     uint8_t qs[QK_K/4];
