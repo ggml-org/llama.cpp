@@ -36,7 +36,7 @@
 		<DialogPrimitive.Content class="code-preview-content">
 			<iframe
 				bind:this={iframeRef}
-				title={`Preview ${language}`}
+				title="Preview {language}"
 				sandbox="allow-scripts"
 				class="code-preview-iframe"
 			></iframe>
