@@ -691,6 +691,29 @@ class MultiChatUI {
         /** @type {string} */
         this.curChatId = "";
 
+        this.TimePeriods = {
+            ToolCallResponseTimeout: 10000,
+            ToolCallAutoTimeUnit: 1000
+        }
+
+        this.timers = {
+            /**
+             * Used to identify Delay with getting response from a tool call.
+             * @type {number | undefined}
+             */
+            toolcallResponseTimeout: undefined,
+            /**
+             * Used to auto trigger tool call, after a set time, if enabled.
+             * @type {number | undefined}
+             */
+            toolcallTriggerClick: undefined,
+            /**
+             * Used to auto submit tool call response, after a set time, if enabled.
+             * @type {number | undefined}
+             */
+            toolcallResponseSubmitClick: undefined
+        }
+
         // the ui elements
         this.elInSystem = /** @type{HTMLInputElement} */(document.getElementById("system-in"));
         this.elDivChat = /** @type{HTMLDivElement} */(document.getElementById("chat-div"));
@@ -742,9 +765,9 @@ class MultiChatUI {
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
             if (gMe.tools.auto > 0) {
-                setTimeout(()=>{
+                this.timers.toolcallTriggerClick = setTimeout(()=>{
                     this.elBtnTool.click()
-                }, gMe.tools.auto*1000)
+                }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
             }
         } else {
             this.elDivTool.hidden = true
@@ -791,6 +814,8 @@ class MultiChatUI {
         });
 
         this.elBtnUser.addEventListener("click", (ev)=>{
+            clearTimeout(this.timers.toolcallResponseSubmitClick)
+            this.timers.toolcallResponseSubmitClick = undefined
             if (this.elInUser.disabled) {
                 return;
             }
@@ -803,20 +828,24 @@ class MultiChatUI {
         });
 
         this.elBtnTool.addEventListener("click", (ev)=>{
+            clearTimeout(this.timers.toolcallTriggerClick)
+            this.timers.toolcallTriggerClick = undefined
             if (this.elDivTool.hidden) {
                 return;
             }
             this.handle_tool_run(this.curChatId);
         })
 
+        // Handle messages from Tools web worker
         tools.setup((id, name, data)=>{
-            clearTimeout(this.idTimeOut)
+            clearTimeout(this.timers.toolcallResponseTimeout)
+            this.timers.toolcallResponseTimeout = undefined
             this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(id, name, data);
             this.ui_reset_userinput(false)
             if (gMe.tools.auto > 0) {
-                setTimeout(()=>{
+                this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                     this.elBtnUser.click()
-                }, gMe.tools.auto*1000)
+                }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
             }
         })
 
@@ -946,10 +975,10 @@ class MultiChatUI {
             this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult);
             this.ui_reset_userinput(false)
         } else {
-            this.idTimeOut = setTimeout(() => {
+            this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`);
                 this.ui_reset_userinput(false)
-            }, 10000)
+            }, this.TimePeriods.ToolCallResponseTimeout)
         }
     }
 
@@ -1044,6 +1073,10 @@ class Me {
             enabled: false,
             fetchProxyUrl: "http://127.0.0.1:3128",
             toolNames: /** @type {Array<string>} */([]),
+            /**
+             * Control how many seconds to wait before auto triggering tool call or its response submission.
+             * A value of 0 is treated as auto triggering disable.
+             */
             auto: 0
         };
         this.chatProps = {
