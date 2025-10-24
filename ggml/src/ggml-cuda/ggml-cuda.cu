@@ -1957,8 +1957,8 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
 
         size_t src1_stride_size = sizeof(cuda_t);
 
-        const int threads_x = 32;
-        const int threads_y = 32;
+        const int threads_x = 16;
+        const int threads_y = 16;
         dim3 block_dims(threads_x, threads_y);
 
         dim3 grid_dims(
