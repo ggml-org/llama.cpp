@@ -259,6 +259,10 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
 
     __syncthreads();
 
+    if(tx == 0 && bx == 0 && by == 0 && z == 0){
+        printf("non tensor \n");
+    }
+
     // if(tx == 0 && bx == 0 && by == 0 && z == 0){
     //     for(int i=0; i < 128; ++i)
     //         printf("%.2f,",  smeminput[i]);
@@ -738,7 +742,7 @@ __device__ __forceinline__ void ldmatrix_a(
   half (&reg)[mma_tiles_per_warp_m][mma_tiles_per_warp_k][4]
 )
 {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
   static_assert(mma_tiles_per_warp_m == 8, "mma_tiles_per_warp_m must be 4");
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
 
@@ -881,11 +885,11 @@ __device__ __forceinline__ void ldmatrix_a(
       : "=r"(reg_[6][3][0]), "=r"(reg_[6][3][1]), "=r"(reg_[7][3][0]), "=r"(reg_[7][3][1])
       : "r"(src_addr + 96 * smem_stride_)
     );
-#else
-    GGML_UNUSED(src);
-    GGML_UNUSED(reg);
-    NO_DEVICE_CODE;
-#endif
+// #else
+//     GGML_UNUSED(src);
+//     GGML_UNUSED(reg);
+//     NO_DEVICE_CODE;
+// #endif
 }
 
 template <unsigned int mma_tiles_per_warp_k, unsigned int mma_tiles_per_warp_n, unsigned int smem_stride>
@@ -894,7 +898,7 @@ __device__ __forceinline__ void ldmatrix_b(
   half (&reg)[mma_tiles_per_warp_k][mma_tiles_per_warp_n][2]
 )
 {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
   static_assert(mma_tiles_per_warp_n == 8, "mma_tiles_per_warp_n must be 8");
   
@@ -985,22 +989,25 @@ __device__ __forceinline__ void ldmatrix_b(
     // : "r"(src_addr ^ 0b1000000)
     : "r"(src_addr + 32 * smem_stride_)
   );
-#else
-    GGML_UNUSED(src);
-    GGML_UNUSED(reg);
-    NO_DEVICE_CODE;
-#endif
+// #else
+//     GGML_UNUSED(src);
+//     GGML_UNUSED(reg);
+//     NO_DEVICE_CODE;
+// #endif
 }
 
 template<const int BM, const int BN, const int BK, const int WM, const int WN,
         const int WK,  const int NUM_THREADS>
-static __global__ void conv2d_implicit_kernel_tc(const half * __restrict__ input,
+static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                                               const half * __restrict__ kernel,
                                               half * __restrict__ output,
                                               const param_t param) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
   constexpr unsigned int MMA_M = 16;
   constexpr unsigned int MMA_N = 8;
+
+// if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y ==0)
+//      printf("conv2d_implicit_kernel launch BM:%d, BN:%d, BK:%d, WM:%d, WN:%d, WK:%d, NUM_THREADS:%d \n", BM, BN, BK, WM, WN, WK, NUM_THREADS);
 
   const unsigned int K = param.c * param.r * param.s;
   const uint PQ = param.Oh * param.Ow;
@@ -1180,13 +1187,13 @@ static __global__ void conv2d_implicit_kernel_tc(const half * __restrict__ input
             }
         }
     }
-#else
-    GGML_UNUSED(input);
-    GGML_UNUSED(kernel);
-    GGML_UNUSED(output);
-    GGML_UNUSED(param);
-    NO_DEVICE_CODE;
-#endif
+// #else
+//     GGML_UNUSED(input);
+//     GGML_UNUSED(kernel);
+//     GGML_UNUSED(output);
+//     GGML_UNUSED(param);
+//     NO_DEVICE_CODE;
+// #endif
 }
 
 
@@ -1248,8 +1255,8 @@ static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
 }
 
 static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && P.layout == 0 && P.c % 8 == 0) {
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
         constexpr unsigned int BK_dim = 32;
@@ -1267,6 +1274,9 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         constexpr unsigned int ThreadsN = WARPSIZE * WARPS_PER_BLOCK_N;
         constexpr unsigned int NumThreads = ThreadsM * ThreadsN;
         const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
+
+        cudaFuncSetAttribute(conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, NumThreads>,
+               cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
 
@@ -1280,17 +1290,19 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         to_fp16_cuda(X_D, x_f16.get(), ne, st);
         const half *X_H = x_f16.get();
         ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
-        conv2d_implicit_kernel_tc<BM_dim, BN_dim, BK_dim,
+        conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim,
             WM_dim, WN_dim, WK_dim, NumThreads>
             <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_D, Y_H.get(), P);
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
         to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow * P.n, st);
-    }else{
+// #else
+//     printf("non tensor path called\n");
+//     conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
+// #endif
+    } else{
        conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
     }
-#else
-    conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
-#endif
+
 }
 
 static void conv2d_implicit_cuda_f32(ggml_backend_cuda_context & ctx, const float * X_D, const float * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {

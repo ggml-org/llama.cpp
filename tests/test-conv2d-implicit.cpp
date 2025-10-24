@@ -63,8 +63,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     size_t buffer_size = 0;
     {
-        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
-        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
+        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
+        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
         buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
         buffer_size += 1024; // overhead
     }
@@ -112,8 +112,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     model.ctx = ggml_init(params);
 
     // create tensors
-    // model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
-    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32,  KW, KH, IC, OC);
+    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
+    // model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32,  KW, KH, IC, OC);
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
 
     // create a allocator
@@ -124,11 +124,11 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
-        // memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
-        memcpy(model.a->data, adata.data(), ggml_nbytes(model.a));
+        memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
+        // memcpy(model.a->data, adata.data(), ggml_nbytes(model.a));
     } else {
-        // ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
-        ggml_backend_tensor_set(model.a, adata.data(), 0, ggml_nbytes(model.a));
+        ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+        // ggml_backend_tensor_set(model.a, adata.data(), 0, ggml_nbytes(model.a));
     }
 
     // alloc memory
@@ -262,7 +262,7 @@ struct ggml_cgraph * build_graph_2(const test_model& model) {
     // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
 
 
-    struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, 1);
+    struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, 0);
     // struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     ggml_set_name(wino_res, "wino_res");
     ggml_build_forward_expand(gf, wino_res);
@@ -339,20 +339,20 @@ int main(void)
 {
     ggml_time_init();
     std::vector<std::tuple<int, int, int, int>> configs = {
-        std::make_tuple(64,64,48,64),
-        std::make_tuple(320,320,104,152),
-        std::make_tuple(640,640,52,76),
-        std::make_tuple(640,640,104,152),
-        std::make_tuple(960,320,104,152),
-        std::make_tuple(1280,1280,26,38),
-        std::make_tuple(1280,640,52,76),
-        std::make_tuple(1920,1280,26,38),
-        std::make_tuple(2560,1280,26,38),
-        std::make_tuple(512,512,104,152),
-        std::make_tuple(512,512,208,304),
-        std::make_tuple(512,256,416,608),
-        std::make_tuple(256,128,832,1216),
-        std::make_tuple(256,256,832,1216),
+        // std::make_tuple(64,64,48,64),
+        // std::make_tuple(320,320,104,152),
+        // std::make_tuple(640,640,52,76),
+        // std::make_tuple(640,640,104,152),
+        // std::make_tuple(960,320,104,152),
+        std::make_tuple(160,1280,26,38),
+        // std::make_tuple(1280,640,52,76),
+        // std::make_tuple(1920,1280,26,38),
+        // std::make_tuple(2560,1280,26,38),
+        // std::make_tuple(512,512,104,152),
+        // std::make_tuple(512,512,208,304),
+        // std::make_tuple(512,256,416,608),
+        // std::make_tuple(256,128,832,1216),
+        // std::make_tuple(256,256,832,1216),
         // std::make_tuple(320,256,1024,1920)
     };
 
@@ -375,7 +375,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -436,15 +436,15 @@ int main(void)
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        // for(int i = 0; i < 3*28; i++) {
-        //     float diff = fabs(conv2d_data[i] - wino_data[i]);
-        //     // if(diff > 1.e-4) {
-        //           printf("(%f, %f, %f, %d) \n",
-        //           conv2d_data[i],
-        //           wino_data[i], diff, i);
-        //         // break;
-        //     // }
-        // }
+        for(int i = 0; i < 26*38; i++) {
+            float diff = fabs(conv2d_data[i] - wino_data[i]);
+            // if(diff > 1.e-4) {
+                  printf("(%f, %f, %f, %d) \n",
+                  conv2d_data[i],
+                  wino_data[i], diff, i);
+                // break;
+            // }
+        }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

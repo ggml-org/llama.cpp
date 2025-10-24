@@ -26,7 +26,7 @@ typedef struct{
     uint3 OHOW_fastdiv;
 } param_t;
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 // same as above, but writes are swizzled to avoid bank conflicts when shared memory is read later in the kernel
 template<unsigned int TILE_ROWS,
 unsigned int NUM_THREADS>
@@ -98,9 +98,9 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
   // TODO: next block_k loop
-    const uint curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
-    const uint curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const uint curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
+    const unsigned int curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
+    const unsigned int curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+    const unsigned int curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++)
@@ -166,9 +166,9 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
         unsigned int inOffset = n * param.c * param.h * param.w;
         // TODO: next block_k loop
-        const uint curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
-        const uint curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        const uint curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
+        const unsigned int curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         // apply swizzle to the dst index
@@ -234,9 +234,9 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
         unsigned int inOffset = n * param.c * param.h * param.w;
         // TODO: next block_k loop
-        const uint curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
-        const uint curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        const uint curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+        const unsigned int curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && 
@@ -285,9 +285,9 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const uint curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
-    const uint curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const uint curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
+    const unsigned int curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+    const unsigned int curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+    const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++)
@@ -448,7 +448,7 @@ __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
     return address;
 }
 
-#endif
+// #endif
 
 // constexpr unsigned int int_log2(unsigned int x)
 // {
