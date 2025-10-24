@@ -992,7 +992,7 @@ static common_chat_params common_chat_params_init_mistral_nemo(const common_chat
 
 
 // Case-insensitive find
-size_t ifind_string(const std::string & haystack, const std::string & needle, size_t pos = 0) {
+static size_t ifind_string(const std::string & haystack, const std::string & needle, size_t pos = 0) {
     auto it = std::search(
         haystack.begin() + pos, haystack.end(),
         needle.begin(), needle.end(),
@@ -1033,7 +1033,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         return false;
     };
 
-     // Lfm2 model does not natively work with json, but can generally understand the tools structure
+    // Lfm2 model does not natively work with json, but can generally understand the tools structure
     //
     // Example of the pytorch dialog structure:
     //     <|startoftext|><|im_start|>system
@@ -1531,7 +1531,6 @@ static common_chat_params common_chat_params_init_apertus(const common_chat_temp
     }
     return data;
 }
-
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {
     builder.try_parse_reasoning("<think>", "</think>");
 
@@ -2873,7 +2872,6 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     if (!inputs.json_schema.empty()) {
-        LOG_INF("%s: mm1 Using provided json schema\n", __func__);
         params.json_schema = json::parse(inputs.json_schema);
     }
 
