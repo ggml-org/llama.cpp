@@ -52,12 +52,10 @@ llm_build_starcoder::llm_build_starcoder(const llama_model & model, const llm_gr
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
-;
             // add the input
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
@@ -78,7 +76,6 @@ llm_build_starcoder::llm_build_starcoder(const llama_model & model, const llm_gr
                         LLM_FFN_GELU, LLM_FFN_SEQ, il);
                 cb(cur, "ffn_out", il);
             }
-;
             cur = ggml_add(ctx0, cur, ffn_inp);
 
             cur = build_cvec(cur, il);
@@ -87,7 +84,6 @@ llm_build_starcoder::llm_build_starcoder(const llama_model & model, const llm_gr
             // input for next layer
             inpL = cur;
         }
-;
         cur = build_norm(inpL,
                 model.output_norm,
                 model.output_norm_b,

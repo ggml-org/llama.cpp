@@ -61,7 +61,6 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
                     Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
                     cb(Kcur, "Kcur_normed", il);
                 }
-;
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -82,12 +81,10 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_transformer_layers - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-;
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -133,7 +130,6 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
                 cur = ggml_add(ctx0, routed_out, shared_out);
                 cb(cur, "ffn_out", il);
             }
-;
             cur = ggml_add(ctx0, cur, ffn_inp);
 
             cur = build_cvec(cur, il);
@@ -142,7 +138,6 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
         cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 

@@ -62,12 +62,10 @@ llm_build_neo_bert::llm_build_neo_bert(const llama_model & model, const llm_grap
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
                 cb(cur, "kqv_out", il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
-;
             // re-add the layer input
             cur = ggml_add(ctx0, cur, inpL);
 
@@ -94,7 +92,6 @@ llm_build_neo_bert::llm_build_neo_bert(const llama_model & model, const llm_grap
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur,
@@ -106,4 +103,3 @@ llm_build_neo_bert::llm_build_neo_bert(const llama_model & model, const llm_grap
 
         ggml_build_forward_expand(gf, cur);
 }
-;

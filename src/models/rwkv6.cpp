@@ -70,21 +70,18 @@ llm_build_rwkv6::llm_build_rwkv6(const llama_model & model, const llm_graph_para
                 x_prev   = ggml_get_rows(ctx0, x_prev,   inp_out_ids);
                 cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
             }
-;
             cur = build_rwkv6_channel_mix(layer, ffn_norm, x_prev, LLM_ARCH_RWKV6);
             cur = ggml_add(ctx0, cur, ffn_inp);
 
             if (hparams.rescale_every_n_layers != 0 && (il + 1) % hparams.rescale_every_n_layers == 0) {
                 cur = ggml_scale(ctx0, cur, 0.5F);
             }
-;
             cur = build_cvec(cur, il);
             cb(cur, "l_out", il);
 
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
         cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
 

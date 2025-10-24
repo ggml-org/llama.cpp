@@ -61,7 +61,6 @@ llm_build_baichuan::llm_build_baichuan(const llama_model & model, const llm_grap
                 default:
                     GGML_ABORT("fatal error");
             }
-;
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -71,13 +70,11 @@ llm_build_baichuan::llm_build_baichuan(const llama_model & model, const llm_grap
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
-;
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
-;
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
@@ -97,7 +94,6 @@ llm_build_baichuan::llm_build_baichuan(const llama_model & model, const llm_grap
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         }
-;
 
         cur = ggml_add(ctx0, cur, ffn_inp);
 
@@ -107,7 +103,6 @@ llm_build_baichuan::llm_build_baichuan(const llama_model & model, const llm_grap
         // input for next layer
         inpL = cur;
     }
-;
 
     cur = inpL;
 

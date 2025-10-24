@@ -22,7 +22,6 @@ llm_build_granite::llm_build_granite(
     if (hparams.rope_finetuned) {
         inp_pos = build_inp_pos();
     }
-;
     auto * inp_attn = build_attn_inp_kv();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -45,14 +44,12 @@ llm_build_granite::llm_build_granite(
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
-;
         // ffn
         cur = build_layer_ffn(cur, inpSA, model, il);
 
         // input for next layer
         inpL = cur;
     }
-;
     cur = inpL;
 
     cur = build_norm(cur,
@@ -88,7 +85,6 @@ ggml_tensor * llm_build_granite::build_attention_layer(
         Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
         cb(Qcur, "Qcur", il);
     }
-;
 
     ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
     cb(Kcur, "Kcur", il);
@@ -96,7 +92,6 @@ ggml_tensor * llm_build_granite::build_attention_layer(
         Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
         cb(Kcur, "Kcur", il);
     }
-;
 
     ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
     cb(Vcur, "Vcur", il);
@@ -104,7 +99,6 @@ ggml_tensor * llm_build_granite::build_attention_layer(
         Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
         cb(Vcur, "Vcur", il);
     }
-;
 
     Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, hparams.n_head(il),    n_tokens);
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, hparams.n_head_kv(il), n_tokens);
@@ -125,7 +119,6 @@ ggml_tensor * llm_build_granite::build_attention_layer(
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
     }
-;
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
@@ -204,7 +197,6 @@ ggml_tensor * llm_build_granite::build_layer_ffn(
             cur = moe_out;
         }
     }
-;
 
     // For Granite architectures - scale residual
     if (hparams.f_residual_scale) {

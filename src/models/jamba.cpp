@@ -47,12 +47,10 @@ llm_build_jamba::llm_build_jamba(const llama_model & model, const llm_graph_para
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
-;
             // residual
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, inpL, cur);
             cb(cur, "ffn_inp", il);
@@ -85,7 +83,6 @@ llm_build_jamba::llm_build_jamba(const llama_model & model, const llm_graph_para
                         il);
                 cb(cur, "ffn_moe_out", il);
             }
-;
             // residual
             cur = ggml_add(ctx0, ffn_inp, cur);
 
@@ -95,7 +92,6 @@ llm_build_jamba::llm_build_jamba(const llama_model & model, const llm_graph_para
             // input for next layer
             inpL = cur;
         }
-;
         // final rmsnorm
         cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
 

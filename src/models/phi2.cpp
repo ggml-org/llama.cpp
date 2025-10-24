@@ -54,7 +54,6 @@ llm_build_phi2::llm_build_phi2(const llama_model & model, const llm_graph_params
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
             }
-;
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -79,13 +78,11 @@ llm_build_phi2::llm_build_phi2(const llama_model & model, const llm_graph_params
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
-;
         if (il == n_layer - 1 && inp_out_ids) {
             cur              = ggml_get_rows(ctx0,              cur, inp_out_ids);
             inpL             = ggml_get_rows(ctx0,             inpL, inp_out_ids);
             attn_norm_output = ggml_get_rows(ctx0, attn_norm_output, inp_out_ids);
         }
-;
         // FF
         {
             ffn_output = build_ffn(attn_norm_output,
@@ -96,7 +93,6 @@ llm_build_phi2::llm_build_phi2(const llama_model & model, const llm_graph_params
                     LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(ffn_output, "ffn_out", il);
         }
-;
         cur = ggml_add(ctx0, cur, ffn_output);
         cur = ggml_add(ctx0, cur, inpL);
 
@@ -106,7 +102,6 @@ llm_build_phi2::llm_build_phi2(const llama_model & model, const llm_graph_params
         // input for next layer
         inpL = cur;
     }
-;
     cur = build_norm(inpL,
             model.output_norm,
             model.output_norm_b,

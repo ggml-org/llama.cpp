@@ -37,21 +37,18 @@ llm_build_olmo::llm_build_olmo(const llama_model & model, const llm_graph_params
                     Qcur = ggml_clamp(ctx0, Qcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
                     cb(Qcur, "Qcur", il);
                 }
-;
                 ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
                 cb(Kcur, "Kcur", il);
                 if (hparams.f_clamp_kqv > 0.0f) {
                     Kcur = ggml_clamp(ctx0, Kcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
                     cb(Kcur, "Kcur", il);
                 }
-;
                 ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
                 cb(Vcur, "Vcur", il);
                 if (hparams.f_clamp_kqv > 0.0f) {
                     Vcur = ggml_clamp(ctx0, Vcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
                     cb(Vcur, "Vcur", il);
                 }
-;
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -76,12 +73,10 @@ llm_build_olmo::llm_build_olmo(const llama_model & model, const llm_graph_params
                         model.layers[il].wo, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-;
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -108,7 +103,6 @@ llm_build_olmo::llm_build_olmo(const llama_model & model, const llm_graph_params
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur,
@@ -126,4 +120,3 @@ llm_build_olmo::llm_build_olmo(const llama_model & model, const llm_graph_params
 
         ggml_build_forward_expand(gf, cur);
 }
-;

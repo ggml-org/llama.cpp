@@ -59,13 +59,11 @@ llm_build_gptneox::llm_build_gptneox(const llama_model & model, const llm_graph_
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
-;
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
-;
 
         // ffn
         if (hparams.use_par_res) {
@@ -129,7 +127,6 @@ llm_build_gptneox::llm_build_gptneox(const llama_model & model, const llm_graph_
             inpL = cur;
         }
     }
-;
 
     cur = build_norm(inpL,
             model.output_norm,

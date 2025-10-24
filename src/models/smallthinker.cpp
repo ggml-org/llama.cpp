@@ -24,7 +24,6 @@ llm_build_smallthinker<iswa>::llm_build_smallthinker(const llama_model & model, 
         } else {
             inp_attn = build_attn_inp_kv();
         }
-;
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
@@ -61,7 +60,6 @@ llm_build_smallthinker<iswa>::llm_build_smallthinker(const llama_model & model, 
                     Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 }
-;
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
 
@@ -69,13 +67,11 @@ llm_build_smallthinker<iswa>::llm_build_smallthinker(const llama_model & model, 
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
                 probs = ggml_get_rows(ctx0, probs, inp_out_ids);
             }
-;
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -106,7 +102,6 @@ llm_build_smallthinker<iswa>::llm_build_smallthinker(const llama_model & model, 
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

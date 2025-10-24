@@ -89,7 +89,6 @@ llm_build_wavtokenizer_dec::llm_build_wavtokenizer_dec(const llama_model & model
                 default: GGML_ABORT("unknown posnet layer");
             };
         }
-;
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
         cur = build_norm(cur,
@@ -130,7 +129,6 @@ llm_build_wavtokenizer_dec::llm_build_wavtokenizer_dec(const llama_model & model
 
             inpL = ggml_add(ctx0, cur, inpL);
         }
-;
         cur = inpL;
 
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));

@@ -70,12 +70,10 @@ llm_build_llada_moe::llm_build_llada_moe(const llama_model & model, const llm_gr
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-;
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -106,7 +104,6 @@ llm_build_llada_moe::llm_build_llada_moe(const llama_model & model, const llm_gr
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur,
@@ -124,4 +121,4 @@ llm_build_llada_moe::llm_build_llada_moe(const llama_model & model, const llm_gr
 
         ggml_build_forward_expand(gf, cur);
 }
-;
+

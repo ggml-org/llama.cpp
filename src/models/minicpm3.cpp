@@ -138,12 +138,10 @@ llm_build_minicpm3::llm_build_minicpm3(const llama_model & model, const llm_grap
                         model.layers[il].wo, NULL,
                         q_states, k_states, v_states, nullptr, nullptr, nullptr, kq_scale, il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-;
             // scale_res - scale the hidden states for residual connection
             const float scale_res = scale_depth/sqrtf(float(n_layer)); // TODO: is this correct?
             cur = ggml_scale(ctx0, cur, scale_res);
@@ -167,7 +165,6 @@ llm_build_minicpm3::llm_build_minicpm3(const llama_model & model, const llm_grap
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(cur, "ffn_out", il);
             }
-;
             // scale the hidden states for residual connection
             cur = ggml_scale(ctx0, cur, scale_res);
             cb(cur, "hidden_scaled_ffn", il);
@@ -180,7 +177,6 @@ llm_build_minicpm3::llm_build_minicpm3(const llama_model & model, const llm_grap
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur,

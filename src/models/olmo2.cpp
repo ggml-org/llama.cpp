@@ -24,7 +24,6 @@ llm_build_olmo2<iswa>::llm_build_olmo2(const llama_model & model, const llm_grap
         } else {
             inp_attn = build_attn_inp_kv();
         }
-;
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
@@ -86,7 +85,6 @@ llm_build_olmo2<iswa>::llm_build_olmo2(const llama_model & model, const llm_grap
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
                 }
-;
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
@@ -95,12 +93,10 @@ llm_build_olmo2<iswa>::llm_build_olmo2(const llama_model & model, const llm_grap
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
-;
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-;
             cur = build_norm(cur,
                     model.layers[il].attn_post_norm, NULL,
                     LLM_NORM_RMS, il);
@@ -132,7 +128,6 @@ llm_build_olmo2<iswa>::llm_build_olmo2(const llama_model & model, const llm_grap
             // input for next layer
             inpL = cur;
         }
-;
         cur = inpL;
 
         cur = build_norm(cur,
