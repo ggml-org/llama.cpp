@@ -4,10 +4,12 @@
 #extension GL_EXT_control_flow_attributes : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 
-#include "rte.comp"
+#include "rte.glsl"
+#include "types.glsl"
 
 layout (push_constant) uniform parameter
 {
+    BDA_STORAGE_T dst_addr;
     uint32_t nb10;
     uint32_t nb11;
     uint32_t nb12;
@@ -38,8 +40,6 @@ layout (push_constant) uniform parameter
     uint32_t misalign_offsets;
 } p;
 
-#include "types.comp"
-
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_doffset() { return p.misalign_offsets & 0xFFFF; }
 
@@ -49,6 +49,10 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
+
+#if BDA
+layout (buffer_reference) buffer D_ptr {D_TYPE d;};
+#endif
 
 void main() {
     const uint32_t i = gl_GlobalInvocationID.x;
@@ -100,13 +104,22 @@ void main() {
         const uint32_t iih = ioh * s1 + ikh * d1 - p1;
         const uint32_t iid = iod * s2 + ikd * d2 - p2;
 
-        const uint32_t offset_dst = in_*OD_OH_OW_IC_KD_KH_KW + iod*OH_OW_IC_KD_KH_KW + ioh*OW_IC_KD_KH_KW + iow*IC_KD_KH_KW + iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw;
+        const BDA_OFFSET_T offset_dst = BDA_OFFSET_T(in_)*OD_OH_OW_IC_KD_KH_KW + BDA_OFFSET_T(iod)*OH_OW_IC_KD_KH_KW + BDA_OFFSET_T(ioh)*OW_IC_KD_KH_KW + BDA_OFFSET_T(iow)*IC_KD_KH_KW + iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw;
 
+        const uint32_t offset_src = (in_*IC + iic)*nb13 + iid*nb12 + iih*nb11 + iiw*nb10;
+#if BDA
+        D_ptr dst_addr = D_ptr(p.dst_addr + D_SIZE * offset_dst);
+        if (iih >= IH || iiw >= IW || iid >= ID) {
+            dst_addr.d = D_TYPE(0.0f);
+        } else {
+            dst_addr.d = D_TYPE(data_a[offset_src + get_aoffset()]);
+        }
+#else
         if (iih >= IH || iiw >= IW || iid >= ID) {
             data_d[offset_dst + get_doffset()] = D_TYPE(0.0f);
         } else {
-            const uint32_t offset_src = (in_*IC + iic)*nb13 + iid*nb12 + iih*nb11 + iiw*nb10;
             data_d[offset_dst + get_doffset()] = D_TYPE(data_a[offset_src + get_aoffset()]);
         }
+#endif
     }
 }

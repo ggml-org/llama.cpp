@@ -106,6 +106,34 @@ static void test_reasoning() {
     assert_equals("<think>Cogito</think>", builder.result().content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
+  {
+    const std::string variant("content_only_inline_think");
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ false,
+    };
+    const std::string input = "<think>Pense</think>Bonjour";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("Pense"), msg.reasoning_content);
+    assert_equals(variant, std::string("Bonjour"), msg.content);
+  }
+  {
+    const std::string variant("llama_3_inline_think");
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ false,
+    };
+    const std::string input = "<think>Plan</think>Réponse";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("Plan"), msg.reasoning_content);
+    assert_equals(variant, std::string("Réponse"), msg.content);
+  }
   // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
   {
     common_chat_syntax syntax = {
@@ -495,6 +523,64 @@ static void test_json_with_dumped_args() {
   test_with_args(
     R"({"foo": "bar", "args": {"arg1": [)",
     R"({"foo":"bar","args":"{\"arg1\":["})"
+  );
+
+  // Unicode tests
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u0)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u0"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u00)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u00"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u000)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u000"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\u0000)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\u0000"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud8)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud8"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud80)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud80"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\u)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\u"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\ud)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\ud"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc0)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc0"})"
+  );
+  test_with_args(
+    R"({"foo": "bar", "args": {"arg1": "\ud800\udc00)",
+    R"({"foo":"bar","args":"{\"arg1\":\"\\ud800\\udc00"})"
   );
 }
 

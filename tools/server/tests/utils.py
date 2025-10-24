@@ -35,6 +35,12 @@ class ServerResponse:
     body: dict | Any
 
 
+class ServerError(Exception):
+    def __init__(self, code, body):
+        self.code = code
+        self.body = body
+
+
 class ServerProcess:
     # default options
     debug: bool = False
@@ -297,6 +303,8 @@ class ServerProcess:
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:
             raise ValueError(f"Unimplemented method: {method}")
+        if response.status_code != 200:
+            raise ServerError(response.status_code, response.json())
         for line_bytes in response.iter_lines():
             line = line_bytes.decode("utf-8")
             if '[DONE]' in line:

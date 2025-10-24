@@ -870,7 +870,7 @@ struct MulMatParams {
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let total = params.m * params.n * params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
     if (global_id.x >= total) {

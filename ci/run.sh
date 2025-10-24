@@ -22,6 +22,9 @@
 # # with MUSA support
 # GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with KLEIDIAI support
+# GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -34,9 +37,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -f $OUT/*.log
+rm -f $OUT/*.exit
+rm -f $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -72,7 +75,7 @@ if [ ! -z ${GG_BUILD_ROCM} ]; then
         exit 1
     fi
 
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DAMDGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -114,6 +117,35 @@ if [ ! -z ${GG_BUILD_NO_SVE} ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
 fi
+
+if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
+    echo ">>===== Enabling KleidiAI support"
+
+    CANDIDATES=("armv9-a+dotprod+i8mm" "armv8.6-a+dotprod+i8mm" "armv8.2-a+dotprod")
+    CPU=""
+
+    for cpu in "${CANDIDATES[@]}"; do
+        if echo 'int main(){}' | ${CXX:-c++} -march="$cpu" -x c++ - -c -o /dev/null >/dev/null 2>&1; then
+            CPU="$cpu"
+            break
+        fi
+    done
+
+    if [ -z "$CPU" ]; then
+        echo "ERROR: None of the required ARM baselines (armv9/armv8.6/armv8.2 + dotprod) are supported by this compiler."
+        exit 1
+    fi
+
+    echo ">>===== Using ARM baseline: ${CPU}"
+
+    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } \
+        -DGGML_NATIVE=OFF \
+        -DGGML_CPU_KLEIDIAI=ON \
+        -DGGML_CPU_AARCH64=ON \
+        -DGGML_CPU_ARM_ARCH=${CPU} \
+        -DBUILD_SHARED_LIBS=OFF"
+fi
+
 ## helpers
 
 # download a file if it does not exist or if it is outdated
@@ -511,12 +543,7 @@ function gg_run_rerank_tiny {
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/tokenizer_config.json
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/special_tokens_map.json
     gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/resolve/main/pytorch_model.bin
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/sentence_bert_config.json
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/vocab.txt
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/modules.json
-    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/config.json
-
-    gg_wget models-mnt/rerank-tiny/1_Pooling https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/1_Pooling/config.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/vocab.json
 
     path_models="../models-mnt/rerank-tiny"
 
@@ -606,6 +633,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
+
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
@@ -622,5 +650,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
 fi
+
+cat $OUT/README.md
 
 exit $ret

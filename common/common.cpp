@@ -51,6 +51,11 @@
 #include <unistd.h>
 #endif
 
+#if defined(__linux__)
+#include <sys/types.h>
+#include <pwd.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -865,8 +870,20 @@ std::string fs_get_cache_directory() {
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || defined(__OpenBSD__)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else {
+        } else if (std::getenv("HOME")) {
             cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        } else {
+#if defined(__linux__)
+            /* no $HOME is defined, fallback to getpwuid */
+            struct passwd *pw = getpwuid(getuid());
+            if ((!pw) || (!pw->pw_dir)) {
+                throw std::runtime_error("Failed to find $HOME directory");
+            }
+
+            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
+#else /* defined(__linux__) */
+            throw std::runtime_error("Failed to find $HOME directory");
+#endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
@@ -1116,6 +1133,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
+    mparams.no_host         = params.no_host;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

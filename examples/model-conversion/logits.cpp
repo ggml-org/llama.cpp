@@ -1,4 +1,7 @@
 #include "llama.h"
+#include "common.h"
+
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -8,7 +11,10 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-ngl n_gpu_layers] -embd-mode [prompt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-ngl n_gpu_layers] -embd-mode [-pooling] [-embd-norm <norm>] [prompt]\n", argv[0]);
+    printf("\n");
+    printf("  -embd-norm: normalization type for pooled embeddings (default: 2)\n");
+    printf("              -1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm\n");
     printf("\n");
 }
 
@@ -17,6 +23,8 @@ int main(int argc, char ** argv) {
     std::string prompt = "Hello, my name is";
     int ngl = 0;
     bool embedding_mode = false;
+    bool pooling_enabled = false;
+    int32_t embd_norm = 2;  // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
     {
         int i = 1;
@@ -41,9 +49,13 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
             } else if (strcmp(argv[i], "-embd-mode") == 0) {
+                embedding_mode = true;
+            } else if (strcmp(argv[i], "-pooling") == 0) {
+                pooling_enabled = true;
+            } else if (strcmp(argv[i], "-embd-norm") == 0) {
                 if (i + 1 < argc) {
                     try {
-                        embedding_mode = true;
+                        embd_norm = std::stoi(argv[++i]);
                     } catch (...) {
                         print_usage(argc, argv);
                         return 1;
@@ -112,7 +124,7 @@ int main(int argc, char ** argv) {
     ctx_params.no_perf = false;
     if (embedding_mode) {
         ctx_params.embeddings = true;
-        ctx_params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        ctx_params.pooling_type = pooling_enabled ? LLAMA_POOLING_TYPE_MEAN : LLAMA_POOLING_TYPE_NONE;
         ctx_params.n_ubatch = ctx_params.n_batch;
     }
 
@@ -143,17 +155,27 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    float * logits;
-    int n_logits;
+    float * data_ptr;
+    int data_size;
     const char * type;
+    std::vector<float> embd_out;
 
     if (embedding_mode) {
-        logits = llama_get_embeddings(ctx);
-        n_logits = llama_model_n_embd(model) * batch.n_tokens;
+        const int n_embd = llama_model_n_embd(model);
+        const int n_embd_count = pooling_enabled ? 1 : batch.n_tokens;
+        const int n_embeddings = n_embd * n_embd_count;
+        float * embeddings;
         type = "-embeddings";
 
-        const int n_embd = llama_model_n_embd(model);
-        const int n_embd_count = batch.n_tokens;
+        if (llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_NONE) {
+            embeddings = llama_get_embeddings_seq(ctx, 0);
+            embd_out.resize(n_embeddings);
+            printf("Normalizing embeddings using norm: %d\n", embd_norm);
+            common_embd_normalize(embeddings, embd_out.data(), n_embeddings, embd_norm);
+            embeddings = embd_out.data();
+        } else {
+            embeddings = llama_get_embeddings(ctx);
+        }
 
         printf("Embedding dimension: %d\n", n_embd);
         printf("\n");
@@ -164,7 +186,7 @@ int main(int argc, char ** argv) {
 
             // Print first 3 values
             for (int i = 0; i < 3 && i < n_embd; i++) {
-                printf("%9.6f ", logits[j * n_embd + i]);
+                printf("%9.6f ", embeddings[j * n_embd + i]);
             }
 
             printf(" ... ");
@@ -172,7 +194,7 @@ int main(int argc, char ** argv) {
             // Print last 3 values
             for (int i = n_embd - 3; i < n_embd; i++) {
                 if (i >= 0) {
-                    printf("%9.6f ", logits[j * n_embd + i]);
+                    printf("%9.6f ", embeddings[j * n_embd + i]);
                 }
             }
 
@@ -180,27 +202,33 @@ int main(int argc, char ** argv) {
         }
         printf("\n");
 
-        printf("Embeddings size: %d\n", n_logits);
+        printf("Embeddings size: %d\n", n_embeddings);
+
+        data_ptr = embeddings;
+        data_size = n_embeddings;
     } else {
-        logits = llama_get_logits_ith(ctx, batch.n_tokens - 1);
-        n_logits = llama_vocab_n_tokens(vocab);
+        float * logits = llama_get_logits_ith(ctx, batch.n_tokens - 1);
+        const int n_logits = llama_vocab_n_tokens(vocab);
         type = "";
         printf("Vocab size: %d\n", n_logits);
+
+        data_ptr = logits;
+        data_size = n_logits;
     }
 
     std::filesystem::create_directory("data");
 
-    // Save logits to binary file
+    // Save data to binary file
     char bin_filename[512];
     snprintf(bin_filename, sizeof(bin_filename), "data/llamacpp-%s%s.bin", model_name, type);
-    printf("Saving logits to %s\n", bin_filename);
+    printf("Saving data to %s\n", bin_filename);
 
     FILE * f = fopen(bin_filename, "wb");
     if (f == NULL) {
         fprintf(stderr, "%s: error: failed to open binary output file\n", __func__);
         return 1;
     }
-    fwrite(logits, sizeof(float), n_logits, f);
+    fwrite(data_ptr, sizeof(float), data_size, f);
     fclose(f);
 
     // Also save as text for debugging
@@ -211,27 +239,27 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s: error: failed to open text output file\n", __func__);
         return 1;
     }
-    for (int i = 0; i < n_logits; i++) {
-        fprintf(f, "%d: %.6f\n", i, logits[i]);
+    for (int i = 0; i < data_size; i++) {
+        fprintf(f, "%d: %.6f\n", i, data_ptr[i]);
     }
     fclose(f);
 
     if (!embedding_mode) {
         printf("First 10 logits: ");
-        for (int i = 0; i < 10 && i < n_logits; i++) {
-            printf("%.6f ", logits[i]);
+        for (int i = 0; i < 10 && i < data_size; i++) {
+            printf("%.6f ", data_ptr[i]);
         }
         printf("\n");
 
         printf("Last 10 logits: ");
-        for (int i = n_logits - 10; i < n_logits; i++) {
-            if (i >= 0) printf("%.6f ", logits[i]);
+        for (int i = data_size - 10; i < data_size; i++) {
+            if (i >= 0) printf("%.6f ", data_ptr[i]);
         }
         printf("\n\n");
     }
 
-    printf("Logits saved to %s\n", bin_filename);
-    printf("Logits saved to %s\n", txt_filename);
+    printf("Data saved to %s\n", bin_filename);
+    printf("Data saved to %s\n", txt_filename);
 
     llama_free(ctx);
     llama_model_free(model);

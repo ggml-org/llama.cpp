@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getDeletionInfo } from '$lib/stores/chat.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
-	import { parseThinkingContent } from '$lib/utils/thinking';
+	import { isIMEComposing } from '$lib/utils/is-ime-composing';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 
@@ -47,24 +47,11 @@
 
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
-			if (message.thinking) {
-				return message.thinking;
-			}
+			const trimmedThinking = message.thinking?.trim();
 
-			const parsed = parseThinkingContent(message.content);
-
-			return parsed.thinking;
+			return trimmedThinking ? trimmedThinking : null;
 		}
 		return null;
-	});
-
-	let messageContent = $derived.by(() => {
-		if (message.role === 'assistant') {
-			const parsed = parseThinkingContent(message.content);
-			return parsed.cleanContent?.replace('<|channel|>analysis', '');
-		}
-
-		return message.content?.replace('<|channel|>analysis', '');
 	});
 
 	function handleCancelEdit() {
@@ -107,7 +94,9 @@
 	}
 
 	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		// Check for IME composition using isComposing property and keyCode 229 (specifically for IME composition on Safari)
+		// This prevents saving edit when confirming IME word selection (e.g., Japanese/Chinese input)
+		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
 			handleSaveEdit();
 		} else if (event.key === 'Escape') {
@@ -165,7 +154,7 @@
 		{editedContent}
 		{isEditing}
 		{message}
-		{messageContent}
+		messageContent={message.content}
 		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
