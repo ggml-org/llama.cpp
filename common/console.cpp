@@ -1,6 +1,7 @@
 #include "console.h"
 #include <vector>
 #include <iostream>
+#include <cstdarg>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -165,8 +166,12 @@ namespace console {
         }
     }
 
-    FILE* get_output_handle() {
-        return out;
+    void write(const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        vfprintf(out, format, args);
+        va_end(args);
+        fflush(out);
     }
 
     static char32_t getchar32() {

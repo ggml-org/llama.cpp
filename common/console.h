@@ -3,7 +3,6 @@
 #pragma once
 
 #include <string>
-#include <cstdio>
 
 namespace console {
     enum display_t {
@@ -19,20 +18,9 @@ namespace console {
     void set_display(display_t display);
     bool readline(std::string & line, bool multiline_input);
 
-    FILE* get_output_handle();
-
-    template<typename... Args>
-    void write(const char* format, Args... args) {
-        FILE* out = get_output_handle();
-        fprintf(out, format, args...);
-        fflush(out);
-    }
-
-    inline void write(const char* str) {
-        write("%s", str);
-    }
+    void write(const char* format, ...);
 
     inline void write(const std::string & data) {
-        write(data.c_str());
+        write("%s", data.c_str());
     }
 }
