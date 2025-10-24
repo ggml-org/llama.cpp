@@ -30,7 +30,7 @@
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 
-	const previewableLanguages = new Set(['html', 'htm', 'javascript', 'js', 'svelte']);
+	const previewableLanguages = new Set(['html', 'htm', 'javascript', 'js']);
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
