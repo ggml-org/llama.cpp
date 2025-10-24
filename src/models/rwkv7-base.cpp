@@ -2,7 +2,7 @@
 
 llm_build_rwkv7_base::llm_build_rwkv7_base(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
-    model(model) {};
+    model(model) {}
 
 ggml_tensor * llm_build_rwkv7_base::build_rwkv7_channel_mix(const llama_layer * layer,
                                                             ggml_tensor *       cur,
@@ -23,7 +23,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_channel_mix(const llama_layer * 
             GGML_ABORT("fatal error");
     };
     return cur;
-};
+}
 
 ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * inp,
                                                          ggml_tensor *        cur,
