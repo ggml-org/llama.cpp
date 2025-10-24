@@ -48,53 +48,53 @@ add_library(llama
             models/chameleon.cpp
             models/chatglm.cpp
             models/codeshell.cpp
-            models/cohere2_iswa.cpp
-            models/command_r.cpp
+            models/cohere2-iswa.cpp
+            models/command-r.cpp
             models/dbrx.cpp
             models/deci.cpp
             models/deepseek.cpp
             models/deepseek2.cpp
             models/dots1.cpp
             models/dream.cpp
-            models/ernie4_5_moe.cpp
-            models/ernie4_5.cpp
+            models/ernie4-5-moe.cpp
+            models/ernie4-5.cpp
             models/exaone.cpp
             models/exaone4.cpp
-            models/falcon_h1.cpp
+            models/falcon-h1.cpp
             models/falcon.cpp
-            models/gemma_embedding.cpp
+            models/gemma-embedding.cpp
             models/gemma.cpp
-            models/gemma2_iswa.cpp
-            models/gemma3_iswa.cpp
-            models/gemma3n_iswa.cpp
-            models/glm4_moe.cpp
+            models/gemma2-iswa.cpp
+            models/gemma3-iswa.cpp
+            models/gemma3n-iswa.cpp
+            models/glm4-moe.cpp
             models/glm4.cpp
             models/gpt2.cpp
             models/gptneox.cpp
-            models/granite_hybrid.cpp
+            models/granite-hybrid.cpp
             models/granite.cpp
             models/grok.cpp
             models/grovemoe.cpp
-            models/hunyuan_dense.cpp
-            models/hunyuan_moe.cpp
+            models/hunyuan-dense.cpp
+            models/hunyuan-moe.cpp
             models/internlm2.cpp
             models/jais.cpp
             models/jamba.cpp
             models/lfm2.cpp
-            models/llada_moe.cpp
+            models/llada-moe.cpp
             models/llada.cpp
-            models/llama_iswa.cpp
+            models/llama-iswa.cpp
             models/llama.cpp
             models/mamba.cpp
             models/minicpm3.cpp
             models/mpt.cpp
-            models/nemotron_h.cpp
+            models/nemotron-h.cpp
             models/nemotron.cpp
-            models/neo_bert.cpp
+            models/neo-bert.cpp
             models/olmo.cpp
             models/olmo2.cpp
             models/olmoe.cpp
-            models/openai_moe_iswa.cpp
+            models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
             models/phi2.cpp
@@ -109,22 +109,22 @@ add_library(llama
             models/qwen3.cpp
             models/qwen3moe.cpp
             models/refact.cpp
-            models/rwkv6_base.cpp
+            models/rwkv6-base.cpp
             models/rwkv6.cpp
             models/rwkv6qwen2.cpp
-            models/rwkv7_base.cpp
+            models/rwkv7-base.cpp
             models/rwkv7.cpp
-            models/seed_oss.cpp
+            models/seed-oss.cpp
             models/smallthinker.cpp
             models/smollm3.cpp
             models/stablelm.cpp
             models/starcoder.cpp
             models/starcoder2.cpp
-            models/t5_dec.cpp
-            models/t5_enc.cpp
-            models/wavtokenizer_dec.cpp
+            models/t5-dec.cpp
+            models/t5-enc.cpp
+            models/wavtokenizer-dec.cpp
             models/xverse.cpp
-            models/graph_context_mamba.cpp
+            models/graph-context-mamba.cpp
             )
 
 target_include_directories(llama PRIVATE .)
