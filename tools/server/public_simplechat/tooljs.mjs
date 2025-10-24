@@ -73,7 +73,7 @@ function calc_run(toolcallid, toolname, obj) {
 
 
 /**
- * Send a message to Tools WebWorker's monitor in main thread directly 
+ * Send a message to Tools WebWorker's monitor in main thread directly
  * @param {MessageEvent<any>} mev
  */
 function message_toolsworker(mev) {
