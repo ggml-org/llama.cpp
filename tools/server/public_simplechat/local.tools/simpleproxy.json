@@ -1,15 +1,15 @@
 {
-	"allowed.domains": [
-		".*\\.bing\\.com$",
-		"^www\\.bing\\.com$",
-		".*\\.yahoo\\.com$",
-		"^search\\.yahoo\\.com$",
-		".*\\.brave\\.com$",
-		"^search\\.brave\\.com$",
-		"^brave\\.com$",
-		".*\\.duckduckgo\\.com$",
-		"^duckduckgo\\.com$",
-		".*\\.google\\.com$",
-		"^google\\.com$"
-	]
+    "allowed.domains": [
+        ".*\\.bing\\.com$",
+        "^www\\.bing\\.com$",
+        ".*\\.yahoo\\.com$",
+        "^search\\.yahoo\\.com$",
+        ".*\\.brave\\.com$",
+        "^search\\.brave\\.com$",
+        "^brave\\.com$",
+        ".*\\.duckduckgo\\.com$",
+        "^duckduckgo\\.com$",
+        ".*\\.google\\.com$",
+        "^google\\.com$"
+    ]
 }
