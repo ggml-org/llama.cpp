@@ -1131,14 +1131,14 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
         }
       }
     }
-    if(threadIdx.x == 0 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
-     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(acc_register_[0][0][0]), __half2float(acc_register_[0][0][1]), 
-     __half2float(acc_register_[0][0][2]), __half2float(acc_register_[0][0][3]));
-     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(A_register_[0][0][0]), __half2float(A_register_[0][0][1]), 
-     __half2float(A_register_[0][0][2]), __half2float(A_register_[0][0][3]));
-     printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(B_register_[0][0][0]), __half2float(B_register_[0][0][1]), 
-     __half2float(B_register_[0][0][2]), __half2float(B_register_[0][0][3]));
-    }
+    // if(threadIdx.x == 4 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(acc_register_[0][0][0]), __half2float(acc_register_[0][0][1]), 
+    //  __half2float(acc_register_[0][0][2]), __half2float(acc_register_[0][0][3]));
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(A_register_[0][0][0]), __half2float(A_register_[0][0][1]), 
+    //  __half2float(A_register_[0][0][2]), __half2float(A_register_[0][0][3]));
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(B_register_[0][0][0]), __half2float(B_register_[0][0][1]), 
+    //  __half2float(B_register_[0][0][2]), __half2float(B_register_[0][0][3]));
+    // }
 
 
     if (block_k != num_block_tiles_k)
@@ -1167,6 +1167,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #pragma unroll
     for (int i = 0; i < 2; ++i)
     {
+        __syncthreads();
+
         for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
         {
             for (unsigned int mma_n = i * mma_tiles_per_warp_n/2; mma_n < (i+1)*mma_tiles_per_warp_n/2; mma_n++)
@@ -1182,6 +1184,20 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
             }
         }
         __syncthreads();
+        // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x ==0 && blockIdx.y ==0){
+        //     for(int ii = 0; ii < 128; ++ii)
+        //         printf("%.2f,", __half2float(smemoutput[ii]));
+        //     printf("\n");
+        //     for(int ii = 128; ii < 256; ++ii)
+        //         printf("%.2f,", __half2float(smemoutput[ii]));
+        //     printf("\n");
+        //     for(int ii = 0; ii < 128; ++ii)
+        //         printf("%.2f,", __half2float(smemoutput[ii*128]));
+        //     printf("\n");
+        //     for(int ii = 128; ii < 256; ++ii)
+        //         printf("%.2f,", __half2float(smemoutput[ii*128]));
+        //     printf("\n");
+        // }
 
 #pragma unroll
         for (int subk = 0; subk < WN / 2; ++subk){
@@ -1196,6 +1212,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 //     param.interm[outOffset] = smemoutput[output_lds_addr + subk * 32];
                     const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
                     output[outOffset] = smemoutput[output_lds_addr + subk + j*32*BN/2];
+                    if(outOffset == 32){
+                        printf("(%u, %u, %u, %u), output[%d,%d,%d]=%f \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
+                             n, row, col, __half2float(output[outOffset]));
+                    }
                 }
             }
         }

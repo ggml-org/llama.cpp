@@ -437,15 +437,15 @@ int main(void)
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        // for(int i = 0; i < 26*38; i++) {
-        //     float diff = fabs(conv2d_data[i] - wino_data[i]);
-        //     // if(diff > 1.e-4) {
-        //           printf("(%f, %f, %f, %d) \n",
-        //           conv2d_data[i],
-        //           wino_data[i], diff, i);
-        //         // break;
-        //     // }
-        // }
+        for(int i = 0; i < 26*38; i++) {
+            float diff = fabs(conv2d_data[i] - wino_data[i]);
+            // if(diff > 1.e-4) {
+                  printf("(%f, %f, %f, %d) \n",
+                  conv2d_data[i],
+                  wino_data[i], diff, i);
+                // break;
+            // }
+        }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
