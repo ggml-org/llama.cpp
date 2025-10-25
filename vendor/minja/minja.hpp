@@ -706,7 +706,7 @@ enum SpaceHandling { Keep, Strip, StripSpaces, StripNewline };
 
 class TemplateToken {
 public:
-    enum class Type { Text, Expression, If, Else, Elif, EndIf, For, EndFor, Generation, EndGeneration, Set, EndSet, Comment, Macro, EndMacro, Filter, EndFilter, Break, Continue };
+    enum class Type { Text, Expression, If, Else, Elif, EndIf, For, EndFor, Generation, EndGeneration, Set, EndSet, Comment, Macro, EndMacro, Filter, EndFilter, Break, Continue, Call, EndCall };
 
     static std::string typeToString(Type t) {
         switch (t) {
@@ -729,6 +729,8 @@ public:
             case Type::EndGeneration: return "endgeneration";
             case Type::Break: return "break";
             case Type::Continue: return "continue";
+            case Type::Call: return "call";
+            case Type::EndCall: return "endcall";
         }
         return "Unknown";
     }
@@ -844,6 +846,17 @@ public:
 struct LoopControlTemplateToken : public TemplateToken {
     LoopControlType control_type;
     LoopControlTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, LoopControlType control_type) : TemplateToken(Type::Break, loc, pre, post), control_type(control_type) {}
+};
+
+struct CallTemplateToken : public TemplateToken {
+    std::shared_ptr<Expression> expr;
+    CallTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && e)
+        : TemplateToken(Type::Call, loc, pre, post), expr(std::move(e)) {}
+};
+
+struct EndCallTemplateToken : public TemplateToken {
+    EndCallTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post)
+        : TemplateToken(Type::EndCall, loc, pre, post) {}
 };
 
 class TemplateNode {
@@ -1050,31 +1063,36 @@ public:
     void do_render(std::ostringstream &, const std::shared_ptr<Context> & macro_context) const override {
         if (!name) throw std::runtime_error("MacroNode.name is null");
         if (!body) throw std::runtime_error("MacroNode.body is null");
-        auto callable = Value::callable([&](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
-            auto call_context = macro_context;
+        auto callable = Value::callable([this, macro_context](const std::shared_ptr<Context> & call_context, ArgumentsValue & args) {
+            auto execution_context = Context::make(Value::object(), macro_context);
+
+            if (call_context->contains("caller")) {
+                execution_context->set("caller", call_context->get("caller"));
+            }
+
             std::vector<bool> param_set(params.size(), false);
             for (size_t i = 0, n = args.args.size(); i < n; i++) {
                 auto & arg = args.args[i];
                 if (i >= params.size()) throw std::runtime_error("Too many positional arguments for macro " + name->get_name());
                 param_set[i] = true;
                 auto & param_name = params[i].first;
-                call_context->set(param_name, arg);
+                execution_context->set(param_name, arg);
             }
             for (auto & [arg_name, value] : args.kwargs) {
                 auto it = named_param_positions.find(arg_name);
                 if (it == named_param_positions.end()) throw std::runtime_error("Unknown parameter name for macro " + name->get_name() + ": " + arg_name);
 
-                call_context->set(arg_name, value);
+                execution_context->set(arg_name, value);
                 param_set[it->second] = true;
             }
             // Set default values for parameters that were not passed
             for (size_t i = 0, n = params.size(); i < n; i++) {
                 if (!param_set[i] && params[i].second != nullptr) {
-                    auto val = params[i].second->evaluate(context);
-                    call_context->set(params[i].first, val);
+                    auto val = params[i].second->evaluate(call_context);
+                    execution_context->set(params[i].first, val);
                 }
             }
-            return body->render(call_context);
+            return body->render(execution_context);
         });
         macro_context->set(name->get_name(), callable);
     }
@@ -1608,6 +1626,40 @@ public:
         }
         auto vargs = args.evaluate(context);
         return obj.call(context, vargs);
+    }
+};
+
+class CallNode : public TemplateNode {
+    std::shared_ptr<Expression> expr;
+    std::shared_ptr<TemplateNode> body;
+
+public:
+    CallNode(const Location & loc, std::shared_ptr<Expression> && e, std::shared_ptr<TemplateNode> && b)
+        : TemplateNode(loc), expr(std::move(e)), body(std::move(b)) {}
+
+    void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
+        if (!expr) throw std::runtime_error("CallNode.expr is null");
+        if (!body) throw std::runtime_error("CallNode.body is null");
+
+        auto caller = Value::callable([this, context](const std::shared_ptr<Context> &, ArgumentsValue &) -> Value {
+            return Value(body->render(context));
+        });
+
+        context->set("caller", caller);
+
+        auto call_expr = dynamic_cast<CallExpr*>(expr.get());
+        if (!call_expr) {
+            throw std::runtime_error("Invalid call block syntax - expected function call");
+        }
+
+        Value function = call_expr->object->evaluate(context);
+        if (!function.is_callable()) {
+            throw std::runtime_error("Call target must be callable: " + function.dump());
+        }
+        ArgumentsValue args = call_expr->args.evaluate(context);
+
+        Value result = function.call(context, args);
+        out << result.to_str();
     }
 };
 
@@ -2320,7 +2372,7 @@ private:
       static std::regex comment_tok(R"(\{#([-~]?)([\s\S]*?)([-~]?)#\})");
       static std::regex expr_open_regex(R"(\{\{([-~])?)");
       static std::regex block_open_regex(R"(^\{%([-~])?\s*)");
-      static std::regex block_keyword_tok(R"((if|else|elif|endif|for|endfor|generation|endgeneration|set|endset|block|endblock|macro|endmacro|filter|endfilter|break|continue)\b)");
+      static std::regex block_keyword_tok(R"((if|else|elif|endif|for|endfor|generation|endgeneration|set|endset|block|endblock|macro|endmacro|filter|endfilter|break|continue|call|endcall)\b)");
       static std::regex non_text_open_regex(R"(\{\{|\{%|\{#)");
       static std::regex expr_close_regex(R"(\s*([-~])?\}\})");
       static std::regex block_close_regex(R"(\s*([-~])?%\})");
@@ -2443,6 +2495,15 @@ private:
             } else if (keyword == "endmacro") {
               auto post_space = parseBlockClose();
               tokens.push_back(std::make_unique<EndMacroTemplateToken>(location, pre_space, post_space));
+            } else if (keyword == "call") {
+              auto expr = parseExpression();
+              if (!expr) throw std::runtime_error("Expected expression in call block");
+
+              auto post_space = parseBlockClose();
+              tokens.push_back(std::make_unique<CallTemplateToken>(location, pre_space, post_space, std::move(expr)));
+            } else if (keyword == "endcall") {
+              auto post_space = parseBlockClose();
+              tokens.push_back(std::make_unique<EndCallTemplateToken>(location, pre_space, post_space));
             } else if (keyword == "filter") {
               auto filter = parseExpression();
               if (!filter) throw std::runtime_error("Expected expression in filter block");
@@ -2575,6 +2636,12 @@ private:
                   throw unterminated(**start);
               }
               children.emplace_back(std::make_shared<MacroNode>(token->location, std::move(macro_token->name), std::move(macro_token->params), std::move(body)));
+          } else if (auto call_token = dynamic_cast<CallTemplateToken*>(token.get())) {
+            auto body = parseTemplate(begin, it, end);
+            if (it == end || (*(it++))->type != TemplateToken::Type::EndCall) {
+                throw unterminated(**start);
+            }
+            children.emplace_back(std::make_shared<CallNode>(token->location, std::move(call_token->expr), std::move(body)));
           } else if (auto filter_token = dynamic_cast<FilterTemplateToken*>(token.get())) {
               auto body = parseTemplate(begin, it, end);
               if (it == end || (*(it++))->type != TemplateToken::Type::EndFilter) {
@@ -2588,6 +2655,7 @@ private:
           } else if (dynamic_cast<EndForTemplateToken*>(token.get())
                   || dynamic_cast<EndSetTemplateToken*>(token.get())
                   || dynamic_cast<EndMacroTemplateToken*>(token.get())
+                  || dynamic_cast<EndCallTemplateToken*>(token.get())
                   || dynamic_cast<EndFilterTemplateToken*>(token.get())
                   || dynamic_cast<EndIfTemplateToken*>(token.get())
                   || dynamic_cast<ElseTemplateToken*>(token.get())
