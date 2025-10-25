@@ -339,20 +339,20 @@ int main(void)
 {
     ggml_time_init();
     std::vector<std::tuple<int, int, int, int>> configs = {
-        // std::make_tuple(64,64,48,64),
-        // std::make_tuple(320,320,104,152),
-        // std::make_tuple(640,640,52,76),
-        // std::make_tuple(640,640,104,152),
-        // std::make_tuple(960,320,104,152),
-        std::make_tuple(128,1280,26,38),
-        // std::make_tuple(1280,640,52,76),
-        // std::make_tuple(1920,1280,26,38),
-        // std::make_tuple(2560,1280,26,38),
-        // std::make_tuple(512,512,104,152),
-        // std::make_tuple(512,512,208,304),
-        // std::make_tuple(512,256,416,608),
-        // std::make_tuple(256,128,832,1216),
-        // std::make_tuple(256,256,832,1216),
+        std::make_tuple(64,64,48,64),
+        std::make_tuple(320,320,104,152),
+        std::make_tuple(640,640,52,76),
+        std::make_tuple(640,640,104,152),
+        std::make_tuple(960,320,104,152),
+        std::make_tuple(1280,1280,26,38),
+        std::make_tuple(1280,640,52,76),
+        std::make_tuple(1920,1280,26,38),
+        std::make_tuple(2560,1280,26,38),
+        std::make_tuple(512,512,104,152),
+        std::make_tuple(512,512,208,304),
+        std::make_tuple(512,256,416,608),
+        std::make_tuple(256,128,832,1216),
+        std::make_tuple(256,256,832,1216),
         // std::make_tuple(320,256,1024,1920)
     };
 
@@ -375,7 +375,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 0;
+        int iterations = 20;
 
         double run_time0;
         std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -437,15 +437,15 @@ int main(void)
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        for(int i = 0; i < 26*38; i++) {
-            float diff = fabs(conv2d_data[i] - wino_data[i]);
-            // if(diff > 1.e-4) {
-                  printf("(%f, %f, %f, %d) \n",
-                  conv2d_data[i],
-                  wino_data[i], diff, i);
-                // break;
-            // }
-        }
+        // for(int i = 0; i < 26*38; i++) {
+        //     float diff = fabs(conv2d_data[i] - wino_data[i]);
+        //     // if(diff > 1.e-4) {
+        //           printf("(%f, %f, %f, %d) \n",
+        //           conv2d_data[i],
+        //           wino_data[i], diff, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

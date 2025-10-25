@@ -26,7 +26,7 @@ typedef struct{
     uint3 OHOW_fastdiv;
 } param_t;
 
-// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
 // same as above, but writes are swizzled to avoid bank conflicts when shared memory is read later in the kernel
 template<unsigned int TILE_ROWS,
 unsigned int NUM_THREADS>
@@ -37,6 +37,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     param_t param
 )
 {
+#if __CUDA_ARCH__ >= GGML_CUDA_TURING
     // constexpr unsigned int SWIZZLE_MASK = 0b111 << SWIZZLE_BITS;
 
     // // reinterpret input/output as float4
@@ -117,6 +118,13 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
         }
         thread_row += ROW_STEP;
     }
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src_stride);
+    GGML_UNUSED(param);
+    NO_DEVICE_CODE;
+#endif
 }
 
 
@@ -131,6 +139,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
     param_t param
 )
 {
+#if __CUDA_ARCH__ >= GGML_CUDA_TURING
     constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
     constexpr unsigned int SWIZZLE_BITS_1 = 4;
     constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
@@ -186,6 +195,13 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         }
         thread_row += ROW_STEP;
     }
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(inChannelOffset);
+    GGML_UNUSED(param);
+    NO_DEVICE_CODE;
+#endif    
 }
 
 template<unsigned int TILE_ROWS,
@@ -201,6 +217,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     param_t param
 )
 {
+#if __CUDA_ARCH__ >= GGML_CUDA_TURING
     // reinterpret input/output as float4
     // const float4* src_float4 = reinterpret_cast<const float4*>(src);
     // const unsigned int src_stride_vectorized = src_stride / 8;
@@ -251,6 +268,14 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         }
         thread_row += ROW_STEP;
     }
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst_reg);
+    GGML_UNUSED(block_k);
+    GGML_UNUSED(inChannelOffset);
+    GGML_UNUSED(param);
+    NO_DEVICE_CODE;
+#endif    
 }
 
 
@@ -266,6 +291,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     param_t param
 )
 {
+#if __CUDA_ARCH__ >= GGML_CUDA_TURING
     // reinterpret input/output as float4
     // const float4* src_float4 = reinterpret_cast<const float4*>(src);
     // const unsigned int src_stride_vectorized = src_stride / 8;
@@ -305,91 +331,18 @@ __device__ __forceinline__ void tileMemcpyLoadB(
         }
         thread_row += ROW_STEP;
     }
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(dst_reg);
+    GGML_UNUSED(block_k);
+    GGML_UNUSED(src_stride);
+    GGML_UNUSED(param);
+    NO_DEVICE_CODE;
+#endif    
 }
 
-// template<unsigned int TILE_ROWS,
-// unsigned int TILE_COLS,
-// unsigned int NUM_THREADS,
-// unsigned int SWIZZLE_BITS,
-// unsigned int ELEMENTS_PER_THREAD>
-// __device__ __forceinline__ void tileMemcpySwizzleStoreB(
-//     float4 src_reg[ELEMENTS_PER_THREAD],
-//     half* dst
-// )
-// {
-//     constexpr unsigned int SWIZZLE_MASK = 0b111 << SWIZZLE_BITS;
-
-//     // reinterpret input/output as float4
-//     float4* dst_float4 = reinterpret_cast<float4*>(dst);
-
-//     // # of threads is multiple of # of columns in the tile
-//     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
-//     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
-    
-//     // flatten out 2d grid of threads into in order of increasing threadIdx.x
-//     const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
-
-//     // assign each thread a row/column in the tile, calculate how many iterations we need
-//     // to cover the whole tile
-//     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
-//     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-//     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-//     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
-    
-//     // compile time check that we provided the right amount of registers for storage
-//     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
-    
-//     #pragma unroll
-//     for (unsigned int i = 0; i < NUM_ITERS; i++)
-//     {
-//         // apply swizzle to the dst index
-//         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
-//         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK) >> SWIZZLE_BITS);
-//         dst_float4[dst_index] = src_reg[i];
-//         thread_row += ROW_STEP;
-//     }
-// }
 
 // same as above but without the swizzle
-template<unsigned int TILE_ROWS,
-unsigned int TILE_COLS,
-unsigned int NUM_THREADS,
-unsigned int ELEMENTS_PER_THREAD>
-__device__ __forceinline__ void tileMemcpyStore(
-    float4 src_reg[ELEMENTS_PER_THREAD],
-    half* dst,
-    unsigned int dst_stride_float4
-)
-{
-    // reinterpret input/output as float4
-    float4* dst_float4 = reinterpret_cast<float4*>(dst);
-
-    // # of threads is multiple of # of columns in the tile
-    constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
-    static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
-    
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
-
-    // assign each thread a row/column in the tile, calculate how many iterations we need
-    // to cover the whole tile
-    constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
-    constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
-    
-    // compile time check that we provided the right amount of registers for storage
-    static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
-    
-    #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++)
-    {
-        // apply swizzle to the dst index
-        unsigned int dst_index = thread_row * dst_stride_float4 + thread_col;
-        dst_float4[dst_index] = src_reg[i];
-        thread_row += ROW_STEP;
-    }
-}
 
 // this is a special case of the above for when TILE_COLS == 32
 template<unsigned int TILE_ROWS,
@@ -400,6 +353,7 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
     half* dst
 )
 {
+#if __CUDA_ARCH__ >= GGML_CUDA_TURING
     constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
     constexpr unsigned int SWIZZLE_BITS_1 = 4;
     constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
@@ -436,6 +390,11 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
         dst_float4[dst_index] =  src_reg[i];
         thread_row += ROW_STEP;
     }
+#else
+    GGML_UNUSED(src_reg);
+    GGML_UNUSED(dst);    
+    NO_DEVICE_CODE;
+#endif    
 }
 
 __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
@@ -449,8 +408,6 @@ __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
         : "l"(pointer));
     return address;
 }
-
-// #endif
 
 // constexpr unsigned int int_log2(unsigned int x)
 // {

@@ -742,7 +742,7 @@ __device__ __forceinline__ void ldmatrix_a(
   half (&reg)[mma_tiles_per_warp_m][mma_tiles_per_warp_k][4]
 )
 {
-// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
   static_assert(mma_tiles_per_warp_m == 8, "mma_tiles_per_warp_m must be 4");
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
 
@@ -885,11 +885,11 @@ __device__ __forceinline__ void ldmatrix_a(
       : "=r"(reg_[6][3][0]), "=r"(reg_[6][3][1]), "=r"(reg_[7][3][0]), "=r"(reg_[7][3][1])
       : "r"(src_addr + 96 * smem_stride_)
     );
-// #else
-//     GGML_UNUSED(src);
-//     GGML_UNUSED(reg);
-//     NO_DEVICE_CODE;
-// #endif
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(reg);
+    NO_DEVICE_CODE;
+#endif
 }
 
 template <unsigned int mma_tiles_per_warp_k, unsigned int mma_tiles_per_warp_n, unsigned int smem_stride>
@@ -898,7 +898,7 @@ __device__ __forceinline__ void ldmatrix_b(
   half (&reg)[mma_tiles_per_warp_k][mma_tiles_per_warp_n][2]
 )
 {
-// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
   static_assert(mma_tiles_per_warp_n == 8, "mma_tiles_per_warp_n must be 8");
   
@@ -989,11 +989,11 @@ __device__ __forceinline__ void ldmatrix_b(
     // : "r"(src_addr ^ 0b1000000)
     : "r"(src_addr + 32 * smem_stride_)
   );
-// #else
-//     GGML_UNUSED(src);
-//     GGML_UNUSED(reg);
-//     NO_DEVICE_CODE;
-// #endif
+#else
+    GGML_UNUSED(src);
+    GGML_UNUSED(reg);
+    NO_DEVICE_CODE;
+#endif
 }
 
 template<const int BM, const int BN, const int BK, const int WM, const int WN,
@@ -1002,7 +1002,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                                               const half * __restrict__ kernel,
                                               half * __restrict__ output,
                                               const param_t param) {
-// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE    
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
   constexpr unsigned int MMA_M = 16;
   constexpr unsigned int MMA_N = 8;
 
@@ -1010,7 +1010,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 //      printf("conv2d_implicit_kernel launch BM:%d, BN:%d, BK:%d, WM:%d, WN:%d, WK:%d, NUM_THREADS:%d \n", BM, BN, BK, WM, WN, WK, NUM_THREADS);
 
   const unsigned int K = param.c * param.r * param.s;
-  const uint PQ = param.Oh * param.Ow;
+//   const uint PQ = param.Oh * param.Ow;
   const uint inChannelOffset = param.c * param.w;
   const uint weightKOffset = param.c * param.r * param.s;
 
@@ -1153,7 +1153,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     }
   }
 
-  
+
+
     // reuse smem
     half *smemoutput = shmem;
     const uint lane_id = threadIdx.x % WARPSIZE;  
@@ -1212,21 +1213,22 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 //     param.interm[outOffset] = smemoutput[output_lds_addr + subk * 32];
                     const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
                     output[outOffset] = smemoutput[output_lds_addr + subk + j*32*BN/2];
-                    if(outOffset == 32){
-                        printf("(%u, %u, %u, %u), output[%d,%d,%d]=%f \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
-                             n, row, col, __half2float(output[outOffset]));
-                    }
+                    // if(outOffset == 32){
+                    //     printf("(%u, %u, %u, %u), output[%d,%d,%d]=%f \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
+                    //          n, row, col, __half2float(output[outOffset]));
+                    // }
                 }
             }
         }
     }
-// #else
-//     GGML_UNUSED(input);
-//     GGML_UNUSED(kernel);
-//     GGML_UNUSED(output);
-//     GGML_UNUSED(param);
-//     NO_DEVICE_CODE;
-// #endif
+
+#else
+    GGML_UNUSED(input);
+    GGML_UNUSED(kernel);
+    GGML_UNUSED(output);
+    GGML_UNUSED(param);
+    NO_DEVICE_CODE;
+#endif
 }
 
 
@@ -1289,7 +1291,8 @@ static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
 
 static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && P.layout == 0 && P.c % 8 == 0) {
-// #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+// #if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+        // printf("tensor core path called\n");
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
         constexpr unsigned int BK_dim = 32;
