@@ -404,6 +404,19 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
     // add the device default buffer type
     buft_list.emplace_back(dev, ggml_backend_dev_buffer_type(dev));
 
+    // add the device extra buffer type (if any)
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts");
+
+    if (ggml_backend_dev_get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(dev);
+        while (extra_bufts && *extra_bufts) {
+            buft_list.emplace_back(dev, *extra_bufts);
+            ++extra_bufts;
+        }
+    }
+
     return buft_list;
 }
 
@@ -17951,6 +17964,8 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
         // final norm
         cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "result_norm", -1);
+
+        res->t_embd = cur;
 
         // lm_head
         cur = build_lora_mm(model.output, cur);
