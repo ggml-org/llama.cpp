@@ -182,3 +182,17 @@ export enum MimeTypeText {
 	LATEX = 'text/x-tex',
 	BIBTEX = 'text/x-bibtex'
 }
+
+// Supported languages for code preview dialogs
+export enum PreviewLanguage {
+	TEXT = 'text',
+	HTML = 'html',
+	JAVASCRIPT = 'javascript'
+}
+
+// Default state values for the code preview dialog
+export const PREVIEW_DIALOG_DEFAULTS = {
+	dialogOpen: false,
+	code: '',
+	language: PreviewLanguage.TEXT
+} as const;

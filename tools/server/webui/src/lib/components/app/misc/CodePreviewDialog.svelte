@@ -2,10 +2,12 @@
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
 
+	import type { PreviewLanguage } from '$lib/enums/files';
+
 	interface Props {
 		open: boolean;
 		code: string;
-		language: string;
+		language: PreviewLanguage;
 		onOpenChange?: (open: boolean) => void;
 	}
 
