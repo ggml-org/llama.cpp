@@ -42,13 +42,18 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     // create data
     int KW = 3, KH = 3, IC = ic, OC = oc;
     int IW = iw, IH = ih, N = 1;
+    srand(time(NULL));
 
     // printf(" input: IC = %d, OC = %d, IW = %d, IH = %d \n ", IC, OC, IW, IH);
 
     // Initialize adata
     std::vector<float> adata(KW * KH * IC * OC);
     for (int i = 0; i < KW * KH * IC * OC; i++) {
-        adata[i] = 0.2f;
+        // adata[i] = 2.f;
+        adata[i] = (float)(i%KW)-1.f;
+        // adata[i] = (rand() % 255) / 255.0;
+        // float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        // adata[i] = r;
     }
 
     // Convert adata to fp16 format
@@ -58,7 +63,11 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     // Initialize bdata
     std::vector<float> bdata(IW * IH * IC * N);
     for (int i = 0; i < IW * IH * IC * N; i++) {
-        bdata[i] = 1.5f;
+        bdata[i] = (float)(i%IW)/10.f;
+        // bdata[i] = 1.5f;
+        // bdata[i] = (rand() % 255) / 255.0;
+        // float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        // bdata[i] = r;
     }
 
     size_t buffer_size = 0;
@@ -344,7 +353,7 @@ int main(void)
         // std::make_tuple(640,640,52,76),
         // std::make_tuple(640,640,104,152),
         // std::make_tuple(960,320,104,152),
-        std::make_tuple(128,128,26,38),
+        std::make_tuple(640,128,26,38),
         // std::make_tuple(1280,640,52,76),
         // std::make_tuple(1920,1280,26,38),
         // std::make_tuple(2560,1280,26,38),
@@ -378,7 +387,7 @@ int main(void)
         int iterations = 0;
 
         double run_time0;
-        std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
+        std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
 
         ggml_gallocr_free(allocr);
 
@@ -399,7 +408,7 @@ int main(void)
 
         double run_time1;
         // std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
-        conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
+        std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
 
 
         ggml_gallocr_free(allocr);
@@ -439,11 +448,13 @@ int main(void)
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         for(int i = 0; i < 26*38; i++) {
         // for(int i = 0; i < conv2d_data.size(); i++) {
-            float diff = fabs(conv2d_data[i] - wino_data[i]);
+            // float diff = fabs(conv2d_data[i] - wino_data[i]);
+            float diff = fabs(im2col_data[i] - wino_data[i]);
+            float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
             // if(diff > 1.e-4) {
-                  printf("(%f, %f, %f, %d) \n",
-                  conv2d_data[i],
-                  wino_data[i], diff, i);
+                  printf("(%f, %f, %f, %f, %f, %d) \n",
+                  im2col_data[i], conv2d_data[i],
+                  wino_data[i], diff, diff1, i);
                 // break;
             // }
         }

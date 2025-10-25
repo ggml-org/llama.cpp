@@ -1076,7 +1076,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   // prefetch the first block tile of A,B into shared memory
 //   half* A_block_gmem = input + (block_m * BM * A_stride);
   const half* A_block_gmem = input;
-  const half* B_block_gmem = kernel + (block_n * weightKOffset);
+//   const half* B_block_gmem = kernel + (block_n * weightKOffset);
+  const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
   tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inChannelOffset, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
 
@@ -1097,7 +1098,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     {
     //   half* A_block_gmem = A + (block_m * BM * A_stride) + (block_k * BK);
       const half* A_block_gmem = input;
-      const half* B_block_gmem = kernel + (block_n * weightKOffset);
+    //   const half* B_block_gmem = kernel + (block_n * weightKOffset);
+      const half* B_block_gmem = kernel + (block_n * BN * weightKOffset);
       tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, inChannelOffset, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, weightKOffset, param);
     }
@@ -1119,6 +1121,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
         {
           asm volatile (
             "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16 "
+            // "mma.sync.aligned.m16n8k8.row.row.f16.f16.f16.f16 "
             "{%0, %1}, "
             "{%2, %3}, "
             "{%4}, "
@@ -1130,14 +1133,14 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
           );
         }
       }
-    //   if(threadIdx.x == 0 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
-    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(acc_register_[3][0][0]), __half2float(acc_register_[3][0][1]), 
-    //     __half2float(acc_register_[3][0][2]), __half2float(acc_register_[3][0][3]));
-    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(A_register_[3][mma_k][0]), __half2float(A_register_[3][mma_k][1]), 
-    //     __half2float(A_register_[3][mma_k][2]), __half2float(A_register_[3][mma_k][3]));
-    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(B_register_[mma_k][0][0]), __half2float(B_register_[mma_k][0][1]), 
-    //     __half2float(B_register_[mma_k][0][2]), __half2float(B_register_[mma_k][0][3]));
-    //   }
+      if(threadIdx.x == 28 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
+        printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(acc_register_[0][0][0]), __half2float(acc_register_[0][0][1]), 
+        __half2float(acc_register_[0][0][2]), __half2float(acc_register_[0][0][3]));
+        printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(A_register_[0][mma_k][0]), __half2float(A_register_[0][mma_k][1]), 
+        __half2float(A_register_[0][mma_k][2]), __half2float(A_register_[0][mma_k][3]));
+        printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(B_register_[mma_k][0][0]), __half2float(B_register_[mma_k][0][1]), 
+        __half2float(B_register_[mma_k][0][2]), __half2float(B_register_[mma_k][0][3]));
+      }
     //   if(threadIdx.x < 4 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){        
     //     printf("A %d, %d, %d: %f, %f \n", block_k, mma_k, threadIdx.x, __half2float(A_register_[3][mma_k][0]), __half2float(A_register_[3][mma_k][1]));
     //     printf("B %d, %d, %d: %f, %f \n", block_k, mma_k, threadIdx.x, __half2float(B_register_[mma_k][0][0]), __half2float(B_register_[mma_k][0][1]));
