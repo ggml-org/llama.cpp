@@ -10,6 +10,7 @@
 #include <minja/minja.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -640,6 +641,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_SEED_OSS: return "Seed-OSS";
         case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
         case COMMON_CHAT_FORMAT_APERTUS: return "Apertus";
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder XML";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -2471,6 +2473,7 @@ static void common_chat_parse_nemotron_v2(common_chat_msg_parser & builder) {
 static void common_chat_parse_apertus(common_chat_msg_parser & builder) {
     // Parse thinking tags
     builder.try_parse_reasoning("<|inner_prefix|>", "<|inner_suffix|>");
+
     if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
@@ -2497,6 +2500,187 @@ static void common_chat_parse_apertus(common_chat_msg_parser & builder) {
         }
     }
     builder.add_content(builder.consume_rest());
+}
+
+static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    // Always set the format to QWEN3_CODER_XML regardless of whether tools are provided
+    // The format identifies the template type, not the runtime configuration
+    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
+
+    if (!inputs.tools.empty()) {
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+
+            auto not_parameter_end = builder.add_rule("not_parameter_end", "([^<] | (\"<\" [^/]) | (\"</\" [^p]) | (\"</p\" [^a]) | (\"</pa\" [^r]) | (\"</par\" [^a]) | (\"</para\" [^m]) | (\"</param\" [^e]) | (\"</parame\" [^t]) | (\"</paramet\" [^e]) | (\"</paramete\" [^r]) | (\"</parameter\" [^>]))*");
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                const std::string & name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                std::unordered_set<std::string> required;
+                if (parameters.contains("required")) {
+                    for (const auto & p : parameters.at("required")) {
+                        required.insert(p);
+                    }
+                }
+
+                // Build parameter rules for XML format
+                std::vector<std::string> param_rules;
+                if (parameters.contains("properties")) {
+                    for (const auto & [param_name, param_schema] : parameters["properties"].items()) {
+                        std::string param_rule = "\"<parameter=" + param_name + ">\" space ";
+
+                        // Add parameter value based on type (supports unions and anyOf/oneOf; sanitize unsupported {"not":{}} branches)
+                        auto schema_local = param_schema;
+
+                        // Recursively remove entries like {"not":{}} inside anyOf/oneOf that json-schema-to-grammar doesn't support
+                        std::function<void(json &)> sanitize = [&](json &s) {
+                            if (s.is_object()) {
+                                if (s.contains("anyOf") && s["anyOf"].is_array()) {
+                                    json filtered = json::array();
+                                    for (auto v : s["anyOf"]) {
+                                        if (v.is_object() && v.contains("not") && v["not"].is_object() && v["not"].empty()) {
+                                            continue;
+                                        }
+                                        sanitize(v);
+                                        filtered.push_back(v);
+                                    }
+                                    s["anyOf"] = filtered;
+                                    if (s["anyOf"].size() == 1) {
+                                        json single = s["anyOf"][0];
+                                        s.erase("anyOf");
+                                        for (auto it = single.begin(); it != single.end(); ++it) {
+                                            s[it.key()] = it.value();
+                                        }
+                                    }
+                                }
+                                if (s.contains("oneOf") && s["oneOf"].is_array()) {
+                                    json filtered = json::array();
+                                    for (auto v : s["oneOf"]) {
+                                        if (v.is_object() && v.contains("not") && v["not"].is_object() && v["not"].empty()) {
+                                            continue;
+                                        }
+                                        sanitize(v);
+                                        filtered.push_back(v);
+                                    }
+                                    s["oneOf"] = filtered;
+                                    if (s["oneOf"].size() == 1) {
+                                        json single = s["oneOf"][0];
+                                        s.erase("oneOf");
+                                        for (auto it = single.begin(); it != single.end(); ++it) {
+                                            s[it.key()] = it.value();
+                                        }
+                                    }
+                                }
+                                for (auto it = s.begin(); it != s.end(); ++it) {
+                                    sanitize(it.value());
+                                }
+                            } else if (s.is_array()) {
+                                for (auto & v : s) sanitize(v);
+                            }
+                        };
+                        sanitize(schema_local);
+
+                        // Determine if schema allows a plain string (so we can accept unquoted text content in XML)
+                        std::function<bool(const json &)> allows_string = [&](const json & sch) -> bool {
+                            if (!sch.is_object()) return false;
+                            if (sch.contains("type")) {
+                                const auto & t = sch.at("type");
+                                if (t.is_string()) {
+                                    std::string ts = t;
+                                    return ts == "string" || ts == "text" || ts == "str";
+                                }
+                                if (t.is_array()) {
+                                    for (const auto & tv : t) {
+                                        if (tv.is_string() && (tv == "string" || tv == "text" || tv == "str")) {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            if (sch.contains("anyOf") && sch["anyOf"].is_array()) {
+                                for (const auto & v : sch["anyOf"]) {
+                                    if (allows_string(v)) return true;
+                                }
+                            }
+                            if (sch.contains("oneOf") && sch["oneOf"].is_array()) {
+                                for (const auto & v : sch["oneOf"]) {
+                                    if (allows_string(v)) return true;
+                                }
+                            }
+                            return false;
+                        };
+
+                        if (allows_string(schema_local)) {
+                            // For string-accepting schemas, keep freeform XML text (no JSON quoting)
+                            param_rule += not_parameter_end;
+                        } else {
+                            // For non-strings (object/array/number/boolean/null), expect JSON per schema
+                            param_rule += builder.add_schema(name + "-parameter-" + param_name, schema_local);
+                        }
+
+                        param_rule += "\"</parameter>\" space";
+
+                        // Parameter is optional
+                        if (required.find(param_name) == required.end()) {
+                            param_rule = "(" + param_rule + ")? ";
+                        }
+
+                        param_rules.push_back(param_rule);
+                    }
+                }
+
+                std::string function_content = param_rules.empty() ? "space" : string_join(param_rules, " ");
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                    "\"<tool_call>\" space \"<function=" + name + ">\" space " +
+                    function_content + " \"</function>\" space \"</tool_call>\" space"));
+            });
+
+            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
+            builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
+
+            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"});
+        });
+
+        data.preserved_tokens = {
+            "<tool_call>",
+            "</tool_call>",
+            "<function=",
+            "</function>",
+            "<parameter=",
+            "</parameter>",
+        };
+    } else {
+        // When no tools are provided, disable lazy grammar to avoid "no triggers set" error
+        data.grammar_lazy = false;
+    }
+
+    data.prompt = apply(tmpl, inputs);
+    return data;
+}
+
+static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    std::string content = builder.consume_rest();
+
+    // Try to parse Qwen3-Coder XML format
+    // For now, use empty tools vector - we'll need to pass tools differently
+    std::vector<common_chat_tool> empty_tools;
+    if (builder.parse_qwen3_xml_tool_call(content, empty_tools)) {
+        // Successfully parsed XML tool call
+        return;
+    }
+    // If no tool call found, treat as regular content
+    builder.add_content(content);
 }
 
 static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
@@ -2718,6 +2902,15 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_command_r7b(tmpl, params);
     }
 
+    // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
+    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
+    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    if (src.find("<tool_call>") != std::string::npos &&
+        src.find("<function=") != std::string::npos &&
+        src.find("<parameter=") != std::string::npos) {
+        return common_chat_params_init_qwen3_coder_xml(tmpl, params);
+    }
+
     // Granite (IBM) - detects thinking / tools support
     if (src.find("elif thinking") != std::string::npos && src.find("<|tool_call|>") != std::string::npos) {
         return common_chat_params_init_granite(tmpl, params);
@@ -2789,6 +2982,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     if (src.find("[TOOL_CALLS]") != std::string::npos) {
         return common_chat_params_init_mistral_nemo(tmpl, params);
     }
+
 
     // Generic fallback
     return common_chat_params_init_generic(tmpl, params);
@@ -2925,6 +3119,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_APERTUS:
             common_chat_parse_apertus(builder);
+            break;
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
+            common_chat_parse_qwen3_coder_xml(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
