@@ -30,8 +30,6 @@
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 
-	const previewableLanguages = new Set(['html', 'htm', 'javascript', 'js']);
-
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
 
@@ -123,11 +121,8 @@
 
 			const rawCode = codeElement.textContent || '';
 			const codeId = `code-${Date.now()}-${index}`;
-			const normalizedLanguage = language.toLowerCase();
-
 			codeElement.setAttribute('data-code-id', codeId);
 			codeElement.setAttribute('data-raw-code', rawCode);
-			codeElement.setAttribute('data-language', normalizedLanguage);
 
 			const wrapper = document.createElement('div');
 			wrapper.className = 'code-block-wrapper';
@@ -154,7 +149,7 @@
 
 			actions.appendChild(copyButton);
 
-			if (previewableLanguages.has(normalizedLanguage)) {
+			if (language.toLowerCase() === 'html') {
 				const previewButton = document.createElement('button');
 				previewButton.className = 'preview-code-btn';
 				previewButton.setAttribute('data-code-id', codeId);
@@ -229,7 +224,8 @@
 			return null;
 		}
 
-		const language = codeElement.getAttribute('data-language') || 'text';
+		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
+		const language = languageLabel?.textContent?.trim() || 'text';
 
 		return { rawCode, language };
 	}
