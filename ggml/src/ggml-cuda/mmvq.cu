@@ -137,6 +137,7 @@ static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int 
     return 1;
 }
 
+// tell the compiler to use as many registers as it wants, see nwarps definition below
 template <ggml_type type, int ncols_dst, bool has_fusion>
 __launch_bounds__(calc_nwarps(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q(
@@ -198,6 +199,7 @@ static __global__ void mul_mat_vec_q(
         }
     }
 
+    // partial sum for each thread
     float tmp[ncols_dst][rows_per_cuda_block] = {{0.0f}};
     float tmp_gate[ncols_dst][rows_per_cuda_block] = {{0.0f}};
 
@@ -205,7 +207,9 @@ static __global__ void mul_mat_vec_q(
     const int kbx_offset = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
 
     for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
-        const int kby = kbx * (qk/QK8_1);
+        const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
+
+        // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
 
 #pragma unroll
@@ -253,6 +257,7 @@ static __global__ void mul_mat_vec_q(
 
     dst += sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0;
 
+    // sum up partial sums and write back result
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
@@ -307,7 +312,7 @@ static __global__ void mul_mat_vec_q(
     }
 }
 
-static inline std::pair<dim3, dim3> calc_launch_params(
+static std::pair<dim3, dim3> calc_launch_params(
         const int ncols_dst, const int nrows_x, const int nchannels_y, const int nsamples_y,
         const int warp_size, const mmvq_parameter_table_id table_id) {
     const int64_t nblocks = (nrows_x + calc_rows_per_block(ncols_dst, table_id) - 1) / calc_rows_per_block(ncols_dst, table_id);
@@ -626,6 +631,7 @@ void ggml_cuda_mul_mat_vec_q(
         fusion_local.glu_op = fusion->glu_op;
     }
 
+    // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
         const size_t size_data  = ggml_nbytes(src0);
         const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
@@ -656,6 +662,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t s12 = ne11*s11;
     const int64_t s13 = ne12*s12;
 
+    // For MUL_MAT_ID the memory layout is different than for MUL_MAT:
     const int64_t ncols_dst          = ids ? ne2  : ne1;
     const int64_t nchannels_y        = ids ? ne11 : ne12;
     const int64_t nchannels_dst      = ids ? ne1  : ne2;
@@ -687,6 +694,8 @@ void ggml_cuda_op_mul_mat_vec_q(
 
     int id = ggml_cuda_get_device();
 
+    // the main device has a larger memory buffer to hold the results from all GPUs
+    // nrows_dst == nrows of the matrix that the kernel writes into
     const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
 
     const int stride_row_x = ne00 / ggml_blck_size(src0->type);
