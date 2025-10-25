@@ -77,9 +77,13 @@ layout (constant_id = 10) const uint WARP = 32;
 
 #include "mul_mmq_shmem_types.glsl"
 
+#ifndef BK_STEP
+#define BK_STEP 4
+#endif
+
 // Shared memory cache
-shared block_a_cache buf_a[BM];
-shared block_b_cache buf_b[BN];
+shared block_a_cache buf_a[BM * BK_STEP / QUANT_BLOCK_FACTOR];
+shared block_b_cache buf_b[BN * BK_STEP / QUANT_BLOCK_FACTOR];
 // Register cache
 block_a_cache cache_a[WMITER * TM];
 block_b_cache cache_b;
@@ -185,70 +189,64 @@ void main() {
         sums[i] = ACC_TYPE_VEC2(0.0f);
     }
 
-    for (uint block = start_k; block < end_k; block += BK) {
+    for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
         [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
             const uint buf_ib = loadc_a + l;
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;
             const uint iqs = loadr_a;
 
-            block_a_to_shmem(buf_ib, ib, iqs);
+            [[unroll]] for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+                block_a_to_shmem(k_step * BM + buf_ib, ib + k_step, iqs);
+            }
         }
         [[unroll]] for (uint l = 0; loadc_b + l < BN; l += loadstride_b) {
+            const uint buf_ib = loadc_b + l;
+
 #ifdef MUL_MAT_ID
-            const u16vec2 row_idx = row_ids[ic * BN + loadc_b + l];
+            const u16vec2 row_idx = row_ids[ic * BN + buf_ib];
             const uint idx = pos_b_ib + row_idx.y * p.batch_stride_b / LOAD_VEC_B + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC_B + loadr_b;
             const uint ib = idx / 8;
             const uint iqs = idx & 0x7;
 #else
-            const uint ib = pos_b_ib + (loadc_b + l) * p.stride_b / BK;
-            const uint ib_outer = ib / 4;
-            const uint ib_inner = ib % 4;
+            const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;
 
             const uint iqs = loadr_b;
 #endif
 
-            const uint buf_ib = loadc_b + l;
-
-            if (iqs == 0) {
-                buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(data_b[ib_outer].ds[ib_inner]);
+            [[unroll]] for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+                block_b_to_shmem(k_step * BN + buf_ib, ib + k_step, iqs);
             }
-            const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
-            buf_b[buf_ib].qs[iqs * 4    ] = values.x;
-            buf_b[buf_ib].qs[iqs * 4 + 1] = values.y;
-            buf_b[buf_ib].qs[iqs * 4 + 2] = values.z;
-            buf_b[buf_ib].qs[iqs * 4 + 3] = values.w;
         }
 
         barrier();
 
-        pos_a_ib += 1;
-        pos_b_ib += 1;
+        pos_a_ib += BK_STEP;
+        pos_b_ib += BK_STEP;
 
-        // Load from shared into cache
-        [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
-            [[unroll]] for (uint cr = 0; cr < TM; cr++) {
-                const uint reg_ib = wsir * TM + cr;
-                const uint buf_ib = warp_r * WM + wsir * WSUBM + tiwr * TM + cr;
+        for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+            // Load from shared into cache
+            [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
+                [[unroll]] for (uint cr = 0; cr < TM; cr++) {
+                    const uint reg_ib = wsir * TM + cr;
+                    const uint buf_ib = warp_r * WM + wsir * WSUBM + tiwr * TM + cr;
 
-                block_a_to_registers(reg_ib, buf_ib);
-            }
-        }
-
-        [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
-            [[unroll]] for (uint cc = 0; cc < TN; cc++) {
-                const uint ib = warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
-                cache_b.ds = buf_b[ib].ds;
-                [[unroll]] for (uint iqs = 0; iqs < BK / 4; iqs++) {
-                    cache_b.qs[iqs] = buf_b[ib].qs[iqs];
+                    block_a_to_registers(reg_ib, k_step * BM + buf_ib);
                 }
+            }
 
-                [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
-                    [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
-                        const uint cache_a_idx = wsir * TM + cr * 2;
-                        const uint sums_idx = (wsic * TN + cc) * (WMITER * TM / 2) + wsir * TM / 2 + cr;
+            [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
+                [[unroll]] for (uint cc = 0; cc < TN; cc++) {
+                    const uint ib = k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
+                    block_b_to_registers(ib);
 
-                        sums[sums_idx].x += mmq_dot_product(cache_a_idx);
-                        sums[sums_idx].y += mmq_dot_product(cache_a_idx + 1);
+                    [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
+                        [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
+                            const uint cache_a_idx = wsir * TM + cr * 2;
+                            const uint sums_idx = (wsic * TN + cc) * (WMITER * TM / 2) + wsir * TM / 2 + cr;
+
+                            sums[sums_idx].x += mmq_dot_product(cache_a_idx);
+                            sums[sums_idx].y += mmq_dot_product(cache_a_idx + 1);
+                        }
                     }
                 }
             }

@@ -31,17 +31,31 @@ struct block_a_cache {
     FLOAT_TYPE dm;
 };
 #elif defined(DATA_A_Q2_K)
-#define QUANT_R_MMQ 4
+#define QUANT_R_MMQ 1
 struct block_a_cache
 {
-    uint32_t qs[2];
-    u8vec2 scales;
+    uint32_t qs[8];
+    u8vec4 scales[2];
     FLOAT_TYPE_VEC2 dm;
 };
 #endif
+
+#if defined(DATA_A_QUANT_LEGACY)
+#define QUANT_BLOCK_FACTOR 1
 
 struct block_b_cache
 {
     int32_t qs[8];
     FLOAT_TYPE_VEC2 ds;
 };
+#elif defined(DATA_A_QUANT_K)
+#define QUANT_BLOCK_FACTOR 4
+
+struct block_b_cache
+{
+    int32_t qs[32];
+    FLOAT_TYPE_VEC2 ds[4];
+};
+#else
+#error unimplemented
+#endif
