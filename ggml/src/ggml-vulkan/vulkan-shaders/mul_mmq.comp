@@ -82,8 +82,8 @@ layout (constant_id = 10) const uint WARP = 32;
 #endif
 
 // Shared memory cache
-shared block_a_cache buf_a[BM * BK_STEP / QUANT_BLOCK_FACTOR];
-shared block_b_cache buf_b[BN * BK_STEP / QUANT_BLOCK_FACTOR];
+shared block_a_cache buf_a[BM * BK_STEP];
+shared block_b_cache buf_b[BN * BK_STEP];
 // Register cache
 block_a_cache cache_a[WMITER * TM];
 block_b_cache cache_b;
@@ -195,7 +195,7 @@ void main() {
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;
             const uint iqs = loadr_a;
 
-            [[unroll]] for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+            [[unroll]] for (uint k_step = 0; k_step < BK_STEP; k_step++) {
                 block_a_to_shmem(k_step * BM + buf_ib, ib + k_step, iqs);
             }
         }
@@ -213,7 +213,7 @@ void main() {
             const uint iqs = loadr_b;
 #endif
 
-            [[unroll]] for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+            [[unroll]] for (uint k_step = 0; k_step < BK_STEP; k_step++) {
                 block_b_to_shmem(k_step * BN + buf_ib, ib + k_step, iqs);
             }
         }
@@ -223,7 +223,7 @@ void main() {
         pos_a_ib += BK_STEP;
         pos_b_ib += BK_STEP;
 
-        for (uint k_step = 0; k_step < BK_STEP / QUANT_BLOCK_FACTOR; k_step++) {
+        for (uint k_step = 0; k_step < BK_STEP; k_step++) {
             // Load from shared into cache
             [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                 [[unroll]] for (uint cr = 0; cr < TM; cr++) {
