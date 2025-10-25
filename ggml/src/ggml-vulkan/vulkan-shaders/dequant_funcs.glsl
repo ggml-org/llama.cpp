@@ -488,9 +488,9 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 
     const uvec2 qs = uvec2(data_a[a_offset + ib].qs[qsi], data_a[a_offset + ib].qs[qsi + 1]);
     const uint scales = data_a[a_offset + ib].scales[scalesi];
-    const vec2 d = vec2(data_a[a_offset + ib].d);
+    const vec2 dm = vec2(data_a[a_offset + ib].dm);
 
-    return d.x * float(scales & 0xF) * vec2((qs >> qsshift) & 3) - d.y * float(scales >> 4);
+    return dm.x * float(scales & 0xF) * vec2((qs >> qsshift) & 3) - dm.y * float(scales >> 4);
 }
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(1, 0);
