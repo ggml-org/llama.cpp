@@ -242,7 +242,7 @@ jobs:
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip
           name: llama-bin-ubuntu-vulkan-x64.zip
-          
+
   ubuntu-22-cuda:
     runs-on: ubuntu-22.04
     strategy:
@@ -254,13 +254,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-  
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-cuda-${{ matrix.cuda }}
           evict-old-files: 1d
-  
+
       - name: Dependencies
         id: depends
         run: |
@@ -268,7 +268,7 @@ jobs:
           sudo dpkg -i cuda-keyring_1.0-1_all.deb
           sudo apt-get update -y
           sudo apt-get install -y cuda-toolkit-${{ matrix.cuda }} build-essential libcurl4-openssl-dev
-  
+
       - name: Build
         id: cmake_build
         run: |
@@ -284,23 +284,23 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES="60;61;70;75;80;86;89;90" \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
-  
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
-  
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip ./build/bin/*
-  
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
           name: llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
-        
+
   windows-cpu:
     runs-on: windows-2025
 
