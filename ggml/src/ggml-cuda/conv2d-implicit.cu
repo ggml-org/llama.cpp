@@ -1130,14 +1130,26 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
           );
         }
       }
+    //   if(threadIdx.x == 0 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
+    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(acc_register_[3][0][0]), __half2float(acc_register_[3][0][1]), 
+    //     __half2float(acc_register_[3][0][2]), __half2float(acc_register_[3][0][3]));
+    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(A_register_[3][mma_k][0]), __half2float(A_register_[3][mma_k][1]), 
+    //     __half2float(A_register_[3][mma_k][2]), __half2float(A_register_[3][mma_k][3]));
+    //     printf(" %d, %d: %f, %f, %f, %f \n", block_k, mma_k, __half2float(B_register_[mma_k][0][0]), __half2float(B_register_[mma_k][0][1]), 
+    //     __half2float(B_register_[mma_k][0][2]), __half2float(B_register_[mma_k][0][3]));
+    //   }
+    //   if(threadIdx.x < 4 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){        
+    //     printf("A %d, %d, %d: %f, %f \n", block_k, mma_k, threadIdx.x, __half2float(A_register_[3][mma_k][0]), __half2float(A_register_[3][mma_k][1]));
+    //     printf("B %d, %d, %d: %f, %f \n", block_k, mma_k, threadIdx.x, __half2float(B_register_[mma_k][0][0]), __half2float(B_register_[mma_k][0][1]));
+    //   }
     }
-    // if(threadIdx.x == 4 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
-    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(acc_register_[0][0][0]), __half2float(acc_register_[0][0][1]), 
-    //  __half2float(acc_register_[0][0][2]), __half2float(acc_register_[0][0][3]));
-    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(A_register_[0][0][0]), __half2float(A_register_[0][0][1]), 
-    //  __half2float(A_register_[0][0][2]), __half2float(A_register_[0][0][3]));
-    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(B_register_[0][0][0]), __half2float(B_register_[0][0][1]), 
-    //  __half2float(B_register_[0][0][2]), __half2float(B_register_[0][0][3]));
+    // if(threadIdx.x == 0 && threadIdx.y ==0 && blockIdx.x ==0 && blockIdx.y ==0){
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(acc_register_[3][0][0]), __half2float(acc_register_[3][0][1]), 
+    //  __half2float(acc_register_[3][0][2]), __half2float(acc_register_[3][0][3]));
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(A_register_[3][0][0]), __half2float(A_register_[3][0][1]), 
+    //  __half2float(A_register_[3][0][2]), __half2float(A_register_[3][0][3]));
+    //  printf(" %d: %f, %f, %f, %f \n", block_k, __half2float(B_register_[3][0][0]), __half2float(B_register_[3][0][1]), 
+    //  __half2float(B_register_[3][0][2]), __half2float(B_register_[3][0][3]));
     // }
 
 

@@ -48,7 +48,7 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     // Initialize adata
     std::vector<float> adata(KW * KH * IC * OC);
     for (int i = 0; i < KW * KH * IC * OC; i++) {
-        adata[i] = 2.f;
+        adata[i] = 0.2f;
     }
 
     // Convert adata to fp16 format
@@ -344,7 +344,7 @@ int main(void)
         // std::make_tuple(640,640,52,76),
         // std::make_tuple(640,640,104,152),
         // std::make_tuple(960,320,104,152),
-        std::make_tuple(640,128,26,38),
+        std::make_tuple(128,128,26,38),
         // std::make_tuple(1280,640,52,76),
         // std::make_tuple(1920,1280,26,38),
         // std::make_tuple(2560,1280,26,38),
