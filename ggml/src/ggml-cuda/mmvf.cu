@@ -163,13 +163,7 @@ static __global__ void mul_mat_vec_f(
         } else {
 #ifdef FP16_AVAILABLE
             half2 sumh2[ncols_dst] = {{0.0f, 0.0f}};
-            half2 sumh2_gate[ncols_dst];
-            if constexpr (has_fusion) {
-#pragma unroll
-                for (int j = 0; j < ncols_dst; ++j) {
-                    sumh2_gate[j] = make_half2(0.0f, 0.0f);
-                }
-            }
+            half2 sumh2_gate[ncols_dst] = {{0.0f, 0.0f}};
 
             for (int col2 = tid; col2 < ncols2; col2 += block_size) {
                 const half2 tmpx = x2[col2];
@@ -359,8 +353,8 @@ static void mul_mat_vec_f_switch_fusion(
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const dim3 & block_dims, const dim3 & block_nums, const int nbytes_shared, const cudaStream_t stream) {
 
+    const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     if constexpr (ncols_dst == 1) {
-        const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
         if (has_fusion) {
             mul_mat_vec_f<T, type_acc, ncols_dst, block_size, true><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (x, y, ids, fusion, dst, ncols, nrows, stride_row, stride_col_y, stride_col_dst,
@@ -369,6 +363,8 @@ static void mul_mat_vec_f_switch_fusion(
             return;
        }
     }
+
+    GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
     mul_mat_vec_f<T, type_acc, ncols_dst, block_size><<<block_nums, block_dims, nbytes_shared, stream>>>
         (x, y, ids, fusion, dst, ncols, nrows, stride_row, stride_col_y, stride_col_dst,
