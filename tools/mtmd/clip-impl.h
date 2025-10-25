@@ -139,6 +139,7 @@ enum projector_type {
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
+    PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -161,6 +162,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
+    { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
