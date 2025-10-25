@@ -6156,8 +6156,8 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
         CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float),    &sf3));
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
         if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
-            sf0 = (float)(ne0 - 1) / (ne00 - 1);
-            sf1 = (float)(ne1 - 1) / (ne01 - 1);
+            sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+            sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
             pixel_offset = 0.0f;
         }
 
