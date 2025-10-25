@@ -1,6 +1,6 @@
 #include "models.h"
 
-llm_graph_context_mamba::llm_graph_context_mamba(const llm_graph_params & params) : llm_graph_context(params) {};
+llm_graph_context_mamba::llm_graph_context_mamba(const llm_graph_params & params) : llm_graph_context(params) {}
 
 ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * inp,
                                                          ggml_tensor *        cur,
