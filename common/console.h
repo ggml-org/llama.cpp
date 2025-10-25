@@ -9,11 +9,18 @@ namespace console {
         reset = 0,
         prompt,
         user_input,
-        error
+        error,
+        reasoning
     };
 
     void init(bool use_simple_io, bool use_advanced_display);
     void cleanup();
     void set_display(display_t display);
     bool readline(std::string & line, bool multiline_input);
+
+    void write(const char* format, ...);
+
+    inline void write(const std::string & data) {
+        write("%s", data.c_str());
+    }
 }

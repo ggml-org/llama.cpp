@@ -1,6 +1,7 @@
 #include "console.h"
 #include <vector>
 #include <iostream>
+#include <cstdarg>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -155,10 +156,22 @@ namespace console {
                     break;
                 case error:
                     fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
+                    break;
+                case reasoning:
+                    fprintf(out, ANSI_COLOR_BLUE);
+                    break;
             }
             current_display = display;
             fflush(out);
         }
+    }
+
+    void write(const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        vfprintf(out, format, args);
+        va_end(args);
+        fflush(out);
     }
 
     static char32_t getchar32() {
