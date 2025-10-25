@@ -35,6 +35,11 @@ MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, con
 // this function is thread-safe
 MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len);
 
+// image-only helper: decode an image file without requiring an mtmd_context
+// supported formats follow stb_image (jpg, png, bmp, gif, etc.)
+// returns nullptr on failure
+MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file_noctx(const char * fname);
+
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
 
