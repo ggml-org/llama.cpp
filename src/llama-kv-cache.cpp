@@ -171,7 +171,15 @@ llama_kv_cache::llama_kv_cache(
         auto * buft = it.first;
         auto * ctx  = it.second;
 
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        ggml_backend_buffer_t buf;
+        if (model.hparams.no_alloc) {
+            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
+            }
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+        }
         if (!buf) {
             throw std::runtime_error("failed to allocate buffer for kv cache");
         }
@@ -472,9 +480,20 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
-    for (const ggml_backend_buffer_ptr & buf_ptr : bufs) {
-        ret[ggml_backend_buffer_get_type(buf_ptr.get())] += ggml_backend_buffer_get_size(buf_ptr.get());
+
+    for (size_t i = 0; i < bufs.size(); i++) {
+        ggml_backend_buffer_t      buf  = bufs[i].get();
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf);
+
+        if (hparams.no_alloc) {
+            GGML_ASSERT(ggml_backend_buffer_get_base(buf) == nullptr);
+            ret[buft] += ggml_backend_alloc_ctx_tensors_from_buft_size(ctxs[i].get(), buft);
+        } else {
+            GGML_ASSERT(ggml_backend_buffer_get_base(buf) != nullptr);
+            ret[buft] += ggml_backend_buffer_get_size(buf);
+        }
     }
+
     return ret;
 }
 
