@@ -838,7 +838,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             LLAMA_LOG_WARN("%s: model ID mismatch, ignoring: %s\n", func, checkpoint_file.c_str());
             return out;
         } else {
-            LLAMA_LOG_INFO("%s: resuming tensor quantization\n", func);
+            LLAMA_LOG_INFO("%s: state file found, resuming tensor quantization\n", func);
         }
 
         uint64_t n = 0;
@@ -1569,54 +1569,59 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return emit_overrides();
     }
 
-    auto tensor_importance = [&](const std::vector<tensor_info> & all_vec) -> std::unordered_map<std::string, float> {
+    auto tensor_depth = [&](const std::string & name) -> float {
+        static const std::regex layer_pattern(R"(blk\.(\d+)\.)");
+        std::smatch match;
+
+        // Depth component: output, embeddings & early/late layers are important
+        if (name == "output.weight" || name == "token_embd.weight") {
+            return 1.0f;
+        }
+        if (std::regex_search(name, match, layer_pattern)) {
+            const int layer = std::stoi(match[1]);
+            const float normalized_layer = (float)layer / (float)std::max(1, (int)model.hparams.n_layer - 1);
+            const float center_dist = std::abs(normalized_layer - 0.5f) * 2.0f;
+            return 0.01f + 0.9f * center_dist;
+        }
+
+        return 0.0f;
+    };
+
+    auto tensor_importance = [&](const std::vector<tensor_info> & all_tensors) -> std::unordered_map<std::string, float> {
         std::unordered_map<std::string, float> scores;
-        for (const auto & ti : all_vec) {
-            const std::string name = ggml_get_name(ti.w->tensor);
+        for (const auto & t : all_tensors) {
+            const std::string name = ggml_get_name(t.w->tensor);
             float total_score = 0.0f;
             float depth_score = 0.0f;
             float type_score = 0.0f;
 
-            // Depth component: output & early/late layers are important
-            if (name == "output.weight") {
-                depth_score = 1.0f;
-            } else {
-                static const std::regex layer_pattern(R"(blk\.(\d+)\.)");
-                std::smatch match;
-                if (std::regex_search(name, match, layer_pattern)) {
-                    const int layer = std::stoi(match[1]);
-                    const float normalized_layer = (float)layer / (float)std::max(1, (int)model.hparams.n_layer - 1);
-                    const float center_dist = std::abs(normalized_layer - 0.5f) * 2.0f;
-                    depth_score = 0.9f * center_dist;
-                }
-            }
-
             // Type component: certain tensor types have more impact on model quality
+            const std::vector<std::pair<float, std::vector<const char*>>> tensor_scores = {
+                {0.9f, {".ffn_down.weight", ".ffn_down_exps.weight"}},
+                {0.89f, {".attn_output.weight", ".time_mix_output.weight", ".attn_o.weight"}},
+                {0.3f, {".ffn_up.weight", ".ffn_gate.weight", ".ffn_up_exps.weight", ".ffn_gate_exps.weight"}},
+                {0.29f, {".attn_q.weight", ".attn_k.weight", ".attn_v.weight", ".attn_qkv.weight"}},
+                {0.2f, {"token_embd.weight"}}
+            };
             if (name == "output.weight") {
                 type_score = 1.0f;
-            } else if (name.find(".ffn_down.weight") != std::string::npos ||
-                       name.find(".ffn_down_exps.weight") != std::string::npos) {
-                type_score = 0.9f;
-            } else if (name.find(".attn_output.weight") != std::string::npos ||
-                       name.find(".time_mix_output.weight") != std::string::npos ||
-                       name.find(".attn_o.weight") != std::string::npos) {
-                type_score = 0.8f;
-            } else if (name.find(".ffn_up.weight") != std::string::npos ||
-                       name.find(".ffn_gate.weight") != std::string::npos ||
-                       name.find(".ffn_up_exps.weight") != std::string::npos ||
-                       name.find(".ffn_gate_exps.weight") != std::string::npos) {
-                type_score = 0.3f;
-            } else if (name.find(".attn_q.weight") != std::string::npos ||
-                       name.find(".attn_k.weight") != std::string::npos ||
-                       name.find(".attn_v.weight") != std::string::npos ||
-                       name.find(".attn_qkv.weight") != std::string::npos) {
-                type_score = 0.2f;
-            } else if (name.find("token_embd.weight") != std::string::npos) {
-                type_score = 0.1f;
+            } else {
+                for (const auto& ts : tensor_scores) {
+                    const bool found = std::any_of(ts.second.begin(), ts.second.end(), [&](const char* pattern) {
+                        return name.find(pattern) != std::string::npos;
+                    });
+                    if (found) {
+                        type_score = ts.first;
+                        break;
+                    }
+                }
+            }
+            if (type_score > 0.0f) {
+                depth_score = tensor_depth(name);
             }
 
             // Weighted combination
-            total_score = 0.8f * type_score + 0.2f * depth_score; // 80% type + 20% depth
+            total_score = 0.90f * type_score + 0.10f * depth_score; // 90% type + 10% depth
             if (total_score != 0.0f) {
                 scores[name] = total_score;
                 LLAMA_LOG_DEBUG("\t%s: \t %45s \t depth score %.4f \t type score %.4f \t total score %.4f\n", func, name.c_str(), depth_score, type_score, total_score);
@@ -1634,7 +1639,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::sort(sorted_scores.begin(), sorted_scores.end(), [](const auto & a, const auto & b) { return a.second > b.second; });
 
         // Select top percentile
-        const size_t n_important = std::max<size_t>(1, std::llround((double)sorted_scores.size() * 0.25f)); // bump top 25%
+        const size_t n_important = std::max<size_t>(1, std::llround((double)sorted_scores.size() * 0.29f)); // 29% seems to be the pareto front
 
         std::unordered_set<std::string> important;
         for (size_t i = 0; i < std::min(n_important, sorted_scores.size()); ++i) {
