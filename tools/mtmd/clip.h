@@ -89,6 +89,7 @@ struct ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx);
 
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
+bool clip_image_batch_encode_coreml(struct clip_ctx * ctx, const struct clip_image_f32_batch * imgs, float * vec);
 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);
@@ -104,3 +105,6 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
 bool clip_has_whisper_encoder(const struct clip_ctx * ctx);
+
+// CoreML support functions
+void clip_set_coreml_model_path(struct clip_ctx * ctx, const char * coreml_model_path);
