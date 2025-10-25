@@ -4712,6 +4712,7 @@ struct test_topk_moe: public test_case {
             out = ggml_reshape_2d(ctx, out, n_expert_used, n_tokens);
             ggml_tensor * weights_sum = ggml_sum_rows(ctx, out); // [1, n_tokens]
 
+            weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5, INFINITY);
             out = ggml_div(ctx, out, weights_sum); // [n_expert_used, n_tokens]
             out = ggml_reshape_3d(ctx, out, 1, n_expert_used, n_tokens);
         }
