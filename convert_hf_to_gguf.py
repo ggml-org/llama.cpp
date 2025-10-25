@@ -53,9 +53,7 @@ except ImportError:
         "`pip install mistral-common[image,audio]` to install it."
     )
 
-
 logger = logging.getLogger("hf-to-gguf")
-
 
 ###### MODEL DEFINITIONS ######
 
@@ -67,14 +65,11 @@ class SentencePieceTokenTypes(IntEnum):
     UNUSED = 5
     BYTE = 6
 
-
 class ModelType(IntEnum):
     TEXT = 1
     MMPROJ = 2
 
-
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
-
 
 class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
@@ -647,7 +642,6 @@ class ModelBase:
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
 
-
 class TextModel(ModelBase):
     model_type = ModelType.TEXT
     hf_arch: str
@@ -749,6 +743,47 @@ class TextModel(ModelBase):
 
         self.gguf_writer.add_file_type(self.ftype)
         logger.info(f"gguf: file type = {self.ftype}")
+
+    def _clean_chat_template_to_mtmd(self) -> bool:
+        """Normalize vision/audio markers in chat_template to the MTMD placeholder.
+
+        Reads self.dir_model/tokenizer_config.json and, if a chat_template is present,
+        replaces <start_of_image>/<end_of_image> and <start_of_audio>/<end_of_audio>
+        to <__media__>/"" respectively, then writes it via
+        self.gguf_writer.add_chat_template(cleaned).
+
+        Returns True if a cleaned template was written, False otherwise.
+        """
+        try:
+            import json
+            from pathlib import Path
+            cfg_path = Path(self.dir_model) / "tokenizer_config.json"
+            if not cfg_path.is_file():
+                return False
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            chat_template = cfg.get("chat_template")
+            if isinstance(chat_template, list):
+                variants = {}
+                for v in chat_template:
+                    if isinstance(v, dict):
+                        name = v.get("name")
+                        templ = v.get("template")
+                        if name is not None and templ is not None:
+                            variants[name] = templ
+                chat_template = variants.get("default") or next((t for t in variants.values() if isinstance(t, str)), None)
+            if isinstance(chat_template, str):
+                cleaned = (chat_template
+                           .replace("<start_of_image>", "<__media__>")
+                           .replace("<end_of_image>", "")
+                           .replace("<start_of_audio>", "<__media__>")
+                           .replace("<end_of_audio>", ""))
+                if cleaned != chat_template:
+                    logger.info("gguf: clean Gemma vision/audio markers to <__media__>")
+                    self.gguf_writer.add_chat_template(cleaned)
+                    return True
+        except Exception as e:
+            logger.warning(f"gguf: failed to clean chat_template: {e}")
+        return False
 
     def write_vocab(self):
         if len(self.gguf_writer.tensors) != 1:
@@ -1426,7 +1461,6 @@ class TextModel(ModelBase):
         special_vocab._set_special_token("bos", 151643)
         special_vocab.add_to_gguf(self.gguf_writer)
 
-
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
     model_arch = gguf.MODEL_ARCH.MMPROJ
@@ -1558,7 +1592,6 @@ class MmprojModel(ModelBase):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return False
 
-
 @ModelBase.register("GPTNeoXForCausalLM")
 class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX
@@ -1614,7 +1647,6 @@ class GPTNeoXModel(TextModel):
         tensors.append((self.map_tensor_name(name), data_torch))
 
         return tensors
-
 
 @ModelBase.register("BloomForCausalLM", "BloomModel")
 class BloomModel(TextModel):
@@ -1672,7 +1704,6 @@ class BloomModel(TextModel):
 
         return tensors
 
-
 @ModelBase.register("MPTForCausalLM")
 class MPTModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MPT
@@ -1716,7 +1747,6 @@ class MPTModel(TextModel):
 
         return [(new_name, data_torch)]
 
-
 @ModelBase.register("OrionForCausalLM")
 class OrionModel(TextModel):
     model_arch = gguf.MODEL_ARCH.ORION
@@ -1750,7 +1780,6 @@ class OrionModel(TextModel):
         # note: config provides rms norm but it is actually layer norm
         # ref:  https://huggingface.co/OrionStarAI/Orion-14B-Chat/blob/276a17221ce42beb45f66fac657a41540e71f4f5/modeling_orion.py#L570-L571
         self.gguf_writer.add_layer_norm_eps(self.hparams["rms_norm_eps"])
-
 
 @ModelBase.register("BaichuanForCausalLM", "BaiChuanForCausalLM")
 class BaichuanModel(TextModel):
@@ -1830,7 +1859,6 @@ class BaichuanModel(TextModel):
     def _reverse_hf_part(self, weights: Tensor, n_part: int) -> Tensor:
         r = weights.shape[0] // 3
         return weights[r * n_part:r * n_part + r, ...]
-
 
 @ModelBase.register("XverseForCausalLM")
 class XverseModel(TextModel):
@@ -1938,7 +1966,6 @@ class XverseModel(TextModel):
             .reshape(weights.shape)
         )
 
-
 @ModelBase.register("FalconForCausalLM", "RWForCausalLM")
 class FalconModel(TextModel):
     model_arch = gguf.MODEL_ARCH.FALCON
@@ -1992,7 +2019,6 @@ class FalconModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("GPTBigCodeForCausalLM")
 class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER
@@ -2008,7 +2034,6 @@ class StarCoderModel(TextModel):
         self.gguf_writer.add_head_count_kv(1)
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
         self.gguf_writer.add_file_type(self.ftype)
-
 
 @ModelBase.register("GPTRefactForCausalLM")
 class RefactModel(TextModel):
@@ -2072,7 +2097,6 @@ class RefactModel(TextModel):
             tensors.append((self.map_tensor_name(name), data_torch))
 
         return tensors
-
 
 @ModelBase.register("StableLmForCausalLM", "StableLMEpochForCausalLM", "LlavaStableLMEpochForCausalLM")
 class StableLMModel(TextModel):
@@ -2162,7 +2186,6 @@ class StableLMModel(TextModel):
             )
             if len(norms) > 0:
                 raise ValueError(f"Unprocessed norms: {norms}")
-
 
 @ModelBase.register(
     "LLaMAForCausalLM",
@@ -2422,7 +2445,6 @@ class LlamaModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("ArceeForCausalLM")
 class ArceeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.ARCEE
@@ -2435,7 +2457,6 @@ class ArceeModel(LlamaModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
-
 
 @ModelBase.register(
     "LlavaForConditionalGeneration", # pixtral
@@ -2521,7 +2542,6 @@ class LlavaVisionModel(MmprojModel):
 
         return [] # skip other tensors
 
-
 @ModelBase.register("Idefics3ForConditionalGeneration", "SmolVLMForConditionalGeneration")
 class SmolVLMModel(MmprojModel):
     def __init__(self, *args, **kwargs):
@@ -2557,7 +2577,6 @@ class SmolVLMModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return [] # skip other tensors
-
 
 @ModelBase.register(
     "Llama4ForConditionalGeneration",
@@ -2608,7 +2627,6 @@ class Llama4Model(LlamaModel):
             return []
         return super().modify_tensors(data_torch, name, bid)
 
-
 @ModelBase.register("Llama4ForConditionalGeneration")
 class Llama4VisionModel(MmprojModel):
     def set_gguf_parameters(self):
@@ -2631,7 +2649,6 @@ class Llama4VisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
         return []
 
-
 @ModelBase.register("Mistral3ForConditionalGeneration")
 class Mistral3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -2641,7 +2658,6 @@ class Mistral3Model(LlamaModel):
         if "multi_modal_projector" in name or "vision_tower" in name:
             return []
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("DeciLMForCausalLM")
 class DeciModel(TextModel):
@@ -2819,7 +2835,6 @@ class DeciModel(TextModel):
     def prepare_tensors(self):
         super().prepare_tensors()
 
-
 @ModelBase.register("BitnetForCausalLM")
 class BitnetModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BITNET
@@ -2859,7 +2874,6 @@ class BitnetModel(TextModel):
             data_torch = self.weight_quant(data_torch)
 
         yield (new_name, data_torch)
-
 
 @ModelBase.register("GrokForCausalLM", "Grok1ForCausalLM")
 class GrokModel(TextModel):
@@ -2965,7 +2979,6 @@ class GrokModel(TextModel):
 
         yield from tensors
 
-
 @ModelBase.register("DbrxForCausalLM")
 class DbrxModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DBRX
@@ -3034,7 +3047,6 @@ class DbrxModel(TextModel):
 
         return n_dims > 1
 
-
 @ModelBase.register("MiniCPMForCausalLM")
 class MiniCPMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM
@@ -3089,7 +3101,6 @@ class MiniCPMModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("MiniCPM3ForCausalLM")
 class MiniCPM3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM3
@@ -3142,7 +3153,6 @@ class MiniCPM3Model(TextModel):
             .reshape(weights.shape)
         )
 
-
 @ModelBase.register("QWenLMHeadModel")
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
@@ -3184,7 +3194,6 @@ class QwenModel(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["layer_norm_epsilon"])
         self.gguf_writer.add_file_type(self.ftype)
 
-
 @ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
@@ -3215,7 +3224,6 @@ class Qwen2Model(TextModel):
             # skip vision and audio tensors
             return []
         yield from super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("DreamModel")
 class DreamModel(TextModel):
@@ -3285,7 +3293,6 @@ class DreamModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Dream model tensors should be mapped directly since it's the base model
         yield from super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("LLaDAModelLM")
 class LLaDAModel(TextModel):
@@ -3387,7 +3394,6 @@ class LLaDAModel(TextModel):
         # LLaDA model tensors should be mapped directly since it's the base model
         yield from super().modify_tensors(data_torch, name, bid)
 
-
 @ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
@@ -3433,7 +3439,6 @@ class Ernie4_5Model(TextModel):
                 (self.map_tensor_name(name_up), up_proj_weight)
             ]
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("Ernie4_5_MoeForCausalLM")
 class Ernie4_5MoeModel(Ernie4_5Model):
@@ -3521,7 +3526,6 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register(
     "Qwen2VLModel",
     "Qwen2VLForConditionalGeneration",
@@ -3552,7 +3556,6 @@ class Qwen2VLModel(TextModel):
             # skip multimodal tensors
             return []
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
 class Qwen2VLVisionModel(MmprojModel):
@@ -3632,7 +3635,6 @@ class Qwen2VLVisionModel(MmprojModel):
                 return [(self.map_tensor_name(name), data_torch)]
         return [] # skip other tensors
 
-
 @ModelBase.register("Qwen2_5OmniModel")
 class Qwen25OmniModel(Qwen2VLVisionModel):
     has_vision_encoder = True
@@ -3690,7 +3692,6 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
@@ -3766,7 +3767,6 @@ class InternVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
         return [] # skip other tensors
 
-
 @ModelBase.register("WavTokenizerDec")
 class WavTokenizerDecModel(TextModel):
     model_arch = gguf.MODEL_ARCH.WAVTOKENIZER_DEC
@@ -3803,7 +3803,6 @@ class WavTokenizerDecModel(TextModel):
         self.gguf_writer.add_convnext_block_count     (self.hparams["convnext"]["n_layer"])
 
         self.gguf_writer.add_causal_attention(False)
-
 
 @ModelBase.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(TextModel):
@@ -3877,7 +3876,6 @@ class Qwen2MoeModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 @ModelBase.register("Qwen3ForCausalLM")
 class Qwen3Model(Qwen2Model):
@@ -3961,7 +3959,6 @@ class Qwen3Model(Qwen2Model):
 
         return super().modify_tensors(data_torch, name, bid)
 
-
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
@@ -3978,7 +3975,6 @@ class Qwen3MoeModel(Qwen2MoeModel):
             return
 
         super().set_vocab()
-
 
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
@@ -4011,7 +4007,6 @@ class GPT2Model(TextModel):
 
         return tensors
 
-
 @ModelBase.register("PhiForCausalLM")
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
@@ -4034,7 +4029,6 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(int(rot_pct * n_embd) // n_head)
         self.gguf_writer.add_file_type(self.ftype)
         self.gguf_writer.add_add_bos_token(False)
-
 
 @ModelBase.register("Phi3ForCausalLM")
 class Phi3MiniModel(TextModel):
@@ -4213,7 +4207,6 @@ class Phi3MiniModel(TextModel):
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
-
 @ModelBase.register("PhiMoEForCausalLM")
 class PhiMoeModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHIMOE
@@ -4270,7 +4263,6 @@ class PhiMoeModel(Phi3MiniModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("PlamoForCausalLM")
 class PlamoModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO
@@ -4317,7 +4309,6 @@ class PlamoModel(TextModel):
             data_torch = self.shuffle_attn_output_weight(data_torch)
 
         return [(new_name, data_torch)]
-
 
 @ModelBase.register("Plamo2ForCausalLM", "PLaMo2ForCausalLM")
 class Plamo2Model(TextModel):
@@ -4492,7 +4483,6 @@ class Plamo2Model(TextModel):
 
         return [(new_name, data_torch)]
 
-
 @ModelBase.register("CodeShellForCausalLM")
 class CodeShellModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CODESHELL
@@ -4511,7 +4501,6 @@ class CodeShellModel(TextModel):
         self.gguf_writer.add_rope_freq_base(10000.0)
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
         self.gguf_writer.add_rope_scaling_factor(1.0)
-
 
 @ModelBase.register("InternLM2ForCausalLM")
 class InternLM2Model(TextModel):
@@ -4690,7 +4679,6 @@ class InternLM2Model(TextModel):
         else:
             return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("InternLM3ForCausalLM")
 class InternLM3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -4751,7 +4739,6 @@ class InternLM3Model(TextModel):
         if name.endswith(("k_proj.weight", "k_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
 class BertModel(TextModel):
@@ -4972,7 +4959,6 @@ class BertModel(TextModel):
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
-
 @ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")
 class DistilBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
@@ -4991,7 +4977,6 @@ class DistilBertModel(BertModel):
             return []
 
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
 class RobertaModel(BertModel):
@@ -5034,7 +5019,6 @@ class RobertaModel(BertModel):
                 data_torch = data_torch[self._position_offset:,:]
 
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("NomicBertModel")
 class NomicBertModel(BertModel):
@@ -5117,7 +5101,6 @@ class NomicBertModel(BertModel):
             return False
         raise ValueError(f"unknown tokenizer: {toktyp}")
 
-
 @ModelBase.register("NeoBERT", "NeoBERTLMHead", "NeoBERTForSequenceClassification")
 class NeoBert(BertModel):
     model_arch = gguf.MODEL_ARCH.NEO_BERT
@@ -5144,7 +5127,6 @@ class NeoBert(BertModel):
             name = name[6:]
 
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
 class XLMRobertaModel(BertModel):
@@ -5243,7 +5225,6 @@ class XLMRobertaModel(BertModel):
             lora_writer.write_tensors_to_file(progress=True)
             lora_writer.close()
 
-
 @ModelBase.register("GemmaForCausalLM")
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
@@ -5293,8 +5274,6 @@ class GemmaModel(TextModel):
             data_torch = data_torch + 1
 
         return [(self.map_tensor_name(name), data_torch)]
-
-
 @ModelBase.register("Gemma2ForCausalLM")
 class Gemma2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA2
@@ -5303,6 +5282,7 @@ class Gemma2Model(TextModel):
         self._set_vocab_sentencepiece()
 
         self.gguf_writer.add_add_space_prefix(False)
+        self._clean_chat_template_to_mtmd()
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -5341,7 +5321,6 @@ class Gemma2Model(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
@@ -5351,6 +5330,7 @@ class Gemma3Model(TextModel):
         self._set_vocab_sentencepiece()
 
         self.gguf_writer.add_add_space_prefix(False)
+        self._clean_chat_template_to_mtmd()
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -5400,7 +5380,6 @@ class Gemma3Model(TextModel):
             data_torch = data_torch + self.norm_shift
 
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("Gemma3TextModel")
 class EmbeddingGemma(Gemma3Model):
@@ -5475,7 +5454,6 @@ class EmbeddingGemma(Gemma3Model):
 
         self._try_set_pooling_type()
 
-
 @ModelBase.register("Gemma3ForConditionalGeneration")
 class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):
@@ -5525,7 +5503,6 @@ class Gemma3VisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return [] # skip other tensors
-
 
 @ModelBase.register("Gemma3nForConditionalGeneration")
 class Gemma3NModel(Gemma3Model):
@@ -5621,11 +5598,9 @@ class Gemma3NModel(Gemma3Model):
 
         return super().modify_tensors(data_torch, name, bid)
 
-
 @ModelBase.register("Starcoder2ForCausalLM")
 class StarCoder2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER2
-
 
 @ModelBase.register("Rwkv6ForCausalLM")
 class Rwkv6Model(TextModel):
@@ -5699,7 +5674,6 @@ class Rwkv6Model(TextModel):
 
         yield (new_name, data_torch)
 
-
 @ModelBase.register("RWKV6Qwen2ForCausalLM")
 class RWKV6Qwen2Model(Rwkv6Model):
     model_arch = gguf.MODEL_ARCH.RWKV6QWEN2
@@ -5752,7 +5726,6 @@ class RWKV6Qwen2Model(Rwkv6Model):
                 yield (new_name, data)
                 continue
             yield (new_name, data)
-
 
 @ModelBase.register("Rwkv7ForCausalLM", "RWKV7ForCausalLM")
 class Rwkv7Model(TextModel):
@@ -5872,7 +5845,6 @@ class Rwkv7Model(TextModel):
 
             yield (new_name, data_torch)
 
-
 @ModelBase.register("RwkvHybridForCausalLM")
 class ARwkv7Model(Rwkv7Model):
     model_arch = gguf.MODEL_ARCH.ARWKV7
@@ -5914,7 +5886,6 @@ class ARwkv7Model(Rwkv7Model):
 
         # required by llama.cpp, unused
         self.gguf_writer.add_head_count(0)
-
 
 @ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
 class MambaModel(TextModel):
@@ -6000,7 +5971,6 @@ class MambaModel(TextModel):
             self._tok_embd = data_torch
 
         return [(new_name, data_torch)]
-
 
 @ModelBase.register("Mamba2ForCausalLM")
 class Mamba2Model(TextModel):
@@ -6093,7 +6063,6 @@ class Mamba2Model(TextModel):
             data_torch = -torch.exp(data_torch)
 
         yield (new_name, data_torch)
-
 
 @ModelBase.register("JambaForCausalLM")
 class JambaModel(TextModel):
@@ -6203,7 +6172,6 @@ class JambaModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("CohereForCausalLM")
 class CommandR2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.COMMAND_R
@@ -6221,7 +6189,6 @@ class CommandR2Model(TextModel):
         self.gguf_writer.add_logit_scale(self.hparams["logit_scale"])
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
-
 @ModelBase.register("Cohere2ForCausalLM")
 class Cohere2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.COHERE2
@@ -6238,7 +6205,6 @@ class Cohere2Model(TextModel):
         num_attention_heads = self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rotary_pct * (hidden_size // num_attention_heads)))
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
-
 
 @ModelBase.register("OlmoForCausalLM")
 @ModelBase.register("OLMoForCausalLM")
@@ -6267,11 +6233,9 @@ class OlmoModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("SeedOssForCausalLM")
 class SeedOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SEED_OSS
-
 
 @ModelBase.register("Olmo2ForCausalLM")
 @ModelBase.register("Olmo3ForCausalLM")
@@ -6301,7 +6265,6 @@ class Olmo2Model(TextModel):
                     sliding_window_pattern.append((i + 1) % 4 != 0)
 
             self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
-
 
 @ModelBase.register("OlmoeForCausalLM")
 class OlmoeModel(TextModel):
@@ -6362,7 +6325,6 @@ class OlmoeModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("JinaBertModel", "JinaBertForMaskedLM")
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2
@@ -6379,7 +6341,6 @@ class JinaBertV2Model(BertModel):
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
-
 
 @ModelBase.register("OpenELMForCausalLM")
 class OpenELMModel(TextModel):
@@ -6454,7 +6415,6 @@ class OpenELMModel(TextModel):
             return
 
         yield (self.map_tensor_name(name), data_torch)
-
 
 @ModelBase.register("ArcticForCausalLM")
 class ArcticModel(TextModel):
@@ -6606,7 +6566,6 @@ class ArcticModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("DeepseekForCausalLM")
 class DeepseekModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK
@@ -6694,7 +6653,6 @@ class DeepseekModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 @ModelBase.register(
     "DeepseekV2ForCausalLM",
@@ -6884,7 +6842,6 @@ class DeepseekV2Model(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("Dots1ForCausalLM")
 class Dots1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.DOTS1
@@ -6912,7 +6869,6 @@ class Dots1Model(Qwen2MoeModel):
             return [(self.map_tensor_name(name), data_torch)]
         return super().modify_tensors(data_torch, name, bid)
 
-
 @ModelBase.register("PLMForCausalLM")
 class PLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PLM
@@ -6934,7 +6890,6 @@ class PLMModel(TextModel):
 
     def prepare_tensors(self):
         super().prepare_tensors()
-
 
 @ModelBase.register("T5WithLMHeadModel")
 @ModelBase.register("T5ForConditionalGeneration")
@@ -7077,7 +7032,6 @@ class T5Model(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("T5EncoderModel")
 class T5EncoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.T5ENCODER
@@ -7213,7 +7167,6 @@ class T5EncoderModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("JAISLMHeadModel")
 class JaisModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS
@@ -7296,7 +7249,6 @@ class JaisModel(TextModel):
         super().prepare_tensors()
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
-
 @ModelBase.register("Glm4ForCausalLM", "Glm4vForConditionalGeneration")
 class Glm4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4
@@ -7334,7 +7286,6 @@ class Glm4Model(TextModel):
         elif name.startswith("model.language_model."):
             name = name.replace("language_model.", "") # for Glm4v
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("Glm4MoeForCausalLM")
 class Glm4MoeModel(TextModel):
@@ -7467,7 +7418,6 @@ class Glm4MoeModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(TextModel):
@@ -7623,7 +7573,6 @@ class ChatGLMModel(TextModel):
         name = name.removeprefix("transformer.")
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("NemotronForCausalLM")
 class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
@@ -7663,7 +7612,6 @@ class NemotronModel(TextModel):
             data_torch = data_torch + 1
 
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("ExaoneForCausalLM")
 class ExaoneModel(TextModel):
@@ -7734,7 +7682,6 @@ class ExaoneModel(TextModel):
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
-
 @ModelBase.register("Exaone4ForCausalLM")
 class Exaone4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE4
@@ -7803,7 +7750,6 @@ class Exaone4Model(TextModel):
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
-
 @ModelBase.register("GraniteForCausalLM")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
@@ -7836,7 +7782,6 @@ class GraniteModel(LlamaModel):
         if logits_scale := self.hparams.get("logits_scaling"):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
-
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
@@ -7890,7 +7835,6 @@ class GraniteMoeModel(GraniteModel):
             ]
 
         return super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("GraniteMoeHybridForCausalLM", "BambaForCausalLM")
 class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
@@ -8031,7 +7975,6 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         self.hparams["pad_vocab_size_multiple"] = 8
         Mamba2Model.set_vocab(self)
 
-
 @ModelBase.register("NemotronHForCausalLM")
 class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
@@ -8079,7 +8022,6 @@ class NemotronHModel(GraniteHybridModel):
         # TemplateProcessing) but does not set add_bos_token to true in the
         # config, so we need to explicitly override it here.
         self.gguf_writer.add_add_bos_token(True)
-
 
 @ModelBase.register("BailingMoeForCausalLM")
 class BailingMoeModel(TextModel):
@@ -8187,7 +8129,6 @@ class BailingMoeModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("BailingMoeV2ForCausalLM")
 class BailingMoeV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE2
@@ -8283,7 +8224,6 @@ class BailingMoeV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
 class GroveMoeModel(TextModel):
@@ -8399,7 +8339,6 @@ class GroveMoeModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("ChameleonForConditionalGeneration")
 @ModelBase.register("ChameleonForCausalLM")  # obsolete
 class ChameleonModel(TextModel):
@@ -8441,7 +8380,6 @@ class ChameleonModel(TextModel):
         data_torch = data_torch.repeat_interleave(n_heads, 0)
         return data_torch
 
-
 @ModelBase.register("UltravoxModel")
 class UltravoxModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA # dummy
@@ -8449,7 +8387,6 @@ class UltravoxModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         raise NotImplementedError("Ultravox does not have text decoder. Instead, it uses Llama or other models for text. If you want to get the audio encoder, please use --mmproj argument")
-
 
 @ModelBase.register("Qwen2AudioForConditionalGeneration")
 class WhisperEncoderModel(MmprojModel):
@@ -8491,7 +8428,6 @@ class WhisperEncoderModel(MmprojModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("UltravoxModel")
 class UltravoxWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder
@@ -8502,7 +8438,6 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ULTRAVOX)
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
-
 @ModelBase.register("VoxtralForConditionalGeneration")
 class VoxtralWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder
@@ -8512,7 +8447,6 @@ class VoxtralWhisperEncoderModel(WhisperEncoderModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VOXTRAL)
         self.gguf_writer.add_audio_stack_factor(4) # == intermediate_size // hidden_size
-
 
 @ModelBase.register("FalconH1ForCausalLM")
 class FalconH1Model(Mamba2Model):
@@ -8619,7 +8553,6 @@ class FalconH1Model(Mamba2Model):
 
         # Add any other Falcon Mamba2 specific configuration
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
-
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
@@ -8761,7 +8694,6 @@ class HunYuanMoEModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-
 @ModelBase.register("LLaDAMoEModel", "LLaDAMoEModelLM")
 class LLaDAMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA_MOE
@@ -8830,7 +8762,6 @@ class LLaDAMoEModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
 class HunYuanModel(TextModel):
@@ -8923,7 +8854,6 @@ class HunYuanModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
 @ModelBase.register("SmolLM3ForCausalLM")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
@@ -8937,7 +8867,6 @@ class SmolLM3Model(LlamaModel):
         if tokenizer.chat_template is not None:
             chat_template = tokenizer.chat_template.replace("[:]", "")
             self.gguf_writer.add_chat_template(chat_template)
-
 
 @ModelBase.register("GptOssForCausalLM")
 class GptOssModel(TextModel):
@@ -9069,7 +8998,6 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
         self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling.get("original_max_position_embeddings", 4096))
 
-
 @ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
@@ -9117,7 +9045,6 @@ class LFM2Model(TextModel):
             data_torch = data_torch.squeeze(1)
 
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("Lfm2MoeForCausalLM")
 class LFM2MoeModel(TextModel):
@@ -9187,7 +9114,6 @@ class LFM2MoeModel(TextModel):
         super().prepare_tensors()
         assert not self._experts_cache
 
-
 @ModelBase.register("Lfm2VlForConditionalGeneration")
 class LFM2VLModel(MmprojModel):
     def __init__(self, *args, **kwargs):
@@ -9221,7 +9147,6 @@ class LFM2VLModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return [] # skip other tensors
-
 
 @ModelBase.register("SmallThinkerForCausalLM")
 class SmallThinkerModel(TextModel):
@@ -9458,8 +9383,9 @@ class KimiVLModel(MmprojModel):
 
 ###### CONVERSION LOGIC ######
 
-
 # tree of lazy tensors
+
+
 class LazyTorchTensor(gguf.LazyBase):
     _tensor_type = torch.Tensor
     # to keep the type-checker happy
