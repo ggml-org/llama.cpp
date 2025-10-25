@@ -3534,31 +3534,22 @@ static void ggml_compute_forward_rms_norm_f32(
 
     GGML_ASSERT(eps >= 0.0f);
 
-    // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                      float * y = (float *) ((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
 
-                ggml_float sum = 0.0;
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    sum += (ggml_float)(x[i00] * x[i00]);
-                }
+                float sum = 0.0f;
+                ggml_vec_dot_f32(ne00, &sum, 0, x, 0, x, 0, 1);
 
-                const float mean = sum/ne00;
-
-                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
-
-                memcpy(y, x, ne00 * sizeof(float));
-                // for (int i00 = 0; i00 < ne00; i00++) {
-                //     y[i00] = x[i00];
-                // }
-
-                const float scale = 1.0f/sqrtf(mean + eps);
+                const float mean = sum / ne00;
+                const float scale = 1.0f / sqrtf(mean + eps);
 
                 // if you hit this, likely you got an inf somewhere earlier
                 assert(scale > 0.0f);
 
+                ggml_vec_cpy_f32(ne00, y, x);
                 ggml_vec_scale_f32(ne00, y, scale);
             }
         }
