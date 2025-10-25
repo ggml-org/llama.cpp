@@ -944,6 +944,9 @@ public:
             return _add_rule(rule_name, out.str());
         } else if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
+        } else if (schema_type.is_null() && schema.contains("not") && schema["not"].is_object() && schema["not"].empty()) {
+            // librechat returns not:{}, which does nothing.
+            return "";
         } else {
             if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
                 _errors.push_back("Unrecognized schema: " + schema.dump());
