@@ -14,7 +14,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { PREVIEW_DIALOG_DEFAULTS, PreviewLanguage } from '$lib/enums/files';
+	import { CODE_PREVIEW_DIALOG_DEFAULTS, CodeBlockLanguage } from '$lib/enums/files';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
@@ -28,9 +28,21 @@
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
 
-	let previewDialogOpen = $state<boolean>(PREVIEW_DIALOG_DEFAULTS.dialogOpen);
-	let previewCode = $state<string>(PREVIEW_DIALOG_DEFAULTS.code);
-	let previewLanguage = $state<PreviewLanguage>(PREVIEW_DIALOG_DEFAULTS.language);
+	let previewDialogOpen = $state<boolean>(CODE_PREVIEW_DIALOG_DEFAULTS.dialogOpen);
+	let previewCode = $state<string>(CODE_PREVIEW_DIALOG_DEFAULTS.code);
+	let previewLanguage = $state<CodeBlockLanguage>(CODE_PREVIEW_DIALOG_DEFAULTS.language);
+
+	const PREVIEWABLE_CODE_LANGUAGES: ReadonlySet<CodeBlockLanguage> = new Set([
+		CodeBlockLanguage.HTML,
+		CodeBlockLanguage.JAVASCRIPT
+	]);
+
+	const previewLanguageMap: Record<string, CodeBlockLanguage | undefined> = {
+		html: CodeBlockLanguage.HTML,
+		htm: CodeBlockLanguage.HTML,
+		javascript: CodeBlockLanguage.JAVASCRIPT,
+		js: CodeBlockLanguage.JAVASCRIPT
+	};
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
@@ -124,17 +136,12 @@
 			const rawCode = codeElement.textContent || '';
 			const codeId = `code-${Date.now()}-${index}`;
 			const normalizedLanguage = language.toLowerCase();
-			let previewLanguage: PreviewLanguage = PREVIEW_DIALOG_DEFAULTS.language;
-
-			if (normalizedLanguage === PreviewLanguage.HTML) {
-				previewLanguage = PreviewLanguage.HTML;
-			} else if (normalizedLanguage === PreviewLanguage.JAVASCRIPT) {
-				previewLanguage = PreviewLanguage.JAVASCRIPT;
-			}
+			const mappedLanguage = previewLanguageMap[normalizedLanguage];
+			const previewableLanguage = mappedLanguage ?? CODE_PREVIEW_DIALOG_DEFAULTS.language;
 
 			codeElement.setAttribute('data-code-id', codeId);
 			codeElement.setAttribute('data-raw-code', rawCode);
-			codeElement.setAttribute('data-language', previewLanguage);
+			codeElement.setAttribute('data-language', previewableLanguage);
 
 			const wrapper = document.createElement('div');
 			wrapper.className = 'code-block-wrapper';
@@ -161,7 +168,7 @@
 
 			actions.appendChild(copyButton);
 
-			if (previewLanguage !== PREVIEW_DIALOG_DEFAULTS.language) {
+			if (PREVIEWABLE_CODE_LANGUAGES.has(previewableLanguage)) {
 				const previewButton = document.createElement('button');
 				previewButton.className = 'preview-code-btn';
 				previewButton.setAttribute('data-code-id', codeId);
@@ -216,7 +223,7 @@
 
 	type CodeInfo = {
 		rawCode: string;
-		language: PreviewLanguage;
+		language: CodeBlockLanguage;
 	};
 
 	function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
@@ -241,8 +248,8 @@
 			return null;
 		}
 
-		const languageAttribute = codeElement.getAttribute('data-language') as PreviewLanguage | null;
-		const language = languageAttribute ?? PREVIEW_DIALOG_DEFAULTS.language;
+		const languageAttribute = codeElement.getAttribute('data-language') as CodeBlockLanguage | null;
+		const language = languageAttribute ?? CODE_PREVIEW_DIALOG_DEFAULTS.language;
 
 		return { rawCode, language };
 	}
@@ -316,8 +323,8 @@
 		previewDialogOpen = open;
 
 		if (!open) {
-			previewCode = PREVIEW_DIALOG_DEFAULTS.code;
-			previewLanguage = PREVIEW_DIALOG_DEFAULTS.language;
+			previewCode = CODE_PREVIEW_DIALOG_DEFAULTS.code;
+			previewLanguage = CODE_PREVIEW_DIALOG_DEFAULTS.language;
 		}
 	}
 
