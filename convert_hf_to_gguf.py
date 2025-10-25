@@ -1503,8 +1503,8 @@ class MmprojModel(ModelBase):
         output_type: str = self.ftype.name.partition("_")[2]
 
         if self.fname_out.is_dir():
-            fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=output_type, model_type="mmproj")
-            self.fname_out = self.fname_out / f"{fname_default}.gguf"
+            fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+            self.fname_out = self.fname_out / f"mmproj-{fname_default}.gguf"
         else:
             self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
 
