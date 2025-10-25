@@ -1144,6 +1144,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
             "visual.merger.mlp.{bid}", # qwen2vl
+            "mlp_AR.linear_{bid}", # PaddleOCR-VL
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
@@ -1338,6 +1339,7 @@ class TensorNameMap:
             "multi_modal_projector.layer_norm",
             "multi_modal_projector.pre_norm",
             "pre_mm_projector_norm",
+            "mlp_AR.pre_norm", # PaddleOCR-VL
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1350,18 +1352,22 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_ATTN_Q: (
             "resampler.attn.in_proj_q", # tensor generated from resampler.attn.in_proj
+            "model.vision_model.head.attention.in_proj_q", # PaddleOCR-VL (generated tensor)
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_K: (
             "resampler.attn.in_proj_k", # tensor generated from resampler.attn.in_proj
+            "model.vision_model.head.attention.in_proj_k", # PaddleOCR-VL (generated tensor)
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_V: (
             "resampler.attn.in_proj_v", # tensor generated from resampler.attn.in_proj
+            "model.vision_model.head.attention.in_proj_v", # PaddleOCR-VL (generated tensor)
         ),
 
         MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
             "resampler.attn.out_proj",
+            "model.vision_model.head.attention.out_proj",
         ),
 
         MODEL_TENSOR.V_RESMPL_KV: (
@@ -1370,6 +1376,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_POST_NORM: (
             "resampler.ln_post",
+            "model.vision_model.head.layernorm", # PaddleOCR-VL
         ),
 
         MODEL_TENSOR.V_RESMPL_KV_NORM: (
@@ -1386,6 +1393,15 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_QUERY: (
             "resampler.query",
+            "model.vision_model.head.probe", # PaddleOCR-VL
+        ),
+
+        MODEL_TENSOR.V_RESMPL_FFN_UP: (
+            "model.vision_model.head.mlp.fc1", # PaddleOCR-VL
+        ),
+
+        MODEL_TENSOR.V_RESMPL_FFN_DOWN: (
+            "model.vision_model.head.mlp.fc2", # PaddleOCR-VL
         ),
 
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (

@@ -265,6 +265,8 @@ class Keys:
 
     class ClipVision:
         IMAGE_SIZE          = "clip.vision.image_size"
+        MAX_PIXELS          = "clip.vision.max_pixels"
+        MIN_PIXELS          = "clip.vision.min_pixels"
         PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
@@ -638,6 +640,8 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_Q_NORM      = auto() # minicpmv
     V_RESMPL_PROJ        = auto() # minicpmv
     V_RESMPL_QUERY       = auto() # minicpmv
+    V_RESMPL_FFN_UP      = auto() # PaddleOCR-VL
+    V_RESMPL_FFN_DOWN    = auto() # PaddleOCR-VL
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
     V_MM_PATCH_MERGER    = auto() # mistral small 3.1
     # audio (mtmd)
@@ -984,6 +988,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_Q_NORM:           "resampler.ln_q",
     MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
+    MODEL_TENSOR.V_RESMPL_FFN_UP:           "resampler.ffn_up",
+    MODEL_TENSOR.V_RESMPL_FFN_DOWN:         "resampler.ffn_down",
     MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
     MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
     # audio (mtmd)
@@ -1052,6 +1058,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_Q_NORM,
         MODEL_TENSOR.V_RESMPL_PROJ,
         MODEL_TENSOR.V_RESMPL_QUERY,
+        MODEL_TENSOR.V_RESMPL_FFN_UP,
+        MODEL_TENSOR.V_RESMPL_FFN_DOWN,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
         MODEL_TENSOR.V_MM_PATCH_MERGER,
         # audio
@@ -3062,6 +3070,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
+    PADDLEOCR = "paddleocr"
 
 
 # Items here are (block size, type size)

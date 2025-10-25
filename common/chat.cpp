@@ -579,6 +579,11 @@ common_chat_templates_ptr common_chat_templates_init(
             "{%- if false %}");
     }
 
+    // TODO @ngxson : hot fix for PaddleOCR
+    if (default_template_src.find("<|IMAGE_PLACEHOLDER|>") != std::string::npos) {
+        string_replace_all(default_template_src, "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>", "");
+    }
+
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool add_bos = false;

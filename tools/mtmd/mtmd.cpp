@@ -275,6 +275,10 @@ struct mtmd_context {
             img_beg = "<img>";
             img_end = "</img>";
 
+        } else if (proj == PROJECTOR_TYPE_PADDLEOCR) {
+            // <|IMAGE_START|> ... (image embeddings) ... <|IMAGE_END|>
+            img_beg = "<|IMAGE_START|>";
+            img_end = "<|IMAGE_END|>";
         }
     }
 

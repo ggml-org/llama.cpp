@@ -1029,6 +1029,12 @@ class GGUFWriter:
     def add_vision_patch_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PATCH_SIZE, value)
 
+    def add_vision_max_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MAX_PIXELS, value)
+
+    def add_vision_min_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MIN_PIXELS, value)
+
     def add_vision_embedding_length(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.EMBEDDING_LENGTH, value)
 

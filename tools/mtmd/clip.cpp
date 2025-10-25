@@ -342,6 +342,10 @@ struct clip_model {
     ggml_tensor * mm_model_ln_kv_b = nullptr;
     ggml_tensor * mm_model_ln_post_w = nullptr;
     ggml_tensor * mm_model_ln_post_b = nullptr;
+    ggml_tensor * mm_model_ffn_up_w = nullptr;
+    ggml_tensor * mm_model_ffn_up_b = nullptr;
+    ggml_tensor * mm_model_ffn_down_w = nullptr;
+    ggml_tensor * mm_model_ffn_down_b = nullptr;
 
     // gemma3
     ggml_tensor * mm_input_proj_w = nullptr;
@@ -1128,6 +1132,77 @@ struct clip_graph {
             cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
             cur = ggml_add(ctx0, cur, model.mm_2_b);
             cb(cur, "proj_out", -1);
+        }
+
+        // build the graph
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
+    }
+
+    ggml_cgraph * build_paddleocr() {
+        // 2D input positions
+        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+
+        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
+
+        ggml_tensor * learned_pos_embd = resize_position_embeddings();
+
+        // build ViT with 2D position embeddings
+        auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+            // first half is X axis and second half is Y axis
+            return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+        };
+
+        ggml_tensor * inp = build_inp();
+        ggml_tensor * cur = build_vit(
+                                inp, n_patches,
+                                NORM_TYPE_NORMAL,
+                                hparams.ffn_op,
+                                learned_pos_embd,
+                                add_pos);
+
+        cb(cur, "vit_out", -1);
+
+        {
+            // SiglipMultiheadAttentionPoolingHead
+            int64_t n_pos = cur->ne[1];
+            ggml_tensor * Qcur = ggml_repeat(ctx0, model.mm_model_query, cur);
+            ggml_tensor * Kcur = cur;
+            ggml_tensor * Vcur = cur;
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+
+            cb(Qcur, "resampl_Qcur", -1);
+            cb(Kcur, "resampl_Kcur", -1);
+            cb(Vcur, "resampl_Vcur", -1);
+
+            float kq_scale = 1.0f / sqrtf((float)(d_head));
+            cur = build_attn(model.mm_model_attn_o_w, model.mm_model_attn_o_b,
+                Qcur, Kcur, Vcur, nullptr, kq_scale, -1);
+
+            cb(cur, "resampl_attn_out", -1);
+
+            cur = build_norm(cur, model.mm_model_ln_post_w, model.mm_model_ln_post_b,
+                NORM_TYPE_NORMAL, eps, -1);
+
+            cb(cur, "resampl_out", -1);
+        }
+
+        {
+            // SiglipMLP
+            cur = build_ffn(cur,
+                        model.mm_model_ffn_up_w, model.mm_model_ffn_up_b,
+                        nullptr, nullptr,
+                        model.mm_model_ffn_down_w, model.mm_model_ffn_down_b,
+                        hparams.ffn_op, -1);
+            cb(cur, "mlp_out", -1);
         }
 
         // build the graph
@@ -2125,6 +2200,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_kimivl();
             } break;
+        case PROJECTOR_TYPE_PADDLEOCR:
+            {
+                res = graph.build_paddleocr();
+            } break;
         default:
             {
                 res = graph.build_llava();
@@ -2440,6 +2519,10 @@ struct clip_model_loader {
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf"; // temporary solution for logging
                     } break;
+                case PROJECTOR_TYPE_PADDLEOCR:
+                    {
+                        hparams.proj_scale_factor = 1;
+                    } break;
                 default:
                     break;
             }
@@ -2650,25 +2733,25 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
                 {
-                    // model.mm_model_pos_embed = get_tensor(new_clip->ctx_data, TN_MINICPMV_POS_EMBD);
-                    model.mm_model_pos_embed_k = get_tensor(TN_MINICPMV_POS_EMBD_K);
-                    model.mm_model_query = get_tensor(TN_MINICPMV_QUERY);
-                    model.mm_model_proj = get_tensor(TN_MINICPMV_PROJ);
-                    model.mm_model_kv_proj = get_tensor(TN_MINICPMV_KV_PROJ);
-                    model.mm_model_attn_q_w = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "weight"));
-                    model.mm_model_attn_k_w = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "weight"));
-                    model.mm_model_attn_v_w = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "weight"));
-                    model.mm_model_attn_q_b = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "bias"));
-                    model.mm_model_attn_k_b = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "bias"));
-                    model.mm_model_attn_v_b = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "bias"));
-                    model.mm_model_attn_o_w = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "weight"));
-                    model.mm_model_attn_o_b = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "bias"));
-                    model.mm_model_ln_q_w = get_tensor(string_format(TN_MINICPMV_LN, "q", "weight"));
-                    model.mm_model_ln_q_b = get_tensor(string_format(TN_MINICPMV_LN, "q", "bias"));
-                    model.mm_model_ln_kv_w = get_tensor(string_format(TN_MINICPMV_LN, "kv", "weight"));
-                    model.mm_model_ln_kv_b = get_tensor(string_format(TN_MINICPMV_LN, "kv", "bias"));
-                    model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
-                    model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));
+                    // model.mm_model_pos_embed = get_tensor(new_clip->ctx_data, TN_RESAMPL_POS_EMBD);
+                    model.mm_model_pos_embed_k = get_tensor(TN_RESAMPL_POS_EMBD_K);
+                    model.mm_model_query = get_tensor(TN_RESAMPL_QUERY);
+                    model.mm_model_proj = get_tensor(TN_RESAMPL_PROJ);
+                    model.mm_model_kv_proj = get_tensor(TN_RESAMPL_KV_PROJ);
+                    model.mm_model_attn_q_w = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "weight"));
+                    model.mm_model_attn_k_w = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "weight"));
+                    model.mm_model_attn_v_w = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "weight"));
+                    model.mm_model_attn_q_b = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "bias"));
+                    model.mm_model_attn_k_b = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "bias"));
+                    model.mm_model_attn_v_b = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "bias"));
+                    model.mm_model_attn_o_w = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "weight"));
+                    model.mm_model_attn_o_b = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "bias"));
+                    model.mm_model_ln_q_w   = get_tensor(string_format(TN_RESAMPL_LN, "q", "weight"));
+                    model.mm_model_ln_q_b   = get_tensor(string_format(TN_RESAMPL_LN, "q", "bias"));
+                    model.mm_model_ln_kv_w  = get_tensor(string_format(TN_RESAMPL_LN, "kv", "weight"));
+                    model.mm_model_ln_kv_b  = get_tensor(string_format(TN_RESAMPL_LN, "kv", "bias"));
+                    model.mm_model_ln_post_w = get_tensor(string_format(TN_RESAMPL_LN, "post", "weight"));
+                    model.mm_model_ln_post_b = get_tensor(string_format(TN_RESAMPL_LN, "post", "bias"));
                 } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
@@ -2765,6 +2848,32 @@ struct clip_model_loader {
                     model.mm_model_proj    = get_tensor(TN_MM_PROJECTOR);
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_PADDLEOCR:
+                {
+                    model.mm_model_query     = get_tensor(TN_RESAMPL_QUERY);
+                    model.mm_model_attn_q_w  = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "weight"));
+                    model.mm_model_attn_k_w  = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "weight"));
+                    model.mm_model_attn_v_w  = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "weight"));
+                    model.mm_model_attn_q_b  = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "bias"));
+                    model.mm_model_attn_k_b  = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "bias"));
+                    model.mm_model_attn_v_b  = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "bias"));
+                    model.mm_model_attn_o_w  = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "weight"));
+                    model.mm_model_attn_o_b  = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "bias"));
+                    model.mm_model_ln_post_w = get_tensor(string_format(TN_RESAMPL_LN, "post", "weight"));
+                    model.mm_model_ln_post_b = get_tensor(string_format(TN_RESAMPL_LN, "post", "bias"));
+                    // resampler ffn
+                    model.mm_model_ffn_up_w   = get_tensor(string_format(TN_RESAMPL_FFN_UP, "weight"));
+                    model.mm_model_ffn_up_b   = get_tensor(string_format(TN_RESAMPL_FFN_UP, "bias"));
+                    model.mm_model_ffn_down_w = get_tensor(string_format(TN_RESAMPL_FFN_DOWN, "weight"));
+                    model.mm_model_ffn_down_b = get_tensor(string_format(TN_RESAMPL_FFN_DOWN, "bias"));
+                    // projector ffn
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3622,7 +3731,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
 
-    } else if (ctx->proj_type() == PROJECTOR_TYPE_PIXTRAL) {
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_PIXTRAL
+            || ctx->proj_type() == PROJECTOR_TYPE_PADDLEOCR
+    ) {
         clip_image_u8 resized_image;
         auto new_size = image_manipulation::calc_size_preserved_ratio(original_size, params.patch_size, params.image_size);
         image_manipulation::bilinear_resize(*img, resized_image, new_size.width, new_size.height);
@@ -3856,6 +3967,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_PADDLEOCR:
             {
                 // dynamic size
                 int scale_factor = ctx->model.hparams.proj_scale_factor;
@@ -4247,6 +4359,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_PADDLEOCR:
             {
                 // set the 2D positions
                 int n_patches_per_col = image_size_width / patch_size;
@@ -4402,6 +4515,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_PADDLEOCR:
             return ctx->model.mm_2_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");

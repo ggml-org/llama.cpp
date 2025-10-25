@@ -87,6 +87,7 @@ struct mtmd_cli_context {
 
     int n_threads    = 1;
     llama_pos n_past = 0;
+    bool use_jinja = false;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init.model.get();
