@@ -14,6 +14,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <mutex>
+
+// Forward declarations for internal cache access
+struct llama_memory_hybrid;
+struct llama_memory_recurrent;
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>

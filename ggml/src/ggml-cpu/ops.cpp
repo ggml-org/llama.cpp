@@ -9,6 +9,7 @@
 
 #include <float.h>
 #include <algorithm>
+#include <cmath>
 
 // ggml_compute_forward_dup
 
@@ -1394,6 +1395,57 @@ void ggml_compute_forward_sum(
     }
 }
 
+// ggml_compute_forward_cumsum
+
+static void ggml_compute_forward_cumsum_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == ne00);
+    GGML_ASSERT(ne1 == ne01);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    for (int64_t i3 = 0; i3 < ne03; i3++) {
+        for (int64_t i2 = 0; i2 < ne02; i2++) {
+            for (int64_t i1 = 0; i1 < ne01; i1++) {
+                float * src_row = (float *) ((char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+                float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+                ggml_vec_cumsum_f32(ne00, dst_row, src_row);
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_cumsum(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_cumsum_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_sum_rows
 
 static void ggml_compute_forward_sum_rows_f32(
@@ -2132,6 +2184,49 @@ static void ggml_compute_forward_gelu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_gelu_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_tri
+
+static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    ggml_tri_type ttype = (ggml_tri_type) dst->op_params[0];
+    float c = ggml_get_op_params_f32(dst, 1);
+    bool keep_org_val = isnan(c);
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(src0->ne[0] == src0->ne[1]);
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const auto [ir0, ir1] = get_thread_range(params, src0);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+        const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+        float        * dst_ptr  = (float  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+        float        * src  = (float  *)           ((char *)       src0->data  + i03*nb03  + i02*nb02  + i01*nb01 );
+        ggml_vec_tri_f32(ne0, i01, dst_ptr, src, keep_org_val, c, ttype);
+    }
+
+}
+
+void ggml_compute_forward_tri(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_tri_f32(params, dst);
             } break;
         default:
             {
@@ -8633,7 +8728,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const float dA = expf(dt_soft_plus * A[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
@@ -8730,7 +8825,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
                     // dim
@@ -9012,6 +9107,14 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_XIELU:
             {
                 ggml_compute_forward_xielu(params, dst);
+            } break;
+        case GGML_UNARY_OP_EXPM1:
+            {
+                ggml_compute_forward_expm1(params, dst);
+            } break;
+        case GGML_UNARY_OP_SOFTPLUS:
+            {
+                ggml_compute_forward_softplus(params, dst);
             } break;
         default:
             {
@@ -9609,8 +9712,899 @@ void ggml_compute_forward_gla(
     }
 }
 
-// ggml_compute_forward_rwkv_wkv7
+// Helper function to compute cumulative sum
+static void delta_cumsum_f32(const float * x, float * dst, const int64_t n) {
+    float cumsum = 0.0f;
+    for (int64_t i = 0; i < n; i++) {
+        cumsum += x[i];
+        dst[i] = cumsum;
+    }
+}
 
+// Helper function for matrix multiplication
+static void delta_matmul_f32(const float * a, const float * b, float * dst,
+                              const int64_t m, const int64_t n, const int64_t k) {
+    for (int64_t i = 0; i < m; i++) {
+        for (int64_t j = 0; j < n; j++) {
+            float sum = 0.0f;
+            for (int64_t l = 0; l < k; l++) {
+                sum += a[i * k + l] * b[l * n + j];
+            }
+            dst[i * n + j] = sum;
+        }
+    }
+}
+
+// Helper function to create upper triangular mask
+static void delta_create_upper_triangular_mask(bool * mask, const int64_t size) {
+    for (int64_t i = 0; i < size; i++) {
+        for (int64_t j = 0; j < size; j++) {
+            mask[i * size + j] = (j >= i); // upper triangular with diagonal
+        }
+    }
+}
+
+// Helper function to compute chunk decay mask
+static void ggml_compute_chunk_decay_mask_f32(const float * g_cumsum, float * decay_mask,
+                                                 const int64_t chunk_size) {
+    for (int64_t i = 0; i < chunk_size; i++) {
+        for (int64_t j = 0; j < chunk_size; j++) {
+            if (i >= j) { // Only compute for lower triangular (including diagonal)
+                float g_diff = g_cumsum[i] - g_cumsum[j];
+                decay_mask[i * chunk_size + j] = expf(-g_diff);
+            } else {
+                decay_mask[i * chunk_size + j] = 0.0f; // Causal mask
+            }
+        }
+    }
+}
+
+// Helper function to compute k_beta @ key.T
+static void delta_compute_k_beta_key_t_f32(const float * k_beta, const float * key,
+                                             float * k_beta_key_t,
+                                             const int64_t chunk_size, const int64_t k_head_dim) {
+    for (int64_t i = 0; i < chunk_size; i++) {
+        for (int64_t j = 0; j < chunk_size; j++) {
+            float sum = 0.0f;
+            for (int64_t d = 0; d < k_head_dim; d++) {
+                int64_t k_beta_idx = i * k_head_dim + d;
+                int64_t key_idx = j * k_head_dim + d;
+                sum += k_beta[k_beta_idx] * key[key_idx];
+            }
+            k_beta_key_t[i * chunk_size + j] = sum;
+        }
+    }
+}
+
+// Helper function to apply triangular updates to entire chunk (all sequences and heads)
+static void delta_apply_triangular_updates_chunk_f32(float *       attn,
+                                                     const int64_t chunk_size,
+                                                     const int64_t n_seqs,
+                                                     const int64_t H_v,
+                                                     int           num_chunks) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int chunk = 0; chunk < num_chunks; chunk++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * attn_ptr = attn + seq * (chunk_size * chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * (chunk_size * chunk_size);
+
+                // Apply triangular updates following the Python reference exactly:
+                // for i in range(1, chunk_size):
+                //     row = attn[..., i, :i].clone()
+                //     sub = attn[..., :i, :i].clone()
+                //     attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
+                for (int64_t i = 1; i < chunk_size; i++) {
+                    // Create temporary storage for row and sub to avoid modifying during computation
+                    float * row = (float *) malloc(i * sizeof(float));
+                    float * sub = (float *) malloc(i * i * sizeof(float));
+
+                    // Copy row = attn[..., i, :i]
+                    for (int64_t j = 0; j < i; j++) {
+                        row[j] = attn_ptr[i * chunk_size + j];
+                    }
+
+                    // Copy sub = attn[..., :i, :i]
+                    for (int64_t k = 0; k < i; k++) {
+                        for (int64_t j = 0; j < i; j++) {
+                            sub[k * i + j] = attn_ptr[k * chunk_size + j];
+                        }
+                    }
+
+                    // Compute updates for each j in :i
+                    for (int64_t j = 0; j < i; j++) {
+                        // Compute (row.unsqueeze(-1) * sub).sum(-2)
+                        float sum_val = 0.0f;
+                        for (int64_t k = 0; k < i; k++) {
+                            sum_val += row[k] * sub[k * i + j];
+                        }
+
+                        // Update: attn[..., i, j] = row[j] + sum_val
+                        attn_ptr[i * chunk_size + j] = row[j] + sum_val;
+                    }
+
+                    free(row);
+                    free(sub);
+                }
+            }
+        }
+    }
+}
+
+// Helper function to add identity matrix to entire chunk (all sequences and heads)
+static void delta_add_identity_matrix_chunk_f32(float *       matrix,
+                                                const int64_t chunk_size,
+                                                const int64_t n_seqs,
+                                                const int64_t H_v,
+                                                int           num_chunks) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int i = 0; i < num_chunks; i++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * matrix_ptr = matrix + seq * (chunk_size * chunk_size * num_chunks * H_v) +
+                                     (head * num_chunks + i) * (chunk_size * chunk_size);
+                // Add identity matrix directly
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    matrix_ptr[i * chunk_size + i] += 1.0f;
+                }
+            }
+        }
+    }
+}
+
+// Helper function to apply triangular updates (original version for individual matrices)
+static void delta_apply_triangular_updates_f32(float * attn, const int64_t chunk_size) {
+    for (int64_t i = 1; i < chunk_size; i++) {
+        for (int64_t j = 0; j < i; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < i; k++) {
+                sum += attn[i * chunk_size + k] * attn[k * chunk_size + j];
+            }
+            attn[i * chunk_size + j] += sum;
+        }
+    }
+}
+
+// Helper function to add identity matrix (original version for individual matrices)
+static void delta_add_identity_matrix_f32(float * matrix, const int64_t size) {
+    for (int64_t i = 0; i < size; i++) {
+        matrix[i * size + i] += 1.0f;
+    }
+}
+
+static void delta_compute_value_f32(const float * attn,
+                                    const float * v_beta,
+                                    float *       value,
+                                    const int64_t chunk_size,
+                                    const int64_t v_head_dim,
+                                    const int64_t n_heads,
+                                    const int64_t n_seqs,
+                                    int           num_chunks) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < n_heads; head++) {
+            for (int i = 0; i < num_chunks; i++) {
+                delta_matmul_f32(
+                    attn + (chunk_size * chunk_size * n_heads * num_chunks) * seq + (chunk_size * chunk_size) * (head * num_chunks + i),
+                    v_beta + (chunk_size * v_head_dim * n_heads * num_chunks) * seq + (chunk_size * v_head_dim) * (head * num_chunks + i),
+                    value + (chunk_size * v_head_dim * n_heads * num_chunks) * seq + (chunk_size * v_head_dim) * (head * num_chunks + i),
+                    chunk_size, v_head_dim, chunk_size);
+            }
+        }
+    }
+}
+
+// Helper function to compute k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1)) for single head/sequence
+static void delta_compute_k_cumdecay_f32(const float * attn, const float * k_beta, const float * g,
+                                        float * k_cumdecay, const int64_t chunk_size, const int64_t k_head_dim) {
+    for (int64_t i = 0; i < chunk_size; i++) {
+        for (int64_t j = 0; j < k_head_dim; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < chunk_size; k++) {
+                sum += attn[i * chunk_size + k] * k_beta[k * k_head_dim + j] * expf(g[k]);
+            }
+            k_cumdecay[i * k_head_dim + j] = sum;
+        }
+    }
+}
+
+// Matrix multiplication helper for delta net
+static void ggml_delta_net_matmul_f32(const float * a, const int64_t rows_a, const int64_t cols_a, const int64_t cols_b,
+                           const float * b, float * result) {
+    for (int64_t i = 0; i < rows_a; i++) {
+        for (int64_t j = 0; j < cols_b; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < cols_a; k++) {
+                int64_t a_idx = i * cols_a + k;
+                int64_t b_idx = k * cols_b + j;
+                sum += a[a_idx] * b[b_idx];
+            }
+            result[i * cols_b + j] = sum;
+        }
+    }
+}
+
+// Helper function to compute q_i @ k_i.transpose(-1, -2) * decay_mask and apply mask
+static void delta_compute_q_k_attn_f32(const float * q, const float * k, const float * decay_mask,
+                                       float * attn, const bool * mask,
+                                       const int64_t chunk_size, const int64_t head_dim) {
+    // Compute q @ k.transpose(-1, -2)
+    for (int64_t i = 0; i < chunk_size; i++) {
+        for (int64_t j = 0; j < chunk_size; j++) {
+            float sum = 0.0f;
+            for (int64_t d = 0; d < head_dim; d++) {
+                int64_t q_idx = i * head_dim + d;
+                int64_t k_idx = j * head_dim + d;
+                sum += q[q_idx] * k[k_idx];
+            }
+            // Apply decay mask and causal mask
+            int64_t attn_idx = i * chunk_size + j;
+            attn[attn_idx] = (mask[attn_idx] ? 0.0f : sum * decay_mask[attn_idx]);
+        }
+    }
+}
+
+// Helper function for matrix multiplication with state tensors
+static void delta_matmul_state_f32(const float * a, const float * state, float * dst,
+                                   const int64_t rows_a, const int64_t cols_a, const int64_t cols_state) {
+    for (int64_t i = 0; i < rows_a; i++) {
+        for (int64_t j = 0; j < cols_state; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < cols_a; k++) {
+                int64_t a_idx = i * cols_a + k;
+                int64_t state_idx = k * cols_state + j;
+                float a_val = a[a_idx];
+                float state_val = state[state_idx];
+                sum += a_val * state_val;
+            }
+            dst[i * cols_state + j] = sum;
+        }
+    }
+}
+
+// Helper function for element-wise tensor subtraction
+static void delta_tensor_subtract_f32(const float * a, const float * b, float * dst, const int64_t size) {
+    for (int64_t i = 0; i < size; i++) {
+        dst[i] = a[i] - b[i];
+    }
+}
+
+// Helper function for element-wise tensor addition
+static void delta_tensor_add_f32(const float * a, const float * b, float * dst, const int64_t size) {
+    for (int64_t i = 0; i < size; i++) {
+        dst[i] = a[i] + b[i];
+    }
+}
+
+// Helper function to update recurrent state
+static void delta_update_recurrent_state_f32(const float * last_state, const float * g_last,
+                                             const float * k_i, const float * g_diff_exp, const float * v_new, float * new_state,
+                                             const int64_t chunk_size, const int64_t k_head_dim, const int64_t v_head_dim) {
+    for (int64_t i = 0; i < k_head_dim; i++) {
+        for (int64_t j = 0; j < v_head_dim; j++) {
+            int64_t state_idx = i * v_head_dim + j;
+
+            // last_recurrent_state * g_last
+            float term1 = last_state[state_idx] * (*g_last);
+
+            // (k_i * g_diff_exp).transpose(-1, -2) @ v_new
+            float term2 = 0.0f;
+            for (int64_t k = 0; k < chunk_size; k++) {
+                int64_t k_idx = k * k_head_dim + i;
+                int64_t v_idx = k * v_head_dim + j;
+                term2 += k_i[k_idx] * g_diff_exp[k] * v_new[v_idx];
+            }
+
+            new_state[state_idx] = term1 + term2;
+        }
+    }
+}
+
+// Helper function to compute q_i @ k_i.transpose(-1, -2) * decay_mask and apply mask for entire chunk
+static void delta_compute_q_k_attn_chunk_f32(const float * q, const float * k, const float * decay_mask,
+                                             float * attn, const bool * mask,
+                                             const int64_t chunk_size, const int64_t head_dim,
+                                             const int64_t n_seqs, const int64_t H_v) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            const float * q_ptr = q + seq * (chunk_size * head_dim * H_v) + head * (chunk_size * head_dim);
+            const float * k_ptr = k + seq * (chunk_size * head_dim * H_v) + head * (chunk_size * head_dim);
+            const float * decay_mask_ptr = decay_mask + seq * (chunk_size * chunk_size * H_v) + head * (chunk_size * chunk_size);
+            float * attn_ptr = attn + seq * (chunk_size * chunk_size * H_v) + head * (chunk_size * chunk_size);
+            delta_compute_q_k_attn_f32(q_ptr, k_ptr, decay_mask_ptr, attn_ptr, mask, chunk_size, head_dim);
+        }
+    }
+}
+
+// Helper function for matrix multiplication with state tensors for entire chunk
+static void delta_matmul_state_chunk_f32(const float * a, const float * state, float * dst,
+                                        const int64_t rows_a, const int64_t cols_a, const int64_t cols_state,
+                                        const int64_t n_seqs, const int64_t H_v, int chunk, int num_chunks) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            const float * a_ptr = chunk < 0 ? a + seq * (rows_a * cols_a * H_v) + head * (rows_a * cols_a) :
+                a + seq * (rows_a * cols_a * H_v * num_chunks) + (head * num_chunks + chunk) * (rows_a * cols_a);
+            const float * state_ptr = state + seq * (cols_a * cols_state * H_v) + head * (cols_a * cols_state);
+            float * dst_ptr = dst + seq * (rows_a * cols_state * H_v) + head * (rows_a * cols_state);
+            delta_matmul_state_f32(a_ptr, state_ptr, dst_ptr, rows_a, cols_a, cols_state);
+        }
+    }
+}
+
+// Helper function to update recurrent state for entire chunk
+static void delta_update_recurrent_state_chunk_f32(const float * state, const float * g_last,
+                                                  const float * k, const float * g_diff_exp, const float * v_new, float * new_state,
+                                                  const int64_t chunk_size, const int64_t k_head_dim, const int64_t v_head_dim,
+                                                  const int64_t n_seqs, const int64_t H_v) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            const float * state_ptr = state + seq * (k_head_dim * v_head_dim * H_v) + head * (k_head_dim * v_head_dim);
+            const float * k_ptr = k + seq * (chunk_size * k_head_dim * H_v) + head * (chunk_size * k_head_dim);
+            const float * g_diff_exp_ptr = g_diff_exp + seq * (chunk_size * H_v) + head * chunk_size;
+            const float * v_new_ptr = v_new + seq * (chunk_size * v_head_dim * H_v) + head * (chunk_size * v_head_dim);
+            float * new_state_ptr = new_state + seq * (k_head_dim * v_head_dim * H_v) + head * (k_head_dim * v_head_dim);
+
+            for (int64_t i = 0; i < k_head_dim; i++) {
+                for (int64_t j = 0; j < v_head_dim; j++) {
+                    int64_t state_idx = i * v_head_dim + j;
+
+                    // last_recurrent_state * g_last
+                    float term1 = state_ptr[state_idx] * g_last[seq * H_v + head];
+
+                    // (k_i * g_diff_exp).transpose(-1, -2) @ v_new
+                    float term2 = 0.0f;
+                    for (int64_t k = 0; k < chunk_size; k++) {
+                        int64_t k_idx = k * k_head_dim + i;
+                        int64_t v_idx = k * v_head_dim + j;
+                        term2 += k_ptr[k_idx] * g_diff_exp_ptr[k] * v_new_ptr[v_idx];
+                    }
+
+                    new_state_ptr[state_idx] = term1 + term2;
+                }
+            }
+        }
+    }
+}
+
+// Helper function for element-wise tensor subtraction for entire chunk
+static void delta_tensor_subtract_chunk_f32(const float * a, const float * b, float * dst, const int64_t size,
+                                           const int64_t n_seqs, const int64_t H_v, int num_chunks, int chunk) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            const float * a_ptr = a + seq * (size * num_chunks * H_v) + (head * num_chunks + chunk) * size;
+            const float * b_ptr = b + seq * (size * H_v) + head * size;
+            float * dst_ptr = dst + seq * (size * H_v) + head * size;
+            delta_tensor_subtract_f32(a_ptr, b_ptr, dst_ptr, size);
+        }
+    }
+}
+
+// Helper function for element-wise tensor addition for entire chunk
+static void delta_tensor_add_chunk_f32(const float * a, const float * b, float * dst, const int64_t size,
+                                       const int64_t n_seqs, const int64_t H_v) {
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            const float * a_ptr = a + seq * (size * H_v) + head * size;
+            const float * b_ptr = b + seq * (size * H_v) + head * size;
+            float * dst_ptr = dst + seq * (size * H_v) + head * size;
+            delta_tensor_add_f32(a_ptr, b_ptr, dst_ptr, size);
+        }
+    }
+}
+
+// chunked version of delta_net (for prompt processing)
+void ggml_compute_forward_delta_net_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];  // q (already normalized and scaled)
+    const struct ggml_tensor * src1 = dst->src[1];  // k (already normalized)
+    const struct ggml_tensor * src2 = dst->src[2];  // v
+    const struct ggml_tensor * src3 = dst->src[3];  // g (cumsum)
+    const struct ggml_tensor * src4 = dst->src[4];  // state
+    const struct ggml_tensor * src5 = dst->src[5];  // decay_mask
+    const struct ggml_tensor * src6 = dst->src[6];  // v_beta
+    const struct ggml_tensor * src7 = dst->src[7];  // k_beta
+    const struct ggml_tensor * src8 = dst->src[8];  // attn
+
+    const int64_t H_v               = (int64_t) dst->op_params[0];
+    const int64_t S_v               = (int64_t) dst->op_params[2];
+    const int64_t original_n_tokens = (int64_t) dst->op_params[3];  // Get original sequence length
+    const int64_t n_tokens          = original_n_tokens;            // Use the original sequence length
+    const int64_t n_seqs            = src0->ne[3];                  // q tensor has n_seqs in dim 3
+    // Calculate chunk size
+    const int64_t chunk_size = GGML_DELTA_NET_CHUNK;
+    const int64_t pad_size = (chunk_size - n_tokens % chunk_size) % chunk_size;
+    const int64_t num_chunks = (n_tokens + pad_size) / chunk_size;
+
+    // Add assertions to verify tensor dimensions
+    GGML_ASSERT(src0->ne[3] == n_seqs && src0->ne[2] == num_chunks * H_v);  // q tensor
+    GGML_ASSERT(src1->ne[3] == n_seqs && src1->ne[2] == num_chunks * H_v);  // k tensor
+    GGML_ASSERT(src2->ne[3] == n_seqs && src2->ne[2] == num_chunks * H_v);  // v tensor
+    GGML_ASSERT(src3->ne[3] == n_seqs && src3->ne[2] == num_chunks * H_v);  // g tensor
+    GGML_ASSERT(src5->ne[3] == n_seqs && src5->ne[2] == num_chunks * H_v);  // decay mask tensor
+    GGML_ASSERT(src6->ne[3] == n_seqs && src6->ne[2] == num_chunks * H_v);  // v_beta tensor
+    GGML_ASSERT(src7->ne[3] == n_seqs && src7->ne[2] == num_chunks * H_v);  // k_beta tensor
+    GGML_ASSERT(src8->ne[3] == n_seqs && src8->ne[2] == num_chunks * H_v);  // k_beta tensor
+    GGML_ASSERT(src4->ne[3] == n_seqs);  // state tensor
+
+    float * dst_data  = (float *) dst->data;
+    // Following GLA pattern: output is first part, state is second part
+    float * output    = dst_data; // [S_v, H_v, n_tokens, n_seqs] - only real sequence length, not padded
+    float * new_state = dst_data + (S_v * H_v * n_tokens * n_seqs);  // [S_v, S_v, H_v, n_seqs]
+
+    const int ith = params->ith;
+    // const int nth = params->nth;  // nth is unused
+
+    // Clear output and new state section
+    if (ith == 0) {
+        memset(output, 0, ((S_v * H_v * n_tokens * n_seqs) + (S_v * S_v * H_v * n_seqs)) * sizeof(float));
+    } else {
+        return;
+    }
+
+    float * state_data = (float *) src4->data;
+
+    // Init new state with initial state (will probably be zeroes)
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int64_t head = 0; head < H_v; head++) {
+            for (int64_t i = 0; i < S_v; i++) {
+                for (int64_t j = 0; j < S_v; j++) {
+                    new_state[seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j] =
+                        state_data[seq * src4->nb[3] / sizeof(float) + (head * S_v + i) * src4->nb[1] / sizeof(float) + j * src4->nb[0] / sizeof(float)];
+                }
+            }
+        }
+    }
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(src2));
+    GGML_ASSERT(ggml_is_contiguous(src3));
+    GGML_ASSERT(ggml_is_contiguous(src4));
+    GGML_ASSERT(ggml_is_contiguous(src5));
+    GGML_ASSERT(ggml_is_contiguous(src6));
+    GGML_ASSERT(ggml_is_contiguous(src7));
+    GGML_ASSERT(ggml_is_contiguous(src8));
+
+    // int64_t total_params = n_seqs * H_v * num_chunks;
+    // int64_t per_thread = (total_params % nth == 0) ? total_params / nth : (total_params / nth) + 1;
+
+    float * attn          = (float *) malloc(chunk_size * chunk_size * H_v * num_chunks * n_seqs * sizeof(float));
+    float * value         = (float *) malloc(chunk_size * S_v * H_v * num_chunks * n_seqs * sizeof(float));
+    float * k_cumdecay    = (float *) malloc(chunk_size * S_v * H_v * num_chunks * n_seqs * sizeof(float));
+    bool *  mask          = (bool *) malloc(chunk_size * chunk_size * sizeof(bool));
+    float * g =             (float *) malloc(chunk_size * H_v * num_chunks * n_seqs * sizeof(float));
+
+    // Create upper triangular mask for causal attention (exclude diagonal)
+    for (int64_t i = 0; i < chunk_size; i++) {
+        for (int64_t j = 0; j < chunk_size; j++) {
+            mask[i * chunk_size + j] = (j > i);  // True for upper triangular (excluding diagonal)
+        }
+    }
+
+    // Make a copy of the attention tensor and the gate cumsum tensor
+    memcpy(attn, src8->data, ggml_nbytes(src8));
+    memcpy(g, src3->data, ggml_nbytes(src3));
+
+    // Prepare the initial attention matrix with triangular updates and identity (for entire chunks)
+    // This corresponds to the reference implementation:
+    // for i in range(1, chunk_size): attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
+    // attn = attn + torch.eye(chunk_size)
+    delta_apply_triangular_updates_chunk_f32(attn, chunk_size, n_seqs, H_v, num_chunks);
+    delta_add_identity_matrix_chunk_f32(attn, chunk_size, n_seqs, H_v, num_chunks);
+
+    // Compute value = attn @ v_beta
+    delta_compute_value_f32(attn, (const float *) src6->data, value, chunk_size, S_v, H_v, n_seqs, num_chunks);
+
+    for (int64_t seq = 0; seq < n_seqs; seq++) {
+        for (int i = 0; i < num_chunks; i++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                delta_compute_k_cumdecay_f32(attn + (chunk_size * chunk_size * num_chunks * H_v) * seq + (chunk_size * chunk_size) * (head * num_chunks + i),
+                    (float *) src7->data + (chunk_size * num_chunks * S_v * H_v) * seq + (chunk_size * S_v) * (head * num_chunks + i),
+                    g + (chunk_size * H_v * num_chunks) * seq + chunk_size * (head * num_chunks + i),
+                    k_cumdecay + (chunk_size * num_chunks * S_v * H_v) * seq + (chunk_size * S_v) * (head * num_chunks + i),
+                    chunk_size, S_v);
+            }
+        }
+    }
+
+    // Process each chunk with all sequences and heads together
+    for (int64_t chunk = 0; chunk < num_chunks; chunk++) {
+        // Create lambdas for tensor access similar to recurrent function
+        const auto q_chunk = [chunk, src0, num_chunks](int64_t seq, int64_t head, int64_t token_idx, int64_t i) {
+            return ggml_get_f32_nd(src0, i, token_idx, head * num_chunks + chunk, seq);
+        };
+        const auto k_chunk = [chunk, src1, num_chunks](int64_t seq, int64_t head, int64_t token_idx, int64_t i) {
+            return ggml_get_f32_nd(src1, i, token_idx, head * num_chunks + chunk, seq);
+        };
+        const auto g_chunk = [chunk, src3, num_chunks](int64_t seq, int64_t head, int64_t token_idx) {
+            return ggml_get_f32_nd(src3, token_idx, 0, head * num_chunks + chunk, seq);
+        };
+
+        // Allocate per-chunk arrays containing all sequences and heads
+        float * pc_core_attn_out = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_attn_inter    = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_v_new         = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_v_prime       = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_g_diff_exp    = (float *) malloc(chunk_size * H_v * n_seqs * sizeof(float));
+        float * pc_g_last        = (float *) malloc(H_v * n_seqs * sizeof(float));
+
+        // Create temporary arrays for entire chunk
+        float * pc_q_chunk_data    = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_k_chunk_data    = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_q_g_exp         = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        float * pc_attn_v_new      = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+
+        // Fill temporary arrays with data from all sequences and heads
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * q_ptr = pc_q_chunk_data + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+                float * k_ptr = pc_k_chunk_data + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+                float * g_ptr = g + (chunk_size * H_v * num_chunks) * seq + chunk_size * (head * num_chunks + chunk);
+
+                float * q_g_exp_ptr = pc_q_g_exp + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+
+                // Fill q, k, decay_mask, and g data
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    for (int64_t d = 0; d < S_v; d++) {
+                        q_ptr[i * S_v + d] = q_chunk(seq, head, i, d);
+                        k_ptr[i * S_v + d] = k_chunk(seq, head, i, d);
+                    }
+                    g_ptr[i] = g_chunk(seq, head, i);
+                }
+
+                // Compute q_g_exp = q * g.exp()
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    for (int64_t d = 0; d <  S_v; d++) {
+                        q_g_exp_ptr[i * S_v + d] = q_ptr[i * S_v + d] * expf(g_ptr[i]);
+                    }
+                }
+            }
+        }
+
+        // Step 4: Compute NEW attention matrix for this chunk: attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
+        // Note: decay_mask[:, :, i] means we need to use the decay_mask for this specific chunk
+        // The mask applied is the simple causal attention mask: torch.triu(torch.ones(chunk_size, chunk_size), diagonal=1)
+
+        // Now compute attention for all sequences and heads together
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * attn_ptr = attn + seq * (chunk_size * chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * (chunk_size * chunk_size);
+                const float * q_ptr = pc_q_chunk_data + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+                const float * k_ptr = pc_k_chunk_data + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+
+                float * k_trans = (float *) malloc(chunk_size * S_v * sizeof(float));
+                for (int i = 0; i < S_v; i++) {
+                    for (int j = 0; j < chunk_size; j++) {
+                        k_trans[i * chunk_size + j] = k_ptr[j * S_v + i];
+                    }
+                }
+
+                delta_matmul_f32(q_ptr, k_trans, attn_ptr, chunk_size, chunk_size, S_v);
+            }
+        }
+
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    for (int64_t j = 0; j < chunk_size; j++) {
+                        float * attn_ptr = attn + seq * (chunk_size * chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * (chunk_size * chunk_size);
+                        const float * decay_mask_ptr = (float *) src5->data + seq * (chunk_size * chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * (chunk_size * chunk_size);
+                        float attn_val = attn_ptr[i * chunk_size + j] * decay_mask_ptr[i * chunk_size + j];
+                        // Apply simple causal attention mask (upper triangular with diagonal=1)
+                        // This corresponds to: torch.triu(torch.ones(chunk_size, chunk_size), diagonal=1)
+                        if (j > i) {
+                            attn_val = 0.0f;
+                        }
+                        attn_ptr[i * chunk_size + j] = attn_val;
+                    }
+                }
+            }
+        }
+
+        // v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
+        // k_cumdecay has shape [chunk_size, v_head_dim], state has shape [v_head_dim, v_head_dim]
+        delta_matmul_state_chunk_f32(k_cumdecay, new_state, pc_v_prime, chunk_size, S_v, S_v, n_seqs, H_v, chunk, num_chunks);
+
+        // v_new = v_i - v_prime
+        delta_tensor_subtract_chunk_f32(value, pc_v_prime, pc_v_new, chunk_size * S_v, n_seqs, H_v, num_chunks, chunk);
+
+        // attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
+        delta_matmul_state_chunk_f32(pc_q_g_exp, new_state, pc_attn_inter, chunk_size, S_v, S_v, n_seqs, H_v, -1, -1);
+
+        // core_attn_out[:, :, i] = attn_inter + attn @ v_new
+        // Use regular matrix multiplication for attn @ v_new
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                const float * attn_ptr = attn + seq * (chunk_size * chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * (chunk_size * chunk_size);
+                const float * v_new_ptr = pc_v_new + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+                float * attn_v_new_ptr = pc_attn_v_new + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+
+                // Compute attn @ v_new: [chunk_size, chunk_size] @ [chunk_size, S_v] -> [chunk_size, S_v]
+                delta_matmul_f32(attn_ptr, v_new_ptr, attn_v_new_ptr, chunk_size, S_v, chunk_size);
+            }
+        }
+        delta_tensor_add_chunk_f32(pc_attn_inter, pc_attn_v_new, pc_core_attn_out, chunk_size * S_v, n_seqs, H_v);
+
+        // Prepare g_last and g_diff_exp for state update
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * g_ptr = g + seq * (chunk_size * num_chunks * H_v) + (head * num_chunks + chunk) * chunk_size;
+                float g_last_val         = g_ptr[chunk_size - 1];
+                pc_g_last[seq * H_v + head] = expf(g_last_val);
+
+                float * g_diff_exp_ptr = pc_g_diff_exp + seq * (chunk_size * H_v) + head * chunk_size;
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    float diff        = g_last_val - g_ptr[i];
+                    g_diff_exp_ptr[i] = expf(diff);
+                }
+            }
+        }
+
+        float * k_g_diffexp = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < chunk_size; i++) {
+                    for (int64_t j = 0; j < S_v; j++) {
+                        k_g_diffexp[seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v) + i * S_v + j] =
+                            k_chunk(seq, head, i, j) * pc_g_diff_exp[seq * (chunk_size * H_v) + head * chunk_size + i];
+                    }
+                }
+            }
+        }
+        float * k_g_diffexp_T = (float *) malloc(chunk_size * S_v * H_v * n_seqs * sizeof(float));
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < S_v; i++) {
+                    for (int64_t j = 0; j < chunk_size; j++) {
+                        k_g_diffexp_T[seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v) + i * chunk_size + j] =
+                            k_g_diffexp[seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v) + j * S_v + i];
+                    }
+                }
+            }
+        }
+
+        float * kgd_mul_vnew = (float *) malloc(S_v * S_v * H_v * n_seqs * sizeof(float));
+
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                delta_matmul_f32(k_g_diffexp_T + (chunk_size * S_v * H_v) * seq + (chunk_size * S_v) * head,
+                    pc_v_new + (chunk_size * S_v * H_v) * seq + (chunk_size * S_v) * head,
+                    kgd_mul_vnew + (S_v * S_v * H_v) * seq + (S_v * S_v) * head,
+                    S_v, S_v, chunk_size);
+            }
+        }
+
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int i = 0; i < S_v; i++) {
+                    for (int j = 0; j < S_v; j++) {
+                        new_state[(S_v * S_v * H_v) * seq + (S_v * S_v) * head + S_v * i + j] =
+                            new_state[(S_v * S_v * H_v) * seq + (S_v * S_v) * head + S_v * i + j] * pc_g_last[seq * H_v + head] +
+                            kgd_mul_vnew[(S_v * S_v * H_v) * seq + (S_v * S_v) * head + S_v * i + j];
+                    }
+                }
+            }
+        }
+
+        // Free temporary memory
+        free(pc_q_chunk_data);
+        free(pc_k_chunk_data);
+        free(pc_q_g_exp);
+        free(pc_attn_v_new);
+        free(kgd_mul_vnew);
+        free(k_g_diffexp_T);
+        free(k_g_diffexp);
+
+        // Store output for this chunk (all sequences and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float * core_attn_out_ptr = pc_core_attn_out + seq * (chunk_size * S_v * H_v) + head * (chunk_size * S_v);
+
+                // Compute number of tokens for this chunk (chunk_size unless this is the last chunk)
+                // With last chunk, the ideal fit needs special handling because otherwise we copy 0 tokens...
+                int64_t remainder = n_tokens % chunk_size;
+                int64_t n_tokens_chunk = chunk == num_chunks - 1 ? (remainder == 0 ? chunk_size : remainder) : chunk_size;
+
+                // Store output for this chunk
+                for (int64_t i = 0; i < n_tokens_chunk; i++) {
+                    for (int64_t d = 0; d < S_v; d++) {
+                        int64_t output_idx =
+                            seq * (n_tokens * S_v * H_v) + head * (n_tokens * S_v) + (chunk * chunk_size + i) * S_v + d;
+                        output[output_idx] = core_attn_out_ptr[i * S_v + d];
+                    }
+                }
+            }
+        }
+        free(pc_core_attn_out);
+        free(pc_attn_inter);
+        free(pc_v_new);
+        free(pc_v_prime);
+        free(pc_g_diff_exp);
+        free(pc_g_last);
+    }
+
+    GGML_ASSERT(output + S_v * H_v * n_tokens * n_seqs == new_state);
+
+    free(attn);
+    free(value);
+    free(k_cumdecay);
+    free(mask);
+    free(g);
+}
+
+void ggml_compute_forward_delta_net_recurrent_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];  // q_tokens
+    const struct ggml_tensor * src1 = dst->src[1];  // k_tokens
+    const struct ggml_tensor * src2 = dst->src[2];  // v_tokens
+    const struct ggml_tensor * src3 = dst->src[3];  // g_tokens_exp
+    const struct ggml_tensor * src4 = dst->src[4];  // beta_tokens
+    const struct ggml_tensor * src5 = dst->src[5];  // state
+    // src6, src7, src8 are nullptr in recurrent version
+
+    const int64_t H_v               = (int64_t) dst->op_params[0];
+    const int64_t S_v               = (int64_t) dst->op_params[2];
+    const int64_t original_n_tokens = (int64_t) dst->op_params[3];  // Get original sequence length
+    const int64_t n_tokens          = original_n_tokens;            // Use the original sequence length
+    const int64_t n_seqs            = src0->ne[3];                  // q tensor has n_seqs in dim 3
+
+    // Add assertions to verify tensor dimensions
+    GGML_ASSERT(src0->ne[3] == n_seqs);  // q tensor
+    GGML_ASSERT(src1->ne[3] == n_seqs);  // k tensor
+    GGML_ASSERT(src2->ne[3] == n_seqs);  // v tensor
+    GGML_ASSERT(src3->ne[3] == n_seqs);  // g tensor
+    GGML_ASSERT(src4->ne[3] == n_seqs);  // beta tensor
+    GGML_ASSERT(src5->ne[3] == n_seqs);  // state tensor
+
+    float * dst_data  = (float *) dst->data;
+    // Output is first part, state is second part
+    float * output    = dst_data; // [S_v * H_v * n_tokens * n_seqs]
+    float * final_state = dst_data + (S_v * H_v * n_tokens * n_seqs);  // [S_v * S_v * H_v * n_seqs]
+
+    const int ith = params->ith;
+    // const int nth = params->nth;
+
+    // Clear output and new state section
+    if (ith == 0) {
+        memset(output, 0, ((S_v * H_v * n_tokens * n_seqs) + (S_v * S_v * H_v * n_seqs)) * sizeof(float));
+    } else {
+        return; // only calculate on one thread
+    }
+
+    float * state_data = (float *) src5->data; // state is now src5
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(src2));
+    GGML_ASSERT(ggml_is_contiguous(src3));
+    GGML_ASSERT(ggml_is_contiguous(src4));
+    GGML_ASSERT(ggml_is_contiguous(src5));
+
+    const auto state_ptr = [state_data, src5] (int64_t seq, int64_t head, int64_t i, int64_t j) {
+        return state_data + (j * src5->nb[0] / sizeof(float)) + (i * src5->nb[1] / sizeof(float)) +
+            (head * src5->nb[2] / sizeof(float)) + (seq * src5->nb[3] / sizeof(float));
+    };
+
+    // Process each token sequentially across all sequences and heads (recurrent processing)
+    // Following the PyTorch reference: for each token i, process all sequences and heads
+    for (int64_t token = 0; token < n_tokens; token++) {
+        const auto q_t = [token, src0] (int64_t seq, int64_t head, int64_t i) { return ggml_get_f32_nd(src0, token, i, head, seq); };
+        const auto k_t = [token, src1] (int64_t seq, int64_t head, int64_t i) { return ggml_get_f32_nd(src1, token, i, head, seq); };
+        const auto v_t = [token, src2] (int64_t seq, int64_t head, int64_t i) { return ggml_get_f32_nd(src2, token, i, head, seq); };
+        const auto g_exp_t = [token, src3] (int64_t seq, int64_t head) { return ggml_get_f32_nd(src3, token, 0, head, seq); };
+        const auto beta_t = [token, src4] (int64_t seq, int64_t head) { return ggml_get_f32_nd(src4, token, 0, head, seq); };
+
+        float * delta = (float *)malloc(S_v * H_v * n_seqs * sizeof(float));
+        float * kv_mem = (float *)malloc(S_v * H_v * n_seqs * sizeof(float));
+        float * attn_out_t = (float *)malloc(S_v * H_v * n_seqs * sizeof(float));
+
+        // Create temporary arrays for processing all sequences and heads at once
+        float * temp_state = (float *) malloc(S_v * S_v * H_v * n_seqs * sizeof(float));
+
+        // Initialize temp_state with current state values for all sequences and heads
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < S_v; i++) {
+                    for (int64_t j = 0; j < S_v; j++) {
+                        int64_t idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        temp_state[idx] = *(state_ptr(seq, head, i, j));
+                    }
+                }
+            }
+        }
+
+        // 1. last_recurrent_state = last_recurrent_state * g_t (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float g_exp = g_exp_t(seq, head);
+                for (int64_t i = 0; i < S_v; i++) {
+                    for (int64_t j = 0; j < S_v; j++) {
+                        int64_t idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        temp_state[idx] *= g_exp;
+                    }
+                }
+            }
+        }
+
+        // 2. kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2) (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t j = 0; j < S_v; j++) {
+                    kv_mem[seq * H_v * S_v + head * S_v + j] = 0.0f;
+                    for (int64_t i = 0; i < S_v; i++) {
+                        int64_t state_idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        // This implements: (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
+                        kv_mem[seq * H_v * S_v + head * S_v + j] += temp_state[state_idx] * k_t(seq, head, i);
+                    }
+                }
+            }
+        }
+
+        // 3. delta = (v_t - kv_mem) * beta_t (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                float beta_val = beta_t(seq, head);
+                for (int64_t j = 0; j < S_v; j++) {
+                    delta[seq * H_v * S_v + head * S_v + j] =
+                        (v_t(seq, head, j) - kv_mem[seq * H_v * S_v + head * S_v + j]) * beta_val;
+                }
+            }
+        }
+
+        // 4. last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2) (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < S_v; i++) {
+                    for (int64_t j = 0; j < S_v; j++) {
+                        int64_t state_idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        // k_t[i] * delta[j] (where delta is treated as column vector)
+                        temp_state[state_idx] += k_t(seq, head, i) * delta[seq * H_v * S_v + head * S_v + j];
+                    }
+                }
+            }
+        }
+
+        // 5. core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2) (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t j = 0; j < S_v; j++) {
+                    attn_out_t[seq * H_v * S_v + head * S_v + j] = 0.0f;
+                    for (int64_t i = 0; i < S_v; i++) {
+                        int64_t state_idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        attn_out_t[seq * H_v * S_v + head * S_v + j] += temp_state[state_idx] * q_t(seq, head, i);
+                    }
+                }
+            }
+        }
+
+        // Store the output for this token (for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t d = 0; d < S_v; d++) {
+                    int64_t output_idx = d + head * S_v + token * (S_v * H_v) + seq * (S_v * H_v * n_tokens);
+                    output[output_idx] = attn_out_t[seq * H_v * S_v + head * S_v + d];
+                }
+            }
+        }
+
+        // Update the working state for next token iteration (in the state tensor for all seqs and heads)
+        for (int64_t seq = 0; seq < n_seqs; seq++) {
+            for (int64_t head = 0; head < H_v; head++) {
+                for (int64_t i = 0; i < S_v; i++) {
+                    for (int64_t j = 0; j < S_v; j++) {
+                        int64_t state_idx = seq * (S_v * S_v * H_v) + head * (S_v * S_v) + i * S_v + j;
+                        *(state_ptr(seq, head, i, j)) = temp_state[state_idx];
+
+                        // Store the final state for this head and sequence (for output)
+                        int64_t final_state_idx = j + i * S_v + head * (S_v * S_v) + seq * (S_v * S_v * H_v);
+                        final_state[final_state_idx] = temp_state[state_idx];
+                    }
+                }
+            }
+        }
+
+        free(temp_state);
+        free(delta);
+        free(kv_mem);
+        free(attn_out_t);
+    }
+}
+
+// ggml_compute_forward_rwkv_wkv7
 static void ggml_compute_forward_rwkv_wkv7_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {

@@ -1160,3 +1160,7 @@ ggml_tensor * llama_memory_recurrent_context::get_s_l(int32_t il) const {
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     return  mem->cells[i + mem->head].src0;
 }
+
+bool llama_memory_recurrent_context::has_previous_state() const {
+    return mem->cells[mem->head].pos >= 0;
+}

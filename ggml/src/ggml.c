@@ -935,6 +935,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "COS",
     "SUM",
     "SUM_ROWS",
+    "CUMSUM",
     "MEAN",
     "ARGMAX",
     "COUNT_EQUAL",
@@ -990,6 +991,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "LEAKY_RELU",
+    "TRI",
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
@@ -1002,6 +1004,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV6",
     "GATED_LINEAR_ATTN",
     "RWKV_WKV7",
+    "DELTA_NET",
+    "DELTA_NET_RECURRENT",
 
     "UNARY",
 
@@ -1019,7 +1023,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1039,6 +1043,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cos(x)",
     "Σx",
     "Σx_k",
+    "cumsum(x)",
     "Σx/n",
     "argmax(x)",
     "count_equal(x)",
@@ -1094,6 +1099,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
     "leaky_relu(x)",
+    "tri(x)",
 
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
@@ -1106,6 +1112,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv6(k, v, r, tf, td, s)",
     "gated_linear_attn(k, v, q, gate, s)",
     "rwkv_wkv7(r, w, k, v, a, b, s)",
+    "delta_net(q, k, v, g, beta, state)",
+    "delta_net_recurrent(q, k, v, g, beta, state)",
 
     "unary(x)",
 
@@ -1123,7 +1131,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1142,6 +1150,8 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSWISH",
     "HARDSIGMOID",
     "EXP",
+    "EXPM1",
+    "SOFTPLUS",
     "GELU_ERF",
     "XIELU",
     "FLOOR",
@@ -1150,7 +1160,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 20, "GGML_UNARY_OP_COUNT != 20");
+static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2258,6 +2268,30 @@ struct ggml_tensor * ggml_log_inplace(
     return ggml_log_impl(ctx, a, true);
 }
 
+struct ggml_tensor * ggml_expm1(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_EXPM1);
+}
+
+struct ggml_tensor * ggml_expm1_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_EXPM1);
+}
+
+struct ggml_tensor * ggml_softplus(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_softplus_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
 // ggml_sin
 
 static struct ggml_tensor * ggml_sin_impl(
@@ -2336,6 +2370,20 @@ struct ggml_tensor * ggml_sum_rows(
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, ne);
 
     result->op     = GGML_OP_SUM_ROWS;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_cumsum
+
+struct ggml_tensor * ggml_cumsum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, a->ne);
+
+    result->op     = GGML_OP_CUMSUM;
     result->src[0] = a;
 
     return result;
@@ -2668,8 +2716,8 @@ struct ggml_tensor * ggml_xielu(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
-    ggml_set_op_params_f32(result, 1, beta + ggml_softplus(alpha_n));
-    ggml_set_op_params_f32(result, 2, ggml_softplus(alpha_p));
+    ggml_set_op_params_f32(result, 1, beta + ggml_compute_softplus_f32(alpha_n));
+    ggml_set_op_params_f32(result, 2, ggml_compute_softplus_f32(alpha_p));
     ggml_set_op_params_f32(result, 3, beta);
     ggml_set_op_params_f32(result, 4, eps);
 
@@ -3516,7 +3564,7 @@ struct ggml_tensor * ggml_reshape_4d(
         int64_t               ne2,
         int64_t               ne3) {
     GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3);
+     GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3);
 
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 4, ne, a, 0);
@@ -5028,6 +5076,33 @@ struct ggml_tensor * ggml_timestep_embedding(
     return result;
 }
 
+// ggml_tri
+
+struct ggml_tensor * ggml_tri(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    float constant,
+    enum ggml_tri_type tritype) {
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, tritype);
+    ggml_set_op_params_f32(result, 1, constant);
+
+    result->op = GGML_OP_TRI;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_tri_keep(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    enum ggml_tri_type tritype) {
+
+    return ggml_tri(ctx, a, nan(""), tritype);
+}
+
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(
@@ -5510,8 +5585,6 @@ struct ggml_tensor * ggml_gated_linear_attn(
     return result;
 }
 
-// ggml_rwkv_wkv7
-
 struct ggml_tensor * ggml_rwkv_wkv7(
         struct ggml_context * ctx,
         struct ggml_tensor  * r,
@@ -5557,6 +5630,7 @@ struct ggml_tensor * ggml_rwkv_wkv7(
 
     return result;
 }
+
 
 // ggml_unary
 
@@ -5856,6 +5930,228 @@ struct ggml_tensor * ggml_opt_step_adamw(
     result->src[2] = m;
     result->src[3] = v;
     result->src[4] = adamw_params;
+
+    return result;
+}
+
+// ggml_delta_net
+
+    // prepare all the tensor data for the operation so we only
+    // do the absolutely necessary steps in the op itself
+struct ggml_tensor * ggml_delta_net(struct ggml_context * ctx,
+                                    struct ggml_tensor *  q,
+                                    struct ggml_tensor *  k,
+                                    struct ggml_tensor *  v,
+                                    struct ggml_tensor *  g,
+                                    struct ggml_tensor *  beta,
+                                    struct ggml_tensor *  state,
+                                    bool                  use_qk_l2norm,
+                                    float                 eps_norm) {
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(g));
+    GGML_ASSERT(ggml_is_contiguous(beta));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S_k      = q->ne[0];
+    const int64_t H_k      = q->ne[1];
+    const int64_t n_tokens = q->ne[2];
+    const int64_t n_seqs   = q->ne[3];
+
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+
+    GGML_ASSERT(v->ne[2] == n_tokens);
+    GGML_ASSERT(k->ne[2] == n_tokens);
+    GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
+    GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
+    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v * H_v && state->ne[2] == 1 && state->ne[3] == n_seqs);
+
+    GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
+    GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
+
+    GGML_ASSERT(H_k == H_v);  // we did a repeat to make sure this is the case
+
+    if (use_qk_l2norm) {
+        q = ggml_l2_norm(ctx, q, eps_norm);
+        k = ggml_l2_norm(ctx, k, eps_norm);
+    }
+
+    int64_t pad_size   = (GGML_DELTA_NET_CHUNK - n_tokens % GGML_DELTA_NET_CHUNK) % GGML_DELTA_NET_CHUNK;
+    // yes, n_tokens, not H_k, the reference implementation has wrong naming
+    int64_t num_chunks = (n_tokens + pad_size) / GGML_DELTA_NET_CHUNK;
+
+    float scale = 1.0f / sqrtf(S_v);
+    q           = ggml_scale(ctx, q, scale);
+
+    beta = ggml_sigmoid(ctx, beta);
+
+    q    = ggml_cont_4d(ctx, ggml_permute(ctx, q, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+    k    = ggml_cont_4d(ctx, ggml_permute(ctx, k, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+    v    = ggml_cont_4d(ctx, ggml_permute(ctx, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 0, 2, 1, 3));
+
+    q    = ggml_pad(ctx, q, 0, pad_size, 0, 0);
+    k    = ggml_pad(ctx, k, 0, pad_size, 0, 0);
+    v    = ggml_pad(ctx, v, 0, pad_size, 0, 0);
+    beta = ggml_pad(ctx, beta, 0, pad_size, 0, 0);
+
+    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 2, 1, 0, 3));
+
+    g = ggml_cont(ctx, ggml_permute(ctx, g, 2, 0, 3, 1));
+
+    g = ggml_pad(ctx, g, pad_size, 0, 0, 0);
+
+    GGML_ASSERT(q->ne[1] % GGML_DELTA_NET_CHUNK == 0 && q->ne[0] == S_k && q->ne[2] == H_k && q->ne[3] == n_seqs);
+    GGML_ASSERT(k->ne[1] % GGML_DELTA_NET_CHUNK == 0 && k->ne[0] == S_k && k->ne[2] == H_k && k->ne[3] == n_seqs);
+    GGML_ASSERT(v->ne[1] % GGML_DELTA_NET_CHUNK == 0 && v->ne[0] == S_v && v->ne[2] == H_k && v->ne[3] == n_seqs);
+    GGML_ASSERT(beta->ne[1] % GGML_DELTA_NET_CHUNK == 0 && beta->ne[2] == H_k && beta->ne[0] == 1 &&
+                beta->ne[3] == n_seqs);
+    GGML_ASSERT(g->ne[0] % GGML_DELTA_NET_CHUNK == 0 && g->ne[2] == H_k && g->ne[1] == 1 && g->ne[3] == n_seqs);
+
+    struct ggml_tensor * v_beta = ggml_mul(ctx, v, beta);
+    v_beta                      = ggml_reshape_4d(ctx, v_beta, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
+    struct ggml_tensor * k_beta = ggml_mul(ctx, k, beta);
+    k_beta                      = ggml_reshape_4d(ctx, k_beta, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
+    k = ggml_reshape_4d(ctx, k, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
+    q = ggml_reshape_4d(ctx, q, S_v, GGML_DELTA_NET_CHUNK, H_k * num_chunks, n_seqs);
+    v = ggml_reshape_4d(ctx, v, S_v, GGML_DELTA_NET_CHUNK, H_v * num_chunks, n_seqs);
+    g = ggml_reshape_4d(ctx, g, GGML_DELTA_NET_CHUNK, 1, H_k * num_chunks, n_seqs);
+    struct ggml_tensor * g_cumsum = ggml_cumsum(ctx, g);
+
+    struct ggml_tensor * gcs_i = ggml_cont_4d(ctx, g_cumsum, GGML_DELTA_NET_CHUNK, 1, num_chunks * H_v,
+                                                n_seqs);  // [chunk_size, 1, n_tokens, n_seqs]
+    struct ggml_tensor * gcs_j = ggml_cont_4d(ctx, g_cumsum, 1, GGML_DELTA_NET_CHUNK, num_chunks * H_v,
+                                                n_seqs);  // [1, chunk_size, n_tokens, n_seqs]
+
+    // Broadcast both tensors to [chunk_size, chunk_size, H_v, n_seqs]
+    struct ggml_tensor * gcs_i_broadcast =
+        ggml_repeat_4d(ctx, gcs_i, GGML_DELTA_NET_CHUNK, GGML_DELTA_NET_CHUNK, num_chunks * H_v,
+                        n_seqs);  // [chunk_size, 1, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
+    struct ggml_tensor * gcs_j_broadcast =
+        ggml_repeat_4d(ctx, gcs_j, GGML_DELTA_NET_CHUNK, GGML_DELTA_NET_CHUNK, num_chunks * H_v,
+                        n_seqs);  // [1, chunk_size, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
+
+    struct ggml_tensor * decay_mask = ggml_sub(ctx, gcs_j_broadcast, gcs_i_broadcast);
+
+    // Apply lower triangular mask to ensure attention is causal (only past tokens influence current)
+    decay_mask = ggml_tri_keep(ctx, decay_mask, GGML_TRI_TYPE_LOWER_DIAG);
+    // Apply exponential to get the decay mask values
+    decay_mask = ggml_exp(ctx, decay_mask);
+    // Apply lower triangular mask again to ensure only lower triangular values remain
+    decay_mask = ggml_tri_keep(ctx, decay_mask, GGML_TRI_TYPE_LOWER_DIAG);
+
+    struct ggml_tensor * kmulkbeta = ggml_mul_mat(ctx, ggml_cont(ctx, k), ggml_cont(ctx, k_beta));
+    struct ggml_tensor * k_decay = ggml_mul(ctx, kmulkbeta, decay_mask);
+    struct ggml_tensor * attn = ggml_neg(ctx, ggml_tri_keep(ctx, k_decay, GGML_TRI_TYPE_LOWER));
+
+    // We'll be returning the result as a 1D tensor due to the dimensions mismatch of the state and output tensors
+    const int64_t        total_dims = (S_v * H_v * n_tokens * n_seqs) + (S_v * S_v * H_v * n_seqs);
+    struct ggml_tensor * result     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, total_dims);
+
+    ggml_set_op_params_i32(result, 0, H_v);
+    ggml_set_op_params_i32(result, 1, S_k);
+    ggml_set_op_params_i32(result, 2, S_v);
+    ggml_set_op_params_i32(result, 3, n_tokens);  // Pass original n_tokens
+
+    result->op     = GGML_OP_DELTA_NET;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = g_cumsum;
+    result->src[4] = state;
+    result->src[5] = decay_mask;
+    result->src[6] = v_beta;
+    result->src[7] = k_beta;
+    result->src[8] = attn;
+
+    return result;
+}
+
+// delta_net_recurrent
+struct ggml_tensor * ggml_delta_net_recurrent(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        bool                  use_qk_l2norm,
+        float                 eps_norm
+    ) {
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(g));
+    GGML_ASSERT(ggml_is_contiguous(beta));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S_k = q->ne[0];
+    const int64_t H_k = q->ne[1];
+    const int64_t n_tokens = q->ne[2];
+    const int64_t n_seqs = q->ne[3];
+
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+
+    GGML_ASSERT(v->ne[2] == n_tokens);
+    GGML_ASSERT(k->ne[2] == n_tokens);
+    GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
+    GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
+    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v * H_v && state->ne[2] == 1 && state->ne[3] == n_seqs);
+
+    GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
+    GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && q->ne[3] == n_seqs);
+
+    GGML_ASSERT(H_k == H_v); // we did a repeat to make sure this is the case
+
+    if (use_qk_l2norm) {
+        q = ggml_l2_norm(ctx, q, eps_norm);
+        k = ggml_l2_norm(ctx, k, eps_norm);
+    }
+
+    float scale = 1.0f / sqrtf(S_v);
+    q = ggml_scale(ctx, q, scale);
+
+    beta = ggml_sigmoid(ctx, beta);
+
+    // Reshape tensors for recurrent computation
+    // From [S_k, H_k, n_tokens, n_seqs] to [S_k, n_tokens, H_k, n_seqs]
+    q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
+    k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
+    v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+    beta = ggml_cont(ctx, ggml_permute(ctx, beta, 1, 2, 0, 3));
+    g = ggml_cont(ctx, ggml_permute(ctx, g, 2, 0, 3, 1));
+
+    struct ggml_tensor * q_tokens = ggml_cont_4d(ctx, q, n_tokens, S_k, H_k, n_seqs);
+    struct ggml_tensor * k_tokens = ggml_cont_4d(ctx, k, n_tokens, S_k, H_k, n_seqs);
+    struct ggml_tensor * v_tokens = ggml_cont_4d(ctx, v, n_tokens, S_v, H_k, n_seqs);
+    struct ggml_tensor * g_tokens = ggml_cont_4d(ctx, g, n_tokens, 1, H_k, n_seqs);
+    struct ggml_tensor * beta_tokens = ggml_cont_4d(ctx, beta, n_tokens, 1, H_k, n_seqs);
+
+    state = ggml_cont_4d(ctx, state, S_v, S_v, H_k, n_seqs);
+    struct ggml_tensor * g_tokens_exp = ggml_exp(ctx, g_tokens);
+
+    // Create result tensor with the same dimensions as delta_net
+    const int64_t total_dims = (S_v * H_v * n_tokens * n_seqs) + (S_v * S_v * H_v * n_seqs);
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, total_dims);
+
+    // Set operation parameters
+    ggml_set_op_params_i32(result, 0, H_v);
+    ggml_set_op_params_i32(result, 1, S_k);
+    ggml_set_op_params_i32(result, 2, S_v);
+    ggml_set_op_params_i32(result, 3, n_tokens); // Pass original n_tokens
+
+    // Set operation and source tensors
+    result->op     = GGML_OP_DELTA_NET_RECURRENT;
+    result->src[0] = q_tokens;
+    result->src[1] = k_tokens;
+    result->src[2] = v_tokens;
+    result->src[3] = g_tokens_exp;
+    result->src[4] = beta_tokens;
+    result->src[5] = state;
 
     return result;
 }
@@ -6449,16 +6745,41 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, grad, src0));
                     }
                 } break;
-                case GGML_UNARY_OP_EXP: {
-                    if (src0_needs_grads) {
-                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, tensor, grad));
+                case GGML_UNARY_OP_EXP:
+                    {
+                        if (src0_needs_grads) {
+                            ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, tensor, grad));
+                        }
                     }
-                } break;
-                default: {
-                    fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",
-                        __func__, ggml_unary_op_name(ggml_get_unary_op(tensor)));
-                    GGML_ABORT("fatal error");
-                } //break;
+                    break;
+                case GGML_UNARY_OP_EXPM1:
+                    {
+                        if (src0_needs_grads) {
+                            ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_exp(ctx, src0)));
+                        }
+                    }
+                    break;
+                case GGML_UNARY_OP_SOFTPLUS:
+                    {
+                        if (src0_needs_grads) {
+                            // gradient of softplus: sigmoid(x) = 1 / (1 + exp(-x))
+                            struct ggml_tensor * neg_src0 = ggml_neg(ctx, src0);
+                            struct ggml_tensor * exp_neg  = ggml_exp(ctx, neg_src0);
+                            struct ggml_tensor * ones =
+                                ggml_exp(ctx, ggml_new_tensor_4d(ctx, src0->type, src0->ne[0], src0->ne[1], src0->ne[2],
+                                                                 src0->ne[3]));
+                            struct ggml_tensor * one_plus_exp = ggml_add(ctx, ones, exp_neg);
+                            struct ggml_tensor * sigmoid      = ggml_div(ctx, ones, one_plus_exp);
+                            ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, sigmoid));
+                        }
+                    }
+                    break;
+                default:
+                    {
+                        fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n", __func__,
+                                ggml_unary_op_name(ggml_get_unary_op(tensor)));
+                        GGML_ABORT("fatal error");
+                    }  //break;
             }
         } break;
         case GGML_OP_CROSS_ENTROPY_LOSS: {
