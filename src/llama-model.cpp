@@ -1616,7 +1616,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
-                    case 26: type = LLM_TYPE_1_3B; break;
+                    case 24: type = LLM_TYPE_1_3B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             }
@@ -4543,34 +4543,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,     "weight", i), {n_embd}, 0);
                         layer.attn_sub_norm = create_tensor(tn(LLM_TENSOR_ATTN_SUB_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.wq_imag       = create_tensor(tn(LLM_TENSOR_ATTN_Q_IMAG,   "weight", i), {n_embd, n_embd}, 0);
-                        layer.wq_real       = create_tensor(tn(LLM_TENSOR_ATTN_Q_REAL,   "weight", i), {n_embd, n_embd}, 0);
-                        layer.wq_scale_imag = create_tensor(tn(LLM_TENSOR_ATTN_Q_IMAG,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wq_scale_real = create_tensor(tn(LLM_TENSOR_ATTN_Q_REAL,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wk_imag      = create_tensor(tn(LLM_TENSOR_ATTN_K_IMAG,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wk_real       = create_tensor(tn(LLM_TENSOR_ATTN_K_REAL,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wk_scale_imag = create_tensor(tn(LLM_TENSOR_ATTN_K_IMAG,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wk_scale_real = create_tensor(tn(LLM_TENSOR_ATTN_K_REAL,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wv_imag       = create_tensor(tn(LLM_TENSOR_ATTN_V_IMAG,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wv_real       = create_tensor(tn(LLM_TENSOR_ATTN_V_REAL,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wv_scale_real       = create_tensor(tn(LLM_TENSOR_ATTN_V_REAL,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wv_scale_imag = create_tensor(tn(LLM_TENSOR_ATTN_V_IMAG,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wo_imag       = create_tensor(tn(LLM_TENSOR_ATTN_OUT_IMAG, "weight", i), {n_embd, n_embd}, 0);
-                        layer.wo_real       = create_tensor(tn(LLM_TENSOR_ATTN_OUT_REAL, "weight", i), {n_embd, n_embd}, 0);
-                        layer.wo_scale_imag = create_tensor(tn(LLM_TENSOR_ATTN_OUT_IMAG, "scale",  i), {1}, TENSOR_NOT_REQUIRED);
-                        layer.wo_scale_real = create_tensor(tn(LLM_TENSOR_ATTN_OUT_REAL, "scale",  i), {1}, TENSOR_NOT_REQUIRED);
+                        layer.wq       = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
+                        layer.wk      = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv      = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo       = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
 
-                        layer.ffn_norm_imag     = create_tensor(tn(LLM_TENSOR_FFN_NORM_IMAG,     "weight", i), {n_embd}, 0);
                         layer.ffn_norm     = create_tensor(tn(LLM_TENSOR_FFN_NORM,     "weight", i), {n_embd}, 0);
-                        layer.ffn_sub_norm = create_tensor(tn(LLM_TENSOR_FFN_SUB_NORM, "weight", i), {n_ff}, 0);
                         layer.ffn_sub_norm = create_tensor(tn(LLM_TENSOR_FFN_SUB_NORM, "weight", i), {n_ff}, 0);
 
                         layer.ffn_gate       = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
-                        layer.ffn_gate_scale = create_tensor(tn(LLM_TENSOR_FFN_GATE, "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.ffn_down       = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
-                        layer.ffn_down_scale = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                         layer.ffn_up         = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
-                        layer.ffn_up_scale   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "scale",  i), {1}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
             case LLM_ARCH_T5:
