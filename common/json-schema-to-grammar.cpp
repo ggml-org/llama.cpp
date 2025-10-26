@@ -601,10 +601,8 @@ private:
     }
 
     std::string _resolve_ref(const std::string & ref) {
-        std::string ref_fragment = ref;
-        if (ref.find('#') != std::string::npos) {
-            ref_fragment = ref.substr(ref.find('#') + 1);
-        }
+        auto it = ref.find('#');
+        std::string ref_fragment = it != std::string::npos ? ref.substr(it + 1) : ref;
         std::string ref_name = "ref" + std::regex_replace(ref_fragment, std::regex(R"([^a-zA-Z0-9-])"), "-");
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(ref) == _refs_being_resolved.end()) {
             _refs_being_resolved.insert(ref);
