@@ -6,9 +6,10 @@ Embed ET kernel ELF files as C byte arrays.
 import os
 import argparse
 from pathlib import Path
+from typing import Tuple
 
 
-def embed_elf_as_bytes(elf_path: Path, var_name: str) -> tuple[str, str]:
+def embed_elf_as_bytes(elf_path: Path, var_name: str) -> Tuple[str, str]:
     """
     Read an ELF file and convert it to C byte array declarations.
 
