@@ -50,10 +50,10 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     std::vector<float> adata(KW * KH * IC * OC);
     for (int i = 0; i < KW * KH * IC * OC; i++) {
         // adata[i] = 2.f;
-        adata[i] = (float)(i%KW)-1.f;
+        // adata[i] = (float)(i%KW)-1.f;
         // adata[i] = (rand() % 255) / 255.0;
-        // float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        // adata[i] = r;
+        float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        adata[i] = r;
     }
 
     // Convert adata to fp16 format
@@ -63,11 +63,11 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     // Initialize bdata
     std::vector<float> bdata(IW * IH * IC * N);
     for (int i = 0; i < IW * IH * IC * N; i++) {
-        bdata[i] = (float)(i%IW)/10.f;
+        // bdata[i] = (float)(i%IW)/10.f;
         // bdata[i] = 1.5f;
         // bdata[i] = (rand() % 255) / 255.0;
-        // float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        // bdata[i] = r;
+        float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        bdata[i] = r;
     }
 
     size_t buffer_size = 0;
@@ -452,7 +452,7 @@ int main(void)
             float diff = fabs(im2col_data[i] - wino_data[i]);
             float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
             // if(diff > 1.e-4) {
-                  printf("(%f, %f, %f, %f, %f, %d) \n",
+                  printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
                   im2col_data[i], conv2d_data[i],
                   wino_data[i], diff, diff1, i);
                 // break;
