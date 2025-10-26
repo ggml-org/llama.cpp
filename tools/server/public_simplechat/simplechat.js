@@ -692,7 +692,6 @@ class MultiChatUI {
         this.curChatId = "";
 
         this.TimePeriods = {
-            ToolCallResponseTimeout: 10000,
             ToolCallAutoTimeUnit: 1000
         }
 
@@ -978,7 +977,7 @@ class MultiChatUI {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`);
                 this.ui_reset_userinput(false)
-            }, this.TimePeriods.ToolCallResponseTimeout)
+            }, gMe.tools.toolCallResponseTimeoutMS)
         }
     }
 
@@ -1086,6 +1085,11 @@ class Me {
             fetchProxyUrl: "http://127.0.0.1:3128",
             searchUrl: SearchURLS.duckduckgo,
             toolNames: /** @type {Array<string>} */([]),
+            /**
+             * Control how many milliseconds to wait for tool call to respond, before generating a timed out
+             * error response and giving control back to end user.
+             */
+            toolCallResponseTimeoutMS: 20000,
             /**
              * Control how many seconds to wait before auto triggering tool call or its response submission.
              * A value of 0 is treated as auto triggering disable.
