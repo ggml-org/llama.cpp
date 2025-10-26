@@ -259,10 +259,6 @@ static __global__ void conv2d_implicit_kernel(const float * __restrict__ input,
 
     __syncthreads();
 
-    if(tx == 0 && bx == 0 && by == 0 && z == 0){
-        printf("non tensor \n");
-    }
-
     // if(tx == 0 && bx == 0 && by == 0 && z == 0){
     //     for(int i=0; i < 128; ++i)
     //         printf("%.2f,",  smeminput[i]);

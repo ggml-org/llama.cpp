@@ -38,9 +38,9 @@ struct test_model {
 
 
 
-void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu = false ) {
+void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, int kh = 3, bool use_gpu = false ) {
     // create data
-    int KW = 3, KH = 3, IC = ic, OC = oc;
+    int KW = kw, KH = kh, IC = ic, OC = oc;
     int IW = iw, IH = ih, N = 1;
     srand(time(NULL));
 
@@ -347,21 +347,24 @@ std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr
 int main(void)
 {
     ggml_time_init();
-    std::vector<std::tuple<int, int, int, int>> configs = {
-        // std::make_tuple(64,64,48,64),
-        // std::make_tuple(320,320,104,152),
-        // std::make_tuple(640,640,52,76),
-        // std::make_tuple(640,640,104,152),
-        // std::make_tuple(960,320,104,152),
-        std::make_tuple(640,128,26,38),
-        // std::make_tuple(1280,640,52,76),
-        // std::make_tuple(1920,1280,26,38),
-        // std::make_tuple(2560,1280,26,38),
-        // std::make_tuple(512,512,104,152),
-        // std::make_tuple(512,512,208,304),
-        // std::make_tuple(512,256,416,608),
-        // std::make_tuple(256,128,832,1216),
-        // std::make_tuple(256,256,832,1216),
+    std::vector<std::tuple<int, int, int, int, int, int>> configs = {
+        std::make_tuple(64,64,48,64,3,3),
+        std::make_tuple(320,320,104,152,3,3),
+        std::make_tuple(640,640,52,76,3,3),
+        std::make_tuple(640,640,104,152,3,3),
+        std::make_tuple(960,320,104,152,3,3),
+        std::make_tuple(1280,1280,26,38,3,3),
+        std::make_tuple(1280,1280,26,38,1,1),
+        std::make_tuple(256,128,768,1024,3,3),
+        std::make_tuple(256,128,768,1024,1,1),
+        std::make_tuple(1280,640,52,76,3,3),
+        std::make_tuple(1920,1280,26,38,3,3),
+        std::make_tuple(2560,1280,26,38,3,3),
+        std::make_tuple(512,512,104,152,3,3),
+        std::make_tuple(512,512,208,304,3,3),
+        std::make_tuple(512,256,416,608,3,3),
+        std::make_tuple(256,128,832,1216,3,3),
+        std::make_tuple(256,256,832,1216,3,3),
         // std::make_tuple(320,256,1024,1920)
     };
 
@@ -369,7 +372,8 @@ int main(void)
 
     for (auto c : configs){
         test_model model;
-        load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), true);
+        load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c), 
+            std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
 
         ggml_gallocr_t allocr = NULL;
         allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -384,7 +388,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 0;
+        int iterations = 20;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -438,26 +442,26 @@ int main(void)
             fprintf(stderr, "| --- | --- | --- |  --- | --- | --- | --- \n");
         }
 
-        fprintf(stderr, " | (%d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
-                std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c),
+        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
+                std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), std::get<4>(c), std::get<5>(c),
                 run_time0, mem_size0/1024.0f/1024.0f,
                 run_time1, mem_size1/1024.0f/1024.0f,
                 run_time2, mem_size2/1024.0f/1024.0f);
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        for(int i = 0; i < 26*38; i++) {
-        // for(int i = 0; i < conv2d_data.size(); i++) {
-            // float diff = fabs(conv2d_data[i] - wino_data[i]);
-            float diff = fabs(im2col_data[i] - wino_data[i]);
-            float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
-            // if(diff > 1.e-4) {
-                  printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
-                  im2col_data[i], conv2d_data[i],
-                  wino_data[i], diff, diff1, i);
-                // break;
-            // }
-        }
+        // for(int i = 0; i < 26*38; i++) {
+        // // for(int i = 0; i < conv2d_data.size(); i++) {
+        //     // float diff = fabs(conv2d_data[i] - wino_data[i]);
+        //     float diff = fabs(im2col_data[i] - wino_data[i]);
+        //     float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
+        //     // if(diff > 1.e-4) {
+        //           printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
+        //           im2col_data[i], conv2d_data[i],
+        //           wino_data[i], diff, diff1, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
