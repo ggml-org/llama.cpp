@@ -11,7 +11,7 @@
 </script>
 
 <header
-	class="md:background-transparent pointer-events-none fixed top-0 right-0 left-0 z-50 flex items-center justify-end bg-background/40 p-4 backdrop-blur-xl md:left-[var(--sidebar-width)]"
+	class="pointer-events-none fixed top-0 right-0 left-0 z-50 flex items-center justify-end p-4 md:left-[var(--sidebar-width)]"
 >
 	<div class="pointer-events-auto flex items-center space-x-2">
 		<Button variant="ghost" size="sm" onclick={toggleSettings}>
