@@ -34,6 +34,7 @@ void ggml_compute_forward_add1(const struct ggml_compute_params * params, struct
 void ggml_compute_forward_acc(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_sum(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_sum_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_cumsum(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_mean(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_argmax(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_count_equal(const struct ggml_compute_params * params, struct ggml_tensor * dst);
@@ -85,6 +86,7 @@ void ggml_compute_forward_arange(const struct ggml_compute_params * params, stru
 void ggml_compute_forward_timestep_embedding(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_argsort(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_leaky_relu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_flash_attn_ext(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_flash_attn_back(
         const struct ggml_compute_params * params,
