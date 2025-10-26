@@ -298,6 +298,10 @@ jobs:
           cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublasLt.so.12 ./build/bin/
           cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcudart.so.12 ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64-standalone.zip ./build/bin/*
+          rm ./build/bin/libcublas.so.12
+          rm ./build/bin/libcublasLt.so.12
+          rm ./build/bin/libcudart.so.12
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
