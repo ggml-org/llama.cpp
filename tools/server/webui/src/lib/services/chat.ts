@@ -551,9 +551,15 @@ export class ChatService {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch(`./props`, {
+			// Force a fresh network read so restarting the backend with a new model
+			// immediately propagates updated props and modality information.
+			const cacheBuster = Date.now().toString();
+			const response = await fetch(`./props?cb=${cacheBuster}`, {
+				cache: 'no-store',
 				headers: {
 					'Content-Type': 'application/json',
+					'Cache-Control': 'no-cache',
+					Pragma: 'no-cache',
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});

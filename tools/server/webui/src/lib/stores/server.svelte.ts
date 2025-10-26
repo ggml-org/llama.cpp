@@ -3,6 +3,8 @@ import { SERVER_PROPS_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys'
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
+const SLOTS_CHECK_THROTTLE_MS = 30_000;
+
 /**
  * ServerStore - Server state management and capability detection
  *
@@ -52,6 +54,8 @@ class ServerStore {
 	private _error = $state<string | null>(null);
 	private _serverWarning = $state<string | null>(null);
 	private _slotsEndpointAvailable = $state<boolean | null>(null);
+	private fetchServerPropsPromise: Promise<void> | null = null;
+	private lastSlotsCheck = 0;
 
 	private readCachedServerProps(): ApiLlamaCppServerProps | null {
 		if (!browser) return null;
@@ -134,7 +138,15 @@ class ServerStore {
 	/**
 	 * Check if slots endpoint is available based on server properties and endpoint support
 	 */
-	private async checkSlotsEndpointAvailability(): Promise<void> {
+	private async checkSlotsEndpointAvailability(force = false): Promise<void> {
+		const now = Date.now();
+
+		if (!force && this.lastSlotsCheck && now - this.lastSlotsCheck < SLOTS_CHECK_THROTTLE_MS) {
+			return;
+		}
+
+		this.lastSlotsCheck = now;
+
 		if (!this._serverProps) {
 			this._slotsEndpointAvailable = false;
 			return;
@@ -149,8 +161,13 @@ class ServerStore {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			const response = await fetch(`./slots`, {
+			// Avoid cached responses so slot availability reflects the restarted backend.
+			const cacheBuster = Date.now().toString();
+			const response = await fetch(`./slots?cb=${cacheBuster}`, {
+				cache: 'no-store',
 				headers: {
+					'Cache-Control': 'no-cache',
+					Pragma: 'no-cache',
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});
@@ -171,73 +188,66 @@ class ServerStore {
 	/**
 	 * Fetches server properties from the server
 	 */
-	async fetchServerProps(): Promise<void> {
-		this._loading = true;
-		this._error = null;
-		this._serverWarning = null;
+	async fetchServerProps(options: { silent?: boolean } = {}): Promise<void> {
+		const { silent = false } = options;
+		const isSilent = silent && this._serverProps !== null;
 
-		try {
-			console.log('Fetching server properties...');
-			const props = await ChatService.getServerProps();
-			this._serverProps = props;
-			this.persistServerProps(props);
-			console.log('Server properties loaded:', props);
+		if (this.fetchServerPropsPromise) {
+			return this.fetchServerPropsPromise;
+		}
 
-			// Check slots endpoint availability after server props are loaded
-			await this.checkSlotsEndpointAvailability();
-		} catch (error) {
-			const hadCachedProps = this._serverProps !== null;
-			let errorMessage = 'Failed to connect to server';
-			let isOfflineLikeError = false;
-			let isServerSideError = false;
+		if (!isSilent) {
+			this._loading = true;
+			this._error = null;
+			this._serverWarning = null;
+		}
 
-			if (error instanceof Error) {
-				// Handle specific error types with user-friendly messages
-				if (error.name === 'TypeError' && error.message.includes('fetch')) {
-					errorMessage = 'Server is not running or unreachable';
-					isOfflineLikeError = true;
-				} else if (error.message.includes('ECONNREFUSED')) {
-					errorMessage = 'Connection refused - server may be offline';
-					isOfflineLikeError = true;
-				} else if (error.message.includes('ENOTFOUND')) {
-					errorMessage = 'Server not found - check server address';
-					isOfflineLikeError = true;
-				} else if (error.message.includes('ETIMEDOUT')) {
-					errorMessage = 'Request timed out - the server took too long to respond';
-					isOfflineLikeError = true;
-				} else if (error.message.includes('503')) {
-					errorMessage = 'Server temporarily unavailable - try again shortly';
-					isServerSideError = true;
-				} else if (error.message.includes('500')) {
-					errorMessage = 'Server error - check server logs';
-					isServerSideError = true;
-				} else if (error.message.includes('404')) {
-					errorMessage = 'Server endpoint not found';
-				} else if (error.message.includes('403') || error.message.includes('401')) {
-					errorMessage = 'Access denied';
+		const hadProps = this._serverProps !== null;
+
+		const fetchPromise = (async () => {
+			try {
+				const props = await ChatService.getServerProps();
+				this._serverProps = props;
+				this.persistServerProps(props);
+				this._error = null;
+				this._serverWarning = null;
+				this.lastSlotsCheck = 0;
+				await this.checkSlotsEndpointAvailability(true);
+			} catch (error) {
+				if (isSilent && hadProps) {
+					console.warn('Silent server props refresh failed, keeping cached data:', error);
+					return;
 				}
+
+				this.handleFetchServerPropsError(error, hadProps);
+			} finally {
+				if (!isSilent) {
+					this._loading = false;
+				}
+
+				this.fetchServerPropsPromise = null;
 			}
+		})();
 
-			let cachedProps: ApiLlamaCppServerProps | null = null;
+		this.fetchServerPropsPromise = fetchPromise;
 
-			if (!hadCachedProps) {
-				cachedProps = this.readCachedServerProps();
-				if (cachedProps) {
-					this._serverProps = cachedProps;
-					this._error = null;
+		await fetchPromise;
+	}
 
-					if (isOfflineLikeError || isServerSideError) {
-						this._serverWarning = errorMessage;
-					}
+	/**
+	 * Handles fetch failures by attempting to recover cached server props and
+	 * updating the user-facing error or warning state appropriately.
+	 */
+	private handleFetchServerPropsError(error: unknown, hadProps: boolean): void {
+		const { errorMessage, isOfflineLikeError, isServerSideError } = this.normalizeFetchError(error);
 
-					console.warn(
-						'Failed to refresh server properties, using cached values from localStorage:',
-						errorMessage
-					);
-				} else {
-					this._error = errorMessage;
-				}
-			} else {
+		let cachedProps: ApiLlamaCppServerProps | null = null;
+
+		if (!hadProps) {
+			cachedProps = this.readCachedServerProps();
+
+			if (cachedProps) {
+				this._serverProps = cachedProps;
 				this._error = null;
 
 				if (isOfflineLikeError || isServerSideError) {
@@ -245,14 +255,66 @@ class ServerStore {
 				}
 
 				console.warn(
-					'Failed to refresh server properties, continuing with cached values:',
+					'Failed to refresh server properties, using cached values from localStorage:',
 					errorMessage
 				);
+			} else {
+				this._error = errorMessage;
 			}
-			console.error('Error fetching server properties:', error);
-		} finally {
-			this._loading = false;
+		} else {
+			this._error = null;
+
+			if (isOfflineLikeError || isServerSideError) {
+				this._serverWarning = errorMessage;
+			}
+
+			console.warn(
+				'Failed to refresh server properties, continuing with cached values:',
+				errorMessage
+			);
 		}
+
+		console.error('Error fetching server properties:', error);
+	}
+
+	private normalizeFetchError(error: unknown): {
+		errorMessage: string;
+		isOfflineLikeError: boolean;
+		isServerSideError: boolean;
+	} {
+		let errorMessage = 'Failed to connect to server';
+		let isOfflineLikeError = false;
+		let isServerSideError = false;
+
+		if (error instanceof Error) {
+			const message = error.message || '';
+
+			if (error.name === 'TypeError' && message.includes('fetch')) {
+				errorMessage = 'Server is not running or unreachable';
+				isOfflineLikeError = true;
+			} else if (message.includes('ECONNREFUSED')) {
+				errorMessage = 'Connection refused - server may be offline';
+				isOfflineLikeError = true;
+			} else if (message.includes('ENOTFOUND')) {
+				errorMessage = 'Server not found - check server address';
+				isOfflineLikeError = true;
+			} else if (message.includes('ETIMEDOUT')) {
+				errorMessage = 'Request timed out - the server took too long to respond';
+				isOfflineLikeError = true;
+			} else if (message.includes('503')) {
+				errorMessage = 'Server temporarily unavailable - try again shortly';
+				isServerSideError = true;
+			} else if (message.includes('500')) {
+				errorMessage = 'Server error - check server logs';
+				isServerSideError = true;
+			} else if (message.includes('404')) {
+				errorMessage = 'Server endpoint not found';
+			} else if (message.includes('403') || message.includes('401')) {
+				errorMessage = 'Access denied';
+			}
+		}
+
+		return { errorMessage, isOfflineLikeError, isServerSideError };
 	}
 
 	/**
@@ -264,6 +326,8 @@ class ServerStore {
 		this._serverWarning = null;
 		this._loading = false;
 		this._slotsEndpointAvailable = null;
+		this.fetchServerPropsPromise = null;
+		this.lastSlotsCheck = 0;
 		this.persistServerProps(null);
 	}
 }

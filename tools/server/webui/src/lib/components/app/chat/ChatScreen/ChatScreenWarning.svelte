@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { AlertTriangle, RefreshCw } from '@lucide/svelte';
-	import { serverLoading, serverStore } from '$lib/stores/server.svelte';
+	import { serverLoading, serverStore, serverWarning } from '$lib/stores/server.svelte';
 	import { fly } from 'svelte/transition';
 
 	interface Props {
@@ -22,7 +22,7 @@
 			<div class="flex items-center">
 				<AlertTriangle class="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
 				<p class="ml-2 text-sm text-yellow-800 dark:text-yellow-200">
-					Server `/props` endpoint not available - using cached data
+					{serverWarning() ?? 'Server `/props` endpoint not available - using cached data'}
 				</p>
 			</div>
 			<button

@@ -1,6 +1,7 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { normalizeModelName } from '$lib/utils/model-names';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
@@ -362,8 +363,75 @@ class ChatStore {
 
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
+		const PROPS_REFRESH_RETRY_DELAY_MS = 1_000;
+		let serverPropsRefreshRequested = false;
+		let lastPropsRefreshAttempt = 0;
+
+		const resetPropsRefreshGate = (options?: { immediate?: boolean }) => {
+			serverPropsRefreshRequested = false;
+			if (options?.immediate) {
+				lastPropsRefreshAttempt = Date.now() - PROPS_REFRESH_RETRY_DELAY_MS;
+			} else {
+				lastPropsRefreshAttempt = Date.now();
+			}
+		};
+
+		const ensureServerPropsRefresh = () => {
+			const now = Date.now();
+
+			if (serverPropsRefreshRequested) {
+				if (resolvedModel) {
+					const currentModel = serverStore.modelName;
+					const normalizedStoreModel = currentModel ? normalizeModelName(currentModel) : null;
+
+					if (!normalizedStoreModel || normalizedStoreModel !== resolvedModel) {
+						resetPropsRefreshGate({ immediate: true });
+					} else {
+						return;
+					}
+				} else {
+					return;
+				}
+			}
+
+			if (now - lastPropsRefreshAttempt < PROPS_REFRESH_RETRY_DELAY_MS) {
+				return;
+			}
+
+			serverPropsRefreshRequested = true;
+			lastPropsRefreshAttempt = now;
+
+			const hasExistingProps = serverStore.serverProps !== null;
+
+			serverStore
+				.fetchServerProps({ silent: hasExistingProps })
+				.then(() => {
+					if (!resolvedModel) {
+						return;
+					}
+
+					const currentModel = serverStore.modelName;
+
+					if (!currentModel) {
+						resetPropsRefreshGate({ immediate: true });
+						return;
+					}
+
+					const normalizedStoreModel = normalizeModelName(currentModel);
+
+					if (!normalizedStoreModel || normalizedStoreModel !== resolvedModel) {
+						resetPropsRefreshGate({ immediate: true });
+					}
+				})
+				.catch((error) => {
+					console.error('Failed to refresh server props during streaming:', error);
+					resetPropsRefreshGate();
+				});
+		};
 
 		const recordModel = (modelName: string, persistImmediately = true): void => {
+			ensureServerPropsRefresh();
+
 			const normalizedModel = normalizeModelName(modelName);
 
 			if (!normalizedModel || normalizedModel === resolvedModel) {
@@ -397,6 +465,8 @@ class ChatStore {
 				...this.getApiOptions(),
 
 				onChunk: (chunk: string) => {
+					ensureServerPropsRefresh();
+
 					streamedContent += chunk;
 					this.setConversationStreaming(
 						assistantMessage.convId,
@@ -411,6 +481,8 @@ class ChatStore {
 				},
 
 				onReasoningChunk: (reasoningChunk: string) => {
+					ensureServerPropsRefresh();
+
 					streamedReasoningContent += reasoningChunk;
 
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
@@ -427,6 +499,8 @@ class ChatStore {
 					reasoningContent?: string,
 					timings?: ChatMessageTimings
 				) => {
+					ensureServerPropsRefresh();
+
 					slotsService.stopStreaming();
 
 					const updateData: {
