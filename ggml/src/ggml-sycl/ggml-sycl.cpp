@@ -4413,7 +4413,6 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 }
                 return false;
             }
-
         case GGML_OP_CONCAT:
             {
                 ggml_type src0_type = op->src[0]->type;
