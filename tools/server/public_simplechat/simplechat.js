@@ -1063,6 +1063,18 @@ class MultiChatUI {
 }
 
 
+/**
+ * Few web search engine url template strings.
+ * The SEARCHWORDS keyword will get replaced by the actual user specified search words at runtime.
+ */
+const SearchURLS = {
+    duckduckgo: "https://duckduckgo.com/html/?q=SEARCHWORDS",
+    bing: "https://www.bing.com/search?q=SEARCHWORDS", // doesnt seem to like google chrome clients in particular
+    brave: "https://search.brave.com/search?q=SEARCHWORDS",
+    google: "https://www.google.com/search?q=SEARCHWORDS", // doesnt seem to like any client in general
+}
+
+
 class Me {
 
     constructor() {
@@ -1072,6 +1084,7 @@ class Me {
         this.tools = {
             enabled: false,
             fetchProxyUrl: "http://127.0.0.1:3128",
+            searchUrl: SearchURLS.duckduckgo,
             toolNames: /** @type {Array<string>} */([]),
             /**
              * Control how many seconds to wait before auto triggering tool call or its response submission.
