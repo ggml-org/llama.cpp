@@ -1454,8 +1454,8 @@ struct test_case {
         ggml_context_ptr ctx(ggml_init(params)); // smart ptr
         GGML_ASSERT(ctx);
 
-        ggml_tensor * out             = build_graph(ctx.get());
-        current_op_name               = op_desc(out);
+        ggml_tensor * out = build_graph(ctx.get());
+        current_op_name   = op_desc(out);
 
         if (!matches_filter(out, op_names_filter)) {
             return true;
