@@ -294,6 +294,15 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+          name: llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+
+      - name: Copy and pack Cuda runtime
+        run: |
           cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublas.so.12 ./build/bin/
           cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcublasLt.so.12 ./build/bin/
           cp /usr/local/cuda-${{ matrix.cuda }}/lib64/libcudart.so.12 ./build/bin/
@@ -302,11 +311,11 @@ jobs:
           rm ./build/bin/libcublasLt.so.12
           rm ./build/bin/libcudart.so.12
 
-      - name: Upload artifacts
+      - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
-          name: llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-cpu:
     runs-on: windows-2025
