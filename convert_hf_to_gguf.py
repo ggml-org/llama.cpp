@@ -742,6 +742,12 @@ class TextModel(ModelBase):
         if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
             self.gguf_writer.add_expert_used_count(n_experts_used)
             logger.info(f"gguf: experts used count = {n_experts_used}")
+        if (n_expert_groups := self.hparams.get("n_group")) is not None:
+            self.gguf_writer.add_expert_group_count(n_expert_groups)
+            logger.info(f"gguf: expert groups count = {n_expert_groups}")
+        if (n_group_used := self.hparams.get("topk_group")) is not None:
+            self.gguf_writer.add_expert_group_used_count(n_group_used)
+            logger.info(f"gguf: expert groups used count = {n_group_used}")
 
         if (head_dim := self.hparams.get("head_dim")) is not None:
             self.gguf_writer.add_key_length(head_dim)
@@ -8233,8 +8239,6 @@ class BailingMoeV2Model(TextModel):
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_count(hparams["num_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
-        self.gguf_writer.add_expert_group_count(hparams["n_group"])
-        self.gguf_writer.add_expert_group_used_count(hparams["topk_group"])
         self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
 
         if hparams["score_function"] == "sigmoid":
