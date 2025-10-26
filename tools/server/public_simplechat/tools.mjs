@@ -1,29 +1,41 @@
 //@ts-check
-// DANGER DANGER DANGER - Simple and Stupid - Use from a discardable VM only
+// ALERT - Simple Stupid flow - Using from a discardable VM is better
 // Helpers to handle tools/functions calling in a direct and dangerous way
 // by Humans for All
 //
 
 
 import * as tjs from './tooljs.mjs'
+import * as tweb from './toolweb.mjs'
 
 
 let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
 /**
+ * Maintain currently available tool/function calls
  * @type {Object<string,Object<string,any>>}
  */
 export let tc_switch = {}
 
+
 export async function init() {
-    return tjs.init(gToolsWorker).then(()=>{
-        let toolNames = []
+    /**
+     * @type {string[]}
+     */
+    let toolNames = []
+    await tjs.init(gToolsWorker).then(()=>{
         for (const key in tjs.tc_switch) {
             tc_switch[key] = tjs.tc_switch[key]
             toolNames.push(key)
         }
-        return toolNames
     })
+    let tNs = await tweb.init(gToolsWorker)
+    for (const key in tNs) {
+        tc_switch[key] = tNs[key]
+        toolNames.push(key)
+    }
+    return toolNames
 }
+
 
 export function meta() {
     let tools = []
@@ -32,6 +44,7 @@ export function meta() {
     }
     return tools
 }
+
 
 /**
  * Setup the callback that will be called when ever message
