@@ -20,12 +20,71 @@ function message_toolsworker(mev) {
 
 
 /**
- * Retrieve a member of the global Me instance
+ * Retrieve the global Me instance
  */
 function get_gme() {
     return (/** @type {Object<string, Object<string, any>>} */(/** @type {unknown} */(document)))['gMe']
-    //return (/** @type {Object<string, Object<string, any>>} */(/** @type {unknown} */(document)))['gMe'][key]
 }
+
+
+/**
+ * Helper http get logic wrt the bundled SimpleProxy server,
+ * which helps execute a given proxy dependent tool call.
+ * Expects the simple minded proxy server to be running locally
+ * * listening on a configured port
+ * * expecting http requests
+ *   * with a predefined query token and value wrt a predefined path
+ * NOTE: Initial go, handles textual data type.
+ * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ * @param {string} path
+ * @param {string} qkey
+ * @param {string} qvalue
+ */
+function proxyserver_get_1arg(toolcallid, toolname, obj, path, qkey, qvalue) {
+    if (gToolsWorker.onmessage != null) {
+        let newUrl = `${get_gme().tools.fetchProxyUrl}/${path}?${qkey}=${qvalue}`
+        fetch(newUrl).then(resp => {
+            if (!resp.ok) {
+                throw new Error(`${resp.status}:${resp.statusText}`);
+            }
+            return resp.text()
+        }).then(data => {
+            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
+        }).catch((err)=>{
+            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
+        })
+    }
+}
+
+
+/**
+ * Setup a proxy server dependent tool call
+ * NOTE: Currently the logic is setup for the bundled simpleproxy.py
+ * @param {string} tag
+ * @param {string} tcPath
+ * @param {string} tcName
+ * @param {{ [x: string]: any; }} tcsData
+ * @param {Object<string, Object<string, any>>} tcs
+ */
+async function proxyserver_tc_setup(tag, tcPath, tcName, tcsData, tcs) {
+    await fetch(`${get_gme().tools.fetchProxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+        if (resp.statusText != 'bharatavarshe') {
+            console.log(`WARN:ToolWeb:${tag}:Dont forget to run the bundled local.tools/simpleproxy.py to enable me`)
+            return
+        } else {
+            console.log(`INFO:ToolWeb:${tag}:Enabling...`)
+        }
+        tcs[tcName] = tcsData;
+    }).catch(err=>console.log(`WARN:ToolWeb:${tag}:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+}
+
+
+//
+// Fetch Web Url Raw
+//
 
 
 let fetchweburlraw_meta = {
@@ -48,7 +107,7 @@ let fetchweburlraw_meta = {
 
 
 /**
- * Implementation of the fetch web url raw logic. Dumb initial go.
+ * Implementation of the fetch web url raw logic.
  * Expects a simple minded proxy server to be running locally
  * * listening on a configured port
  * * expecting http requests
@@ -60,20 +119,7 @@ let fetchweburlraw_meta = {
  * @param {any} obj
  */
 function fetchweburlraw_run(toolcallid, toolname, obj) {
-    if (gToolsWorker.onmessage != null) {
-        // @ts-ignore
-        let newUrl = `${document['gMe'].tools.fetchProxyUrl}/urlraw?url=${encodeURIComponent(obj.url)}`
-        fetch(newUrl).then(resp => {
-            if (!resp.ok) {
-                throw new Error(`${resp.status}:${resp.statusText}`);
-            }
-            return resp.text()
-        }).then(data => {
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
-        }).catch((err)=>{
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
-        })
-    }
+    return proxyserver_get_1arg(toolcallid, toolname, obj, 'urlraw', 'url', encodeURIComponent(obj.url));
 }
 
 
@@ -83,21 +129,17 @@ function fetchweburlraw_run(toolcallid, toolname, obj) {
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function fetchweburlraw_setup(tcs) {
-    // @ts-ignore
-    let got = await fetch(`${document["gMe"].tools.fetchProxyUrl}/aum?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
-        if (resp.statusText != 'bharatavarshe') {
-            console.log("WARN:ToolJS:FetchWebUrlRaw:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
-            return
-        } else {
-            console.log("INFO:ToolJS:FetchWebUrlRaw:Enabling...")
-        }
-        tcs["fetch_web_url_raw"] = {
-            "handler": fetchweburlraw_run,
-            "meta": fetchweburlraw_meta,
-            "result": ""
-        };
-    }).catch(err=>console.log(`WARN:ToolJS:FetchWebUrlRaw:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+    return proxyserver_tc_setup('FetchWebUrlRaw', 'urlraw', 'fetch_web_url_raw', {
+        "handler": fetchweburlraw_run,
+        "meta": fetchweburlraw_meta,
+        "result": ""
+    }, tcs);
 }
+
+
+//
+// Fetch Web Url Text
+//
 
 
 let fetchweburltext_meta = {
@@ -120,7 +162,7 @@ let fetchweburltext_meta = {
 
 
 /**
- * Implementation of the fetch web url text logic. Dumb initial go.
+ * Implementation of the fetch web url text logic.
  * Expects a simple minded proxy server to be running locally
  * * listening on a configured port
  * * expecting http requests
@@ -134,20 +176,7 @@ let fetchweburltext_meta = {
  * @param {any} obj
  */
 function fetchweburltext_run(toolcallid, toolname, obj) {
-    if (gToolsWorker.onmessage != null) {
-        // @ts-ignore
-        let newUrl = `${document['gMe'].tools.fetchProxyUrl}/urltext?url=${encodeURIComponent(obj.url)}`
-        fetch(newUrl).then(resp => {
-            if (!resp.ok) {
-                throw new Error(`${resp.status}:${resp.statusText}`);
-            }
-            return resp.text()
-        }).then(data => {
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
-        }).catch((err)=>{
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
-        })
-    }
+    return proxyserver_get_1arg(toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(obj.url));
 }
 
 
@@ -157,20 +186,11 @@ function fetchweburltext_run(toolcallid, toolname, obj) {
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function fetchweburltext_setup(tcs) {
-    // @ts-ignore
-    let got = await fetch(`${document["gMe"].tools.fetchProxyUrl}/aum?url=jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
-        if (resp.statusText != 'bharatavarshe') {
-            console.log("WARN:ToolJS:FetchWebUrlText:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
-            return
-        } else {
-            console.log("INFO:ToolJS:FetchWebUrlText:Enabling...")
-        }
-        tcs["fetch_web_url_text"] = {
-            "handler": fetchweburltext_run,
-            "meta": fetchweburltext_meta,
-            "result": ""
-        };
-    }).catch(err=>console.log(`WARN:ToolJS:FetchWebUrlText:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+    return proxyserver_tc_setup('FetchWebUrlText', 'urltext', 'fetch_web_url_text', {
+        "handler": fetchweburltext_run,
+        "meta": fetchweburltext_meta,
+        "result": ""
+    }, tcs);
 }
 
 
@@ -200,6 +220,7 @@ let searchwebtext_meta = {
 
 /**
  * Implementation of the search web text logic. Initial go.
+ * Builds on urltext path of the bundled simpleproxy.py.
  * Expects simpleproxy.py server to be running locally
  * * listening on a configured port
  * * expecting http requests
@@ -216,18 +237,8 @@ function searchwebtext_run(toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         /** @type {string} */
         let searchUrl = get_gme().tools.searchUrl;
-        searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words))
-        let newUrl = `${get_gme().tools.fetchProxyUrl}/urltext?url=${encodeURIComponent(searchUrl)}`
-        fetch(newUrl).then(resp => {
-            if (!resp.ok) {
-                throw new Error(`${resp.status}:${resp.statusText}`);
-            }
-            return resp.text()
-        }).then(data => {
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
-        }).catch((err)=>{
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
-        })
+        searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
+        return proxyserver_get_1arg(toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(searchUrl));
     }
 }
 
@@ -238,20 +249,11 @@ function searchwebtext_run(toolcallid, toolname, obj) {
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function searchwebtext_setup(tcs) {
-    // @ts-ignore
-    let got = await fetch(`${document["gMe"].tools.fetchProxyUrl}/aum?url=jambudweepe.multiverse.987654321123456789`).then(resp=>{
-        if (resp.statusText != 'bharatavarshe') {
-            console.log("WARN:ToolJS:SearchWebText:Dont forget to run the bundled local.tools/simpleproxy.py to enable me")
-            return
-        } else {
-            console.log("INFO:ToolJS:SearchWebText:Enabling...")
-        }
-        tcs["search_web_text"] = {
-            "handler": searchwebtext_run,
-            "meta": searchwebtext_meta,
-            "result": ""
-        };
-    }).catch(err=>console.log(`WARN:ToolJS:SearchWebText:ProxyServer missing?:${err}\nDont forget to run the bundled local.tools/simpleproxy.py`))
+    return proxyserver_tc_setup('SearchWebText', 'urltext', 'search_web_text', {
+        "handler": searchwebtext_run,
+        "meta": searchwebtext_meta,
+        "result": ""
+    }, tcs);
 }
 
 
