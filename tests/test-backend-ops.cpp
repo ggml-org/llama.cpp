@@ -688,9 +688,7 @@ struct printer {
 
     virtual void print_overall_summary(const overall_summary_info & info) { (void) info; }
 
-    virtual void print_failed_tests(const std::vector<std::string> & failed_tests) {
-        (void) failed_tests;
-    }
+    virtual void print_failed_tests(const std::vector<std::string> & failed_tests) { (void) failed_tests; }
 };
 
 struct console_printer : public printer {
@@ -1144,7 +1142,10 @@ struct test_case {
         }
     }
 
-    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer) {
+    test_status_t eval(ggml_backend_t backend1,
+                       ggml_backend_t backend2,
+                       const char *   op_names_filter,
+                       printer *      output_printer) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -1161,7 +1162,7 @@ struct test_case {
         add_sentinel(ctx);
 
         ggml_tensor * out = build_graph(ctx);
-        current_op_name = op_desc(out);
+        current_op_name   = op_desc(out);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -1324,7 +1325,7 @@ struct test_case {
         GGML_ASSERT(ctx);
 
         ggml_tensor * out             = build_graph(ctx.get());
-        current_op_name = op_desc(out);
+        current_op_name               = op_desc(out);
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             return true;
@@ -1454,7 +1455,7 @@ struct test_case {
         GGML_ASSERT(ctx);
 
         ggml_tensor * out             = build_graph(ctx.get());
-        current_op_name = op_desc(out);
+        current_op_name               = op_desc(out);
 
         if (!matches_filter(out, op_names_filter)) {
             return true;
@@ -7375,7 +7376,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         }
 
         size_t n_ok = 0;
-        size_t tests_run = 0;
+        size_t                   tests_run = 0;
         std::vector<std::string> failed_tests;
         for (auto & test : test_cases) {
             test_status_t status = test->eval(backend, backend_cpu, op_names_filter, output_printer);
