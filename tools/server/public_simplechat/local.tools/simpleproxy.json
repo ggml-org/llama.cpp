@@ -1,5 +1,6 @@
 {
     "allowed.domains": [
+        ".*\\.wikipedia\\.org$",
         ".*\\.bing\\.com$",
         "^www\\.bing\\.com$",
         ".*\\.yahoo\\.com$",
