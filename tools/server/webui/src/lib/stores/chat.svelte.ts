@@ -1,11 +1,12 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
-import { serverStore } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { normalizeModelName } from '$lib/utils/model-names';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
+import { SvelteMap } from 'svelte/reactivity';
 import type { ExportedConversations } from '$lib/types/database';
 
 /**
@@ -50,6 +51,8 @@ class ChatStore {
 	errorDialogState = $state<{ type: 'timeout' | 'server'; message: string } | null>(null);
 	isInitialized = $state(false);
 	isLoading = $state(false);
+	conversationLoadingStates = new SvelteMap<string, boolean>();
+	conversationStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	constructor() {
@@ -94,6 +97,13 @@ class ChatStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
+		slotsService.setActiveConversation(conversation.id);
+
+		const isConvLoading = this.isConversationLoading(conversation.id);
+		this.isLoading = isConvLoading;
+
+		this.currentResponse = '';
+
 		await goto(`#/chat/${conversation.id}`);
 
 		return conversation.id;
@@ -113,6 +123,14 @@ class ChatStore {
 			}
 
 			this.activeConversation = conversation;
+
+			slotsService.setActiveConversation(convId);
+
+			const isConvLoading = this.isConversationLoading(convId);
+			this.isLoading = isConvLoading;
+
+			const streamingState = this.getConversationStreaming(convId);
+			this.currentResponse = streamingState?.response || '';
 
 			if (conversation.currNode) {
 				const allMessages = await DatabaseStore.getConversationMessages(convId);
@@ -286,6 +304,47 @@ class ChatStore {
 	}
 
 	/**
+	 * Helper methods for per-conversation loading state management
+	 */
+	private setConversationLoading(convId: string, loading: boolean): void {
+		if (loading) {
+			this.conversationLoadingStates.set(convId, true);
+			if (this.activeConversation?.id === convId) {
+				this.isLoading = true;
+			}
+		} else {
+			this.conversationLoadingStates.delete(convId);
+			if (this.activeConversation?.id === convId) {
+				this.isLoading = false;
+			}
+		}
+	}
+
+	private isConversationLoading(convId: string): boolean {
+		return this.conversationLoadingStates.get(convId) || false;
+	}
+
+	private setConversationStreaming(convId: string, response: string, messageId: string): void {
+		this.conversationStreamingStates.set(convId, { response, messageId });
+		if (this.activeConversation?.id === convId) {
+			this.currentResponse = response;
+		}
+	}
+
+	private clearConversationStreaming(convId: string): void {
+		this.conversationStreamingStates.delete(convId);
+		if (this.activeConversation?.id === convId) {
+			this.currentResponse = '';
+		}
+	}
+
+	private getConversationStreaming(
+		convId: string
+	): { response: string; messageId: string } | undefined {
+		return this.conversationStreamingStates.get(convId);
+	}
+
+	/**
 	 * Handles streaming chat completion with the AI model
 	 * @param allMessages - All messages in the conversation
 	 * @param assistantMessage - The assistant message to stream content into
@@ -300,150 +359,162 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
-		let modelCaptured = false;
 
-		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
-			if (!modelCaptured) {
-				const currentModelName = serverStore.modelName;
+		let resolvedModel: string | null = null;
+		let modelPersisted = false;
 
-				if (currentModelName) {
-					if (updateDbImmediately) {
-						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
-							console.error
-						);
-					}
+		const recordModel = (modelName: string, persistImmediately = true): void => {
+			const normalizedModel = normalizeModelName(modelName);
 
-					const messageIndex = this.findMessageIndex(assistantMessage.id);
-
-					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
-					modelCaptured = true;
-
-					return currentModelName;
-				}
+			if (!normalizedModel || normalizedModel === resolvedModel) {
+				return;
 			}
-			return undefined;
+
+			resolvedModel = normalizedModel;
+
+			const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+			this.updateMessageAtIndex(messageIndex, { model: normalizedModel });
+
+			if (persistImmediately && !modelPersisted) {
+				modelPersisted = true;
+				DatabaseStore.updateMessage(assistantMessage.id, { model: normalizedModel }).catch(
+					(error) => {
+						console.error('Failed to persist model name:', error);
+						modelPersisted = false;
+						resolvedModel = null;
+					}
+				);
+			}
 		};
 
 		slotsService.startStreaming();
+		slotsService.setActiveConversation(assistantMessage.convId);
 
-		await chatService.sendMessage(allMessages, {
-			...this.getApiOptions(),
+		await chatService.sendMessage(
+			allMessages,
+			{
+				...this.getApiOptions(),
 
-			onChunk: (chunk: string) => {
-				streamedContent += chunk;
-				this.currentResponse = streamedContent;
+				onChunk: (chunk: string) => {
+					streamedContent += chunk;
+					this.setConversationStreaming(
+						assistantMessage.convId,
+						streamedContent,
+						assistantMessage.id
+					);
 
-				captureModelIfNeeded();
-				const messageIndex = this.findMessageIndex(assistantMessage.id);
-				this.updateMessageAtIndex(messageIndex, {
-					content: streamedContent
-				});
-			},
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+					this.updateMessageAtIndex(messageIndex, {
+						content: streamedContent
+					});
+				},
 
-			onReasoningChunk: (reasoningChunk: string) => {
-				streamedReasoningContent += reasoningChunk;
+				onReasoningChunk: (reasoningChunk: string) => {
+					streamedReasoningContent += reasoningChunk;
 
-				captureModelIfNeeded();
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-				const messageIndex = this.findMessageIndex(assistantMessage.id);
+					this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
+				},
 
-				this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
-			},
+				onModel: (modelName: string) => {
+					recordModel(modelName);
+				},
 
-			onComplete: async (
-				finalContent?: string,
-				reasoningContent?: string,
-				timings?: ChatMessageTimings
-			) => {
-				slotsService.stopStreaming();
+				onComplete: async (
+					finalContent?: string,
+					reasoningContent?: string,
+					timings?: ChatMessageTimings
+				) => {
+					slotsService.stopStreaming();
 
-				const updateData: {
-					content: string;
-					thinking: string;
-					timings?: ChatMessageTimings;
-					model?: string;
-				} = {
-					content: finalContent || streamedContent,
-					thinking: reasoningContent || streamedReasoningContent,
-					timings: timings
-				};
+					const updateData: {
+						content: string;
+						thinking: string;
+						timings?: ChatMessageTimings;
+						model?: string;
+					} = {
+						content: finalContent || streamedContent,
+						thinking: reasoningContent || streamedReasoningContent,
+						timings: timings
+					};
 
-				const capturedModel = captureModelIfNeeded(false);
+					if (resolvedModel && !modelPersisted) {
+						updateData.model = resolvedModel;
+						modelPersisted = true;
+					}
 
-				if (capturedModel) {
-					updateData.model = capturedModel;
-				}
+					await DatabaseStore.updateMessage(assistantMessage.id, updateData);
 
-				await DatabaseStore.updateMessage(assistantMessage.id, updateData);
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-				const messageIndex = this.findMessageIndex(assistantMessage.id);
+					const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
+						timings: timings
+					};
 
-				const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
-					timings: timings
-				};
+					if (updateData.model) {
+						localUpdateData.model = updateData.model;
+					}
 
-				if (updateData.model) {
-					localUpdateData.model = updateData.model;
-				}
+					this.updateMessageAtIndex(messageIndex, localUpdateData);
 
-				this.updateMessageAtIndex(messageIndex, localUpdateData);
+					await DatabaseStore.updateCurrentNode(assistantMessage.convId, assistantMessage.id);
 
-				await DatabaseStore.updateCurrentNode(this.activeConversation!.id, assistantMessage.id);
-				this.activeConversation!.currNode = assistantMessage.id;
-				await this.refreshActiveMessages();
+					if (this.activeConversation?.id === assistantMessage.convId) {
+						this.activeConversation.currNode = assistantMessage.id;
+						await this.refreshActiveMessages();
+					}
 
-				if (onComplete) {
-					await onComplete(streamedContent);
-				}
+					if (onComplete) {
+						await onComplete(streamedContent);
+					}
 
-				this.isLoading = false;
-				this.currentResponse = '';
-			},
+					this.setConversationLoading(assistantMessage.convId, false);
+					this.clearConversationStreaming(assistantMessage.convId);
+					slotsService.clearConversationState(assistantMessage.convId);
+				},
 
-			onError: (error: Error) => {
-				slotsService.stopStreaming();
+				onError: (error: Error) => {
+					slotsService.stopStreaming();
 
-				if (error.name === 'AbortError' || error instanceof DOMException) {
-					this.isLoading = false;
-					this.currentResponse = '';
-					return;
-				}
+					if (this.isAbortError(error)) {
+						this.setConversationLoading(assistantMessage.convId, false);
+						this.clearConversationStreaming(assistantMessage.convId);
+						slotsService.clearConversationState(assistantMessage.convId);
+						return;
+					}
 
-				console.error('Streaming error:', error);
-				this.isLoading = false;
-				this.currentResponse = '';
+					console.error('Streaming error:', error);
+					this.setConversationLoading(assistantMessage.convId, false);
+					this.clearConversationStreaming(assistantMessage.convId);
+					slotsService.clearConversationState(assistantMessage.convId);
 
-				const messageIndex = this.activeMessages.findIndex(
-					(m: DatabaseMessage) => m.id === assistantMessage.id
-				);
+					const messageIndex = this.activeMessages.findIndex(
+						(m: DatabaseMessage) => m.id === assistantMessage.id
+					);
 
-				if (messageIndex !== -1) {
-					const [failedMessage] = this.activeMessages.splice(messageIndex, 1);
+					if (messageIndex !== -1) {
+						const [failedMessage] = this.activeMessages.splice(messageIndex, 1);
 
-					if (failedMessage) {
-						DatabaseStore.deleteMessage(failedMessage.id).catch((cleanupError) => {
-							console.error('Failed to remove assistant message after error:', cleanupError);
-						});
+						if (failedMessage) {
+							DatabaseStore.deleteMessage(failedMessage.id).catch((cleanupError) => {
+								console.error('Failed to remove assistant message after error:', cleanupError);
+							});
+						}
+					}
+
+					const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+
+					this.showErrorDialog(dialogType, error.message);
+
+					if (onError) {
+						onError(error);
 					}
 				}
-
-				const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
-
-				this.showErrorDialog(dialogType, error.message);
-
-				if (onError) {
-					onError(error);
-				}
-			}
-		});
-	}
-
-	private showErrorDialog(type: 'timeout' | 'server', message: string): void {
-		this.errorDialogState = { type, message };
-	}
-
-	dismissErrorDialog(): void {
-		this.errorDialogState = null;
+			},
+			assistantMessage.convId
+		);
 	}
 
 	/**
@@ -453,6 +524,14 @@ class ChatStore {
 	 */
 	private isAbortError(error: unknown): boolean {
 		return error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException);
+	}
+
+	private showErrorDialog(type: 'timeout' | 'server', message: string): void {
+		this.errorDialogState = { type, message };
+	}
+
+	dismissErrorDialog(): void {
+		this.errorDialogState = null;
 	}
 
 	/**
@@ -491,7 +570,8 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: []
+				children: [],
+				model: null
 			},
 			parentId || null
 		);
@@ -519,7 +599,12 @@ class ChatStore {
 	 * @param extras - Optional extra data (files, attachments, etc.)
 	 */
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
-		if ((!content.trim() && (!extras || extras.length === 0)) || this.isLoading) return;
+		if (!content.trim() && (!extras || extras.length === 0)) return;
+
+		if (this.activeConversation && this.isConversationLoading(this.activeConversation.id)) {
+			console.log('Cannot send message: current conversation is already processing a message');
+			return;
+		}
 
 		let isNewConversation = false;
 
@@ -534,8 +619,9 @@ class ChatStore {
 		}
 
 		this.errorDialogState = null;
-		this.isLoading = true;
-		this.currentResponse = '';
+
+		this.setConversationLoading(this.activeConversation.id, true);
+		this.clearConversationStreaming(this.activeConversation.id);
 
 		let userMessage: DatabaseMessage | null = null;
 
@@ -546,7 +632,6 @@ class ChatStore {
 				throw new Error('Failed to add user message');
 			}
 
-			// If this is a new conversation, update the title with the first user prompt
 			if (isNewConversation && content) {
 				const title = content.trim();
 				await this.updateConversationName(this.activeConversation.id, title);
@@ -559,19 +644,18 @@ class ChatStore {
 			}
 
 			this.activeMessages.push(assistantMessage);
-			// Don't update currNode until after streaming completes to maintain proper conversation path
 
 			const conversationContext = this.activeMessages.slice(0, -1);
 
 			await this.streamChatCompletion(conversationContext, assistantMessage);
 		} catch (error) {
 			if (this.isAbortError(error)) {
-				this.isLoading = false;
+				this.setConversationLoading(this.activeConversation!.id, false);
 				return;
 			}
 
 			console.error('Failed to send message:', error);
-			this.isLoading = false;
+			this.setConversationLoading(this.activeConversation!.id, false);
 			if (!this.errorDialogState) {
 				if (error instanceof Error) {
 					const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
@@ -587,12 +671,19 @@ class ChatStore {
 	 * Stops the current message generation
 	 * Aborts ongoing requests and saves partial response if available
 	 */
-	stopGeneration(): void {
+	async stopGeneration(): Promise<void> {
+		if (!this.activeConversation) return;
+
+		const convId = this.activeConversation.id;
+
+		await this.savePartialResponseIfNeeded(convId);
+
 		slotsService.stopStreaming();
-		chatService.abort();
-		this.savePartialResponseIfNeeded();
-		this.isLoading = false;
-		this.currentResponse = '';
+		chatService.abort(convId);
+
+		this.setConversationLoading(convId, false);
+		this.clearConversationStreaming(convId);
+		slotsService.clearConversationState(convId);
 	}
 
 	/**
@@ -604,6 +695,9 @@ class ChatStore {
 		slotsService.stopStreaming();
 		chatService.abort();
 		await this.savePartialResponseIfNeeded();
+
+		this.conversationLoadingStates.clear();
+		this.conversationStreamingStates.clear();
 		this.isLoading = false;
 		this.currentResponse = '';
 	}
@@ -612,12 +706,23 @@ class ChatStore {
 	 * Saves partial response if generation was interrupted
 	 * Preserves user's partial content and timing data when generation is stopped early
 	 */
-	private async savePartialResponseIfNeeded(): Promise<void> {
-		if (!this.currentResponse.trim() || !this.activeMessages.length) {
+	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
+		const conversationId = convId || this.activeConversation?.id;
+		if (!conversationId) return;
+
+		const streamingState = this.conversationStreamingStates.get(conversationId);
+		if (!streamingState || !streamingState.response.trim()) {
 			return;
 		}
 
-		const lastMessage = this.activeMessages[this.activeMessages.length - 1];
+		const messages =
+			conversationId === this.activeConversation?.id
+				? this.activeMessages
+				: await DatabaseStore.getConversationMessages(conversationId);
+
+		if (!messages.length) return;
+
+		const lastMessage = messages[messages.length - 1];
 
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
@@ -626,7 +731,7 @@ class ChatStore {
 					thinking?: string;
 					timings?: ChatMessageTimings;
 				} = {
-					content: this.currentResponse
+					content: streamingState.response
 				};
 
 				if (lastMessage.thinking?.trim()) {
@@ -640,7 +745,6 @@ class ChatStore {
 						prompt_n: lastKnownState.promptTokens || 0,
 						predicted_n: lastKnownState.tokensDecoded || 0,
 						cache_n: lastKnownState.cacheTokens || 0,
-						// We don't have ms data from the state, but we can estimate
 						predicted_ms:
 							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
 								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
@@ -701,7 +805,6 @@ class ChatStore {
 			this.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseStore.updateMessage(messageId, { content: newContent });
 
-			// If this is the first user message, update the conversation title with confirmation if needed
 			if (isFirstUserMessage && newContent.trim()) {
 				await this.updateConversationTitleWithConfirmation(
 					this.activeConversation.id,
@@ -718,8 +821,8 @@ class ChatStore {
 			this.activeMessages = this.activeMessages.slice(0, messageIndex + 1);
 			this.updateConversationTimestamp();
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			try {
 				const assistantMessage = await this.createAssistantMessage();
@@ -742,7 +845,7 @@ class ChatStore {
 				);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
-				this.isLoading = false;
+				this.setConversationLoading(this.activeConversation!.id, false);
 
 				const messageIndex = this.findMessageIndex(messageId);
 				this.updateMessageAtIndex(messageIndex, { content: originalContent });
@@ -784,8 +887,8 @@ class ChatStore {
 			this.activeMessages = this.activeMessages.slice(0, messageIndex);
 			this.updateConversationTimestamp();
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			try {
 				const parentMessageId =
@@ -806,7 +909,7 @@ class ChatStore {
 				await this.streamChatCompletion(conversationContext, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
-				this.isLoading = false;
+				this.setConversationLoading(this.activeConversation!.id, false);
 			}
 		} catch (error) {
 			if (this.isAbortError(error)) return;
@@ -862,7 +965,6 @@ class ChatStore {
 		try {
 			const currentConfig = config();
 
-			// Only ask for confirmation if the setting is enabled and callback is provided
 			if (currentConfig.askForTitleConfirmation && onConfirmationNeeded) {
 				const conversation = await DatabaseStore.getConversation(convId);
 				if (!conversation) return false;
@@ -944,8 +1046,9 @@ class ChatStore {
 
 	/**
 	 * Exports all conversations with their messages as a JSON file
+	 * Returns the list of exported conversations
 	 */
-	async exportAllConversations(): Promise<void> {
+	async exportAllConversations(): Promise<DatabaseConversation[]> {
 		try {
 			const allConversations = await DatabaseStore.getAllConversations();
 			if (allConversations.length === 0) {
@@ -972,6 +1075,7 @@ class ChatStore {
 			URL.revokeObjectURL(url);
 
 			toast.success(`All conversations (${allConversations.length}) prepared for download`);
+			return allConversations;
 		} catch (err) {
 			console.error('Failed to export conversations:', err);
 			throw err;
@@ -982,8 +1086,9 @@ class ChatStore {
 	 * Imports conversations from a JSON file.
 	 * Supports both single conversation (object) and multiple conversations (array).
 	 * Uses DatabaseStore for safe, encapsulated data access
+	 * Returns the list of imported conversations
 	 */
-	async importConversations(): Promise<void> {
+	async importConversations(): Promise<DatabaseConversation[]> {
 		return new Promise((resolve, reject) => {
 			const input = document.createElement('input');
 			input.type = 'file';
@@ -1024,7 +1129,9 @@ class ChatStore {
 
 					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
 
-					resolve(undefined);
+					// Extract the conversation objects from imported data
+					const importedConversations = importedData.map((item) => item.conv);
+					resolve(importedConversations);
 				} catch (err: unknown) {
 					const message = err instanceof Error ? err.message : 'Unknown error';
 					console.error('Failed to import conversations:', err);
@@ -1170,14 +1277,16 @@ class ChatStore {
 	}
 
 	/**
-	 * Clears the active conversation and resets state
+	 * Clears the active conversation and messages
 	 * Used when navigating away from chat or starting fresh
+	 * Note: Does not stop ongoing streaming to allow background completion
 	 */
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		this.currentResponse = '';
 		this.isLoading = false;
+		this.currentResponse = '';
+		slotsService.setActiveConversation(null);
 	}
 
 	/** Refreshes active messages based on currNode after branch navigation */
@@ -1419,8 +1528,8 @@ class ChatStore {
 				return;
 			}
 
-			this.isLoading = true;
-			this.currentResponse = '';
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
 
 			const newAssistantMessage = await DatabaseStore.createMessageBranch(
 				{
@@ -1430,7 +1539,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				parentMessage.id
 			);
@@ -1454,7 +1564,7 @@ class ChatStore {
 			if (this.isAbortError(error)) return;
 
 			console.error('Failed to regenerate message with branching:', error);
-			this.isLoading = false;
+			this.setConversationLoading(this.activeConversation!.id, false);
 		}
 	}
 
@@ -1466,8 +1576,8 @@ class ChatStore {
 		if (!this.activeConversation) return;
 
 		this.errorDialogState = null;
-		this.isLoading = true;
-		this.currentResponse = '';
+		this.setConversationLoading(this.activeConversation.id, true);
+		this.clearConversationStreaming(this.activeConversation.id);
 
 		try {
 			// Get conversation path up to the user message
@@ -1487,7 +1597,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				userMessageId
 			);
@@ -1499,8 +1610,29 @@ class ChatStore {
 			await this.streamChatCompletion(conversationPath, assistantMessage);
 		} catch (error) {
 			console.error('Failed to generate response:', error);
-			this.isLoading = false;
+			this.setConversationLoading(this.activeConversation!.id, false);
 		}
+	}
+
+	/**
+	 * Public methods for accessing per-conversation states
+	 */
+	public isConversationLoadingPublic(convId: string): boolean {
+		return this.isConversationLoading(convId);
+	}
+
+	public getConversationStreamingPublic(
+		convId: string
+	): { response: string; messageId: string } | undefined {
+		return this.getConversationStreaming(convId);
+	}
+
+	public getAllLoadingConversations(): string[] {
+		return Array.from(this.conversationLoadingStates.keys());
+	}
+
+	public getAllStreamingConversations(): string[] {
+		return Array.from(this.conversationStreamingStates.keys());
 	}
 }
 
@@ -1541,3 +1673,11 @@ export function stopGeneration() {
 	chatStore.stopGeneration();
 }
 export const messages = () => chatStore.activeMessages;
+
+// Per-conversation state access
+export const isConversationLoading = (convId: string) =>
+	chatStore.isConversationLoadingPublic(convId);
+export const getConversationStreaming = (convId: string) =>
+	chatStore.getConversationStreamingPublic(convId);
+export const getAllLoadingConversations = () => chatStore.getAllLoadingConversations();
+export const getAllStreamingConversations = () => chatStore.getAllStreamingConversations();

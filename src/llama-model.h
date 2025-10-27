@@ -109,9 +109,11 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
+    LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
-    LLM_TYPE_106B_A12B, // GLM-4.5-Air (and GLM-4.5V text model)
+    LLM_TYPE_100B_A6B,
+    LLM_TYPE_106B_A12B, // GLM-4.5-Air
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
     LLM_TYPE_355B_A32B, // GLM-4.5
