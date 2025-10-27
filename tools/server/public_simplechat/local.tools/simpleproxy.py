@@ -36,8 +36,11 @@ gConfigType = {
     '--port': 'int',
     '--config': 'str',
     '--debug': 'bool',
-    '--allowed.domains': 'list'
+    '--allowed.domains': 'list',
+    '--bearer.insecure': 'str'
 }
+
+gConfigNeeded = [ '--allowed.domains', '--bearer.insecure' ]
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -377,6 +380,10 @@ def process_args(args: list[str]):
             print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand")
             exit(103)
     print(gMe)
+    for k in gConfigNeeded:
+        if gMe.get(k) == None:
+            print(f"ERRR:ProcessArgs:{k}:missing, did you forget to pass the config file...")
+            exit(104)
 
 
 def run():
