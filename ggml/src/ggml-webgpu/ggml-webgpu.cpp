@@ -2149,6 +2149,10 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     required_features.push_back(wgpu::FeatureName::TimestampQuery);
 #endif
 
+    // Enable Dawn-specific toggles to increase native performance
+    // TODO: Don't enable for WASM builds, they won't have an effect anyways
+    // TODO: Maybe WebGPU needs a "fast" mode where you can request compilers skip adding checks like these,
+    //       only for native performance?
     const char * const deviceEnabledToggles[]  = { "skip_validation", "disable_robustness", "disable_workgroup_init",
                                                    "disable_polyfills_on_integer_div_and_mod" };
     const char * const deviceDisabledToggles[] = { "timestamp_quantization" };
