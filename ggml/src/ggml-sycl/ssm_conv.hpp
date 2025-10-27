@@ -1,5 +1,9 @@
-#pragma once
+#pragma once#pragma once
 
-#include "common.hpp"
 
-void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#include "common.hpp"#include "common.hpp"
+
+
+
+void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst);void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
