@@ -366,6 +366,8 @@ class ChatStore {
 		const PROPS_REFRESH_RETRY_DELAY_MS = 1_000;
 		let serverPropsRefreshRequested = false;
 		let lastPropsRefreshAttempt = 0;
+		const currentConfig = config();
+		const preferServerPropsModel = !currentConfig.modelSelectorEnabled;
 
 		const resetPropsRefreshGate = (options?: { immediate?: boolean }) => {
 			serverPropsRefreshRequested = false;
@@ -429,10 +431,19 @@ class ChatStore {
 				});
 		};
 
-		const recordModel = (modelName: string, persistImmediately = true): void => {
+		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			ensureServerPropsRefresh();
 
-			const normalizedModel = normalizeModelName(modelName);
+			const serverModelName = serverStore.modelName;
+			const preferredModelSource = preferServerPropsModel
+				? (serverModelName ?? modelName ?? null)
+				: (modelName ?? serverModelName ?? null);
+
+			if (!preferredModelSource) {
+				return;
+			}
+
+			const normalizedModel = normalizeModelName(preferredModelSource);
 
 			if (!normalizedModel || normalizedModel === resolvedModel) {
 				return;
@@ -455,6 +466,31 @@ class ChatStore {
 				);
 			}
 		};
+
+		if (preferServerPropsModel) {
+			const hasExistingProps = serverStore.serverProps !== null;
+
+			const updateModelFromServerProps = (persistImmediately = true) => {
+				const currentServerModel = serverStore.modelName;
+
+				if (!currentServerModel) {
+					return;
+				}
+
+				recordModel(currentServerModel, persistImmediately);
+			};
+
+			updateModelFromServerProps(false);
+
+			serverStore
+				.fetchServerProps({ silent: hasExistingProps })
+				.then(() => {
+					updateModelFromServerProps(true);
+				})
+				.catch((error) => {
+					console.warn('Failed to fetch server props before streaming:', error);
+				});
+		}
 
 		slotsService.startStreaming();
 		slotsService.setActiveConversation(assistantMessage.convId);
