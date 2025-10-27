@@ -226,3 +226,12 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+# Developer-only sanity checks (not built by default)
+option(GGML_DEV_SANITY "Build developer-only sanity executables" OFF)
+if(GGML_DEV_SANITY)
+    add_executable(rms-norm-back-sanity ${PROJECT_SOURCE_DIR}/tests/tools/rms_norm_back_sanity.cpp)
+    target_link_libraries(rms-norm-back-sanity PRIVATE ggml ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(rms-norm-back-sanity PRIVATE cxx_std_17)
+    add_test(NAME rms-norm-back-sanity COMMAND $<TARGET_FILE:rms-norm-back-sanity>)
+endif()

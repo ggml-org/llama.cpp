@@ -152,3 +152,6 @@ poetry.toml
 # IDE
 *.code-workspace
 .windsurf/
+
+# Local bootcamp notes (do not include in PRs)
+Bootcamp_Status.md
