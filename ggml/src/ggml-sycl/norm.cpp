@@ -491,7 +491,7 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     std::memcpy(&eps, dst->op_params, sizeof(float));
     if (!(eps > 0.0f) || !std::isfinite(eps)) eps = 1e-5f;
 
-    const float * g_base  = static_cast<const float *>(dst->src[0]->data); // g = dz
+    const float * g_base  = static_cast<const float *>(dst->src[0]->data); // dz
     const float * x_base  = static_cast<const float *>(dst->src[1]->data); // x
           float * dx_base = static_cast<      float *>(dst->data);
 
@@ -501,8 +501,8 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const int64_t N  = ggml_nrows(dst);
     if (D == 0 || N == 0) return;
 
-    const ggml_tensor *G = dst->src[0]; // dz
-    const ggml_tensor *X = dst->src[1]; // x
+    const ggml_tensor *G = dst->src[0];
+    const ggml_tensor *X = dst->src[1];
     const int ts = (int) ggml_type_size(X->type);
     GGML_ASSERT((size_t) X->nb[0] == (size_t) ts);
     GGML_ASSERT((size_t) G->nb[0] == (size_t) ts);
@@ -520,156 +520,98 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
 
     dpct::queue_ptr q = ctx.stream();
 
+    // work-group size: multiple of WARP_SIZE, capped by device and 256
     const int device_max_wg = ggml_sycl_info().max_work_group_sizes[ctx.device];
-    int WG = 64;
-    if (device_max_wg > 0) WG = std::min(WG, device_max_wg);
-    if (D > 0) WG = std::min(WG, (int)D);
-    if (WG <= 0) WG = 1;
+    auto roundup = [](int v, int m) { return ((v + m - 1) / m) * m; };
+    int wg_cap = 256;
+    if (device_max_wg > 0) wg_cap = std::min(wg_cap, device_max_wg);
+    int WG = std::max(WARP_SIZE, std::min(roundup((int)std::min<int64_t>(D, wg_cap), WARP_SIZE), wg_cap));
 
-    const bool has_fp64 = q->get_device().has(sycl::aspect::fp64);
+    // FP32 compensated reduction
+    q->submit([&](sycl::handler &cgh) {
+        auto l_inv_r = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
+        auto l_coeff = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
+        auto l_part  = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(std::max(1, WG / WARP_SIZE)), cgh);
 
-    if (has_fp64) {
-        q->submit([&](sycl::handler &cgh) {
-            auto l_inv_r = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
-            auto l_coeff = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, N) * sycl::range<3>(1, 1, WG), sycl::range<3>(1, 1, WG)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                const int row = item_ct1.get_group(2);
+                const int tid = item_ct1.get_local_id(2);
 
-            cgh.parallel_for(
-                sycl::nd_range<3>(sycl::range<3>(1, 1, N) * sycl::range<3>(1, 1, WG),
-                                  sycl::range<3>(1, 1, WG)),
-                [=](sycl::nd_item<3> item_ct1) {
-                    const int row = item_ct1.get_group(2);
-                    const int tid = item_ct1.get_local_id(2);
+                const int64_t i1 = row % n1;
+                const int64_t i2 = (row / n1) % n2;
+                const int64_t i3 = row / (n1 * n2);
 
-                    const int64_t i1 = row % n1;
-                    const int64_t i2 = (row / n1) % n2;
-                    const int64_t i3 = row / (n1 * n2);
+                const float *__restrict x_row = x_base + i3 * xs3 + i2 * xs2 + i1 * xs1;
+                const float *__restrict g_row = g_base + i3 * gs3 + i2 * gs2 + i1 * gs1;
+                float *__restrict d_row       = dx_base + i3 * ds3 + i2 * ds2 + i1 * ds1;
 
-                    const float *__restrict x_row = x_base + i3 * xs3 + i2 * xs2 + i1 * xs1;
-                    const float *__restrict g_row = g_base + i3 * gs3 + i2 * gs2 + i1 * gs1;
-                    float *__restrict d_row = dx_base + i3 * ds3 + i2 * ds2 + i1 * ds1;
+                // per-thread compensated sums for sum(x^2) and sum(x*dz)
+                float sum_xx = 0.f, c_xx = 0.f;
+                float sum_xg = 0.f, c_xg = 0.f;
+                for (int64_t col = tid; col < D; col += WG) {
+                    const float xv = x_row[col];
+                    const float gv = g_row[col];
+                    float y1 = xv * xv - c_xx;         // compensated add for x^2
+                    float t1 = sum_xx + y1;            
+                    c_xx = (t1 - sum_xx) - y1;
+                    sum_xx = t1;
+                    float y2 = xv * gv - c_xg;         // compensated add for x*dz
+                    float t2 = sum_xg + y2;            
+                    c_xg = (t2 - sum_xg) - y2;
+                    sum_xg = t2;
+                }
 
-                    if (tid == 0) {
-                        double sx2 = 0.0;
-                        double xg = 0.0;
-                        for (int64_t col = 0; col < D; ++col) {
-                            const double xv = (double)x_row[col];
-                            const double gv = (double)g_row[col];
-                            sx2 += xv * xv;
-                            xg += xv * gv;
-                        }
+                // reduce within warp
+                sycl::float2 xx = sycl::float2(sum_xx, c_xx);
+                sycl::float2 xg = sycl::float2(sum_xg, c_xg);
+                xx = warp_reduce_sum(xx, item_ct1);
+                xg = warp_reduce_sum(xg, item_ct1);
 
-                        const double mean_eps_d = sx2 / (double)D + (double)eps;
-                        const double sum_eps_d = sx2 + (double)eps * (double)D;
-                        const double inv_r_d = 1.0 / sycl::sqrt(mean_eps_d);
-                        const double coeff_d = -(xg) / sum_eps_d;
+                // cross-warp reduction if needed
+                const auto sub_group = item_ct1.get_sub_group();
+                const auto sg_id     = sub_group.get_group_linear_id();
+                const auto wi_in_sg  = sub_group.get_local_linear_id();
+                const int nthreads   = item_ct1.get_local_range(2);
+                const int nwarps     = nthreads / WARP_SIZE;
 
-                        l_inv_r[0] = (float)inv_r_d;
-                        l_coeff[0] = (float)coeff_d;
-                    }
-
+                sycl::float2 xx_total = xx;
+                sycl::float2 xg_total = xg;
+                if (nwarps > 1) {
+                    if (wi_in_sg == 0) l_part[sg_id] = xx;
                     item_ct1.barrier(sycl::access::fence_space::local_space);
 
-                    const float inv_r = l_inv_r[0];
-                    const float coeff = l_coeff[0];
+                    xx_total = sycl::float2(0.f, 0.f);
+                    const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
+                    for (size_t i = 0; i < nreduce; ++i) xx_total += l_part[wi_in_sg + i * WARP_SIZE];
+                    xx_total = warp_reduce_sum(xx_total, item_ct1);
 
-                    for (int64_t col = tid; col < D; col += WG) {
-                        float tmp = x_row[col] * coeff;
-                        tmp = tmp + g_row[col];
-                        d_row[col] = tmp * inv_r;
-                    }
-                });
-        });
-    } else {
-        q->submit([&](sycl::handler &cgh) {
-            auto l_inv_r = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
-            auto l_coeff = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
-
-            cgh.parallel_for(
-                sycl::nd_range<3>(sycl::range<3>(1, 1, N) * sycl::range<3>(1, 1, WG),
-                                  sycl::range<3>(1, 1, WG)),
-                [=](sycl::nd_item<3> item_ct1) {
-                    const int row = item_ct1.get_group(2);
-                    const int tid = item_ct1.get_local_id(2);
-
-                    const int64_t i1 = row % n1;
-                    const int64_t i2 = (row / n1) % n2;
-                    const int64_t i3 = row / (n1 * n2);
-
-                    const float *__restrict x_row = x_base + i3 * xs3 + i2 * xs2 + i1 * xs1;
-                    const float *__restrict g_row = g_base + i3 * gs3 + i2 * gs2 + i1 * gs1;
-                    float *__restrict d_row = dx_base + i3 * ds3 + i2 * ds2 + i1 * ds1;
-
-                    if (tid == 0) {
-                        auto two_sum = [&](float a, float b) -> sycl::float2 {
-                            const float s = a + b;
-                            const float bp = s - a;
-                            const float ap = s - bp;
-                            const float err = (a - ap) + (b - bp);
-                            return sycl::float2(s, err);
-                        };
-
-                        auto dd_add_scalar = [&](sycl::float2 acc, float v) -> sycl::float2 {
-                            sycl::float2 t = two_sum(acc.x(), v);
-                            sycl::float2 r = two_sum(t.x(), acc.y() + t.y());
-                            return sycl::float2(r.x(), r.y());
-                        };
-
-                        sycl::float2 sx2dd = sycl::float2(0.f, 0.f);
-                        sycl::float2 xgdd = sycl::float2(0.f, 0.f);
-                        const float split = 4097.0f; // Dekker constant for IEEE 754 float
-                        for (int64_t col = 0; col < D; ++col) {
-                            const float xv = x_row[col];
-
-                            // Dekker split of x
-                            const float c = split * xv;
-                            const float hi_x = c - (c - xv);
-                            const float lo_x = xv - hi_x;
-
-                            // x*x product with error term
-                            const float prod_xx_hi = xv * xv;
-                            const float prod_xx_lo = ((hi_x * hi_x - prod_xx_hi) + 2.0f * hi_x * lo_x + lo_x * lo_x);
-
-                            // x*g product with error term
-                            const float gv = g_row[col];
-                            const float cg = split * gv;
-                            const float hi_g = cg - (cg - gv);
-                            const float lo_g = gv - hi_g;
-                            const float prod_xg_hi = xv * gv;
-                            const float prod_xg_lo = ((hi_x * hi_g - prod_xg_hi) + hi_x * lo_g + lo_x * hi_g + lo_x * lo_g);
-
-                            // accumulate hi and lo parts into double-double sums
-                            sx2dd = dd_add_scalar(sx2dd, prod_xx_hi);
-                            sx2dd = dd_add_scalar(sx2dd, prod_xx_lo);
-                            xgdd  = dd_add_scalar(xgdd,  prod_xg_hi);
-                            xgdd  = dd_add_scalar(xgdd,  prod_xg_lo);
-                        }
-
-                        const float sum_xx = sx2dd.x() + sx2dd.y();
-                        const float sum_xdz = xgdd.x() + xgdd.y();
-
-                        const float mean_eps = sum_xx / (float)D + eps;
-                        const float sum_eps = sum_xx + eps * (float)D;
-
-                        const float inv_r = 1.0f / sycl::sqrt(mean_eps);
-                        const float coeff = -sum_xdz / sum_eps;
-
-                        l_inv_r[0] = inv_r;
-                        l_coeff[0] = coeff;
-                    }
-
+                    if (wi_in_sg == 0) l_part[sg_id] = xg;
                     item_ct1.barrier(sycl::access::fence_space::local_space);
+                    xg_total = sycl::float2(0.f, 0.f);
+                    for (size_t i = 0; i < nreduce; ++i) xg_total += l_part[wi_in_sg + i * WARP_SIZE];
+                    xg_total = warp_reduce_sum(xg_total, item_ct1);
+                }
 
-                    const float inv_r = l_inv_r[0];
-                    const float coeff = l_coeff[0];
+                // compute inv_r and coeff once per row
+                if (tid == 0) {
+                    const float sum_xx_f  = xx_total.x() + xx_total.y();
+                    const float sum_xdz_f = xg_total.x() + xg_total.y();
+                    const float mean_eps  = sum_xx_f / (float) D + eps;
+                    const float sum_eps   = sum_xx_f + eps * (float) D;
+                    l_inv_r[0] = sycl::rsqrt(mean_eps);
+                    l_coeff[0] = -sum_xdz_f / sum_eps;
+                }
 
-                    for (int64_t col = tid; col < D; col += WG) {
-                        float tmp = x_row[col] * coeff;
-                        tmp = tmp + g_row[col];
-                        d_row[col] = tmp * inv_r;
-                    }
-                });
-        });
-    }
+                item_ct1.barrier(sycl::access::fence_space::local_space);
+                const float inv_r = l_inv_r[0];
+                const float coeff = l_coeff[0];
+                for (int64_t col = tid; col < D; col += WG) {
+                    d_row[col] = (g_row[col] + coeff * x_row[col]) * inv_r;
+                }
+            });
+    });
 
     q->wait_and_throw();
 }
