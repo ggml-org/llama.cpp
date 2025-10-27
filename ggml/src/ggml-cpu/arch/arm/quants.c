@@ -2090,8 +2090,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const int vector_length = ggml_cpu_get_sve_cnt()*8;
 #endif
 
-#if defined(__ARM_FEATURE_MATMUL_INT8)
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
     if (nrc==2) {
         svbool_t pg32_2 = svptrue_pat_b32(SV_VL2);
         const block_q4_K * GGML_RESTRICT vx0 = vx;
@@ -2294,7 +2293,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         svst1_f32(pg32_2, s + bs, svreinterpret_f32_u8(svext_u8(svreinterpret_u8_f32(sumf1), svdup_n_u8(0), 8)));
         return ;
     }
-#else
+#elif defined(__ARM_FEATURE_MATMUL_INT8)
     if (nrc == 2) {
         const block_q4_K * GGML_RESTRICT x0 = x;
         const block_q4_K * GGML_RESTRICT x1 = (const block_q4_K *) ((const uint8_t *)vx + bx);
@@ -2432,7 +2431,6 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         return;
     }
-#endif
 #endif
 
 #ifdef __ARM_FEATURE_SVE
@@ -2710,8 +2708,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #ifdef __ARM_FEATURE_SVE
     const int vector_length = ggml_cpu_get_sve_cnt()*8;
 #endif
-#if defined(__ARM_FEATURE_MATMUL_INT8)
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
     if (nrc==2) {
         const svbool_t pg32_2 = svptrue_pat_b32(SV_VL2);
         svfloat32_t sum = svdup_n_f32(0);
@@ -2897,7 +2894,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         svst1_f32(pg32_2, s + bs, svreinterpret_f32_u8(svext_u8(svreinterpret_u8_f32(sum), svdup_n_u8(0), 8)));
         return;
     }
-#else
+#elif defined(__ARM_FEATURE_MATMUL_INT8)
     if (nrc == 2) {
         const block_q6_K * GGML_RESTRICT x0 = x;
         const block_q6_K * GGML_RESTRICT x1 = (const block_q6_K *) ((const uint8_t *)vx + bx);
@@ -3064,7 +3061,6 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         return;
     }
-#endif
 #endif
 
 #ifdef __ARM_FEATURE_SVE
