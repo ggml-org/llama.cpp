@@ -35,6 +35,12 @@ class ServerResponse:
     body: dict | Any
 
 
+class ServerError(Exception):
+    def __init__(self, code, body):
+        self.code = code
+        self.body = body
+
+
 class ServerProcess:
     # default options
     debug: bool = False
@@ -99,8 +105,12 @@ class ServerProcess:
             self.debug = True
         if "PORT" in os.environ:
             self.server_port = int(os.environ["PORT"])
+        self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int | None = DEFAULT_HTTP_TIMEOUT) -> None:
+        if self.external_server:
+            print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
+            return
         if self.server_path is not None:
             server_path = self.server_path
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
@@ -244,6 +254,9 @@ class ServerProcess:
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:
+        if self.external_server:
+            print("[external_server]: Not stopping external server")
+            return
         if self in server_instances:
             server_instances.remove(self)
         if self.process:
@@ -290,6 +303,8 @@ class ServerProcess:
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:
             raise ValueError(f"Unimplemented method: {method}")
+        if response.status_code != 200:
+            raise ServerError(response.status_code, response.json())
         for line_bytes in response.iter_lines():
             line = line_bytes.decode("utf-8")
             if '[DONE]' in line:

@@ -76,51 +76,206 @@ jobs:
         run: |
           pip install -r tools/server/tests/requirements.txt
 
-      # Setup nodejs (to be used for verifying bundled index.html)
-      - uses: actions/setup-node@v4
+  webui-setup:
+    name: WebUI Setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          node-version: '22.11.0'
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: WebUI - Install dependencies
-        id: webui_lint
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache-node-modules
+        with:
+          path: tools/server/webui/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+        working-directory: tools/server/webui
+
+  webui-check:
+    needs: webui-setup
+    name: WebUI Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: tools/server/webui/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Run type checking
+        run: npm run check
+        working-directory: tools/server/webui
+
+      - name: Run linting
+        run: npm run lint
+        working-directory: tools/server/webui
+
+  webui-build:
+    needs: webui-check
+    name: WebUI Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: tools/server/webui/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Build application
+        run: npm run build
+        working-directory: tools/server/webui
+
+  webui-tests:
+    needs: webui-build
+    name: Run WebUI tests
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: tools/server/webui/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+        working-directory: tools/server/webui
+
+      - name: Build Storybook
+        run: npm run build-storybook
+        working-directory: tools/server/webui
+
+      - name: Run Client tests
+        run: npm run test:client
+        working-directory: tools/server/webui
+
+      - name: Run Server tests
+        run: npm run test:server
+        working-directory: tools/server/webui
+
+      - name: Run UI tests
+        run: npm run test:ui
+        working-directory: tools/server/webui
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        working-directory: tools/server/webui
+
+  server-build:
+    needs: [webui-tests]
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
+        build_type: [RelWithDebInfo]
+        include:
+          - build_type: Release
+            sanitizer: ""
+      fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
+
+    steps:
+      - name: Dependencies
+        id: depends
         run: |
-          cd tools/server/webui
-          npm ci
+          sudo apt-get update
+          sudo apt-get -y install \
+            build-essential \
+            xxd \
+            git \
+            cmake \
+            curl \
+            wget \
+            language-pack-en \
+            libcurl4-openssl-dev
 
-      - name: WebUI - Check code format
-        id: webui_format
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tests dependencies
+        id: test_dependencies
         run: |
-          git config --global --add safe.directory $(realpath .)
-          cd tools/server/webui
-          git status
+          pip install -r tools/server/tests/requirements.txt
 
-          npm run format
-          git status
-          modified_files="$(git status -s)"
-          echo "Modified files: ${modified_files}"
-          if [ -n "${modified_files}" ]; then
-            echo "Files do not follow coding style. To fix: npm run format"
-            echo "${modified_files}"
-            exit 1
-          fi
+      - name: Setup Node.js for WebUI
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
 
-      - name: Verify bundled index.html
-        id: verify_server_index_html
-        run: |
-          git config --global --add safe.directory $(realpath .)
-          cd tools/server/webui
-          git status
+      - name: Install WebUI dependencies
+        run: npm ci
+        working-directory: tools/server/webui
 
-          npm run build
-          git status
-          modified_files="$(git status -s)"
-          echo "Modified files: ${modified_files}"
-          if [ -n "${modified_files}" ]; then
-            echo "Repository is dirty or server/webui is not built as expected"
-            echo "Hint: You may need to follow Web UI build guide in server/README.md"
-            echo "${modified_files}"
-            exit 1
-          fi
+      - name: Build WebUI
+        run: npm run build
+        working-directory: tools/server/webui
 
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp

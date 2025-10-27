@@ -116,7 +116,7 @@ extern "C" {
         void (*event_wait)  (ggml_backend_t backend, ggml_backend_event_t event);
 
         // (optional) sort/optimize the nodes in the graph
-        void                      (*optimize_graph)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
+        void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
     };
 
     struct ggml_backend {
@@ -208,9 +208,6 @@ extern "C" {
         struct ggml_backend_reg_i iface;
         void * context;
     };
-
-    // Internal backend registry API
-    GGML_API void ggml_backend_register(ggml_backend_reg_t reg);
 
     // Add backend dynamic loading support to the backend
 
