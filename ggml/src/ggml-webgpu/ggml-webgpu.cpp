@@ -248,7 +248,7 @@ struct webgpu_context_struct {
 
     webgpu_pipeline memset_pipeline;
     webgpu_pipeline mul_mat_pipeline[30][2];
-    webgpu_pipeline set_rows_pipeline[1][2];  // dst->type, vectorized (0 for vectorized, 1 for non vectorized)
+    webgpu_pipeline set_rows_pipeline[1][2];  // dst->type, vectorized
     webgpu_pipeline get_rows_pipeline[30];
     webgpu_pipeline get_rows_f32_no_vec_pipeline;
     webgpu_pipeline cpy_pipeline[2][2];          // src type, dst type
@@ -770,7 +770,6 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
 
     int             vectorized = src->ne[0] % 4 == 0;
     webgpu_pipeline pipeline   = ctx->set_rows_pipeline[0][vectorized];
-    // if not evenly divisble by 4, use the non-vectorized version
     uint32_t        threads;
     if (vectorized) {
         threads = (src->ne[1] * src->ne[2] * src->ne[3]) * (src->ne[0] / 4);
