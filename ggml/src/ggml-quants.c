@@ -2676,6 +2676,67 @@ void dequantize_row_q8_K(const block_q8_K * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
+//===================================== IFAIRY ==============================================
+
+void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, block_ifairy_q16 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int i = 0; i < nb; i++) {
+
+        float max_real = 1e-5, max_imag = 1e-5;
+
+        for (int j = 0; j < QK_K; ++j) {
+            float* x_com = x + j;
+
+            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+
+            float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+            float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+            max_real = MAX(max_real, fabsf(x_real));
+            max_imag = MAX(max_imag, fabsf(x_imag));
+        }
+
+        const float iscale_real = 127.f / max_real;
+        const float iscale_imag = 127.f / max_imag;
+        for (int j = 0; j < QK_K; ++j) {
+            float* x_com = x + j;
+
+            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+
+            float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+            float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+
+            int v = nearest_int(iscale_real * x_real);
+            y[i].x_real[j] = MIN(127, v);
+            v = nearest_int(iscale_imag * x_imag);
+            y[i].x_imag[j] = MIN(127, v);
+        }
+        y[i].d_real = 1.0 / iscale_real;
+        y[i].d_imag = 1.0 / iscale_imag;
+        x += QK_K;
+    }
+}
+
+void dequantize_row_ifairy_q16(const block_ifairy_q16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int i = 0; i < nb; i++) {
+        for (int j = 0; j < QK_K; ++j) {
+            float x_real = x[i].d_real * x[i].x_real[j];
+            float x_imag = x[i].d_imag * x[i].x_imag[j];
+
+            ((ggml_bf16_t*)y)[0] = GGML_FP32_TO_BF16(x_real);
+            ((ggml_bf16_t*)y)[1] = GGML_FP32_TO_BF16(x_imag);
+            y ++; 
+        }
+    }
+}
+
 // ================================ IQ2 quantization =============================================
 
 typedef struct {
@@ -5331,6 +5392,15 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 const block_q8_K * q = (const block_q8_K *) data;
                 for (size_t i = 0; i < nb; ++i) {
                     if (!validate_float(q[i].d, i)) {
+                        return false;
+                    }
+                }
+            } break;
+        case GGML_TYPE_IFAIRY_Q16:
+            {
+                const block_ifairy_q16 * q = (const block_ifairy_q16 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_float(q[i].d_real, i) || !validate_float(q[i].d_imag, i)) {
                         return false;
                     }
                 }

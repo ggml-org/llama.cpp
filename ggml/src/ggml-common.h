@@ -268,6 +268,13 @@ static_assert(sizeof(block_ifairy) == sizeof(ggml_half) * 2 + QK_K / 4, "wrong i
 // 存储 256 个复数 = 512 个 fp32 值 (2048 字节)
 // 压缩率: 2048/68 = 30.1x
 
+
+typedef struct {
+    uint8_t x_real[QK_K], x_imag[QK_K];
+    ggml_half d_real, d_imag;
+} block_ifairy_q16;
+static_assert(sizeof(block_ifairy_q16) == sizeof(ggml_half) * 2 + QK_K * 2, "wrong ifairy_q16 block size/padding");
+
 //
 // Super-block quantization structures
 //

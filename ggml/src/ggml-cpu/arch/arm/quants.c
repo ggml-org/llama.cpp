@@ -1428,141 +1428,60 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
+#if defined(__ARM_NEON)
+    const block_ifairy * GGML_RESTRICT weight = vx;
+    const block_ifairy_q16 * GGML_RESTRICT x = vy;
 
-    const block_ifairy * GGML_RESTRICT x = vx;
-    const block_q8_K  * GGML_RESTRICT y = vy;
     const int nb = n / QK_K;
 
-#if defined(__ARM_NEON)
     float sum_real = 0.0f;
     float sum_imag = 0.0f;
 
-    // NEON常量
-    const uint8x16_t mask_3bit = vdupq_n_u8(3);     // 0b11 - 提取2-bit值
-    const int8x16_t  minus_one = vdupq_n_s8(-1);    // -1 - 转换为{-1,0,1,2}偏移
-
     for (int i = 0; i < nb; ++i) {
-        // 激活分开存储: 实部和虚部在不同块中
-        const block_q8_K * y_real = &y[i * 2];        // 实部激活块
-        const block_q8_K * y_imag = &y[i * 2 + 1];    // 虚部激活块
+        int32x4_t sum_ac = vdupq_n_s32(0);
+        int32x4_t sum_bd = vdupq_n_s32(0);
+        int32x4_t sum_ad = vdupq_n_s32(0);
+        int32x4_t sum_bc = vdupq_n_s32(0);
 
-        // 获取权重缩放因子
-        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
-
-        // 获取激活缩放因子
-        const float d_y_real = y_real->d;
-        const float d_y_imag = y_imag->d;
-
-#if defined(__ARM_FEATURE_DOTPROD)  // 支持点积指令的ARMv8.2+
-        int32x4_t sum_ac_0 = vdupq_n_s32(0);    // real_w * real_act
-        int32x4_t sum_ac_1 = vdupq_n_s32(0);
-        int32x4_t sum_bd_0 = vdupq_n_s32(0);    // imag_w * imag_act
-        int32x4_t sum_bd_1 = vdupq_n_s32(0);
-        int32x4_t sum_ad_0 = vdupq_n_s32(0);    // real_w * imag_act
-        int32x4_t sum_ad_1 = vdupq_n_s32(0);
-        int32x4_t sum_bc_0 = vdupq_n_s32(0);    // imag_w * real_act
-        int32x4_t sum_bc_1 = vdupq_n_s32(0);
-
-        // 处理权重块: 前32字节 (128个2-bit值 = 64个复数权重)
-        for (int j = 0; j < 32; j += 16) {
-            // 加载权重数据 (16字节 = 64个2-bit值)
-            uint8x16_t qx = vld1q_u8(&x[i].qs[j]);
-
-            // 解包2-bit值并转换为有符号整数
-            // 每个2-bit值表示: 00=0, 01=1, 10=2, 11=3
-            // 转换为: {-1, 0, 1, 2} (减去1偏移)
-            uint8x16_t qx_shift1 = vshrq_n_u8(qx, 2);      // >> 2
-            uint8x16_t qx_shift2 = vshrq_n_u8(qx, 4);      // >> 4
-            uint8x16_t qx_shift3 = vshrq_n_u8(qx, 6);      // >> 6
-
-            uint8x16_t qx_0 = vandq_u8(qx, mask_3bit);       // bits 0-1
-            uint8x16_t qx_1 = vandq_u8(qx_shift1, mask_3bit); // bits 2-3
-            uint8x16_t qx_2 = vandq_u8(qx_shift2, mask_3bit); // bits 4-5
-            uint8x16_t qx_3 = vandq_u8(qx_shift3, mask_3bit); // bits 6-7
-
-            // 转换为有符号并应用偏移
-            int8x16_t sqx_0 = vreinterpretq_s8_u8(qx_0); sqx_0 = vsubq_s8(sqx_0, minus_one);
-            int8x16_t sqx_1 = vreinterpretq_s8_u8(qx_1); sqx_1 = vsubq_s8(sqx_1, minus_one);
-            int8x16_t sqx_2 = vreinterpretq_s8_u8(qx_2); sqx_2 = vsubq_s8(sqx_2, minus_one);
-            int8x16_t sqx_3 = vreinterpretq_s8_u8(qx_3); sqx_3 = vsubq_s8(sqx_3, minus_one);
-
-            // 加载对应的激活值 (分开存储)
-            // 实部激活: y_real->qs[j*4 + offset]
-            // 虚部激活: y_imag->qs[j*4 + offset]
-            const int8x16_t qy_real_0 = vld1q_s8(&y_real->qs[j*4 + 0]);
-            const int8x16_t qy_real_1 = vld1q_s8(&y_real->qs[j*4 + 16]);
-            const int8x16_t qy_imag_0 = vld1q_s8(&y_imag->qs[j*4 + 0]);
-            const int8x16_t qy_imag_1 = vld1q_s8(&y_imag->qs[j*4 + 16]);
-
-            // 计算点积分量
-            // sum_ac += real_w * real_act
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_0, qy_real_0);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_1, qy_real_0);
-            sum_ac_0 = vdotq_s32(sum_ac_0, sqx_2, qy_real_1);
-            sum_ac_1 = vdotq_s32(sum_ac_1, sqx_3, qy_real_1);
-
-            // sum_bd += imag_w * imag_act
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_0, qy_imag_0);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_1, qy_imag_0);
-            sum_bd_0 = vdotq_s32(sum_bd_0, sqx_2, qy_imag_1);
-            sum_bd_1 = vdotq_s32(sum_bd_1, sqx_3, qy_imag_1);
-
-            // sum_ad += real_w * imag_act
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_0, qy_imag_0);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_1, qy_imag_0);
-            sum_ad_0 = vdotq_s32(sum_ad_0, sqx_2, qy_imag_1);
-            sum_ad_1 = vdotq_s32(sum_ad_1, sqx_3, qy_imag_1);
-
-            // sum_bc += imag_w * real_act
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_0, qy_real_0);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_1, qy_real_0);
-            sum_bc_0 = vdotq_s32(sum_bc_0, sqx_2, qy_real_1);
-            sum_bc_1 = vdotq_s32(sum_bc_1, sqx_3, qy_real_1);
+        for (size_t j = 0; j < sizeof(weight->qs); j += 32) {
+            for (size_t k = 0; k < 32; ++k) {
+                // 解包权重
+                uint8_t w = weight->qs[j + k];
+                int8x8_t w_vec;
+                int8x8_t c_vec, d_vec;
+                for (size_t l = 0; l < 4; ++l) {
+                    int8_t w_val = (w >> (l*2)) & 3;
+                    int8_t c = x[i].x_real[(j + k) * 4 + l];
+                    int8_t d = x[i].x_imag[(j + k) * 4 + l];
+                    // NEON 并行累加
+                    if      (w_val == 1) { sum_ac = vaddq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vaddq_s32(sum_ad, vdupq_n_s32(d)); }
+                    else if (w_val == 0) { sum_ac = vsubq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vsubq_s32(sum_ad, vdupq_n_s32(d)); }
+                    else if (w_val == 3) { sum_bc = vaddq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vaddq_s32(sum_bd, vdupq_n_s32(d)); }
+                    else if (w_val == 2) { sum_bc = vsubq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vsubq_s32(sum_bd, vdupq_n_s32(d)); }
+                }
+            }
         }
+        // NEON 累加到标量
+        int32_t ac = vaddvq_s32(sum_ac);
+        int32_t bd = vaddvq_s32(sum_bd);
+        int32_t ad = vaddvq_s32(sum_ad);
+        int32_t bc = vaddvq_s32(sum_bc);
 
-        // 水平累加并应用缩放因子
-        // 复数乘法: (a+bi)(c+di) = (ac-bd) + i(ad+bc)
-        int32_t total_ac = vaddvq_s32(vaddq_s32(sum_ac_0, sum_ac_1));
-        int32_t total_bd = vaddvq_s32(vaddq_s32(sum_bd_0, sum_bd_1));
-        int32_t total_ad = vaddvq_s32(vaddq_s32(sum_ad_0, sum_ad_1));
-        int32_t total_bc = vaddvq_s32(vaddq_s32(sum_bc_0, sum_bc_1));
+        // Apply scales
+        const float d_real = GGML_CPU_FP16_TO_FP32(weight[i].d_real);
+        const float d_imag = GGML_CPU_FP16_TO_FP32(weight[i].d_imag);
+        const float scale_real = d_real * x[i].d_real;
+        const float scale_imag = d_imag * x[i].d_imag;
 
-        sum_real += (total_ac - total_bd) * d_real * d_y_real;
-        sum_imag += (total_ad + total_bc) * d_imag * d_y_imag;
-
-#else  // 不支持点积指令的fallback实现
-        int16x8_t sum_ac_0 = vdupq_n_s16(0);
-        int16x8_t sum_ac_1 = vdupq_n_s16(0);
-        int16x8_t sum_bd_0 = vdupq_n_s16(0);
-        int16x8_t sum_bd_1 = vdupq_n_s16(0);
-        int16x8_t sum_ad_0 = vdupq_n_s16(0);
-        int16x8_t sum_ad_1 = vdupq_n_s16(0);
-        int16x8_t sum_bc_0 = vdupq_n_s16(0);
-        int16x8_t sum_bc_1 = vdupq_n_s16(0);
-
-        // 类似的处理逻辑，使用VMLAL指令
-        // ... (实现省略，使用VMLAL_S8指令替代VDOTQ_S32) ...
-
-        // 水平累加
-        int32_t total_ac = vaddlvq_s16(vaddq_s16(sum_ac_0, sum_ac_1));
-        int32_t total_bd = vaddlvq_s16(vaddq_s16(sum_bd_0, sum_bd_1));
-        int32_t total_ad = vaddlvq_s16(vaddq_s16(sum_ad_0, sum_ad_1));
-        int32_t total_bc = vaddlvq_s16(vaddq_s16(sum_bc_0, sum_bc_1));
-
-        sum_real += (total_ac - total_bd) * d_real * d_y_real;
-        sum_imag += (total_ad + total_bc) * d_imag * d_y_imag;
-#endif
+        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        sum_real += scale_real * (float)ac - scale_imag * (float)bd;
+        sum_imag += scale_real * (float)ad + scale_imag * (float)bc;
     }
 
-    // 输出复数结果
-    s[0] = sum_real;
-    s[bs] = sum_imag;
+    ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
+    ((ggml_bf16_t*)s)[1] = GGML_FP32_TO_BF16(sum_imag);
 
 #else  // 非ARM平台，回退到标量实现
-    UNUSED(x);
-    UNUSED(y);
-    UNUSED(nb);
     ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }

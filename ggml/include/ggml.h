@@ -416,7 +416,8 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_IFAIRY  = 40, // imaginary type used for the ifairy function
-        GGML_TYPE_COUNT   = 41,
+        GGML_TYPE_IFAIRY_Q16 = 41, // imaginary type used for the ifairy function in fp32
+        GGML_TYPE_COUNT   = 42,
     };
 
     // precision

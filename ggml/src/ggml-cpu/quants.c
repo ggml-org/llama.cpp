@@ -105,25 +105,22 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
 }
 
 // ====================== Fairy±i complex 2-bit quantization
-
 void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    // This function is intended to be called with complex number pairs
-    // For now, we provide a placeholder that calls the reference implementation
-    // In practice, this should not be used directly as ifairy requires separate real/imag inputs
-    // Use quantize_row_ifairy_ref from ggml-quants.c instead
     assert(k % QK_K == 0);
     block_ifairy * GGML_RESTRICT y = vy;
 
-    // Since this function signature doesn't support complex inputs,
-    // we treat x as interleaved [real0, imag0, real1, imag1, ...]
-    // and split it for the reference function
     const int64_t n = k / 2;  // Number of complex elements
     float * x_real = (float *)malloc(n * sizeof(float));
     float * x_imag = (float *)malloc(n * sizeof(float));
 
     for (int64_t i = 0; i < n; ++i) {
-        x_real[i] = x[2*i];
-        x_imag[i] = x[2*i + 1];
+        float* x_com = x + i;
+
+        ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+        ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+
+        x_real[i] = GGML_BF16_TO_FP32(x_real_bf16);
+        x_imag[i] = GGML_BF16_TO_FP32(x_imag_bf16);
     }
 
     quantize_row_ifairy_ref(x_real, x_imag, y, n);
@@ -455,62 +452,51 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     UNUSED(bs);
 
     const block_ifairy * GGML_RESTRICT x = vx;
-    const block_q8_K  * GGML_RESTRICT y = vy;
+    const block_ifairy_q16 * GGML_RESTRICT y = vy;
 
     const int nb = n / QK_K;
 
     float sum_real = 0.0f;
     float sum_imag = 0.0f;
 
-    // For Fairy±i: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-    // where a,b are quantized 2-bit weights (real, imag)
-    // and c,d are activations in q8_K format
-
     for (int i = 0; i < nb; ++i) {
-        // We assume y contains interleaved real and imaginary blocks
-        const block_q8_K * y_real = &y[i * 2];
-        const block_q8_K * y_imag = &y[i * 2 + 1];
+        // x: 权重矩阵, y: 激活向量
 
-        int32_t sum_ac = 0; // real_weight * real_act
-        int32_t sum_bd = 0; // imag_weight * imag_act
-        int32_t sum_ad = 0; // real_weight * imag_act
-        int32_t sum_bc = 0; // imag_weight * real_act
+        int32_t sum_ac = 0;
+        int32_t sum_bd = 0;
+        int32_t sum_ad = 0;
+        int32_t sum_bc = 0;
+        
+        for (size_t j = 0; j < sizeof(x->qs); j += 32) { // sizeof 512
+            for (size_t k = 0; k < 32; ++k) {
+                for (size_t l = 0; l < 4; ++l) {
+                    // a: real_w, b: imag_w, c: real_x, d: imag_x
+                    int8_t w = (x[i].qs[j + k] >> (l*2)) & 3;
+                    // todo_tbr: q8k 激活量化方式 
+                    int8_t c = y[i].x_real[(j + k) * 4 + l];
+                    int8_t d = y[i].x_imag[(j + k) * 4 + l];
 
-        // Process all elements in the block
-        // qs array layout: [0..31] = real part (128 elements), [32..63] = imag part (128 elements)
-        // Each byte contains 4 2-bit values
-        for (size_t j = 0; j < 32; ++j) {
-            for (size_t l = 0; l < 4; ++l) {
-                // Extract 2-bit value from real part and convert to signed (-1, 0, 1)
-                const int a = (int)(((x[i].qs[j] >> (l*2)) & 3)) - 1;
-                // Extract 2-bit value from imag part (offset by 32 bytes)
-                const int b = (int)(((x[i].qs[j + 32] >> (l*2)) & 3)) - 1;
-
-                // Get corresponding activation values
-                const int c = (int)y_real->qs[j*4 + l];
-                const int d = (int)y_imag->qs[j*4 + l];
-
-                sum_ac += a * c;
-                sum_bd += b * d;
-                sum_ad += a * d;
-                sum_bc += b * c;
+                    if      (w == 1) sum_ac += c, sum_ad += d;
+                    else if (w == 0) sum_ac -= c, sum_ad -= d;
+                    else if (w == 3) sum_bc += c, sum_bd += d;
+                    else if (w == 2) sum_bc -= c, sum_bd -= d;
+                }
             }
         }
 
         // Apply scales
         const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
         const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
-        const float scale_real = d_real * y_real->d;
-        const float scale_imag = d_imag * y_imag->d;
+        const float scale_real = d_real * y[i].d_real;
+        const float scale_imag = d_imag * y[i].d_imag;
 
         // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
         sum_real += scale_real * (float)sum_ac - scale_imag * (float)sum_bd;
         sum_imag += scale_real * (float)sum_ad + scale_imag * (float)sum_bc;
     }
-
-    // Store results: for inference we typically use magnitude or just real part
-    // Here we return the magnitude: sqrt(real^2 + imag^2)
-    *s = sqrtf(sum_real * sum_real + sum_imag * sum_imag);
+    
+    ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
+    ((ggml_bf16_t*)s)[1] = GGML_FP32_TO_BF16(sum_imag);
 }
 
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
