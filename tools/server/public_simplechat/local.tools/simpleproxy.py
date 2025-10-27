@@ -325,6 +325,7 @@ def load_config():
     with open(gMe['--config']) as f:
         cfg = json.load(f)
         for k in cfg:
+            print(f"DBUG:LoadConfig:{k}")
             try:
                 cArg = f"--{k}"
                 aTypeCheck = gConfigType[cArg]
@@ -340,10 +341,17 @@ def load_config():
 
 
 def process_args(args: list[str]):
+    """
+    Helper to process command line arguments.
+
+    Flow setup below such that
+    * location of --config in commandline will decide whether command line or config file will get
+    priority wrt setting program parameters.
+    * str type values in cmdline are picked up directly, without running them through ast.literal_eval,
+    bcas otherwise one will have to ensure throught the cmdline arg mechanism that string quote is
+    retained for literal_eval
+    """
     import ast
-    """
-    Helper to process command line arguments
-    """
     global gMe
     iArg = 1
     while iArg < len(args):
@@ -351,16 +359,20 @@ def process_args(args: list[str]):
         if (not cArg.startswith("--")):
             print(f"ERRR:ProcessArgs:{iArg}:{cArg}:MalformedCommandOr???")
             exit(101)
+        print(f"DBUG:ProcessArgs:{iArg}:{cArg}")
         try:
             aTypeCheck = gConfigType[cArg]
-            iArg += 1
-            aValue = ast.literal_eval(args[iArg])
-            aType = type(aValue).__name__
-            if aType != aTypeCheck:
-                print(f"ERRR:ProcessArgs:{iArg}:{cArg}:expected type [{aTypeCheck}] got type [{aType}]")
-                exit(102)
+            aValue = args[iArg+1]
+            if aTypeCheck != 'str':
+                aValue = ast.literal_eval(aValue)
+                aType = type(aValue).__name__
+                if aType != aTypeCheck:
+                    print(f"ERRR:ProcessArgs:{iArg}:{cArg}:expected type [{aTypeCheck}] got type [{aType}]")
+                    exit(102)
             gMe[cArg] = aValue
-            iArg += 1
+            iArg += 2
+            if cArg == '--config':
+                load_config()
         except KeyError:
             print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand")
             exit(103)
