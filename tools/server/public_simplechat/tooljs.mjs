@@ -32,12 +32,13 @@ let js_meta = {
 /**
  * Implementation of the javascript interpretor logic. Minimal skeleton for now.
  * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function js_run(toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ id: toolcallid, name: toolname, code: obj["code"]})
+function js_run(chatid, toolcallid, toolname, obj) {
+    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
 }
 
 
@@ -63,12 +64,13 @@ let calc_meta = {
 /**
  * Implementation of the simple calculator logic. Minimal skeleton for now.
  * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function calc_run(toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ id: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
+function calc_run(chatid, toolcallid, toolname, obj) {
+    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
 }
 
 
