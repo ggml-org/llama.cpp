@@ -1048,7 +1048,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     //     The candidate with ID 12345 is currently in the "Interview Scheduled" stage for the position of Clinical Research Associate, with an interview date set for 2023-11-20.<|im_end|>
     //
     // For the llama server compatibility with json tools semantic,
-    // the client can add "Follow json schema" line into the system message prompt to force the json output.
+    // the client can add "Follow json schema." line into the system message prompt to force the json output.
     //
     if (are_tools_provided && (is_json_schema_provided || is_grammar_provided)) {
         // server/utils.hpp prohibits that branch for the custom grammar anyways
