@@ -121,9 +121,6 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             dst_stride_token, dst_stride_seq
         );
         
-        // Wait for completion
-        q->wait();
-        
     } catch (const std::exception &e) {
         std::fprintf(stderr, "[SYCL-SSM_CONV] ERROR: %s\n", e.what());
         throw;
