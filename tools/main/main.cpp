@@ -141,7 +141,7 @@ public:
         }
 
         common_chat_msg new_msg;
-        if (syntax_ptr) {
+        if (role == "assistant" && syntax_ptr) {
             new_msg = common_chat_parse(content, false, *syntax_ptr);
         } else {
             new_msg.content = content;
