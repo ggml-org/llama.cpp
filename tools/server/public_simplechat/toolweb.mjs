@@ -46,7 +46,7 @@ function get_gme() {
 function proxyserver_get_1arg(toolcallid, toolname, obj, path, qkey, qvalue) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `${get_gme().tools.proxyUrl}/${path}?${qkey}=${qvalue}`
-        fetch(newUrl).then(resp => {
+        fetch(newUrl, { headers: { 'Authorization': `Bearer ${get_gme().tools.proxyAuthInsecure}` }}).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);
             }
@@ -70,7 +70,9 @@ function proxyserver_get_1arg(toolcallid, toolname, obj, path, qkey, qvalue) {
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function proxyserver_tc_setup(tag, tcPath, tcName, tcsData, tcs) {
-    await fetch(`${get_gme().tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+    await fetch(`${get_gme().tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`, {
+        headers: { 'Authorization': `Bearer ${get_gme().tools.proxyAuthInsecure}` }
+    }).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log(`WARN:ToolWeb:${tag}:Dont forget to run the bundled local.tools/simpleproxy.py to enable me`)
             return
