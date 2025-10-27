@@ -12,6 +12,7 @@ class Roles {
     static User = "user";
     static Assistant = "assistant";
     static Tool = "tool";
+    static ToolTemp = "TOOL.TEMP";
 }
 
 class ApiEP {
@@ -319,7 +320,7 @@ class SimpleChat {
         this.iLastSys = ods.iLastSys;
         this.xchat = [];
         for (const cur of ods.xchat) {
-            if (cur.ns == undefined) {
+            if (cur.ns == undefined) { // this relates to the old on-disk-structure/format, needs to be removed later
                 /** @typedef {{role: string, content: string}} OldChatMessage */
                 let tcur = /** @type {OldChatMessage} */(/** @type {unknown} */(cur));
                 this.xchat.push(new ChatMessageEx(tcur.role, tcur.content))
@@ -383,6 +384,12 @@ class SimpleChat {
         let xchat = this.recent_chat(iRecentUserMsgCnt);
         let chat = [];
         for (const msg of xchat) {
+            if (msg.ns.role == Roles.ToolTemp) {
+                // Skip (temp) tool response which has not yet been accepted by user
+                // In future need to check that it is the last message
+                // and not something in between, which shouldnt occur normally.
+                continue
+            }
             let tmsg = ChatMessageEx.newFrom(msg);
             if (!tmsg.has_toolcall()) {
                 tmsg.ns_delete("tool_calls")
@@ -414,24 +421,54 @@ class SimpleChat {
     }
 
     /**
+     * Check if the last message in the chat history is a ToolTemp role based one.
+     * If so, then
+     * * update that to a regular Tool role based message.
+     * * also update the content of that message to what is passed.
+     * @param {string} content
+     */
+    promote_tooltemp(content) {
+        let lastIndex = this.xchat.length - 1;
+        if (lastIndex < 0) {
+            console.error("DBUG:SimpleChat:PromoteToolTemp:No chat messages including ToolTemp")
+            return
+        }
+        if (this.xchat[lastIndex].ns.role != Roles.ToolTemp) {
+            console.error("DBUG:SimpleChat:PromoteToolTemp:LastChatMsg not ToolTemp")
+            return
+        }
+        this.xchat[lastIndex].ns.role = Roles.Tool;
+        this.xchat[lastIndex].ns.content = content;
+    }
+
+    /**
      * Show the chat contents in the specified div.
+     * Also update the user query input box, with ToolTemp role message, if any.
+     *
      * If requested to clear prev stuff and inturn no chat content then show
      * * usage info
      * * option to load prev saved chat if any
      * * as well as settings/info.
      * @param {HTMLDivElement} div
+     * @param {HTMLInputElement} elInUser
      * @param {boolean} bClear
      * @param {boolean} bShowInfoAll
      */
-    show(div, bClear=true, bShowInfoAll=false) {
+    show(div, elInUser, bClear=true, bShowInfoAll=false) {
         if (bClear) {
             div.replaceChildren();
         }
         let last = undefined;
         for(const x of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
-            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
-            entry.className = `role-${x.ns.role}`;
-            last = entry;
+            if (x.ns.role != Roles.ToolTemp) {
+                let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
+                entry.className = `role-${x.ns.role}`;
+                last = entry;
+            } else {
+                if (elInUser) {
+                    elInUser.value = x.ns.content;
+                }
+            }
         }
         if (last !== undefined) {
             last.scrollIntoView(false);
@@ -793,6 +830,20 @@ class MultiChatUI {
     }
 
     /**
+     * Refresh UI wrt given chatId, provided it matches the currently selected chatId
+     * @param {string} chatId
+     * @param {boolean} bClear
+     * @param {boolean} bShowInfoAll
+     */
+    chat_show(chatId, bClear=true, bShowInfoAll=false) {
+        if (chatId != this.curChatId) {
+            return
+        }
+        let chat = this.simpleChats[this.curChatId];
+        chat.show(this.elDivChat, this.elInUser, bClear, bShowInfoAll)
+    }
+
+    /**
      * Setup the needed callbacks wrt UI, curChatId to defaultChatId and
      * optionally switch to specified defaultChatId.
      * @param {string} defaultChatId
@@ -839,7 +890,12 @@ class MultiChatUI {
         tools.setup((id, name, data)=>{
             clearTimeout(this.timers.toolcallResponseTimeout)
             this.timers.toolcallResponseTimeout = undefined
-            this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(id, name, data);
+            // TODO: Check for chat id in future so as to
+            // identify the right chat session to add the tc response to
+            // as well as to decide whether to show this chat currently or not and same with auto submit
+            let chat = this.simpleChats[this.curChatId]; // rather we should pick chat based on tool response's chatId
+            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(id, name, data)))
+            this.chat_show(chat.chatId) // one needs to use tool response's chatId
             this.ui_reset_userinput(false)
             if (gMe.tools.auto > 0) {
                 this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
@@ -867,7 +923,7 @@ class MultiChatUI {
                 this.elInSystem.value = value.substring(0,value.length-1);
                 let chat = this.simpleChats[this.curChatId];
                 chat.add_system_anytime(this.elInSystem.value, this.curChatId);
-                chat.show(this.elDivChat);
+                this.chat_show(chat.chatId)
                 ev.preventDefault();
             }
         });
@@ -922,11 +978,11 @@ class MultiChatUI {
             return;
         }
         if (content.startsWith("<tool_response>")) {
-            chat.add(new ChatMessageEx(Roles.Tool, content))
+            chat.promote_tooltemp(content)
         } else {
             chat.add(new ChatMessageEx(Roles.User, content))
         }
-        chat.show(this.elDivChat);
+        this.chat_show(chat.chatId);
 
         let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
         let theBody = chat.request_jsonstr(apiEP);
@@ -943,7 +999,7 @@ class MultiChatUI {
 
         let theResp = await chat.handle_response(resp, apiEP, this.elDivChat);
         if (chatId == this.curChatId) {
-            chat.show(this.elDivChat);
+            this.chat_show(chatId);
             if (theResp.trimmedContent.length > 0) {
                 let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                 p.className="role-trim";
@@ -1053,9 +1109,9 @@ class MultiChatUI {
         }
         this.elInSystem.value = chat.get_system_latest().ns.content;
         this.elInUser.value = "";
-        chat.show(this.elDivChat, true, true);
-        this.elInUser.focus();
         this.curChatId = chatId;
+        this.chat_show(chatId, true, true);
+        this.elInUser.focus();
         console.log(`INFO:SimpleChat:MCUI:HandleSessionSwitch:${chatId} entered...`);
     }
 
@@ -1159,7 +1215,7 @@ class Me {
             console.log("DBUG:SimpleChat:SC:Load", chat);
             chat.load();
             queueMicrotask(()=>{
-                chat.show(div, true, true);
+                chat.show(div, this.multiChat.elInUser, true, true);
                 this.multiChat.elInSystem.value = chat.get_system_latest().ns.content;
             });
         });
