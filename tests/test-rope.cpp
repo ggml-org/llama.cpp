@@ -164,6 +164,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
                 ((int32_t *) p2->data)[i] = n_past_2 + i;
             }
             // test mode 0, 2, 4 (standard, GPT-NeoX, GLM)
+            // note: GLM is not implemented, it will default to standard
             mode = m == 0 ? 0 : m == 1 ? 2 : 4;
 
             // 100, 101, 102, ..., 172

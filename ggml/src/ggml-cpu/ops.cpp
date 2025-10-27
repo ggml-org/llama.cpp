@@ -5543,6 +5543,24 @@ static void ggml_mrope_cache_init(
     }
 }
 
+static void rotate_pairs(const int64_t n, const int64_t n_offset, const float * cache, const float * src_data, float * dst_data, const int scale = 2) {
+  for (int64_t i0 = 0; i0 < n; i0 += 2) {
+    const int64_t ic = i0/scale; //hack for GGML_ROPE_TYPE_NORMAL, where we need ic = i0; for all other cases, ic = i0/2
+
+    const float cos_theta = cache[i0 + 0];
+    const float sin_theta = cache[i0 + 1];
+
+    const float * const src = src_data + ic;
+    float * dst             = dst_data + ic;
+
+    const float x0 = src[0];
+    const float x1 = src[n_offset];
+
+    dst[0]        = x0*cos_theta - x1*sin_theta;
+    dst[n_offset] = x0*sin_theta + x1*cos_theta;
+  }
+}
+
 static void ggml_compute_forward_rope_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -5599,12 +5617,11 @@ static void ggml_compute_forward_rope_f32(
     float corr_dims[2];
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
-    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
-    const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
+    const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, note: also true for vision (24 & 8 == true)
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
-    if (is_mrope) {
+    if (mrope_used) {
         GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
     }
 
@@ -5630,7 +5647,7 @@ static void ggml_compute_forward_rope_f32(
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
 
             float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
-            if (!is_mrope) {
+            if (!mrope_used) {
                 const int64_t p = pos[i2];
                 ggml_rope_cache_init(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
@@ -5648,73 +5665,26 @@ static void ggml_compute_forward_rope_f32(
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;
 
-                if (is_neox || is_mrope) {
-                    if (is_vision){
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
+                float * src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+                float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1);
 
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
-
-                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
-
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims];
-
-                            dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                            dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
-                        }
-                    } else {
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
-
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
-
-                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
-
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims/2];
-
-                            dst_data[0]        = x0*cos_theta - x1*sin_theta;
-                            dst_data[n_dims/2] = x0*sin_theta + x1*cos_theta;
-                        }
-                    }
-                } else {
-                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                        const float cos_theta = cache[i0 + 0];
-                        const float sin_theta = cache[i0 + 1];
-
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
-
-                        const float x0 = src[0];
-                        const float x1 = src[1];
-
-                        dst_data[0] = x0*cos_theta - x1*sin_theta;
-                        dst_data[1] = x0*sin_theta + x1*cos_theta;
-                    }
+                switch (mode) {
+                  case GGML_ROPE_TYPE_NORMAL:
+                    rotate_pairs(n_dims, 1, cache, src, dst_data, 1);
+                    break;
+                  case GGML_ROPE_TYPE_NEOX:
+                  case GGML_ROPE_TYPE_MROPE: //pure, not vision
+                    rotate_pairs(n_dims, n_dims/2, cache, src, dst_data);
+                    break;
+                  case GGML_ROPE_TYPE_VISION:
+                    rotate_pairs(ne0, n_dims, cache, src, dst_data);
+                    break;
+                  default:
+                    //rope type not supported, silently default to NORMAL
+                    rotate_pairs(n_dims, 1, cache, src, dst_data, 1);
                 }
 
-                if (is_vision) {
-                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
-                        const int64_t ic = i0/2;
-
-                        const float cos_theta = cache[i0 + 0];
-                        const float sin_theta = cache[i0 + 1];
-
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
-
-                        const float x0 = src[0];
-                        const float x1 = src[n_dims];
-
-                        dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                        dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
-                    }
-                } else {
+                if (!is_vision) {
                     // fill the remain channels with data from src tensor
                     for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
                         const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
@@ -5724,7 +5694,7 @@ static void ggml_compute_forward_rope_f32(
                         dst_data[1] = src[1];
                     }
                 }
-            }
+            } //attn-heads
         }
     }
 }
