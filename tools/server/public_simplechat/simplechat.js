@@ -1027,11 +1027,13 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult);
+            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult)))
+            this.chat_show(chat.chatId)
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
-                this.elInUser.value = ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`);
+                chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
+                this.chat_show(chat.chatId)
                 this.ui_reset_userinput(false)
             }, gMe.tools.toolCallResponseTimeoutMS)
         }
