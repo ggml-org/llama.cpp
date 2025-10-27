@@ -1082,7 +1082,7 @@ class Me {
         this.multiChat = new MultiChatUI();
         this.tools = {
             enabled: false,
-            fetchProxyUrl: "http://127.0.0.1:3128",
+            proxyUrl: "http://127.0.0.1:3128",
             searchUrl: SearchURLS.duckduckgo,
             toolNames: /** @type {Array<string>} */([]),
             /**
