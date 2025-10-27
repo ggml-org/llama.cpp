@@ -171,7 +171,7 @@ struct clip_hparams {
     int32_t n_head;
     int32_t n_layer;
     // idefics3
-    int32_t preproc_image_size = 0;
+    int32_t preproc_image_size = 0; // aka max_dimension
     int32_t proj_scale_factor = 0;
 
     float image_mean[3];
@@ -3221,8 +3221,8 @@ struct image_manipulation {
             return {0, 0};
         }
 
-        float scale = std::min(1.0f, std::min(static_cast<float>(max_dimension) / inp_size.width,
-                                              static_cast<float>(max_dimension) / inp_size.height));
+        float scale = std::min(static_cast<float>(max_dimension) / inp_size.width,
+                               static_cast<float>(max_dimension) / inp_size.height);
 
         float target_width_f  = static_cast<float>(inp_size.width)  * scale;
         float target_height_f = static_cast<float>(inp_size.height) * scale;
@@ -3385,7 +3385,7 @@ struct llava_uhd {
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
-        image_manipulation::bicubic_resize(*img, *resized_img, inst.overview_size.width, inst.overview_size.height);
+        image_manipulation::resize_and_pad_image(*img, *resized_img, inst.overview_size);
         output.push_back(std::move(resized_img));
         if (inst.slices.empty()) {
             // no slices, just return the resized image
@@ -3587,6 +3587,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
         const clip_image_size refined_size = image_manipulation::calc_size_preserved_ratio(
             original_size, params.image_size, params.preproc_image_size);
+        // LOG_INF("%s: original size: %d x %d, refined size: %d x %d\n",
+        //         __func__, original_size.width, original_size.height,
+        //         refined_size.width, refined_size.height);
 
         llava_uhd::slice_instructions instructions;
         instructions.overview_size = clip_image_size{params.image_size, params.image_size};
@@ -3597,6 +3600,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         };
         for (int y = 0; y < refined_size.height; y += params.image_size) {
             for (int x = 0; x < refined_size.width; x += params.image_size) {
+                // LOG_INF("%s: adding slice at x=%d, y=%d\n", __func__, x, y);
                 instructions.slices.push_back(llava_uhd::slice_coordinates{
                     /* x    */x,
                     /* y    */y,

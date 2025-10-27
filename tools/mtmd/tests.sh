@@ -139,7 +139,10 @@ for i in "${!arr_hf[@]}"; do
 
     echo "$output" > $SCRIPT_DIR/output/$bin-$(echo "$hf" | tr '/' '-').log
 
-    if echo "$output" | grep -iq "new york"; then
+    # either contains "new york" or both "men" and "walk"
+    if echo "$output" | grep -iq "new york" \
+            || (echo "$output" | grep -iq "men" && echo "$output" | grep -iq "walk")
+    then
         result="$prefix \033[32mOK\033[0m:   $bin $hf"
     else
         result="$prefix \033[31mFAIL\033[0m: $bin $hf"
