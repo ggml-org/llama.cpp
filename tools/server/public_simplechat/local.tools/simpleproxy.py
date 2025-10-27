@@ -13,6 +13,9 @@
 # * any request to aum path is used to respond with a predefined text response
 #   which can help identify this server, in a simple way.
 #
+# Expects a Bearer authorization line in the http header of the requests got.
+# HOWEVER DO KEEP IN MIND THAT ITS A VERY INSECURE IMPLEMENTATION, AT BEST
+#
 
 
 import sys
@@ -67,12 +70,33 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code, message)
         self.send_headers_common()
 
+    def auth_check(self):
+        """
+        Simple Bearer authorization
+        ALERT: For multiple reasons, this is a very insecure implementation.
+        """
+        authline = self.headers['Authorization']
+        if authline == None:
+            return { 'AllOk': False, 'Msg': "No auth line" }
+        authlineA = authline.strip().split(' ')
+        if len(authlineA) != 2:
+            return { 'AllOk': False, 'Msg': "Invalid auth line" }
+        if authlineA[0] != 'Bearer':
+            return { 'AllOk': False, 'Msg': "Invalid auth type" }
+        if authlineA[1] != gMe['--bearer.insecure']:
+            return { 'AllOk': False, 'Msg': "Invalid auth" }
+        return { 'AllOk': True, 'Msg': "Auth Ok" }
+
     def do_GET(self):
         """
         Handle GET requests
         """
         print(f"\n\n\nDBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
         print(f"DBUG:PH:Get:Headers:{self.headers}")
+        acGot = self.auth_check()
+        if not acGot['AllOk']:
+            self.send_error(400, f"WARN:{acGot['Msg']}")
+            return
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
         match pr.path:
