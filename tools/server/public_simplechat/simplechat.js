@@ -721,7 +721,7 @@ class SimpleChat {
             return "Tool/Function call name not specified"
         }
         try {
-            return await tools.tool_call(toolcallid, toolname, toolargs)
+            return await tools.tool_call(this.chatId, toolcallid, toolname, toolargs)
         } catch (/** @type {any} */error) {
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
@@ -847,10 +847,11 @@ class MultiChatUI {
      */
     chat_show(chatId, bClear=true, bShowInfoAll=false) {
         if (chatId != this.curChatId) {
-            return
+            return false
         }
         let chat = this.simpleChats[this.curChatId];
         chat.show(this.elDivChat, this.elInUser, bClear, bShowInfoAll)
+        return true
     }
 
     /**
@@ -897,21 +898,19 @@ class MultiChatUI {
         })
 
         // Handle messages from Tools web worker
-        tools.setup((id, name, data)=>{
+        tools.setup((cid, tcid, name, data)=>{
             clearTimeout(this.timers.toolcallResponseTimeout)
             this.timers.toolcallResponseTimeout = undefined
-            // TODO: Check for chat id in future so as to
-            // identify the right chat session to add the tc response to
-            // as well as to decide whether to show this chat currently or not and same with auto submit
-            let chat = this.simpleChats[this.curChatId]; // rather we should pick chat based on tool response's chatId
-            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(id, name, data)))
-            this.chat_show(chat.chatId) // one needs to use tool response's chatId
-            this.ui_reset_userinput(false)
-            if (gMe.tools.auto > 0) {
-                this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
-                    this.elBtnUser.click()
-                }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
+            let chat = this.simpleChats[cid];
+            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, data)))
+            if (this.chat_show(cid)) {
+                if (gMe.tools.auto > 0) {
+                    this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
+                        this.elBtnUser.click()
+                    }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
+                }
             }
+            this.ui_reset_userinput(false)
         })
 
         this.elInUser.addEventListener("keyup", (ev)=> {
