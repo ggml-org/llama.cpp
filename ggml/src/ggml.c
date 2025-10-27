@@ -3301,6 +3301,9 @@ static struct ggml_tensor * ggml_cont_impl(
 
     result->op     = GGML_OP_CONT;
     result->src[0] = a;
+    if (a->op == GGML_OP_TRANSPOSE) {
+        result->op_params[10] = a->op_params[10]; // preserve the original order
+    }
 
     return result;
 }
@@ -3614,6 +3617,7 @@ struct ggml_tensor * ggml_transpose(
 
     result->op     = GGML_OP_TRANSPOSE;
     result->src[0] = a;
+    result->op_params[10] = 999; // the transpose flag
 
     return result;
 }
@@ -4609,8 +4613,18 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
 
     struct ggml_tensor *ap, *bp;
     if(layout == 0){
-        ap = ggml_cont(ctx, ggml_permute(ctx, a, 1, 2, 0, 3));
-        bp = ggml_cont(ctx, ggml_permute(ctx, b, 1, 2, 0, 3));
+        // ap = ggml_cont(ctx, ggml_permute(ctx, a, 1, 2, 0, 3));
+        // bp = ggml_cont(ctx, ggml_permute(ctx, b, 1, 2, 0, 3));
+        ap = ggml_reshape_4d(ctx, 
+                            ggml_cont(ctx,
+                            ggml_transpose(ctx, 
+                            ggml_reshape_3d(ctx, a, a->ne[0]*a->ne[1], a->ne[2], a->ne[3]))),
+                            a->ne[2], a->ne[0], a->ne[1], a->ne[3]);
+        bp = ggml_reshape_4d(ctx, 
+                            ggml_cont(ctx,
+                            ggml_transpose(ctx, 
+                            ggml_reshape_3d(ctx, b, b->ne[0]*b->ne[1], b->ne[2], b->ne[3]))),
+                            b->ne[2], b->ne[0], b->ne[1], b->ne[3]);
     } else{
         ap = a;
         bp = b;

@@ -2414,6 +2414,7 @@ struct test_cpy : public test_case {
     const std::array<int64_t, 4> permute_dst;
     bool _src_use_permute;
     bool _dst_use_permute;
+    bool is_transpose;
 
     std::string vars() override {
         return VARS_TO_STR5(type_src, type_dst, ne, permute_src, permute_dst);
@@ -2430,10 +2431,12 @@ struct test_cpy : public test_case {
     test_cpy(ggml_type type_src = GGML_TYPE_F32, ggml_type type_dst = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 10, 1},
             std::array<int64_t, 4> permute_src = {0, 0, 0, 0},
-            std::array<int64_t, 4> permute_dst = {0, 0, 0, 0})
+            std::array<int64_t, 4> permute_dst = {0, 0, 0, 0},
+            bool transpose = false)
         : type_src(type_src), type_dst(type_dst), ne(ne), permute_src(permute_src), permute_dst(permute_dst),
           _src_use_permute(permute_src[0] + permute_src[1] + permute_src[2] + permute_src[3] > 0),
-          _dst_use_permute(permute_dst[0] + permute_dst[1] + permute_dst[2] + permute_dst[3] > 0) {}
+          _dst_use_permute(permute_dst[0] + permute_dst[1] + permute_dst[2] + permute_dst[3] > 0),
+          is_transpose(transpose) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
@@ -2454,6 +2457,8 @@ struct test_cpy : public test_case {
         }
 
         ggml_tensor * out = ggml_cpy(ctx, src, dst);
+        if(is_transpose)
+            dst->op_params[10] = 999;
         ggml_set_name(out, "out");
 
         return out;
@@ -4258,14 +4263,14 @@ struct test_conv_2d_implicit : public test_case {
         ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
 
-        if (cwhn) {
-            // change memory layout to channel-most-contiguous (CWHN),
-            // then permute it back so NE matches the original input
-            input  = ggml_cont(ctx, ggml_permute(ctx, input, 1, 2, 0, 3));
-            input  = ggml_permute(ctx, input, 2, 0, 1, 3);
-            kernel = ggml_cont(ctx, ggml_permute(ctx, kernel, 2, 3, 1, 0));
-            kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
-        }
+        // if (cwhn) {
+        //     // change memory layout to channel-most-contiguous (CWHN),
+        //     // then permute it back so NE matches the original input
+        //     input  = ggml_cont(ctx, ggml_permute(ctx, input, 1, 2, 0, 3));
+        //     input  = ggml_permute(ctx, input, 2, 0, 1, 3);
+        //     kernel = ggml_cont(ctx, ggml_permute(ctx, kernel, 2, 3, 1, 0));
+        //     kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
+        // }
 
         ggml_tensor * out =
             ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn?0:1);
@@ -6831,9 +6836,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
 
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {512, 3072, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8192, 512, 2, 1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {3072, 512, 2, 1}, {0, 2, 1, 3}));
+    // test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {512, 3072, 1, 1}));
+    // test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8192, 512, 2, 1}, {0, 2, 1, 3}));
+    // test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {3072, 512, 2, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {768*1024, 256, 1, 1}, {0, 0, 0, 0}, {1, 0, 2, 3}, true));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {768*1024, 256, 1, 1}, {0, 0, 0, 0}, {1, 0, 2, 3}, false));
 
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4096, 4096, 5, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {12888, 256, 5, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));

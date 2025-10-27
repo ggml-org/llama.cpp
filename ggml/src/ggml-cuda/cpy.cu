@@ -39,7 +39,7 @@ static __global__ void cpy_flt(const char * cx, char * cdst_direct, const int ne
 
 
 template <typename T>
-static __global__ void cpy_flt_transpose(char * cx, char * cdst_direct,, const int ne,
+static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, const int ne,
                                const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
                                const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
@@ -58,22 +58,31 @@ static __global__ void cpy_flt_transpose(char * cx, char * cdst_direct,, const i
     int tx = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
     int ty = blockIdx.x * TILE_DIM + threadIdx.y;
 
-    __shared__ T tile[TILE_DIM * TILE_DIM];
+    // __shared__ T tile[TILE_DIM * TILE_DIM];
+    __shared__ T tile[TILE_DIM][TILE_DIM];
 
     for(int i = 0; i < BLOCK_NM; ++i){
         const unsigned int imat = blockIdx.z * BLOCK_NM + i;
         if(imat < nmat){
             for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
                 const unsigned int idx = (y+j)*width + x;
-                if(idx < n)
-                    tile[threadIdx.y+j][threadIdx.x] = src[imat*n + idx];
+                if(idx < n){
+                    const int row = threadIdx.y+j;
+                    const int col = threadIdx.x ^ row;
+                    // tile[threadIdx.y+j][threadIdx.x] = src[imat*n + idx];
+                    tile[row][col] = src[imat*n + idx];
+                }
             }
             __syncthreads();
 
             for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
                 const unsigned int idx = (ty+j)*width + tx;
-                if(idx < n)
-                    dst[imat*n + idx] = tile[threadIdx.x][threadIdx.y + j];
+                if(idx < n){
+                    // const int row = threadIdx.x;
+                    const int col = (threadIdx.y+j) ^ threadIdx.x;
+                    // dst[imat*n + idx] = tile[threadIdx.x][threadIdx.y + j];
+                    dst[imat*n + idx] = tile[threadIdx.x][col];
+                }
             }
         }
     }
@@ -180,30 +189,33 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
 #endif
 }
 
-template<typename src_t, typename dst_t>
+template<typename src_t, typename dst_t, bool transpose = false>
 static void ggml_cpy_flt_cuda(
     const char * cx, char * cdst, const int ne,
     const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
     const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
     const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
-    if constexpr (std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
-                  std::is_same_v<src_t, float> && std::is_same_v<dst_t, float>
-                ){
-        if (ne00 == ne11 && ne01 = ne10 && nb00 == nb11 && nb10 == nb01){ //transpose
+    if constexpr ((std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
+                  std::is_same_v<src_t, float> && std::is_same_v<dst_t, float>)
+                   && transpose){
+        // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
+        // printf("cuda cpy transpose nb00=%d nb01=%d nb10=%d nb11=%d\n", nb00, nb01, nb10, nb11);
+        // if (ne00 == ne11 && ne01 == ne10 && nb00 == nb11 && nb10 == nb01){ //transpose
+        // if (transpose) { //transpose
+            // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
             dim3 dimGrid( (ne00 + TILE_DIM - 1) / TILE_DIM,
                           (ne01 + TILE_DIM - 1) / TILE_DIM,
                           (ne/(ne00*ne01) + BLOCK_NM - 1) / BLOCK_NM );
             dim3 dimBlock(TILE_DIM, BLOCK_ROWS, 1);
-            cpy_flt_transpose<cpy_1_flt<dst_t><<<dimGrid, dimBlock, 0, stream>>>
-                (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
-        } else{ // other
-            cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
-                (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
-        }
-    } else{
+            cpy_flt_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    } else{ // other
         cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
             (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
     }
+    // } else{
+    //     cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
+    //         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    // }
 }
 
 static void ggml_cpy_f32_q8_0_cuda(
@@ -389,7 +401,11 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
         }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
-        ggml_cpy_flt_cuda<float, float> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        if(src1->op_params[10] == 999){
+            ggml_cpy_flt_cuda<float, float, true> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        } else {
+            ggml_cpy_flt_cuda<float, float, false> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_BF16) {
         ggml_cpy_flt_cuda<float, nv_bfloat16> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16) {
@@ -420,7 +436,11 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     } else if (src0->type == GGML_TYPE_Q5_1 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_q5_1_f32_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
-        ggml_cpy_flt_cuda<half, half> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        if(src1->op_params[10] == 999){
+            ggml_cpy_flt_cuda<half, half, true> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        } else {
+            ggml_cpy_flt_cuda<half, half, false> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
+        }
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_BF16) {
         ggml_cpy_flt_cuda<half, nv_bfloat16> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream, dest_ptrs_d, graph_cpynode_index);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32) {
