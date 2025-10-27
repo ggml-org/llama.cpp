@@ -1429,7 +1429,7 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     UNUSED(by);
     UNUSED(bs);
 #if defined(__ARM_NEON)
-    const block_ifairy * GGML_RESTRICT weight = vx;
+    const block_ifairy * GGML_RESTRICT w = vx;
     const block_ifairy_q16 * GGML_RESTRICT x = vy;
 
     const int nb = n / QK_K;
@@ -1438,44 +1438,42 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     float sum_imag = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
-        int32x4_t sum_ac = vdupq_n_s32(0);
-        int32x4_t sum_bd = vdupq_n_s32(0);
-        int32x4_t sum_ad = vdupq_n_s32(0);
-        int32x4_t sum_bc = vdupq_n_s32(0);
+        int16x4_t sum_ac = vdup_n_s16(0);
+        int16x4_t sum_bd = vdup_n_s16(0);
+        int16x4_t sum_ad = vdup_n_s16(0);
+        int16x4_t sum_bc = vdup_n_s16(0);
 
-        for (size_t j = 0; j < sizeof(weight->qs); j += 32) {
+        for (size_t j = 0; j < sizeof(w->qs); j += 32) {
             for (size_t k = 0; k < 32; ++k) {
                 // 解包权重
-                uint8_t w = weight->qs[j + k];
-                int8x8_t w_vec;
-                int8x8_t c_vec, d_vec;
+                uint8_t weight = w->qs[j + k];
                 for (size_t l = 0; l < 4; ++l) {
-                    int8_t w_val = (w >> (l*2)) & 3;
+                    int8_t w_val = (weight >> (l*2)) & 3;
                     int8_t c = x[i].x_real[(j + k) * 4 + l];
                     int8_t d = x[i].x_imag[(j + k) * 4 + l];
                     // NEON 并行累加
-                    if      (w_val == 1) { sum_ac = vaddq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vaddq_s32(sum_ad, vdupq_n_s32(d)); }
-                    else if (w_val == 0) { sum_ac = vsubq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vsubq_s32(sum_ad, vdupq_n_s32(d)); }
-                    else if (w_val == 3) { sum_bc = vaddq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vaddq_s32(sum_bd, vdupq_n_s32(d)); }
-                    else if (w_val == 2) { sum_bc = vsubq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vsubq_s32(sum_bd, vdupq_n_s32(d)); }
+                    if      (w_val == 1) { sum_ac = vadd_s16(sum_ac, vdup_n_s16(c)); sum_ad = vadd_s16(sum_ad, vdup_n_s16(d)); }
+                    else if (w_val == 0) { sum_ac = vsub_s16(sum_ac, vdup_n_s16(c)); sum_ad = vsub_s16(sum_ad, vdup_n_s16(d)); }
+                    else if (w_val == 3) { sum_bc = vadd_s16(sum_bc, vdup_n_s16(c)); sum_bd = vadd_s16(sum_bd, vdup_n_s16(d)); }
+                    else if (w_val == 2) { sum_bc = vsub_s16(sum_bc, vdup_n_s16(c)); sum_bd = vsub_s16(sum_bd, vdup_n_s16(d)); }
                 }
             }
         }
         // NEON 累加到标量
-        int32_t ac = vaddvq_s32(sum_ac);
-        int32_t bd = vaddvq_s32(sum_bd);
-        int32_t ad = vaddvq_s32(sum_ad);
-        int32_t bc = vaddvq_s32(sum_bc);
+        int16_t ac = vaddv_s16(sum_ac);
+        int16_t bd = vaddv_s16(sum_bd);
+        int16_t ad = vaddv_s16(sum_ad);
+        int16_t bc = vaddv_s16(sum_bc);
 
         // Apply scales
-        const float weight_real = GGML_CPU_FP16_TO_FP32(weight[i].d_real);
-        const float weight_imag = GGML_CPU_FP16_TO_FP32(weight[i].d_imag);
+        const float w_real = GGML_CPU_FP16_TO_FP32(w[i].d_real);
+        const float w_imag = GGML_CPU_FP16_TO_FP32(w[i].d_imag);
         const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
         const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
         // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += weight_real * x_real * (float)ac - weight_imag * x_imag * (float)bd;
-        sum_imag += weight_real * x_imag * (float)ad + weight_imag * x_real * (float)bc;
+        sum_real += w_real * x_real * (float)ac - w_imag * x_imag * (float)bd;
+        sum_imag += w_real * x_imag * (float)ad + w_imag * x_real * (float)bc;
     }
 
     ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
