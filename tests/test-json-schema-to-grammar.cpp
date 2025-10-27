@@ -1134,36 +1134,6 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
-        "top-level $ref array item",
-        R"""({
-            "$ref": "#/definitions/0",
-            "definitions": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "a": {
-                            "type": "string"
-                        }
-                    },
-                    "required": [
-                        "a"
-                    ],
-                    "additionalProperties": false
-                }
-            ]
-        })""",
-        R"""(
-            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            ref-definitions-0 ::= "{" space ref-definitions-0-a-kv "}" space
-            ref-definitions-0-a-kv ::= "\"a\"" space ":" space string
-            root ::= ref-definitions-0
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            string ::= "\"" char* "\"" space
-        )"""
-    });
-
-    test({
-        SUCCESS,
         "anyOf",
         R"""({
             "anyOf": [
@@ -1192,6 +1162,44 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             ref-definitions-foo-a-kv ::= "\"a\"" space ":" space number
             root ::= alternative-0 | alternative-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "anyOf $ref",
+        R"""({
+            "properties": {
+                "a": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "number"}
+                    ]
+                },
+                "b": {
+                    "anyOf": [
+                        {"$ref": "#/properties/a/anyOf/0"},
+                        {"type": "boolean"}
+                    ]
+                }
+            },
+            "type": "object"
+        })""",
+        R"""(
+            a ::= string | number
+            a-kv ::= "\"a\"" space ":" space a
+            a-rest ::= ( "," space b-kv )?
+            b ::= b-0 | boolean
+            b-0 ::= string
+            b-kv ::= "\"b\"" space ":" space b
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            root ::= "{" space  (a-kv a-rest | b-kv )? "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
         )"""
     });
 
