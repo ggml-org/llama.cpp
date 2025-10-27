@@ -496,45 +496,40 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
           float * dx_base = static_cast<      float *>(dst->data);
 
     const int64_t D  = dst->ne[0];
-    const int64_t n1 = dst->ne[1], n2 = dst->ne[2], n3 = dst->ne[3];
-    (void) n3;
+    const int64_t n1 = dst->ne[1], n2 = dst->ne[2], n3 = dst->ne[3]; (void) n3;
     const int64_t N  = ggml_nrows(dst);
     if (D == 0 || N == 0) return;
 
     const ggml_tensor *G = dst->src[0];
     const ggml_tensor *X = dst->src[1];
     const int ts = (int) ggml_type_size(X->type);
-    GGML_ASSERT((size_t) X->nb[0] == (size_t) ts);
-    GGML_ASSERT((size_t) G->nb[0] == (size_t) ts);
+    GGML_ASSERT((size_t) X->nb[0]   == (size_t) ts);
+    GGML_ASSERT((size_t) G->nb[0]   == (size_t) ts);
     GGML_ASSERT((size_t) dst->nb[0] == (size_t) ts);
 
-    const int64_t xs1 = X->nb[1] / ts;
-    const int64_t xs2 = X->nb[2] / ts;
-    const int64_t xs3 = X->nb[3] / ts;
-    const int64_t gs1 = G->nb[1] / ts;
-    const int64_t gs2 = G->nb[2] / ts;
-    const int64_t gs3 = G->nb[3] / ts;
-    const int64_t ds1 = dst->nb[1] / ts;
-    const int64_t ds2 = dst->nb[2] / ts;
-    const int64_t ds3 = dst->nb[3] / ts;
+    const int64_t xs1 = X->nb[1] / ts, xs2 = X->nb[2] / ts, xs3 = X->nb[3] / ts;
+    const int64_t gs1 = G->nb[1] / ts, gs2 = G->nb[2] / ts, gs3 = G->nb[3] / ts;
+    const int64_t ds1 = dst->nb[1] / ts, ds2 = dst->nb[2] / ts, ds3 = dst->nb[3] / ts;
 
     dpct::queue_ptr q = ctx.stream();
 
-    // work-group size: multiple of WARP_SIZE, capped by device and 256
+    // work-group size: multiple of WARP_SIZE, capped by device and 256, and not larger than D
     const int device_max_wg = ggml_sycl_info().max_work_group_sizes[ctx.device];
     auto roundup = [](int v, int m) { return ((v + m - 1) / m) * m; };
     int wg_cap = 256;
     if (device_max_wg > 0) wg_cap = std::min(wg_cap, device_max_wg);
     int WG = std::max(WARP_SIZE, std::min(roundup((int)std::min<int64_t>(D, wg_cap), WARP_SIZE), wg_cap));
 
-    // FP32 compensated reduction
+    // FP32 path: per-thread compensated accumulation + hierarchical reduction
     q->submit([&](sycl::handler &cgh) {
-        auto l_inv_r = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
-        auto l_coeff = sycl::local_accessor<float, 1>(sycl::range<1>(1), cgh);
-        auto l_part  = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(std::max(1, WG / WARP_SIZE)), cgh);
+        const int nwarps_loc = std::max(1, WG / WARP_SIZE);
+        // store one partial value per warp (xx and xg) for cross-warp reduction
+        auto l_xx   = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(nwarps_loc), cgh);
+        auto l_xg   = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(nwarps_loc), cgh);
 
         cgh.parallel_for(
-            sycl::nd_range<3>(sycl::range<3>(1, 1, N) * sycl::range<3>(1, 1, WG), sycl::range<3>(1, 1, WG)),
+            sycl::nd_range<3>(sycl::range<3>(1, 1, N) * sycl::range<3>(1, 1, WG),
+                              sycl::range<3>(1, 1, WG)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 const int row = item_ct1.get_group(2);
                 const int tid = item_ct1.get_local_id(2);
@@ -547,29 +542,49 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
                 const float *__restrict g_row = g_base + i3 * gs3 + i2 * gs2 + i1 * gs1;
                 float *__restrict d_row       = dx_base + i3 * ds3 + i2 * ds2 + i1 * ds1;
 
-                // per-thread compensated sums for sum(x^2) and sum(x*dz)
-                float sum_xx = 0.f, c_xx = 0.f;
-                float sum_xg = 0.f, c_xg = 0.f;
+                // per-thread accumulation (compensated by default)
+                float sum_xx = 0.f, sum_xg = 0.f;
+#ifndef GGML_SYCL_RMS_BACK_FAST
+                float c_xx = 0.f, c_xg = 0.f;
+#endif
                 for (int64_t col = tid; col < D; col += WG) {
                     const float xv = x_row[col];
                     const float gv = g_row[col];
-                    float y1 = xv * xv - c_xx;         // compensated add for x^2
-                    float t1 = sum_xx + y1;            
+#ifdef GGML_SYCL_RMS_BACK_FAST
+                    sum_xx += xv * xv;
+                    sum_xg += xv * gv;
+#else
+                    float y1 = xv * xv - c_xx;
+                    float t1 = sum_xx + y1;
                     c_xx = (t1 - sum_xx) - y1;
                     sum_xx = t1;
-                    float y2 = xv * gv - c_xg;         // compensated add for x*dz
-                    float t2 = sum_xg + y2;            
+
+                    float y2 = xv * gv - c_xg;
+                    float t2 = sum_xg + y2;
                     c_xg = (t2 - sum_xg) - y2;
                     sum_xg = t2;
+#endif
                 }
 
-                // reduce within warp
-                sycl::float2 xx = sycl::float2(sum_xx, c_xx);
-                sycl::float2 xg = sycl::float2(sum_xg, c_xg);
+                // warp-level reduction
+                sycl::float2 xx = sycl::float2(sum_xx, 
+#ifndef GGML_SYCL_RMS_BACK_FAST
+                    c_xx
+#else
+                    0.f
+#endif
+                );
+                sycl::float2 xg = sycl::float2(sum_xg, 
+#ifndef GGML_SYCL_RMS_BACK_FAST
+                    c_xg
+#else
+                    0.f
+#endif
+                );
                 xx = warp_reduce_sum(xx, item_ct1);
                 xg = warp_reduce_sum(xg, item_ct1);
 
-                // cross-warp reduction if needed
+                // cross-warp reduction using local memory (single barrier)
                 const auto sub_group = item_ct1.get_sub_group();
                 const auto sg_id     = sub_group.get_group_linear_id();
                 const auto wi_in_sg  = sub_group.get_local_linear_id();
@@ -579,34 +594,40 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
                 sycl::float2 xx_total = xx;
                 sycl::float2 xg_total = xg;
                 if (nwarps > 1) {
-                    if (wi_in_sg == 0) l_part[sg_id] = xx;
+                    if (wi_in_sg == 0) {
+                        l_xx[sg_id] = xx;
+                        l_xg[sg_id] = xg;
+                    }
                     item_ct1.barrier(sycl::access::fence_space::local_space);
 
-                    xx_total = sycl::float2(0.f, 0.f);
-                    const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
-                    for (size_t i = 0; i < nreduce; ++i) xx_total += l_part[wi_in_sg + i * WARP_SIZE];
-                    xx_total = warp_reduce_sum(xx_total, item_ct1);
-
-                    if (wi_in_sg == 0) l_part[sg_id] = xg;
-                    item_ct1.barrier(sycl::access::fence_space::local_space);
-                    xg_total = sycl::float2(0.f, 0.f);
-                    for (size_t i = 0; i < nreduce; ++i) xg_total += l_part[wi_in_sg + i * WARP_SIZE];
-                    xg_total = warp_reduce_sum(xg_total, item_ct1);
+                    if (sg_id == 0) {
+                        const unsigned wi_u = wi_in_sg;
+                        sycl::float2 xx_first = (wi_u < static_cast<unsigned>(nwarps)) ? l_xx[wi_u] : sycl::float2(0.f, 0.f);
+                        sycl::float2 xg_first = (wi_u < static_cast<unsigned>(nwarps)) ? l_xg[wi_u] : sycl::float2(0.f, 0.f);
+                        xx_total = warp_reduce_sum(xx_first, item_ct1);
+                        xg_total = warp_reduce_sum(xg_first, item_ct1);
+                    } else {
+                        // other subgroups keep their local totals; they'll be ignored
+                        xx_total = xx;
+                        xg_total = xg;
+                    }
+                    // ensure all threads see the first-subgroup result via broadcast below
                 }
 
-                // compute inv_r and coeff once per row
+                // compute inv_r and coeff once per row and broadcast to the whole work-group
+                float inv_r = 0.f;
+                float coeff = 0.f;
                 if (tid == 0) {
                     const float sum_xx_f  = xx_total.x() + xx_total.y();
                     const float sum_xdz_f = xg_total.x() + xg_total.y();
                     const float mean_eps  = sum_xx_f / (float) D + eps;
                     const float sum_eps   = sum_xx_f + eps * (float) D;
-                    l_inv_r[0] = sycl::rsqrt(mean_eps);
-                    l_coeff[0] = -sum_xdz_f / sum_eps;
+                    inv_r = sycl::rsqrt(mean_eps);
+                    coeff = -sum_xdz_f / sum_eps;
                 }
+                inv_r = sycl::group_broadcast(item_ct1.get_group(), inv_r);
+                coeff = sycl::group_broadcast(item_ct1.get_group(), coeff);
 
-                item_ct1.barrier(sycl::access::fence_space::local_space);
-                const float inv_r = l_inv_r[0];
-                const float coeff = l_coeff[0];
                 for (int64_t col = tid; col < D; col += WG) {
                     d_row[col] = (g_row[col] + coeff * x_row[col]) * inv_r;
                 }
