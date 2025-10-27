@@ -1083,6 +1083,7 @@ class Me {
         this.tools = {
             enabled: false,
             proxyUrl: "http://127.0.0.1:3128",
+            proxyAuthInsecure: "NeverSecure",
             searchUrl: SearchURLS.duckduckgo,
             toolNames: /** @type {Array<string>} */([]),
             /**
