@@ -11,8 +11,8 @@
 #include <stdbool.h>     // bool 타입 추가
 
 #define GPU_TEMP_PATH "/sys/class/kgsl/kgsl-3d0/temp"
-#define TEMP_THRESHOLD_MC 70000  // 70도 = 70000 millidegree C
-#define TARGET_CPU_FREQ 1785600
+#define TEMP_THRESHOLD_MC 60000  // 60도 = 60000 millidegree C
+#define TARGET_CPU_FREQ 960000
 
 // GPU 온도 읽기 (millidegree C)
 static inline int read_gpu_temp() {
@@ -94,14 +94,14 @@ static inline void thermal_control_check() {
     if (temp_mc >= TEMP_THRESHOLD_MC && !throttled) {
         set_cpu_freq(TARGET_CPU_FREQ);
         throttled = true;
-        fprintf(stderr, "Thermal: GPU temp %.1f°C >= 70°C, throttling CPU to %d KHz\n", 
+        fprintf(stderr, "Thermal: GPU temp %.1f°C >= 60°C, throttling CPU to %d KHz\n", 
                 temp_mc / 1000.0, TARGET_CPU_FREQ);
     }
     // 65도 이하로 내려가면 throttle 해제 (hysteresis)
     else if (temp_mc < (TEMP_THRESHOLD_MC - 5000) && throttled) {
         // 원하는 경우 여기서 원래 frequency로 복구 가능
         throttled = false;
-        fprintf(stderr, "Thermal: GPU temp %.1f°C < 65°C, releasing throttle\n", 
+        fprintf(stderr, "Thermal: GPU temp %.1f°C < 55°C, releasing throttle\n", 
                 temp_mc / 1000.0);
     }
     
