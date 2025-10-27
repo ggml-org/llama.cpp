@@ -7519,8 +7519,8 @@ static void ggml_compute_forward_upscale_f32(
         float pixel_offset = 0.5f;
         if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
             pixel_offset = 0.0f;
-            sf0 = (float)(ne0 - 1) / (src0->ne[0] - 1);
-            sf1 = (float)(ne1 - 1) / (src0->ne[1] - 1);
+            sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+            sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
         }
 
         for (int64_t i3 = 0; i3 < ne3; i3++) {

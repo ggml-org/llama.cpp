@@ -523,7 +523,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_f32, pipeline_concat_f16, pipeline_concat_i32;
-    vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bilinear_ac_f32;
+    vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_sqr_f32;
     vk_pipeline pipeline_sqrt_f32;
@@ -1238,6 +1238,7 @@ struct vk_op_upscale_push_constants {
     uint32_t nb00; uint32_t nb01; uint32_t nb02; uint32_t nb03;
     uint32_t ne10; uint32_t ne11; uint32_t ne12; uint32_t ne13;
     float sf0; float sf1; float sf2; float sf3;
+    float pixel_offset;
 };
 
 struct vk_op_sum_rows_push_constants
@@ -3493,7 +3494,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_upscale_nearest_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_NEAREST}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_ac_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_scale_f32, "scale_f32", scale_f32_len, scale_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -7798,14 +7798,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_UPSCALE:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            int mode = ggml_get_op_params_i32(dst, 0);
+            ggml_scale_mode mode = (ggml_scale_mode)(ggml_get_op_params_i32(dst, 0) & 0xFF);
             switch (mode) {
                 case GGML_SCALE_MODE_NEAREST:
                     return ctx->device->pipeline_upscale_nearest_f32;
                 case GGML_SCALE_MODE_BILINEAR:
                     return ctx->device->pipeline_upscale_bilinear_f32;
-                case GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS:
-                    return ctx->device->pipeline_upscale_bilinear_ac_f32;
+                default:
+                    return nullptr;
             }
         }
         return nullptr;
@@ -9294,22 +9294,26 @@ static void ggml_vk_upscale(ggml_backend_vk_context * ctx, vk_context& subctx, c
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t mode = (uint32_t)ggml_get_op_params_i32(dst, 0);
 
-    float sf0 = (float)dst->ne[0] / src0->ne[0];
-    float sf1 = (float)dst->ne[1] / src0->ne[1];
-    float sf2 = (float)dst->ne[2] / src0->ne[2];
-    float sf3 = (float)dst->ne[3] / src0->ne[3];
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    float sf0 = (float)ne0 / ne00;
+    float sf1 = (float)ne1 / ne01;
+    float sf2 = (float)ne2 / ne02;
+    float sf3 = (float)ne3 / ne03;
+    float pixel_offset = 0.5f;
 
     if (mode & GGML_SCALE_FLAG_ALIGN_CORNERS) {
-        sf0 = (float)(dst->ne[0] - 1) / (src0->ne[0] - 1);
-        sf1 = (float)(dst->ne[1] - 1) / (src0->ne[1] - 1);
+        sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+        sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
+        pixel_offset = 0.0f;
     }
 
     ggml_vk_op_f32<vk_op_upscale_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UPSCALE, {
         (uint32_t)ggml_nelements(dst), 0, 0,
-        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1],
-        (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
-        (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2],(uint32_t)dst->ne[3],
-        sf0, sf1, sf2, sf3,
+        (uint32_t)ne00, (uint32_t)ne01,
+        (uint32_t)nb00 / src0_type_size, (uint32_t)nb01 / src0_type_size, (uint32_t)nb02 / src0_type_size, (uint32_t)nb03 / src0_type_size,
+        (uint32_t)ne0, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3,
+        sf0, sf1, sf2, sf3, pixel_offset
     }, dryrun);
 }
 
