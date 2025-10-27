@@ -1961,7 +1961,7 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q4_K_8x8_q8_K;
             }
         }
-        if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8() && ggml_cpu_has_dotprod()) {
+        if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q4_K_8x8_q8_K;
             }
