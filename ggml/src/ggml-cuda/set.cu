@@ -35,5 +35,5 @@ void ggml_cuda_op_set(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     dst_view.nb[2] = nb2;
     dst_view.nb[3] = nb3;
 
-    ggml_cuda_cpy(ctx, src1, &dst_view, true);
+    ggml_cuda_cpy(ctx, src1, &dst_view);
 }
