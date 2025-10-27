@@ -3301,9 +3301,6 @@ static struct ggml_tensor * ggml_cont_impl(
 
     result->op     = GGML_OP_CONT;
     result->src[0] = a;
-    if (a->op == GGML_OP_TRANSPOSE) {
-        result->op_params[10] = a->op_params[10]; // preserve the original order
-    }
 
     return result;
 }
