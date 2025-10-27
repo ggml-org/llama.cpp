@@ -18,6 +18,12 @@
 // llama_context
 //
 
+std::atomic<int> g_token_count{0};
+std::atomic<bool> g_monitoring{false};
+std::thread g_monitor_thread;
+std::ofstream g_csv;
+
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -960,7 +966,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
-    thermal_control_check();
+    // thermal_control_check();
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
@@ -971,6 +977,62 @@ int llama_context::decode(const llama_batch & batch_inp) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
+
+    static bool is_first = true;
+    if (is_first) {
+        is_first = false;
+        
+        // CSV 파일 열기
+        g_csv.open("throughput.csv");
+        g_csv << "timestamp,elapsed_sec,tokens_per_sec,total_tokens\n";
+        
+        // 모니터링 스레드 시작
+        g_monitoring = true;
+        g_token_count = 0;
+        
+        auto start = std::chrono::steady_clock::now();
+        
+        g_monitor_thread = std::thread([start]() {
+            int last_count = 0;
+            
+            while (g_monitoring) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (!g_monitoring) break;
+                
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - start).count() / 1000.0;
+                
+                int current = g_token_count.load();
+                int per_sec = current - last_count;
+                
+                auto ts = std::chrono::system_clock::now().time_since_epoch();
+                auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ts).count();
+                
+                g_csv << ts_ms << "," << elapsed << "," << per_sec << "," << current << "\n";
+                g_csv.flush();
+                
+                fprintf(stderr, "[%.1fs] %d tok/s\n", elapsed, per_sec);
+                
+                last_count = current;
+            }
+            
+            g_csv.close();
+        });
+        
+        // 프로그램 종료 시 자동으로 정리
+        std::atexit([]() {
+            g_monitoring = false;
+            if (g_monitor_thread.joinable()) {
+                g_monitor_thread.join();
+            }
+        });
+        
+        LLAMA_LOG_INFO("Throughput monitoring started\n");
+    }
+    
+    // 토큰 카운트 증가
+    g_token_count.fetch_add(batch_inp.n_tokens);
 
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
