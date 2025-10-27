@@ -70,7 +70,7 @@ def combine_complex_tensors(imag_part, real_part):
     real_32 = real_int.to(torch.int32)
     
     # 将虚部移到高16位，实部在低16位
-    merged_int = (imag_32 << 16) | (real_32 & 0xFFFF)
+    merged_int = (real_32 << 16) | (imag_32 & 0xFFFF)
     
     # 将合并后的整数重新解释为float32
     merged_tensor = merged_int.view(torch.float32)
