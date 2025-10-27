@@ -3105,6 +3105,7 @@ class VisionProjectorType:
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
     GLM4V = "glm4v_moe"
+    LIGHTONOCR = "lightonocr"
 
 
 # Items here are (block size, type size)
