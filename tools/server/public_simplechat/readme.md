@@ -458,7 +458,7 @@ Provide a handler which
 
 Update the tc_switch to include a object entry for the tool, which inturn includes
 * the meta data wrt the tool call
-* a reference to the handler - the handler should take toolCallId, toolName and toolArgs.
+* a reference to the handler - handler should take chatSessionId, toolCallId, toolName and toolArgs.
   It should pass these along to the tools web worker, if used.
 * the result key (was used previously, may use in future, but for now left as is)
 

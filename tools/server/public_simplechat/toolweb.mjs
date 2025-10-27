@@ -43,6 +43,7 @@ function bearer_transform() {
  *   * with a predefined query token and value wrt a predefined path
  * NOTE: Initial go, handles textual data type.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
@@ -50,7 +51,7 @@ function bearer_transform() {
  * @param {string} qkey
  * @param {string} qvalue
  */
-async function proxyserver_get_1arg(toolcallid, toolname, obj, path, qkey, qvalue) {
+async function proxyserver_get_1arg(chatid, toolcallid, toolname, obj, path, qkey, qvalue) {
     if (gToolsWorker.onmessage != null) {
         let newUrl = `${get_gme().tools.proxyUrl}/${path}?${qkey}=${qvalue}`
         let btoken = await bearer_transform()
@@ -60,9 +61,9 @@ async function proxyserver_get_1arg(toolcallid, toolname, obj, path, qkey, qvalu
             }
             return resp.text()
         }).then(data => {
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: data}}))
+            message_toolsworker(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}}))
         }).catch((err)=>{
-            message_toolsworker(new MessageEvent('message', {data: {id: toolcallid, name: toolname, data: `Error:${err}`}}))
+            message_toolsworker(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: `Error:${err}`}}))
         })
     }
 }
@@ -122,12 +123,13 @@ let fetchweburlraw_meta = {
  *   * with a query token named url wrt the path urlraw
  *     which gives the actual url to fetch
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function fetchweburlraw_run(toolcallid, toolname, obj) {
-    return proxyserver_get_1arg(toolcallid, toolname, obj, 'urlraw', 'url', encodeURIComponent(obj.url));
+function fetchweburlraw_run(chatid, toolcallid, toolname, obj) {
+    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urlraw', 'url', encodeURIComponent(obj.url));
 }
 
 
@@ -179,12 +181,13 @@ let fetchweburltext_meta = {
  * * strips out head as well as any script, style, header, footer, nav and so blocks in body
  *   before returning remaining body contents.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function fetchweburltext_run(toolcallid, toolname, obj) {
-    return proxyserver_get_1arg(toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(obj.url));
+function fetchweburltext_run(chatid, toolcallid, toolname, obj) {
+    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(obj.url));
 }
 
 
@@ -237,16 +240,17 @@ let searchwebtext_meta = {
  * * strips out head as well as any script, style, header, footer, nav and so blocks in body
  *   before returning remaining body contents.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function searchwebtext_run(toolcallid, toolname, obj) {
+function searchwebtext_run(chatid, toolcallid, toolname, obj) {
     if (gToolsWorker.onmessage != null) {
         /** @type {string} */
         let searchUrl = get_gme().tools.searchUrl;
         searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
-        return proxyserver_get_1arg(toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(searchUrl));
+        return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(searchUrl));
     }
 }
 
