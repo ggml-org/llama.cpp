@@ -32,6 +32,7 @@
 #include "pad.hpp"
 #include "quantize.hpp"
 #include "quants.hpp"
+#include "roll.hpp"
 #include "rope.hpp"
 #include "set_rows.hpp"
 #include "softmax.hpp"
