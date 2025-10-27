@@ -1,0 +1,16 @@
+// FastRPC IDL interface for GGML HTP
+
+#ifndef HTP_IDL
+#define HTP_IDL
+
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+interface htp_iface : remote_handle64 {
+    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx);
+    AEEResult stop();
+    AEEResult enable_etm();
+    AEEResult disable_etm();
+};
+
+#endif /* HTP_IDL */
