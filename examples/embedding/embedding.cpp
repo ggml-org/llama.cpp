@@ -4,7 +4,6 @@
 #include "llama.h"
 
 #include <ctime>
-#include <cstdio>
 #include <algorithm>
 
 #if defined(_MSC_VER)
@@ -85,12 +84,12 @@ static void print_raw_embeddings(const float * emb,
     for (int j = 0; j < n_embd_count; ++j) {
         for (int i = 0; i < cols; ++i) {
             if (embd_normalize == 0) {
-                printf("%1.0f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
+                LOG("%1.0f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
             } else {
-                printf("%1.7f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
+                LOG("%1.7f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
             }
         }
-        printf("\n");
+        LOG("\n");
     }
 }
 
