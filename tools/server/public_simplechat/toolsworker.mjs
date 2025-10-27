@@ -23,6 +23,6 @@ self.onmessage = async function (ev) {
         console.log(`\n\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}\n\n`)
     }
     tconsole.console_revert()
-    self.postMessage({ id: ev.data.id, name: ev.data.name, data: tconsole.gConsoleStr})
+    self.postMessage({ cid: ev.data.cid, tcid: ev.data.tcid, name: ev.data.name, data: tconsole.gConsoleStr})
     console.info("DBUG:WW:OnMessage done")
 }
