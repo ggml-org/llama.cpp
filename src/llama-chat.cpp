@@ -63,8 +63,6 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
-    { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
-    { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
@@ -73,6 +71,35 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
     { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
     { "grok-2",            LLM_CHAT_TEMPLATE_GROK_2            },
+    { "teuken",            LLM_CHAT_TEMPLATE_TEUKEN            },
+};
+
+
+static const std::map<std::string,std::string> LLM_TEUKEN_SYSTEM = {
+     {"BG", "Чат между човек и асистент с изкуствен интелект. Асистентът дава полезни и учтиви отговори на въпросите на човека."},
+     {"CS", "Chat mezi člověkem a asistentem s umělou inteligencí. Asistent poskytuje vstřícné a zdvořilé odpovědi na otázky člověka."},
+     {"DA", "En chat mellem et menneske og en assistent med kunstig intelligens, som giver hjælpsomme og høflige svar på menneskets spørgsmål."},
+     {"DE", "Ein Gespräch zwischen einem Menschen und einem Assistenten mit künstlicher Intelligenz. Der Assistent gibt hilfreiche und höfliche Antworten auf die Fragen des Menschen."},
+     {"EL", "Μια συνομιλία μεταξύ ενός ανθρώπου και ενός βοηθού τεχνητής νοημοσύνης. Ο βοηθός δίνει χρήσιμες και ευγενικές απαντήσεις στις ερωτήσεις του ανθρώπου."},
+     {"EN", "A chat between a human and an artificial intelligence assistant.The assistant gives helpful and polite answers to the human's questions."},
+     {"ES", "Una conversación entre un humano y un asistente de inteligencia artificial. El asistente da respuestas útiles y amables a las preguntas del humano."},
+     {"ET", "Inimese ja tehisintellekti assistendi vaheline vestlus. Assistent annab inimese küsimustele abivalmis ja viisakaid vastuseid."},
+     {"FI", "Ihmisen ja tekoälyavustajan välinen keskustelu. Avustaja antaa avuliaita ja kohteliaita vastauksia ihmisen kysymyksiin."},
+     {"FR", "Conversation entre un humain et un assistant doté d'une intelligence artificielle. L'assistant donne des réponses utiles et polies aux questions de l'homme."},
+     {"GA", "Comhrá idir duine agus cúntóir hintleachta saorga. Tugann an cúntóir freagraí cabhracha dea-bhéasacha ar cheisteanna an duine."},
+     {"HR", "Razgovor između čovjeka i pomoćnika umjetne inteligencije. Pomoćnik daje korisne i ljubazne odgovore na ljudska pitanja."},
+     {"HU", "Egy ember és egy mesterséges intelligencia asszisztens közötti beszélgetés. Az asszisztens segítőkész és udvarias válaszokat ad az ember kérdéseire."},
+     {"IT", "Una chat tra un umano e un assistente di intelligenza artificiale. L'assistente fornisce risposte utili ed educate alle domande dell'uomo."},
+     {"LT", "Žmogaus ir dirbtinio intelekto asistento pokalbis. Asistentas naudingai ir mandagiai atsako į žmogaus klausimus."},
+     {"LV", "Cilvēka un mākslīgā intelekta asistenta tērzēšana. Asistents sniedz noderīgas un pieklājīgas atbildes uz cilvēka jautājumiem."},
+     {"MT", "Chat bejn bniedem u assistent ta' intelliġenza artifiċjali. L-assistent jagħti tweġibiet ta' għajnuna u edukat għall-mistoqsijiet tal-bniedem."},
+     {"NL", "Een chat tussen een mens en een assistent met kunstmatige intelligentie. De assistent geeft behulpzame en beleefde antwoorden op de vragen van de mens."},
+     {"PL", "Czat między człowiekiem a asystentem sztucznej inteligencji. Asystent udziela pomocnych i uprzejmych odpowiedzi na pytania człowieka."},
+     {"PT", "Uma conversa entre um ser humano e um assistente de inteligência artificial. O assistente dá respostas úteis e educadas às perguntas do utilizador."},
+     {"RO", "O conversație între un om și un asistent cu inteligență artificială. Asistentul oferă răspunsuri utile și politicoase la întrebările omului."}, 
+     {"SK", "Rozhovor medzi človekom a asistentom s umelou inteligenciou. Asistent poskytuje užitočné a zdvorilé odpovede na otázky človeka."},
+     {"SL", "Pogovor med človekom in pomočnikom z umetno inteligenco. Pomočnik človeku prijazno in vljudno odgovarja na njegova vprašanja."},
+     {"SV", "En chatt mellan en människa och en assistent med artificiell intelligens. Assistenten ger hjälpsamma och artiga svar på människans frågor."}
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -156,6 +183,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
             return LLM_CHAT_TEMPLATE_VICUNA_ORCA;
         }
         return LLM_CHAT_TEMPLATE_VICUNA;
+    } else if (tmpl_contains("User: ") && tmpl_contains("Assistant: ") && tmpl_contains("System: ")) {
+        return LLM_CHAT_TEMPLATE_TEUKEN;
     } else if (tmpl_contains("### Instruction:") && tmpl_contains("<|EOT|>")) {
         // deepseek-ai/deepseek-coder-33b-instruct
         return LLM_CHAT_TEMPLATE_DEEPSEEK;
@@ -193,10 +222,6 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_YANDEX;
     } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("'HUMAN'")) {
         return LLM_CHAT_TEMPLATE_BAILING;
-    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("\"HUMAN\"") && tmpl_contains("<think>")) {
-        return LLM_CHAT_TEMPLATE_BAILING_THINK;
-    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("<role>HUMAN</role>") && tmpl_contains("<|role_end|>")) {
-        return LLM_CHAT_TEMPLATE_BAILING2;
     } else if (tmpl_contains("<|header_start|>") && tmpl_contains("<|header_end|>")) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
     } else if (tmpl_contains("<|endofuserprompt|>")) {
@@ -430,6 +455,30 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << "ASSISTANT:";
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_TEUKEN) {
+        // eachadea/vicuna-13b-1.1 (and Orca variant)
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+               const std::string lang=trim( message->content);
+               if(LLM_TEUKEN_SYSTEM.find(lang)==LLM_TEUKEN_SYSTEM.end())
+               {
+                    ss << "System: " << message->content << "\n";
+               }
+               else
+               {
+                   std::string teuken_system=(*(LLM_TEUKEN_SYSTEM.find(lang))).second;
+                   ss << "System: " << teuken_system << "\n";
+               }
+            } else if (role == "user") {
+                ss << "User: " << message->content << "\n";
+            } else if (role == "assistant") {
+                ss << "Assistant: " << message->content << "</s>\n";
+            }
+        }
+        if (add_ass) {
+            ss << "Assistant:";
+        }
     } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK) {
         // deepseek-ai/deepseek-coder-33b-instruct
         for (auto message : chat) {
@@ -650,8 +699,8 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << " Ассистент:[SEP]";
         }
-    } else if (tmpl == LLM_CHAT_TEMPLATE_BAILING || tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
-        // Bailing (Ling/Ring) template
+    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING) {
+        // Bailing (Ling) template
         for (auto message : chat) {
             std::string role(message->role);
 
@@ -662,33 +711,6 @@ int32_t llm_chat_apply_template(
             }
 
             ss << "<role>" << role << "</role>" << message->content;
-        }
-
-        if (add_ass) {
-            ss << "<role>ASSISTANT</role>";
-
-            if (tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
-                ss << "<think>";
-            }
-        }
-    } else if (tmpl == LLM_CHAT_TEMPLATE_BAILING2) {
-        // Bailing2 (Ling 2.0) template
-        bool has_system = !chat.empty() && std::string(chat[0]->role) == "system";
-
-        if (!has_system) {
-            ss << "<role>SYSTEM</role>detailed thinking off<|role_end|>";
-        }
-
-        for (auto message : chat) {
-            std::string role(message->role);
-
-            if (role == "user") {
-                role = "HUMAN";
-            } else {
-                std::transform(role.begin(), role.end(), role.begin(), ::toupper);
-            }
-
-            ss << "<role>" << role << "</role>" << message->content << "<|role_end|>";
         }
 
         if (add_ass) {

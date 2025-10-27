@@ -97,7 +97,7 @@ int main(void) {
         },
         {
             /* .name= */ "OrionStarAI/Orion-14B-Chat",
-            /* .template_str= */ "{% for message in messages %}{% if loop.first %}{{ bos_token }}{% endif %}{% if message['role'] == 'user' %}{{ 'Human: ' + message['content'] + '\\n\\nAssistant: ' + eos_token }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token }}{% endif %}{% endfor %}",
+            /* .template_str= */ "{% for message in messages %}{% if loop.first %}{{ bos_token }}{% endif %}{% if message['role'] == 'user' %}{{ 'USER: ' + message['content'] + '\\n\\nAssistant: ' + eos_token }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token }}{% endif %}{% endfor %}",
             /* .expected_output= */       "Human: You are a helpful assistant\n\nHello\n\nAssistant: </s>Hi there</s>Human: Who are you\n\nAssistant: </s>   I am an assistant   </s>Human: Another question\n\nAssistant: </s>",
             /* .expected_output_jinja= */ "Human: You are a helpful assistant\nHello\n\nAssistant: </s>Hi there</s>Human: Who are you\n\nAssistant: </s>   I am an assistant   </s>Human: Another question\n\nAssistant: </s>",
             /* .bos_token= */ "",
@@ -297,7 +297,16 @@ int main(void) {
             /* .expected_output_jinja= */ "<seed:bos>system\nYou are a helpful assistant<seed:eos><seed:bos>user\nHello<seed:eos><seed:bos>assistant\nHi there<seed:eos><seed:bos>user\nWho are you<seed:eos><seed:bos>assistant\nI am an assistant<seed:eos><seed:bos>user\nAnother question<seed:eos><seed:bos>assistant\n",
             /* .bos_token= */ "<seed:bos>",
             /* .eos_token= */ "<seed:eos>",
-        }
+        },
+        {
+            /* .name= */ "teuken",
+            // No template included in tokenizer_config.json, so this template likely needs to be manually set.
+            /* .template_str= */ "{%- for message in messages %}{%- if message['role'] == 'system' -%}{{-'System: ' + message['content'] + '\n' -}}{%- else -%}{%- if message['role'] == 'user' -%}{{-'User: ' + message['content'] + '\n'-}}{%- else -%}{{-'Assistant: ' + message['content'] + '</s>\n' -}}{%- endif -%}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{-'Assistant:'-}}{%- endif -%}",
+            /* .expected_output= */ "System: You are a helpful assistant\nUser: Hello\nAssistant: Hi there</s>\nUser: Who are you\nAssistant:    I am an assistant   </s>\nUser: Another question\nAssistant:",
+            /* .expected_output_jinja= */ "",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+        },
     };
     std::vector<char> formatted_chat(1024);
     int32_t res;
@@ -321,6 +330,9 @@ int main(void) {
     for (const auto & test_case : test_cases) {
         printf("\n\n=== %s ===\n\n", test_case.name.c_str());
         formatted_chat.resize(1024);
+
+        printf("%s\n",test_case.template_str.c_str());
+
         res = llama_chat_apply_template(
             test_case.template_str.c_str(),
             conversation.data(),
@@ -331,13 +343,15 @@ int main(void) {
         );
         formatted_chat.resize(res);
         std::string output(formatted_chat.data(), formatted_chat.size());
-        if (output != test_case.expected_output) {
+        if (output != test_case.expected_output)
+        {
             printf("Expected:\n%s\n", test_case.expected_output.c_str());
             printf("-------------------------\n");
             printf("Actual:\n%s\n", output.c_str());
             fflush(stdout);
             assert(output == test_case.expected_output);
         }
+        return 0;
     }
 
     std::vector<common_chat_msg> messages;

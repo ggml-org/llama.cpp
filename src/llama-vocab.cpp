@@ -1708,6 +1708,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
+       } else if (tokenizer_model == "teuken") {
+            type = LLAMA_VOCAB_TYPE_UGM;
+            // default special tokens
+            special_bos_id  = 1;
+            special_eos_id  = 2;
+            special_unk_id  = 0;
+            special_sep_id  = LLAMA_TOKEN_NULL;
+            special_pad_id  = LLAMA_TOKEN_NULL;
+            special_mask_id = LLAMA_TOKEN_NULL;
         } else if (tokenizer_model == "bert") {
             type = LLAMA_VOCAB_TYPE_WPM;
 
