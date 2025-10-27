@@ -1,5 +1,6 @@
 #include "llama-model.h"
 
+#include "gguf.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-batch.h"
@@ -2428,6 +2429,115 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 
+        struct tensor_def {
+            LLM_TN_IMPL tn;
+            std::vector<int64_t> ne;
+            int flags;
+            ggml_tensor ** out;
+        };
+
+        auto create_contiguous = [&](const LLM_TN_IMPL & fused_tn,
+                                     std::initializer_list<int64_t> ne,
+                                     std::initializer_list<tensor_def> reqs) -> ggml_tensor * {
+            ggml_backend_buffer_type_t fused_buft = nullptr;
+
+            std::vector<const ggml_tensor*> tensor_metas;
+
+            for (size_t i = 0; i < reqs.size(); ++i) {
+                const tensor_def & req = reqs.begin()[i];
+                const bool required = (req.flags & llama_model_loader::TENSOR_NOT_REQUIRED) == 0;
+                const ggml_tensor * tensor_meta = ml.check_tensor_dims(req.tn.str(), req.ne, required);
+
+                if (!tensor_meta) {
+                    return nullptr;
+                }
+
+                tensor_metas.push_back(tensor_meta);
+
+                *req.out = const_cast<ggml_tensor*>(tensor_meta);
+
+                if (!*req.out) {
+                    return nullptr;
+                }
+
+                llm_tensor tn_tensor = req.tn.tensor;
+                if (tn_tensor == LLM_TENSOR_TOKEN_EMBD && (req.flags & llama_model_loader::TENSOR_DUPLICATED)) {
+                    tn_tensor = LLM_TENSOR_OUTPUT;
+                }
+
+                llm_tensor_info info;
+                try {
+                    info = llm_tensor_info_for(tn_tensor);
+                } catch (const std::out_of_range &) {
+                    throw std::runtime_error(format("missing tensor info mapping for %s", req.tn.str().c_str()));
+                }
+
+                bool bias = req.tn.suffix != nullptr && strcmp(req.tn.suffix, "bias") == 0;
+                ggml_op op = bias ? (info.op == GGML_OP_MUL_MAT_ID ? GGML_OP_ADD_ID : GGML_OP_ADD) : info.op;
+
+                buft_list_t * buft_list = nullptr;
+                switch (info.layer) {
+                    case LLM_TENSOR_LAYER_INPUT:
+                        buft_list = pimpl->dev_input.buft_list;
+                        break;
+                    case LLM_TENSOR_LAYER_OUTPUT:
+                        buft_list = pimpl->dev_output.buft_list;
+                        break;
+                    case LLM_TENSOR_LAYER_REPEATING:
+                        buft_list = pimpl->dev_layer.at(req.tn.bid).buft_list;
+                        break;
+                    default:
+                        GGML_ABORT("invalid layer %d for tensor %s", info.layer, req.tn.str().c_str());
+                }
+
+                ggml_backend_buffer_type_t buft = select_weight_buft(hparams, *req.out, op, *buft_list);
+                if (!buft) {
+                    return nullptr;
+                }
+
+                auto * buft_dev = ggml_backend_buft_get_device(buft);
+                if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+                    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                    if (!cpu_dev) {
+                        throw std::runtime_error("no CPU backend found");
+                    }
+                    buft = ggml_backend_dev_buffer_type(cpu_dev);
+                }
+
+                //TODO: check buft overrides
+
+                if (!fused_buft) {
+                    fused_buft = buft;
+                } else if (fused_buft != buft) {
+                    return nullptr;
+                }
+            }
+
+            if (!fused_buft) {
+                return nullptr;
+            }
+
+            ggml_context * ctx = ctx_for_buft(fused_buft);
+
+            std::vector<ggml_tensor**> tensor_req{reqs.size()};
+
+            ggml_type type = tensor_metas[0]->type;
+            for (size_t i = 0; i < reqs.size(); ++i) {
+
+                // types are not same
+                if (tensor_metas[i]->type != type) {
+                    return nullptr;
+                }
+
+                const auto & req = reqs.begin()[i];
+                tensor_req[i] = req.out;
+            }
+
+            ggml_tensor * fused = ml.create_contiguous_tensor(ctx, fused_tn.str(), ne, tensor_req, 0);
+
+            return fused;
+        };
+
         layers.resize(n_layer);
 
         // TODO: move to a separate function
@@ -3297,9 +3407,19 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wqkv = create_contiguous(
+                                tn(LLM_TENSOR_ATTN_QKV, "weight", i),
+                                {n_embd, n_embd_head_k * n_head + n_embd_gqa * 2},
+                                {
+                                    { tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0, &layer.wq },
+                                    { tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0, &layer.wk },
+                                    { tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0, &layer.wv },
+                                });
+                        if (!layer.wqkv) {
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        }
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
@@ -3328,9 +3448,19 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
-                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wqkv = create_contiguous(
+                                tn(LLM_TENSOR_ATTN_QKV, "weight", i),
+                                {n_embd, n_embd_head_k * n_head + n_embd_gqa * 2},
+                                {
+                                    { tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0, &layer.wq },
+                                    { tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0, &layer.wk },
+                                    { tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0, &layer.wv },
+                                });
+                        if (!layer.wqkv) {
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        }
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
@@ -9388,18 +9518,15 @@ struct llm_build_qwen3 : public llm_graph_context {
             // self-attention
             {
                 // compute Q and K and RoPE them
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-                cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-                cb(Kcur, "Kcur", il);
+                ggml_tensor * Qcur = nullptr;
+                ggml_tensor * Kcur = nullptr;
+                ggml_tensor * Vcur = nullptr;
 
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-                cb(Vcur, "Vcur", il);
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                build_qkv(model.layers[il], cur, n_embd_head,
+                    n_embd_head_k, n_embd_head_v, n_head, n_head_kv,
+                    &Qcur, &Kcur, &Vcur, il
+                );
 
                 Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
                 cb(Qcur, "Qcur_normed", il);
@@ -9509,18 +9636,15 @@ struct llm_build_qwen3moe : public llm_graph_context {
             // self_attention
             {
                 // compute Q and K and RoPE them
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-                cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-                cb(Kcur, "Kcur", il);
+                ggml_tensor * Qcur = nullptr;
+                ggml_tensor * Kcur = nullptr;
+                ggml_tensor * Vcur = nullptr;
 
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-                cb(Vcur, "Vcur", il);
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                build_qkv(model.layers[il], cur, n_embd_head,
+                    n_embd_head_k, n_embd_head_v, n_head, n_head_kv,
+                    &Qcur, &Kcur, &Vcur, il
+                );
 
                 Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
                 cb(Qcur, "Qcur_normed", il);

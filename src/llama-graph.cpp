@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-model.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -630,6 +631,74 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     }
 
     return res;
+}
+
+static bool disable_fusion() {
+    const char * disable_fusion = getenv("LLAMA_GRAPH_DISABLE_FUSION");
+    return disable_fusion != nullptr && atoi(disable_fusion) != 0;
+}
+
+
+void llm_graph_context::build_qkv(const llama_layer & layer,
+                                      ggml_tensor       * cur,
+                                      int64_t             n_embd_head_q,
+                                      int64_t             n_embd_head_k,
+                                      int64_t             n_embd_head_v,
+                                      int32_t             n_head,
+                                      int32_t             n_head_kv,
+                                      ggml_tensor      ** q_out,
+                                      ggml_tensor      ** k_out,
+                                      ggml_tensor      ** v_out,
+                                      int                 il) const {
+    if (disable_fusion() || !layer.wqkv || (loras && !loras->empty())) {
+       *q_out = build_lora_mm(layer.wq, cur);
+       cb(*q_out, "Qcur", il);
+
+       *k_out = build_lora_mm(layer.wk, cur);
+       cb(*k_out, "Kcur", il);
+
+       *v_out = build_lora_mm(layer.wv, cur);
+       cb(*v_out, "Vcur", il);
+
+       *q_out = ggml_reshape_3d(ctx0, *q_out, n_embd_head_q, n_head,    n_tokens);
+       *k_out = ggml_reshape_3d(ctx0, *k_out, n_embd_head_k, n_head_kv, n_tokens);
+       *v_out = ggml_reshape_3d(ctx0, *v_out, n_embd_head_v, n_head_kv, n_tokens);
+
+       return;
+    }
+
+
+    ggml_tensor * qkv = ggml_mul_mat(ctx0, layer.wqkv, cur);
+    cb(qkv, "wqkv", il);
+
+    const int64_t q_offset = 0;
+    const int64_t k_offset = n_embd_head_q * n_head;
+    const int64_t v_offset = k_offset + n_embd_head_k * n_head_kv;
+    const size_t elt_size  = ggml_element_size(qkv);
+
+    ggml_tensor * Qcur = ggml_view_3d(
+            ctx0, qkv,
+            n_embd_head_q, n_head, n_tokens,
+            n_embd_head_q * elt_size, qkv->nb[1],
+            q_offset * elt_size);
+    ggml_tensor * Kcur = ggml_view_3d(
+            ctx0, qkv,
+            n_embd_head_k, n_head_kv, n_tokens,
+            n_embd_head_k * elt_size, qkv->nb[1],
+            k_offset * elt_size);
+    ggml_tensor * Vcur = ggml_view_3d(
+            ctx0, qkv,
+            n_embd_head_v, n_head_kv, n_tokens,
+            n_embd_head_v * elt_size, qkv->nb[1],
+            v_offset * elt_size);
+
+    cb(Qcur, "Qcur", il);
+    cb(Kcur, "Kcur", il);
+    cb(Vcur, "Vcur", il);
+
+    *q_out = Qcur;
+    *k_out = Kcur;
+    *v_out = Vcur;
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm_id(
