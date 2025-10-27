@@ -21,7 +21,6 @@ static void kernel_ssm_conv(
     const size_t total_work = d_inner * n_t * n_s;
     const size_t work_group_size = 256;
     const size_t num_work_groups = (total_work + work_group_size - 1) / work_group_size;
-    
     const range<1> global_range(num_work_groups * work_group_size);
     const range<1> local_range(work_group_size);
 
@@ -43,8 +42,8 @@ static void kernel_ssm_conv(
                 sumf += s[i0] * c[i0];
             }
             
-            const size_t dst_idx = seq * dst_stride_seq + 
-                                  token * dst_stride_token + 
+            const size_t dst_idx = seq * dst_stride_seq +
+                                  token * dst_stride_token +
                                   channel;
             dst_data[dst_idx] = sumf;
         });
@@ -73,7 +72,7 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->ne[2] == n_s);
     
     GGML_ASSERT(src0->nb[0] == sizeof(float));
-    GGML_ASSERT(src1->nb[0] == sizeof(float));  
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src0->nb[1] == src0->ne[0] * sizeof(float));
     
     const int src_stride_inner = ncs;
@@ -89,7 +88,6 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         float *dst_data = (float *) dst->data;
         
         GGML_ASSERT(src_data && weights && dst_data);
-        
         kernel_ssm_conv(
             *q, src_data, weights, dst_data,
             d_conv, d_inner, n_t, n_s, ncs,

@@ -4425,8 +4425,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GATED_LINEAR_ATTN:
             return true;
         case GGML_OP_SSM_CONV:
-            return op->type == GGML_TYPE_F32 && 
-                   op->src[0]->type == GGML_TYPE_F32 && 
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
                    op->src[1]->type == GGML_TYPE_F32;
         default:
             return false;
