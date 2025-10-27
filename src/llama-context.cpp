@@ -12,6 +12,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "thermal_control.h"
+
 //
 // llama_context
 //
@@ -957,6 +959,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
+
+    thermal_control_check();
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
