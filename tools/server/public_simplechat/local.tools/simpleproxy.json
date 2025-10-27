@@ -12,5 +12,6 @@
         "^duckduckgo\\.com$",
         ".*\\.google\\.com$",
         "^google\\.com$"
-    ]
+    ],
+    "bearer.insecure": "NeverSecure"
 }
