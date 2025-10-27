@@ -32,6 +32,7 @@ gMe = {
     '--port': 3128,
     '--config': '/dev/null',
     '--debug': False,
+    'bearer.transformed.year': "",
     'server': None
 }
 
@@ -44,6 +45,22 @@ gConfigType = {
 }
 
 gConfigNeeded = [ '--allowed.domains', '--bearer.insecure' ]
+
+
+def bearer_transform():
+    """
+    Transform the raw bearer token to the network handshaked token,
+    if and when needed.
+    """
+    global gMe
+    year = str(time.gmtime().tm_year)
+    if gMe['bearer.transformed.year'] == year:
+        return
+    import hashlib
+    s256 = hashlib.sha256(year.encode('utf-8'))
+    s256.update(gMe['--bearer.insecure'].encode('utf-8'))
+    gMe['--bearer.transformed'] = s256.hexdigest()
+    gMe['bearer.transformed.year'] = year
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -75,6 +92,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         Simple Bearer authorization
         ALERT: For multiple reasons, this is a very insecure implementation.
         """
+        bearer_transform()
         authline = self.headers['Authorization']
         if authline == None:
             return { 'AllOk': False, 'Msg': "No auth line" }
@@ -83,7 +101,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return { 'AllOk': False, 'Msg': "Invalid auth line" }
         if authlineA[0] != 'Bearer':
             return { 'AllOk': False, 'Msg': "Invalid auth type" }
-        if authlineA[1] != gMe['--bearer.insecure']:
+        if authlineA[1] != gMe['--bearer.transformed']:
             return { 'AllOk': False, 'Msg': "Invalid auth" }
         return { 'AllOk': True, 'Msg': "Auth Ok" }
 
@@ -93,17 +111,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         print(f"\n\n\nDBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
         print(f"DBUG:PH:Get:Headers:{self.headers}")
-        acGot = self.auth_check()
-        if not acGot['AllOk']:
-            self.send_error(400, f"WARN:{acGot['Msg']}")
-            return
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
         match pr.path:
             case '/urlraw':
-                handle_urlraw(self, pr)
+                acGot = self.auth_check()
+                if not acGot['AllOk']:
+                    self.send_error(400, f"WARN:{acGot['Msg']}")
+                else:
+                    handle_urlraw(self, pr)
             case '/urltext':
-                handle_urltext(self, pr)
+                acGot = self.auth_check()
+                if not acGot['AllOk']:
+                    self.send_error(400, f"WARN:{acGot['Msg']}")
+                else:
+                    handle_urltext(self, pr)
             case '/aum':
                 handle_aum(self, pr)
             case _:
