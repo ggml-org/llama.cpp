@@ -288,21 +288,21 @@ struct block_q3_K_packed16
 
 struct block_q4_K
 {
-    f16vec2 d;
+    f16vec2 dm;
     uint8_t scales[3*QUANT_K_Q4_K/64];
     uint8_t qs[QUANT_K_Q4_K/2];
 };
 
 struct block_q4_K_packed16
 {
-    f16vec2 d;
+    f16vec2 dm;
     uint16_t scales[3*QUANT_K_Q4_K/64/2];
     uint16_t qs[QUANT_K_Q4_K/2/2];
 };
 
 struct block_q4_K_packed32
 {
-    f16vec2 d;
+    f16vec2 dm;
     uint32_t scales[3*QUANT_K_Q4_K/64/4];
     uint32_t qs[QUANT_K_Q4_K/2/4];
 };

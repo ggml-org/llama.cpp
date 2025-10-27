@@ -14,9 +14,8 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint v_im, 
 
     [[unroll]] for (uint n = 0; n < num_rows; ++n) {
         const uint ib0 = a_offset / QUANT_K + (first_row+n)*num_blocks_per_row;
-        vec2 d = vec2(data_a[ib0 + i].d);
-        const FLOAT_TYPE dall = FLOAT_TYPE(d.x);
-        const FLOAT_TYPE dmin = FLOAT_TYPE(d.y);
+        const FLOAT_TYPE dall = FLOAT_TYPE(data_a[ib0 + i].dm.x);
+        const FLOAT_TYPE dmin = FLOAT_TYPE(data_a[ib0 + i].dm.y);
 
         const uint32_t scale0_u32 = data_a_packed16[ib0 + i].scales[v_im    ];
         const uint32_t scale4_u32 = data_a_packed16[ib0 + i].scales[v_im + 2];

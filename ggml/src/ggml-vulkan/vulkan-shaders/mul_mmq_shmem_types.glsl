@@ -26,16 +26,23 @@ struct block_a_cache {
 };
 #elif defined(DATA_A_Q8_0)
 #define QUANT_R_MMQ 1
+// AMD likes 4, Intel likes 1 and Nvidia likes 2
+#define BK_STEP 4
 struct block_a_cache {
     int32_t qs[32/4];
     FLOAT_TYPE dm;
 };
 #elif defined(DATA_A_Q2_K)
 #define QUANT_R_MMQ 4
-struct block_a_cache
-{
+struct block_a_cache {
     uint32_t qs[2];
     u8vec2 scales;
+    FLOAT_TYPE_VEC2 dm;
+};
+#elif defined(DATA_A_Q4_K)
+#define QUANT_R_MMQ 2
+struct block_a_cache {
+    uint32_t qs[4];
     FLOAT_TYPE_VEC2 dm;
 };
 #endif
