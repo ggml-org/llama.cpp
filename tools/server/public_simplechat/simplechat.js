@@ -45,7 +45,7 @@ class ApiEP {
  */
 
 /**
- * @typedef {{role: string, content: string, tool_calls: Array<NSToolCalls>}} NSChatMessage
+ * @typedef {{role: string, content: string, reasoning_content: string, tool_calls: Array<NSToolCalls>}} NSChatMessage
  */
 
 class ChatMessageEx {
@@ -54,12 +54,13 @@ class ChatMessageEx {
      * Represent a Message in the Chat
      * @param {string} role
      * @param {string} content
+     * @param {string} reasoning_content
      * @param {Array<any>} tool_calls
      * @param {string} trimmedContent
      */
-    constructor(role = "", content="", tool_calls=[], trimmedContent="") {
+    constructor(role = "", content="", reasoning_content="", tool_calls=[], trimmedContent="") {
         /** @type {NSChatMessage} */
-        this.ns = { role: role, content: content, tool_calls: tool_calls }
+        this.ns = { role: role, content: content, tool_calls: tool_calls, reasoning_content: reasoning_content }
         this.trimmedContent = trimmedContent;
     }
 
@@ -68,12 +69,13 @@ class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(old.ns.role, old.ns.content, old.ns.tool_calls, old.trimmedContent)
+        return new ChatMessageEx(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.trimmedContent)
     }
 
     clear() {
         this.ns.role = "";
         this.ns.content = "";
+        this.ns.reasoning_content = "";
         this.ns.tool_calls = [];
         this.trimmedContent = "";
     }
@@ -182,6 +184,7 @@ class ChatMessageEx {
                     }
                 } else {
                     let toolCalls = nwo["choices"][0]["delta"]["tool_calls"];
+                    let reasoningContent = nwo["choices"][0]["delta"]["reasoning_content"];
                     if (toolCalls !== undefined) {
                         if (toolCalls[0]["function"]["name"] !== undefined) {
                             this.ns.tool_calls.push(toolCalls[0]);
@@ -196,6 +199,9 @@ class ChatMessageEx {
                                 this.ns.tool_calls[0].function.arguments += toolCalls[0]["function"]["arguments"];
                             }
                         }
+                    }
+                    if (reasoningContent !== undefined) {
+                        this.ns.reasoning_content += reasoningContent
                     }
                 }
             }
@@ -221,6 +227,10 @@ class ChatMessageEx {
                     this.ns.content = curContent;
                 }
             }
+            let curRC = nwo["choices"][0]["message"]["reasoning_content"];
+            if (curRC != undefined) {
+                this.ns.reasoning_content = curRC;
+            }
             let curTCs = nwo["choices"][0]["message"]["tool_calls"];
             if (curTCs != undefined) {
                 this.ns.tool_calls = curTCs;
@@ -242,10 +252,21 @@ class ChatMessageEx {
     }
 
     content_equiv() {
+        let reasoning = ""
+        if (this.ns.reasoning_content.trim() !== "") {
+            reasoning = this.ns.reasoning_content.trim()
+        }
         if (this.ns.content !== "") {
+            if (reasoning !== "") {
+                return `!!!Reasoning: ${reasoning}!!! ${this.ns.content}`;
+            }
             return this.ns.content;
         } else if (this.has_toolcall()) {
-            return `<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>`;
+            let ret = ""
+            if (reasoning !== "") {
+                ret = `!!!Reasoning: ${reasoning}!!!`
+            }
+            return `${ret}<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>`;
         } else {
             return ""
         }
@@ -325,7 +346,7 @@ class SimpleChat {
                 let tcur = /** @type {OldChatMessage} */(/** @type {unknown} */(cur));
                 this.xchat.push(new ChatMessageEx(tcur.role, tcur.content))
             } else {
-                this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.tool_calls, cur.trimmedContent))
+                this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.trimmedContent))
             }
         }
     }
@@ -393,6 +414,9 @@ class SimpleChat {
             let tmsg = ChatMessageEx.newFrom(msg);
             if (!tmsg.has_toolcall()) {
                 tmsg.ns_delete("tool_calls")
+            }
+            if (tmsg.ns.reasoning_content.trim() === "") {
+                tmsg.ns_delete("reasoning_content")
             }
             if (tmsg.ns.role == Roles.Tool) {
                 let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.content)
@@ -471,6 +495,10 @@ class SimpleChat {
         let last = undefined;
         for(const x of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
             if (x.ns.role != Roles.ToolTemp) {
+                if (x.ns.reasoning_content.trim() === "") {
+                    let entry = ui.el_create_append_p(`>>${x.ns.role}!<<: ${x.ns.reasoning_content}`, div);
+                    entry.className = `role-${x.ns.role}`;
+                }
                 let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
                 entry.className = `role-${x.ns.role}`;
                 last = entry;
