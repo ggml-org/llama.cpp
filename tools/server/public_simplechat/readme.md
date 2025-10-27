@@ -89,7 +89,12 @@ remember to
   content like head, scripts, styles, headers, footers, ... Be careful when accessing web through this and
   use it only with known safe sites.
 
-  * it allows one to specify a white list of allowed.domains, look into local.tools/simpleproxy.json
+  * look into local.tools/simpleproxy.json for specifying
+
+    * the white list of allowed.domains
+    * the shared bearer token between server and client ui
+
+
 
 ### using the front end
 
@@ -227,6 +232,10 @@ It is attached to the document object. Some of these can also be updated using t
       remember to enable this only for GenAi/LLM models which support tool/function calling.
 
     * proxyUrl - specify the address for the running instance of bundled local.tools/simpleproxy.py
+
+    * proxyAuthInsecure - shared token between simpleproxy.py server and client ui, for accessing service provided by it.
+
+      Shared token is currently hashed with the current year and inturn handshaked over the network. In future if required one could also include a dynamic token provided by simpleproxy server during /aum handshake and running counter or so into hashed token. ALERT: However do remember that currently the handshake occurs over http and not https, so others can snoop the network and get token. Per client ui running counter and random dynamic token can help mitigate things to some extent, if required in future.
 
     * searchUrl - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
 
@@ -419,7 +428,8 @@ The bundled simple proxy
   * tools/server/public_simplechat/local.tools/simpleproxy.py
 
 * it provides for a basic white list of allowed domains to access, to be specified by the end user.
-  This should help limit web access to a safe set of sites determined by the end user.
+  This should help limit web access to a safe set of sites determined by the end user. There is also
+  a provision for shared bearer token to be specified by the end user.
 
 * it tries to mimic the client/browser making the request to it by propogating header entries like
   user-agent, accept and accept-language from the got request to the generated request during proxying
