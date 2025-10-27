@@ -194,7 +194,7 @@ namespace console {
         }
     }
 
-    void write_console(const char* format, ...) {
+    void write_console(const char * format, ...) {
         va_list args;
         va_start(args, format);
         vfprintf(out, format, args);

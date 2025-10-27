@@ -21,10 +21,10 @@ namespace console {
     const char * get_display_color();
     bool readline(std::string & line, bool multiline_input);
 
-    void write_console(const char* format, ...);
+    void write_console(const char * format, ...);
 
     template<typename... Args>
-    void write(const char* format, Args... args) {
+    void write(const char * format, Args... args) {
         if (get_display() == user_input || !common_log_is_active(common_log_main())) {
             write_console(format, args...);
 
@@ -35,7 +35,7 @@ namespace console {
         }
     }
 
-    inline void write(const char* data) {
+    inline void write(const char * data) {
         write("%s", data);
     }
 
