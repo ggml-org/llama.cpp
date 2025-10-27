@@ -407,11 +407,21 @@ class SimpleChat {
 
     /**
      * Add an entry into xchat.
+     * If the last message in chat history is a ToolTemp message, discard it
+     * as the runtime logic is asking for adding new message instead of promoting the tooltemp message.
+     *
      * NOTE: A new copy is created and added into xchat.
      * Also update iLastSys system prompt index tracker
      * @param {ChatMessageEx} chatMsg
      */
     add(chatMsg) {
+        if (this.xchat.length > 0) {
+            let lastIndex = this.xchat.length - 1;
+            if (this.xchat[lastIndex].ns.role == Roles.ToolTemp) {
+                console.debug("DBUG:SimpleChat:Add:Discarding prev ToolTemp message...")
+                this.xchat.pop()
+            }
+        }
         this.xchat.push(ChatMessageEx.newFrom(chatMsg));
         if (chatMsg.ns.role == Roles.System) {
             this.iLastSys = this.xchat.length - 1;
