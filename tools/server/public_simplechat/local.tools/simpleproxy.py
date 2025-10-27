@@ -32,6 +32,13 @@ gMe = {
     'server': None
 }
 
+gConfigType = {
+    '--port': 'int',
+    '--config': 'str',
+    '--debug': 'bool',
+    '--allowed.domains': 'list'
+}
+
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     """
@@ -318,7 +325,18 @@ def load_config():
     with open(gMe['--config']) as f:
         cfg = json.load(f)
         for k in cfg:
-            gMe[f"--{k}"] = cfg[k]
+            try:
+                cArg = f"--{k}"
+                aTypeCheck = gConfigType[cArg]
+                aValue = cfg[k]
+                aType = type(aValue).__name__
+                if aType != aTypeCheck:
+                    print(f"ERRR:LoadConfig:{k}:expected type [{aTypeCheck}] got type [{aType}]")
+                    exit(112)
+                gMe[cArg] = aValue
+            except KeyError:
+                print(f"ERRR:LoadConfig:{k}:UnknownCommand")
+                exit(113)
 
 
 def process_args(args: list[str]):
@@ -327,38 +345,25 @@ def process_args(args: list[str]):
     Helper to process command line arguments
     """
     global gMe
-    gMe['INTERNAL.ProcessArgs.Malformed'] = []
-    gMe['INTERNAL.ProcessArgs.Unknown'] = []
     iArg = 1
     while iArg < len(args):
         cArg = args[iArg]
         if (not cArg.startswith("--")):
-            gMe['INTERNAL.ProcessArgs.Malformed'].append(cArg)
-            print(f"WARN:ProcessArgs:{iArg}:IgnoringMalformedCommandOr???:{cArg}")
+            print(f"ERRR:ProcessArgs:{iArg}:{cArg}:MalformedCommandOr???")
+            exit(101)
+        try:
+            aTypeCheck = gConfigType[cArg]
             iArg += 1
-            continue
-        match cArg:
-            case '--port':
-                iArg += 1
-                gMe[cArg] = int(args[iArg])
-                iArg += 1
-            case '--config':
-                iArg += 1
-                gMe[cArg] = args[iArg]
-                iArg += 1
-                load_config()
-            case '--allowed.domains':
-                iArg += 1
-                gMe[cArg] = ast.literal_eval(args[iArg])
-                iArg += 1
-            case '--debug':
-                iArg += 1
-                gMe[cArg] = ast.literal_eval(args[iArg])
-                iArg += 1
-            case _:
-                gMe['INTERNAL.ProcessArgs.Unknown'].append(cArg)
-                print(f"WARN:ProcessArgs:{iArg}:IgnoringUnknownCommand:{cArg}")
-                iArg += 1
+            aValue = ast.literal_eval(args[iArg])
+            aType = type(aValue).__name__
+            if aType != aTypeCheck:
+                print(f"ERRR:ProcessArgs:{iArg}:{cArg}:expected type [{aTypeCheck}] got type [{aType}]")
+                exit(102)
+            gMe[cArg] = aValue
+            iArg += 1
+        except KeyError:
+            print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand")
+            exit(103)
     print(gMe)
 
 
