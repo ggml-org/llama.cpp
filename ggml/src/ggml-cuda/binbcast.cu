@@ -54,7 +54,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3);
     const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3.z);
 
-    if (i0s >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3.z) {
+    if (i0s >= (uint32_t)ne0 || i1 >= (uint32_t)ne1 || i2 >= (uint32_t)ne2 || i3 >= ne3.z) {
         return;
     }
 
@@ -272,7 +272,7 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         const uint3 ne12 = init_fastdiv_values((uint32_t) cne1[2]);
         const uint3 ne13 = init_fastdiv_values((uint32_t) cne1[3]);
 
-        if (block_nums.z > 65535) {
+        if (block_nums.z > 65535 || block_nums.y > 65535) {
             int         block_num  = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
             const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
             const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));

@@ -18,8 +18,8 @@
 #extension GL_EXT_bfloat16 : enable
 #endif
 
-#include "types.comp"
-#include "utils.comp"
+#include "types.glsl"
+#include "utils.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -71,7 +71,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 #if QUANT_K > 1
 #define DECODEFUNCA , dequantFuncA
 
-#include "dequant_funcs_cm2.comp"
+#include "dequant_funcs_cm2.glsl"
 
 #else
 #define DECODEFUNCA
@@ -265,7 +265,6 @@ void main() {
     tensorLayoutNV<2> tensorLayoutB = createTensorLayoutNV(2);
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutBClamp = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutD = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
-    tensorLayoutD = setTensorLayoutStrideNV(tensorLayoutD, p.stride_d, 1);
 
 #if QUANT_K > 1
     tensorLayoutA = setTensorLayoutBlockSizeNV(tensorLayoutA, 1, QUANT_K);
@@ -280,6 +279,8 @@ void main() {
     tensorLayoutD = setTensorLayoutDimensionNV(tensorLayoutD, p.N, p.M);
     tensorLayoutAClamp = setTensorLayoutDimensionNV(tensorLayoutAClamp, p.M, end_k);
     tensorLayoutBClamp = setTensorLayoutDimensionNV(tensorLayoutBClamp, p.padded_N, end_k);
+
+    tensorLayoutD = setTensorLayoutStrideNV(tensorLayoutD, p.stride_d, 1);
 
     tensorViewNV<2, false, 1, 0> tensorViewTranspose = createTensorViewNV(2, false, 1, 0);
 

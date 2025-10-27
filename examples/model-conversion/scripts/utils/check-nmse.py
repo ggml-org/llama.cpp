@@ -67,7 +67,7 @@ def main():
     parser.add_argument('-m', '--model-path', required=True,  help='Path to the model directory')
     args = parser.parse_args()
 
-    model_name = os.path.splitext(os.path.basename(args.model_path))[0]
+    model_name = os.path.basename(args.model_path)
     data_dir = Path("data")
 
     pytorch_file = data_dir / f"pytorch-{model_name}.bin"

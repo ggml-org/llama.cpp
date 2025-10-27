@@ -36,6 +36,31 @@
 		children: []
 	};
 
+	const assistantWithReasoning: DatabaseMessage = {
+		id: '3',
+		convId: 'conv-1',
+		type: 'message',
+		timestamp: Date.now() - 1000 * 60 * 2,
+		role: 'assistant',
+		content: "Here's the concise answer, now that I've thought it through carefully for you.",
+		parent: '1',
+		thinking:
+			"Let's consider the user's question step by step:\\n\\n1. Identify the core problem\\n2. Evaluate relevant information\\n3. Formulate a clear answer\\n\\nFollowing this process ensures the final response stays focused and accurate.",
+		children: []
+	};
+	const rawOutputMessage: DatabaseMessage = {
+		id: '6',
+		convId: 'conv-1',
+		type: 'message',
+		timestamp: Date.now() - 1000 * 60,
+		role: 'assistant',
+		content:
+			'<|channel|>analysis<|message|>User greeted me. Initiating overcomplicated analysis: Is this a trap? No, just a normal hello. Respond calmly, act like a helpful assistant, and do not start explaining quantum physics again. Confidence 0.73. Engaging socially acceptable greeting protocol...<|end|>Hello there! How can I help you today?',
+		parent: '1',
+		thinking: '',
+		children: []
+	};
+
 	let processingMessage = $state({
 		id: '4',
 		convId: 'conv-1',
@@ -66,6 +91,10 @@
 	args={{
 		message: userMessage
 	}}
+	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', false);
+	}}
 />
 
 <Story
@@ -74,15 +103,45 @@
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		message: assistantMessage
 	}}
+	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', false);
+	}}
 />
 
 <Story
-	name="WithThinkingBlock"
+	name="AssistantWithReasoning"
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: assistantWithReasoning
+	}}
+	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', false);
+	}}
+/>
+
+<Story
+	name="RawLlmOutput"
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		message: rawOutputMessage
+	}}
+	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', true);
+	}}
+/>
+
+<Story
+	name="WithReasoningContent"
 	args={{
 		message: streamingMessage
 	}}
 	asChild
 	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', false);
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
 			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
@@ -133,14 +192,16 @@
 		message: processingMessage
 	}}
 	play={async () => {
+		const { updateConfig } = await import('$lib/stores/settings.svelte');
+		updateConfig('disableReasoningFormat', false);
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');
-		
+
 		// Set loading state to true to trigger the processing UI
 		chatStore.isLoading = true;
-		
+
 		// Simulate the processing state hook behavior
 		// This will show the "Generating..." text and parameter details
-		await new Promise(resolve => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}}
 />

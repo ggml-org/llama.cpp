@@ -206,7 +206,7 @@ public:
 
 class llm_graph_input_cls : public llm_graph_input_i {
 public:
-    llm_graph_input_cls(const llama_cparams & cparams) : cparams(cparams) {}
+    llm_graph_input_cls(const llama_cparams & cparams, const llm_arch arch) : cparams(cparams), arch(arch) {}
     virtual ~llm_graph_input_cls() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -214,6 +214,7 @@ public:
     ggml_tensor * cls; // I32 [n_batch]
 
     const llama_cparams cparams;
+    const llm_arch arch;
 };
 
 class llm_graph_input_rs : public llm_graph_input_i {
@@ -256,10 +257,14 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    ggml_tensor * get_kq_mask() const { return kq_mask_cnv; }
+    ggml_tensor * get_kq_mask()     const { return self_kq_mask_cnv; }
+    ggml_tensor * get_kq_mask_swa() const { return self_kq_mask_swa_cnv; }
 
-    ggml_tensor * kq_mask     = nullptr; // F32 [n_tokens, n_batch, 1, 1]
-    ggml_tensor * kq_mask_cnv = nullptr; //     [n_tokens, n_batch, 1, 1]
+    // n_tokens == n_batch
+    ggml_tensor * self_kq_mask         = nullptr; // F32 [n_tokens, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_cnv     = nullptr; //     [n_tokens, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_swa     = nullptr; // F32 [n_tokens, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_swa_cnv = nullptr; //     [n_tokens, n_batch/n_stream, 1, n_stream]
 
     const llama_hparams hparams;
     const llama_cparams cparams;
@@ -813,6 +818,14 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b) const;
+
+    //
+    // dense (out)
+    //
+
+    void build_dense_out(
+            ggml_tensor * dense_2,
+            ggml_tensor * dense_3) const;
 };
 
 // TODO: better name
