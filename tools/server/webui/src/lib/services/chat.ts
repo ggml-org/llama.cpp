@@ -1,4 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { slotsService } from './slots';
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
@@ -13,7 +14,7 @@ import { slotsService } from './slots';
  *   - Manages streaming and non-streaming response parsing
  *   - Provides request abortion capabilities
  *   - Converts database messages to API format
- *   - Handles error translation and context detection
+ *   - Handles error translation for server responses
  *
  * - **ChatStore**: Stateful orchestration and UI state management
  *   - Uses ChatService for all AI model communication
@@ -26,11 +27,10 @@ import { slotsService } from './slots';
  * - Streaming response handling with real-time callbacks
  * - Reasoning content extraction and processing
  * - File attachment processing (images, PDFs, audio, text)
- * - Context error detection and reporting
  * - Request lifecycle management (abort, cleanup)
  */
 export class ChatService {
-	private abortController: AbortController | null = null;
+	private abortControllers: Map<string, AbortController> = new Map();
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -44,13 +44,16 @@ export class ChatService {
 	 */
 	async sendMessage(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
-		options: SettingsChatServiceOptions = {}
+		options: SettingsChatServiceOptions = {},
+		conversationId?: string
 	): Promise<string | void> {
 		const {
 			stream,
 			onChunk,
 			onComplete,
 			onError,
+			onReasoningChunk,
+			onModel,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -78,25 +81,27 @@ export class ChatService {
 			timings_per_token
 		} = options;
 
-		// Cancel any ongoing request and create a new abort controller
-		this.abort();
-		this.abortController = new AbortController();
+		const currentConfig = config();
 
-		// Convert database messages with attachments to API format if needed
+		const requestId = conversationId || 'default';
+
+		if (this.abortControllers.has(requestId)) {
+			this.abortControllers.get(requestId)?.abort();
+		}
+
+		const abortController = new AbortController();
+		this.abortControllers.set(requestId, abortController);
+
 		const normalizedMessages: ApiChatMessageData[] = messages
 			.map((msg) => {
-				// Check if this is a DatabaseMessage by checking for DatabaseMessage-specific fields
 				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-					// This is a DatabaseMessage, convert it
 					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 					return ChatService.convertMessageToChatServiceData(dbMsg);
 				} else {
-					// This is already an ApiChatMessageData object
 					return msg as ApiChatMessageData;
 				}
 			})
 			.filter((msg) => {
-				// Filter out empty system messages
 				if (msg.role === 'system') {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
@@ -106,7 +111,6 @@ export class ChatService {
 				return true;
 			});
 
-		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(normalizedMessages);
 
 		const requestBody: ApiChatCompletionRequest = {
@@ -117,12 +121,20 @@ export class ChatService {
 			stream
 		};
 
-		requestBody.reasoning_format = 'auto';
+		const modelSelectorEnabled = Boolean(currentConfig.modelSelectorEnabled);
+		const activeModel = modelSelectorEnabled ? selectedModelName() : null;
+
+		if (modelSelectorEnabled && activeModel) {
+			requestBody.model = activeModel;
+		}
+
+		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
-		// Set max_tokens to -1 (infinite) if not provided or empty
-		requestBody.max_tokens =
-			max_tokens !== undefined && max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		if (max_tokens !== undefined) {
+			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
+			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
@@ -161,7 +173,6 @@ export class ChatService {
 		}
 
 		try {
-			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
 			const response = await fetch(`./v1/chat/completions`, {
@@ -171,11 +182,10 @@ export class ChatService {
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				},
 				body: JSON.stringify(requestBody),
-				signal: this.abortController.signal
+				signal: abortController.signal
 			});
 
 			if (!response.ok) {
-				// Use the new parseErrorResponse method to handle structured errors
 				const error = await this.parseErrorResponse(response);
 				if (onError) {
 					onError(error);
@@ -184,15 +194,19 @@ export class ChatService {
 			}
 
 			if (stream) {
-				return this.handleStreamResponse(
+				await this.handleStreamResponse(
 					response,
 					onChunk,
 					onComplete,
 					onError,
-					options.onReasoningChunk
+					onReasoningChunk,
+					onModel,
+					conversationId,
+					abortController.signal
 				);
+				return;
 			} else {
-				return this.handleNonStreamResponse(response, onComplete, onError);
+				return this.handleNonStreamResponse(response, onComplete, onError, onModel);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -207,10 +221,13 @@ export class ChatService {
 					userFriendlyError = new Error(
 						'Unable to connect to server - please check if the server is running'
 					);
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ECONNREFUSED')) {
 					userFriendlyError = new Error('Connection refused - server may be offline');
+					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ETIMEDOUT')) {
-					userFriendlyError = new Error('Request timeout - server may be overloaded');
+					userFriendlyError = new Error('Request timed out - the server took too long to respond');
+					userFriendlyError.name = 'TimeoutError';
 				} else {
 					userFriendlyError = error;
 				}
@@ -223,18 +240,19 @@ export class ChatService {
 				onError(userFriendlyError);
 			}
 			throw userFriendlyError;
+		} finally {
+			this.abortControllers.delete(requestId);
 		}
 	}
 
 	/**
-	 * Handles streaming response from the chat completion API.
-	 * Processes server-sent events and extracts content chunks from the stream.
-	 *
-	 * @param response - The fetch Response object containing the streaming data
+	 * Handles streaming response from the chat completion API
+	 * @param response - The Response object from the fetch request
 	 * @param onChunk - Optional callback invoked for each content chunk received
 	 * @param onComplete - Optional callback invoked when the stream is complete with full response
 	 * @param onError - Optional callback invoked if an error occurs during streaming
 	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
+	 * @param conversationId - Optional conversation ID for per-conversation state tracking
 	 * @returns {Promise<void>} Promise that resolves when streaming is complete
 	 * @throws {Error} if the stream cannot be read or parsed
 	 */
@@ -247,7 +265,10 @@ export class ChatService {
 			timings?: ChatMessageTimings
 		) => void,
 		onError?: (error: Error) => void,
-		onReasoningChunk?: (chunk: string) => void
+		onReasoningChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void,
+		conversationId?: string,
+		abortSignal?: AbortSignal
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -256,43 +277,45 @@ export class ChatService {
 		}
 
 		const decoder = new TextDecoder();
-		let fullResponse = '';
+		let aggregatedContent = '';
 		let fullReasoningContent = '';
-		let regularContent = '';
-		let insideThinkTag = false;
 		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
+		let streamFinished = false;
+		let modelEmitted = false;
 
 		try {
 			let chunk = '';
 			while (true) {
+				if (abortSignal?.aborted) break;
+
 				const { done, value } = await reader.read();
 				if (done) break;
 
+				if (abortSignal?.aborted) break;
+
 				chunk += decoder.decode(value, { stream: true });
 				const lines = chunk.split('\n');
-				chunk = lines.pop() || ''; // Save incomplete line for next read
+				chunk = lines.pop() || '';
 
 				for (const line of lines) {
+					if (abortSignal?.aborted) break;
+
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
-							if (!hasReceivedData && fullResponse.length === 0) {
-								const contextError = new Error(
-									'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-								);
-								contextError.name = 'ContextError';
-								onError?.(contextError);
-								return;
-							}
-
-							onComplete?.(regularContent, fullReasoningContent || undefined, lastTimings);
-
-							return;
+							streamFinished = true;
+							continue;
 						}
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+
+							const chunkModel = this.extractModelName(parsed);
+							if (chunkModel && !modelEmitted) {
+								modelEmitted = true;
+								onModel?.(chunkModel);
+							}
 
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
@@ -300,9 +323,7 @@ export class ChatService {
 							const promptProgress = parsed.prompt_progress;
 
 							if (timings || promptProgress) {
-								this.updateProcessingState(timings, promptProgress);
-
-								// Store the latest timing data
+								this.updateProcessingState(timings, promptProgress, conversationId);
 								if (timings) {
 									lastTimings = timings;
 								}
@@ -310,48 +331,37 @@ export class ChatService {
 
 							if (content) {
 								hasReceivedData = true;
-								fullResponse += content;
-
-								// Track the regular content before processing this chunk
-								const regularContentBefore = regularContent;
-
-								// Process content character by character to handle think tags
-								insideThinkTag = this.processContentForThinkTags(
-									content,
-									insideThinkTag,
-									() => {
-										// Think content is ignored - we don't include it in API requests
-									},
-									(regularChunk) => {
-										regularContent += regularChunk;
-									}
-								);
-
-								const newRegularContent = regularContent.slice(regularContentBefore.length);
-								if (newRegularContent) {
-									onChunk?.(newRegularContent);
+								aggregatedContent += content;
+								if (!abortSignal?.aborted) {
+									onChunk?.(content);
 								}
 							}
 
 							if (reasoningContent) {
 								hasReceivedData = true;
 								fullReasoningContent += reasoningContent;
-								onReasoningChunk?.(reasoningContent);
+								if (!abortSignal?.aborted) {
+									onReasoningChunk?.(reasoningContent);
+								}
 							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
 						}
 					}
 				}
+
+				if (abortSignal?.aborted) break;
 			}
 
-			if (!hasReceivedData && fullResponse.length === 0) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				return;
+			if (abortSignal?.aborted) return;
+
+			if (streamFinished) {
+				if (!hasReceivedData && aggregatedContent.length === 0) {
+					const noResponseError = new Error('No response received from server. Please try again.');
+					throw noResponseError;
+				}
+
+				onComplete?.(aggregatedContent, fullReasoningContent || undefined, lastTimings);
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
@@ -381,21 +391,24 @@ export class ChatService {
 			reasoningContent?: string,
 			timings?: ChatMessageTimings
 		) => void,
-		onError?: (error: Error) => void
+		onError?: (error: Error) => void,
+		onModel?: (model: string) => void
 	): Promise<string> {
 		try {
 			const responseText = await response.text();
 
 			if (!responseText.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
+
+			const responseModel = this.extractModelName(data);
+			if (responseModel) {
+				onModel?.(responseModel);
+			}
+
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 
@@ -404,22 +417,14 @@ export class ChatService {
 			}
 
 			if (!content.trim()) {
-				const contextError = new Error(
-					'The request exceeds the available context size. Try increasing the context size or enable context shift.'
-				);
-				contextError.name = 'ContextError';
-				onError?.(contextError);
-				throw contextError;
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
 			}
 
 			onComplete?.(content, reasoningContent);
 
 			return content;
 		} catch (error) {
-			if (error instanceof Error && error.name === 'ContextError') {
-				throw error;
-			}
-
 			const err = error instanceof Error ? error : new Error('Parse error');
 
 			onError?.(err);
@@ -480,6 +485,19 @@ export class ChatService {
 			contentParts.push({
 				type: 'text',
 				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
+			});
+		}
+
+		// Handle legacy 'context' type from old webui (pasted content)
+		const legacyContextFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
+				extra.type === 'context'
+		);
+
+		for (const legacyContextFile of legacyContextFiles) {
+			contentParts.push({
+				type: 'text',
+				text: `\n\n--- File: ${legacyContextFile.name} ---\n${legacyContextFile.content}`
 			});
 		}
 
@@ -553,60 +571,23 @@ export class ChatService {
 	}
 
 	/**
-	 * Processes content to separate thinking tags from regular content.
-	 * Parses <think> and </think> tags to route content to appropriate handlers.
-	 *
-	 * @param content - The content string to process
-	 * @param currentInsideThinkTag - Current state of whether we're inside a think tag
-	 * @param addThinkContent - Callback to handle content inside think tags
-	 * @param addRegularContent - Callback to handle regular content outside think tags
-	 * @returns Boolean indicating if we're still inside a think tag after processing
-	 * @private
-	 */
-	private processContentForThinkTags(
-		content: string,
-		currentInsideThinkTag: boolean,
-		addThinkContent: (chunk: string) => void,
-		addRegularContent: (chunk: string) => void
-	): boolean {
-		let i = 0;
-		let insideThinkTag = currentInsideThinkTag;
-
-		while (i < content.length) {
-			if (!insideThinkTag && content.substring(i, i + 7) === '<think>') {
-				insideThinkTag = true;
-				i += 7; // Skip the <think> tag
-				continue;
-			}
-
-			if (insideThinkTag && content.substring(i, i + 8) === '</think>') {
-				insideThinkTag = false;
-				i += 8; // Skip the </think> tag
-				continue;
-			}
-
-			if (insideThinkTag) {
-				addThinkContent(content[i]);
-			} else {
-				addRegularContent(content[i]);
-			}
-
-			i++;
-		}
-
-		return insideThinkTag;
-	}
-
-	/**
 	 * Aborts any ongoing chat completion request.
 	 * Cancels the current request and cleans up the abort controller.
 	 *
 	 * @public
 	 */
-	public abort(): void {
-		if (this.abortController) {
-			this.abortController.abort();
-			this.abortController = null;
+	public abort(conversationId?: string): void {
+		if (conversationId) {
+			const abortController = this.abortControllers.get(conversationId);
+			if (abortController) {
+				abortController.abort();
+				this.abortControllers.delete(conversationId);
+			}
+		} else {
+			for (const controller of this.abortControllers.values()) {
+				controller.abort();
+			}
+			this.abortControllers.clear();
 		}
 	}
 
@@ -658,56 +639,72 @@ export class ChatService {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
 
-			if (errorData.error?.type === 'exceed_context_size_error') {
-				const contextError = errorData.error as ApiContextSizeError;
-				const error = new Error(contextError.message);
-				error.name = 'ContextError';
-				// Attach structured context information
-				(
-					error as Error & {
-						contextInfo?: { promptTokens: number; maxContext: number; estimatedTokens: number };
-					}
-				).contextInfo = {
-					promptTokens: contextError.n_prompt_tokens,
-					maxContext: contextError.n_ctx,
-					estimatedTokens: contextError.n_prompt_tokens
-				};
-				return error;
-			}
-
-			// Fallback for other error types
 			const message = errorData.error?.message || 'Unknown server error';
-			return new Error(message);
+			const error = new Error(message);
+			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
+
+			return error;
 		} catch {
-			// If we can't parse the error response, return a generic error
-			return new Error(`Server error (${response.status}): ${response.statusText}`);
+			const fallback = new Error(`Server error (${response.status}): ${response.statusText}`);
+			fallback.name = 'HttpError';
+			return fallback;
 		}
 	}
 
-	/**
-	 * Updates the processing state with timing information from the server response
-	 * @param timings - Timing data from the API response
-	 * @param promptProgress - Progress data from the API response
-	 */
+	private extractModelName(data: unknown): string | undefined {
+		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+			return typeof value === 'object' && value !== null
+				? (value as Record<string, unknown>)
+				: undefined;
+		};
+
+		const getTrimmedString = (value: unknown): string | undefined => {
+			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+		};
+
+		const root = asRecord(data);
+		if (!root) return undefined;
+
+		// 1) root (some implementations provide `model` at the top level)
+		const rootModel = getTrimmedString(root.model);
+		if (rootModel) return rootModel;
+
+		// 2) streaming choice (delta) or final response (message)
+		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+		if (!firstChoice) return undefined;
+
+		// priority: delta.model (first chunk) else message.model (final response)
+		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+		if (deltaModel) return deltaModel;
+
+		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+		if (messageModel) return messageModel;
+
+		// avoid guessing from non-standard locations (metadata, etc.)
+		return undefined;
+	}
+
 	private updateProcessingState(
 		timings?: ChatMessageTimings,
-		promptProgress?: ChatMessagePromptProgress
+		promptProgress?: ChatMessagePromptProgress,
+		conversationId?: string
 	): void {
-		// Calculate tokens per second from timing data
 		const tokensPerSecond =
 			timings?.predicted_ms && timings?.predicted_n
 				? (timings.predicted_n / timings.predicted_ms) * 1000
 				: 0;
 
-		// Update slots service with timing data (async but don't wait)
 		slotsService
-			.updateFromTimingData({
-				prompt_n: timings?.prompt_n || 0,
-				predicted_n: timings?.predicted_n || 0,
-				predicted_per_second: tokensPerSecond,
-				cache_n: timings?.cache_n || 0,
-				prompt_progress: promptProgress
-			})
+			.updateFromTimingData(
+				{
+					prompt_n: timings?.prompt_n || 0,
+					predicted_n: timings?.predicted_n || 0,
+					predicted_per_second: tokensPerSecond,
+					cache_n: timings?.cache_n || 0,
+					prompt_progress: promptProgress
+				},
+				conversationId
+			)
 			.catch((error) => {
 				console.warn('Failed to update processing state:', error);
 			});

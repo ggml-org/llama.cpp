@@ -70,11 +70,19 @@
 
 // function constants offsets
 #define FC_FLASH_ATTN_EXT_PAD          100
-#define FC_FLASH_ATTN_EXT              200
-#define FC_FLASH_ATTN_EXT_VEC          300
-#define FC_FLASH_ATTN_EXT_VEC_REDUCE   400
-#define FC_MUL_MV                      500
-#define FC_MUL_MM                      600
+#define FC_FLASH_ATTN_EXT_BLK          200
+#define FC_FLASH_ATTN_EXT              300
+#define FC_FLASH_ATTN_EXT_VEC          400
+#define FC_FLASH_ATTN_EXT_VEC_REDUCE   500
+#define FC_MUL_MV                      600
+#define FC_MUL_MM                      700
+
+// op-specific constants
+#define OP_FLASH_ATTN_EXT_NQPTG 8
+#define OP_FLASH_ATTN_EXT_NCPSG 64
+
+#define OP_FLASH_ATTN_EXT_VEC_NQPTG 1
+#define OP_FLASH_ATTN_EXT_VEC_NCPSG 32
 
 // kernel argument structs
 //
@@ -243,6 +251,7 @@ typedef struct {
     int32_t  sect_1;
     int32_t  sect_2;
     int32_t  sect_3;
+    bool     src2;
 } ggml_metal_kargs_rope;
 
 typedef struct {
@@ -262,6 +271,17 @@ typedef struct {
     uint64_t nb32;
     uint64_t nb33;
 } ggml_metal_kargs_flash_attn_ext_pad;
+
+typedef struct {
+    int32_t  ne01;
+    int32_t  ne30;
+    int32_t  ne31;
+    int32_t  ne32;
+    int32_t  ne33;
+    uint64_t nb31;
+    uint64_t nb32;
+    uint64_t nb33;
+} ggml_metal_kargs_flash_attn_ext_blk;
 
 typedef struct {
     int32_t  ne01;
@@ -495,6 +515,19 @@ typedef struct {
 } ggml_metal_kargs_conv_transpose_1d;
 
 typedef struct {
+    int32_t  IC;
+    int32_t  IH;
+    int32_t  IW;
+    int32_t  KH;
+    int32_t  KW;
+    int32_t  OC;
+    int32_t  s0;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+} ggml_metal_kargs_conv_transpose_2d;
+
+typedef struct {
     uint64_t  ofs0;
     uint64_t  ofs1;
     int32_t  IW;
@@ -524,6 +557,10 @@ typedef struct{
     float    alpha;
     float    limit;
 } ggml_metal_kargs_glu;
+
+typedef struct {
+    uint64_t np;
+} ggml_metal_kargs_sum;
 
 typedef struct {
     int64_t  ne00;
@@ -753,5 +790,13 @@ typedef struct {
      int64_t ne00;
     uint64_t nb01;
 } ggml_metal_kargs_argmax;
+
+typedef struct {
+    int64_t  np;
+} ggml_metal_kargs_opt_step_adamw;
+
+typedef struct {
+    int64_t  np;
+} ggml_metal_kargs_opt_step_sgd;
 
 #endif // GGML_METAL_IMPL

@@ -72,6 +72,8 @@ struct llama_hparams {
     uint32_t n_ff_chexp         = 0;
     uint32_t n_expert_shared    = 0;
     uint32_t n_norm_groups      = 0;
+    uint32_t n_expert_groups    = 0;
+    uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
 
     float    expert_group_scale   = 0.05f;
@@ -168,6 +170,12 @@ struct llama_hparams {
     uint32_t i_altup_act  = 0; // altup_active_idx
     uint32_t laurel_rank  = 64;
     uint32_t n_embd_altup = 256;
+
+    // needed for sentence-transformers dense layers
+    uint32_t dense_2_feat_in  = 0;  // in_features of the 2_Dense
+    uint32_t dense_2_feat_out = 0;  // out_features of the 2_Dense
+    uint32_t dense_3_feat_in  = 0;  // in_features of the 3_Dense
+    uint32_t dense_3_feat_out = 0;  // out_features of the 3_Dense
 
     // xIELU
     std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;

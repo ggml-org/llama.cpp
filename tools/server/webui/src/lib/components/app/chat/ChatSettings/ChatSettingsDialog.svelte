@@ -4,18 +4,19 @@
 		Funnel,
 		AlertTriangle,
 		Brain,
-		Cog,
+		Code,
 		Monitor,
 		Sun,
 		Moon,
 		ChevronLeft,
-		ChevronRight
+		ChevronRight,
+		Database
 	} from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
+	import ImportExportTab from './ImportExportTab.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { config, updateMultipleConfig, resetConfig } from '$lib/stores/settings.svelte';
+	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
@@ -80,13 +81,68 @@
 					key: 'showModelInfo',
 					label: 'Show model information',
 					type: 'checkbox'
+				},
+				{
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
+					type: 'checkbox'
 				}
 			]
 		},
 		{
-			title: 'Samplers',
+			title: 'Sampling',
 			icon: Funnel,
 			fields: [
+				{
+					key: 'temperature',
+					label: 'Temperature',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_range',
+					label: 'Dynamic temperature range',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_exponent',
+					label: 'Dynamic temperature exponent',
+					type: 'input'
+				},
+				{
+					key: 'top_k',
+					label: 'Top K',
+					type: 'input'
+				},
+				{
+					key: 'top_p',
+					label: 'Top P',
+					type: 'input'
+				},
+				{
+					key: 'min_p',
+					label: 'Min P',
+					type: 'input'
+				},
+				{
+					key: 'xtc_probability',
+					label: 'XTC probability',
+					type: 'input'
+				},
+				{
+					key: 'xtc_threshold',
+					label: 'XTC threshold',
+					type: 'input'
+				},
+				{
+					key: 'typ_p',
+					label: 'Typical P',
+					type: 'input'
+				},
+				{
+					key: 'max_tokens',
+					label: 'Max tokens',
+					type: 'input'
+				},
 				{
 					key: 'samplers',
 					label: 'Samplers',
@@ -152,58 +208,23 @@
 			]
 		},
 		{
-			title: 'Advanced',
-			icon: Cog,
+			title: 'Import/Export',
+			icon: Database,
+			fields: []
+		},
+		{
+			title: 'Developer',
+			icon: Code,
 			fields: [
 				{
-					key: 'temperature',
-					label: 'Temperature',
-					type: 'input'
+					key: 'modelSelectorEnabled',
+					label: 'Enable model selector',
+					type: 'checkbox'
 				},
 				{
-					key: 'dynatemp_range',
-					label: 'Dynamic temperature range',
-					type: 'input'
-				},
-				{
-					key: 'dynatemp_exponent',
-					label: 'Dynamic temperature exponent',
-					type: 'input'
-				},
-				{
-					key: 'top_k',
-					label: 'Top K',
-					type: 'input'
-				},
-				{
-					key: 'top_p',
-					label: 'Top P',
-					type: 'input'
-				},
-				{
-					key: 'min_p',
-					label: 'Min P',
-					type: 'input'
-				},
-				{
-					key: 'xtc_probability',
-					label: 'XTC probability',
-					type: 'input'
-				},
-				{
-					key: 'xtc_threshold',
-					label: 'XTC threshold',
-					type: 'input'
-				},
-				{
-					key: 'typ_p',
-					label: 'Typical P',
-					type: 'input'
-				},
-				{
-					key: 'max_tokens',
-					label: 'Max tokens',
-					type: 'input'
+					key: 'disableReasoningFormat',
+					label: 'Show raw LLM output',
+					type: 'checkbox'
 				},
 				{
 					key: 'custom',
@@ -256,16 +277,13 @@
 	}
 
 	function handleReset() {
-		resetConfig();
+		localConfig = { ...config() };
 
-		localConfig = { ...SETTING_CONFIG_DEFAULT };
-
-		setMode(SETTING_CONFIG_DEFAULT.theme as 'light' | 'dark' | 'system');
-		originalTheme = SETTING_CONFIG_DEFAULT.theme as string;
+		setMode(localConfig.theme as 'light' | 'dark' | 'system');
+		originalTheme = localConfig.theme as string;
 	}
 
 	function handleSave() {
-		// Validate custom JSON if provided
 		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
 			try {
 				JSON.parse(localConfig.custom);
@@ -449,21 +467,25 @@
 
 			<ScrollArea class="max-h-[calc(100dvh-13.5rem)] flex-1 md:max-h-[calc(100vh-13.5rem)]">
 				<div class="space-y-6 p-4 md:p-6">
-					<div>
+					<div class="grid">
 						<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
 							<currentSection.icon class="h-5 w-5" />
 
 							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 						</div>
 
-						<div class="space-y-6">
-							<ChatSettingsFields
-								fields={currentSection.fields}
-								{localConfig}
-								onConfigChange={handleConfigChange}
-								onThemeChange={handleThemeChange}
-							/>
-						</div>
+						{#if currentSection.title === 'Import/Export'}
+							<ImportExportTab />
+						{:else}
+							<div class="space-y-6">
+								<ChatSettingsFields
+									fields={currentSection.fields}
+									{localConfig}
+									onConfigChange={handleConfigChange}
+									onThemeChange={handleThemeChange}
+								/>
+							</div>
+						{/if}
 					</div>
 
 					<div class="mt-8 border-t pt-6">

@@ -7,6 +7,7 @@
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
+		ChatErrorDialog,
 		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
@@ -22,10 +23,11 @@
 		activeMessages,
 		activeConversation,
 		deleteConversation,
+		dismissErrorDialog,
+		errorDialog,
 		isLoading,
 		sendMessage,
-		stopGeneration,
-		setMaxContextError
+		stopGeneration
 	} from '$lib/stores/chat.svelte';
 	import {
 		supportsVision,
@@ -34,7 +36,6 @@
 		serverWarning,
 		serverStore
 	} from '$lib/stores/server.svelte';
-	import { contextService } from '$lib/services';
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 	import { isFileTypeSupported } from '$lib/utils/file-type';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
@@ -79,7 +80,10 @@
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
+	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
+
+	let isCurrentConversationLoading = $derived(isLoading());
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
@@ -102,6 +106,12 @@
 		dragCounter--;
 		if (dragCounter === 0) {
 			isDragOver = false;
+		}
+	}
+
+	function handleErrorDialogOpenChange(open: boolean) {
+		if (!open) {
+			dismissErrorDialog();
 		}
 	}
 
@@ -183,21 +193,6 @@
 
 		const extras = result?.extras;
 
-		// Check context limit using real-time slots data
-		const contextCheck = await contextService.checkContextLimit();
-
-		if (contextCheck && contextCheck.wouldExceed) {
-			const errorMessage = contextService.getContextErrorMessage(contextCheck);
-
-			setMaxContextError({
-				message: errorMessage,
-				estimatedTokens: contextCheck.currentUsage,
-				maxContext: contextCheck.maxContext
-			});
-
-			return false;
-		}
-
 		// Enable autoscroll for user-initiated message sending
 		userScrolledUp = false;
 		autoScrollEnabled = true;
@@ -261,7 +256,7 @@
 	});
 
 	$effect(() => {
-		if (isLoading() && autoScrollEnabled) {
+		if (isCurrentConversationLoading && autoScrollEnabled) {
 			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
 		} else if (scrollInterval) {
 			clearInterval(scrollInterval);
@@ -312,7 +307,7 @@
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
-					isLoading={isLoading()}
+					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
@@ -355,7 +350,7 @@
 
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
-					isLoading={isLoading()}
+					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
@@ -459,6 +454,13 @@
 			emptyFileNames = [];
 		}
 	}}
+/>
+
+<ChatErrorDialog
+	message={activeErrorDialog?.message ?? ''}
+	onOpenChange={handleErrorDialogOpenChange}
+	open={Boolean(activeErrorDialog)}
+	type={activeErrorDialog?.type ?? 'server'}
 />
 
 <style>

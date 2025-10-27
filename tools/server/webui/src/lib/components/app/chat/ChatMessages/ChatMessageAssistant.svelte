@@ -10,6 +10,7 @@
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { modelName as serverModelName } from '$lib/stores/server.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
 
 	interface Props {
@@ -70,6 +71,23 @@
 	}: Props = $props();
 
 	const processingState = useProcessingState();
+	let currentConfig = $derived(config());
+	let serverModel = $derived(serverModelName());
+	let displayedModel = $derived((): string | null => {
+		if (!currentConfig.showModelInfo) return null;
+
+		if (currentConfig.modelSelectorEnabled) {
+			return message.model ?? null;
+		}
+
+		return serverModel;
+	});
+
+	function handleCopyModel() {
+		const model = displayedModel();
+
+		void copyToClipboard(model ?? '');
+	}
 </script>
 
 <div
@@ -131,14 +149,18 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		<MarkdownContent content={messageContent || ''} />
+		{#if config().disableReasoningFormat}
+			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else}
+			<MarkdownContent content={messageContent || ''} />
+		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
 			{messageContent}
 		</div>
 	{/if}
 
-	{#if config().showModelInfo && message.model}
+	{#if displayedModel()}
 		<span class="mt-6 mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground">
 			<Package class="h-3.5 w-3.5" />
 
@@ -146,9 +168,9 @@
 
 			<button
 				class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-				onclick={() => copyToClipboard(message.model)}
+				onclick={handleCopyModel}
 			>
-				{message.model}
+				{displayedModel()}
 
 				<Copy class="ml-1 h-3 w-3 " />
 			</button>
@@ -202,5 +224,22 @@
 		to {
 			background-position: -200% 0;
 		}
+	}
+
+	.raw-output {
+		width: 100%;
+		max-width: 48rem;
+		margin-top: 1.5rem;
+		padding: 1rem 1.25rem;
+		border-radius: 1rem;
+		background: hsl(var(--muted) / 0.3);
+		color: var(--foreground);
+		font-family:
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
+		font-size: 0.875rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		word-break: break-word;
 	}
 </style>

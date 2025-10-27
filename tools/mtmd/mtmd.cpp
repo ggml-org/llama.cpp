@@ -275,6 +275,11 @@ struct mtmd_context {
             img_beg = "<img>";
             img_end = "</img>";
 
+        } else if (proj == PROJECTOR_TYPE_LIGHTONOCR) {
+            // <|im_start|> ... (image embeddings) ... <|im_end|>
+            img_beg = "<|im_start|>";
+            img_end = "<|im_end|>";
+
         }
     }
 
