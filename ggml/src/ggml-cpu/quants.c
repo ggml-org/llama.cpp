@@ -109,11 +109,10 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
     assert(k % QK_K == 0);
     block_ifairy * GGML_RESTRICT y = vy;
 
-    const int64_t n = k / 2;  // Number of complex elements
-    float * x_real = (float *)malloc(n * sizeof(float));
-    float * x_imag = (float *)malloc(n * sizeof(float));
+    float * x_real = (float *)malloc(k * sizeof(float));
+    float * x_imag = (float *)malloc(k * sizeof(float));
 
-    for (int64_t i = 0; i < n; ++i) {
+    for (int64_t i = 0; i < k; ++i) {
         float* x_com = x + i;
 
         ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
@@ -123,7 +122,7 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
         x_imag[i] = GGML_BF16_TO_FP32(x_imag_bf16);
     }
 
-    quantize_row_ifairy_ref(x_real, x_imag, y, n);
+    quantize_row_ifairy_ref(x_real, x_imag, y, k);
 
     free(x_real);
     free(x_imag);
@@ -444,15 +443,22 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 // Complex 2-bit quantization dot product for Fairy±i model
 // Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
 // We use q8_K for both real and imaginary activation parts stored sequentially
-void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+// Complex 2-bit quantization dot product with ARM NEON acceleration for iFairy
+// Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i)) 
+// 共轭乘法
+// where w_r, w_i are 2-bit quantized weights
+// and a_r, a_i are activations stored in separate q8_K blocks
+void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
+                            const void * GGML_RESTRICT vx, size_t bx,
+                            const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
-
-    const block_ifairy * GGML_RESTRICT x = vx;
-    const block_ifairy_q16 * GGML_RESTRICT y = vy;
+#if defined(__ARM_NEON)
+    const block_ifairy * GGML_RESTRICT weight = vx;
+    const block_ifairy_q16 * GGML_RESTRICT x = vy;
 
     const int nb = n / QK_K;
 
@@ -460,43 +466,52 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     float sum_imag = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
-        // x: 权重矩阵, y: 激活向量
+        int32x4_t sum_ac = vdupq_n_s32(0);
+        int32x4_t sum_bd = vdupq_n_s32(0);
+        int32x4_t sum_ad = vdupq_n_s32(0);
+        int32x4_t sum_bc = vdupq_n_s32(0);
 
-        int32_t sum_ac = 0;
-        int32_t sum_bd = 0;
-        int32_t sum_ad = 0;
-        int32_t sum_bc = 0;
-        
-        for (size_t j = 0; j < sizeof(x->qs); j += 32) { // sizeof 512
+        for (size_t j = 0; j < sizeof(weight->qs); j += 32) {
             for (size_t k = 0; k < 32; ++k) {
+                // 解包权重
+                uint8_t w = weight->qs[j + k];
+                int8x8_t w_vec;
+                int8x8_t c_vec, d_vec;
                 for (size_t l = 0; l < 4; ++l) {
-                    // a: real_w, b: imag_w, c: real_x, d: imag_x
-                    int8_t w = (x[i].qs[j + k] >> (l*2)) & 3;
-                    // todo_tbr: q8k 激活量化方式 
-                    int8_t c = y[i].x_real[(j + k) * 4 + l];
-                    int8_t d = y[i].x_imag[(j + k) * 4 + l];
-
-                    if      (w == 1) sum_ac += c, sum_ad += d;
-                    else if (w == 0) sum_ac -= c, sum_ad -= d;
-                    else if (w == 3) sum_bc += c, sum_bd += d;
-                    else if (w == 2) sum_bc -= c, sum_bd -= d;
+                    int8_t w_val = (w >> (l*2)) & 3;
+                    int8_t c = x[i].x_real[(j + k) * 4 + l];
+                    int8_t d = x[i].x_imag[(j + k) * 4 + l];
+                    // NEON 并行累加
+                    if      (w_val == 1) { sum_ac = vaddq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vaddq_s32(sum_ad, vdupq_n_s32(d)); }
+                    else if (w_val == 0) { sum_ac = vsubq_s32(sum_ac, vdupq_n_s32(c)); sum_ad = vsubq_s32(sum_ad, vdupq_n_s32(d)); }
+                    else if (w_val == 3) { sum_bc = vaddq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vaddq_s32(sum_bd, vdupq_n_s32(d)); }
+                    else if (w_val == 2) { sum_bc = vsubq_s32(sum_bc, vdupq_n_s32(c)); sum_bd = vsubq_s32(sum_bd, vdupq_n_s32(d)); }
                 }
             }
         }
+        // NEON 累加到标量
+        int32_t ac = vaddvq_s32(sum_ac);
+        int32_t bd = vaddvq_s32(sum_bd);
+        int32_t ad = vaddvq_s32(sum_ad);
+        int32_t bc = vaddvq_s32(sum_bc);
 
         // Apply scales
-        const float d_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-        const float d_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
-        const float scale_real = d_real * y[i].d_real;
-        const float scale_imag = d_imag * y[i].d_imag;
+        const float weight_real = GGML_CPU_FP16_TO_FP32(weight[i].d_real);
+        const float weight_imag = GGML_CPU_FP16_TO_FP32(weight[i].d_imag);
+        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
         // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += scale_real * (float)sum_ac - scale_imag * (float)sum_bd;
-        sum_imag += scale_real * (float)sum_ad + scale_imag * (float)sum_bc;
+        sum_real += weight_real * x_real * (float)ac - weight_imag * x_imag * (float)bd;
+        sum_imag += weight_real * x_imag * (float)ad + weight_imag * x_real * (float)bc;
     }
-    
+
     ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
     ((ggml_bf16_t*)s)[1] = GGML_FP32_TO_BF16(sum_imag);
+
+#else  // 非ARM平台，回退到标量实现
+    ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
 }
 
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {

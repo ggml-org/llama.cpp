@@ -1468,14 +1468,14 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
         int32_t bc = vaddvq_s32(sum_bc);
 
         // Apply scales
-        const float d_real = GGML_CPU_FP16_TO_FP32(weight[i].d_real);
-        const float d_imag = GGML_CPU_FP16_TO_FP32(weight[i].d_imag);
-        const float scale_real = d_real * x[i].d_real;
-        const float scale_imag = d_imag * x[i].d_imag;
+        const float weight_real = GGML_CPU_FP16_TO_FP32(weight[i].d_real);
+        const float weight_imag = GGML_CPU_FP16_TO_FP32(weight[i].d_imag);
+        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
         // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += scale_real * (float)ac - scale_imag * (float)bd;
-        sum_imag += scale_real * (float)ad + scale_imag * (float)bc;
+        sum_real += weight_real * x_real * (float)ac - weight_imag * x_imag * (float)bd;
+        sum_imag += weight_real * x_imag * (float)ad + weight_imag * x_real * (float)bc;
     }
 
     ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
