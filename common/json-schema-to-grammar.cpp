@@ -603,7 +603,8 @@ private:
     std::string _resolve_ref(const std::string & ref) {
         auto it = ref.find('#');
         std::string ref_fragment = it != std::string::npos ? ref.substr(it + 1) : ref;
-        std::string ref_name = "ref" + std::regex_replace(ref_fragment, std::regex(R"([^a-zA-Z0-9-])"), "-");
+        static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
+        std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(ref) == _refs_being_resolved.end()) {
             _refs_being_resolved.insert(ref);
             json resolved = _refs[ref];

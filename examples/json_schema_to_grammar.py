@@ -557,7 +557,7 @@ class SchemaConverter:
 
     def _resolve_ref(self, ref):
         ref_fragment = ref.split('#')[-1]
-        ref_name = 'ref' + re.sub(r'[^a-zA-Z0-9-]', '-', ref_fragment)
+        ref_name = 'ref' + re.sub(r'[^a-zA-Z0-9-]+', '-', ref_fragment)
         if ref_name not in self._rules and ref not in self._refs_being_resolved:
             self._refs_being_resolved.add(ref)
             resolved = self._refs[ref]

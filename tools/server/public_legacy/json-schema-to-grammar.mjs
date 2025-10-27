@@ -599,7 +599,7 @@ export class SchemaConverter {
 
   _resolveRef(ref) {
     let refFragment = ref.split('#').pop();
-    let refName = 'ref' + refFragment.replace(/[^a-zA-Z0-9-]/, '-');
+    let refName = 'ref' + refFragment.replace(/[^a-zA-Z0-9-]+/g, '-');
     if (!(refName in this._rules) && !this._refsBeingResolved.has(ref)) {
       this._refsBeingResolved.add(ref);
       const resolved = this._refs[ref];
