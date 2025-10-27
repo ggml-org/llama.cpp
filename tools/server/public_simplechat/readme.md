@@ -226,7 +226,7 @@ It is attached to the document object. Some of these can also be updated using t
 
       remember to enable this only for GenAi/LLM models which support tool/function calling.
 
-    * fetchProxyUrl - specify the address for the running instance of bundled local.tools/simpleproxy.py
+    * proxyUrl - specify the address for the running instance of bundled local.tools/simpleproxy.py
 
     * searchUrl - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
 
@@ -411,7 +411,7 @@ manner by dropping head block as well as all scripts/styles/footers/headers/nav 
 dropping the html tags.
 
 The client ui logic does a simple check to see if the bundled simpleproxy is running at specified
-fetchProxyUrl before enabling these web and related tool calls.
+proxyUrl before enabling these web and related tool calls.
 
 The bundled simple proxy
 
