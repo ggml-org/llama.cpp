@@ -1013,6 +1013,7 @@ int main(int argc, char ** argv) {
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
+    ggml_backend_cleanup();
 
     llama_backend_free();
 
