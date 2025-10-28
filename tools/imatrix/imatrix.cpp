@@ -278,63 +278,48 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
 
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
-
-    // compute the Cosine Similarity between the same tensors in consecutive layers
     for (auto & ts : tstats) {
-        ts.cossim = 0;
-
-        if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
-            const int blk = std::stoi(match[1]);
-            if (blk <= 0) { continue; }
-            std::string tname(ts.tensor);
-            tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
-            auto prev = std::find_if(tstats.begin(), tstats.end(),
-                [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev == tstats.end()) { continue; }
-            const auto curr_avg = compute_tensor_averages(ts.stats);
-            const auto prev_avg = compute_tensor_averages(prev->stats);
-            if (curr_avg.size() == prev_avg.size() && !curr_avg.empty()) {
-                float dot_prod = 0.0f;
-                float vec1 = 0.0f;
-                float vec2 = 0.0f;
-                for (size_t i = 0; i < curr_avg.size(); ++i) {
-                    dot_prod += curr_avg[i] * prev_avg[i];
-                    vec1  += curr_avg[i] * curr_avg[i];
-                    vec2  += prev_avg[i] * prev_avg[i];
-                }
-                if (vec1 > 0 && vec2 > 0) {
-                    float cs = dot_prod / (std::sqrt(vec1) * std::sqrt(vec2));
-                    cs = std::min(cs, 1.0f);
-                    cs = std::max(cs, -1.0f);
-                    ts.cossim = cs;
-                }
-            }
-        }
-    }
-
-    // compute the L2 Norm (Euclidian Distance) between the same tensors in consecutive layers
-    for (auto & ts : tstats) {
+        ts.cossim = 0.0f;
         ts.l2_norm = 0.0f;
-        if (ts.stats.activations.empty()) { continue; }
 
         if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
             const int blk = std::stoi(match[1]);
             if (blk <= 0) { continue; }
             std::string tname(ts.tensor);
             tname.replace(match.position(1), match.length(1), std::to_string(blk - 1));
-            auto prev = std::find_if(tstats.begin(), tstats.end(),
+            auto prev_it = std::find_if(tstats.begin(), tstats.end(),
                 [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev == tstats.end()) { continue; }
-            const auto cur_avg = compute_tensor_averages(ts.stats);
-            const auto prev_avg = compute_tensor_averages(prev->stats);
-            if (cur_avg.empty() || prev_avg.empty() || cur_avg.size() != prev_avg.size()) { continue; }
+            if (prev_it == tstats.end()) { continue; }
 
-            float dist = 0.0;
-            for (size_t i = 0; i < cur_avg.size(); ++i) {
-                const float act = cur_avg[i] - prev_avg[i];
-                dist += act * act;
+            const auto curr_avg = compute_tensor_averages(ts.stats);
+            const auto prev_avg = compute_tensor_averages(prev_it->stats);
+            if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
+
+            float dot_prod = 0.0f;
+            float norm1_sq = 0.0f;
+            float norm2_sq = 0.0f;
+            float l2_dist_sq = 0.0f;
+
+            for (size_t i = 0; i < curr_avg.size(); ++i) {
+                const float c_val = curr_avg[i];
+                const float p_val = prev_avg[i];
+                dot_prod += c_val * p_val;
+                norm1_sq += c_val * c_val;
+                norm2_sq += p_val * p_val;
+                const float diff = c_val - p_val;
+                l2_dist_sq += diff * diff;
             }
-            ts.l2_norm = std::sqrt(dist);
+
+            // Compute Cosine Similarity
+            if (norm1_sq > 0.0f && norm2_sq > 0.0f) {
+                float cs = dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq));
+                cs = std::min(cs, 1.0f);
+                cs = std::max(cs, -1.0f);
+                ts.cossim = cs;
+            }
+
+            // Compute L2 Norm (Euclidean Distance)
+            ts.l2_norm = std::sqrt(l2_dist_sq);
         }
     }
 }
@@ -347,56 +332,58 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         std::vector<float> curr_avg;
         std::vector<float> prev_avg;
     };
+
     static const std::regex pattern(R"(blk\.(\d+)\.)");
     std::unordered_map<std::string, const tensor_statistics*> tidx;
     tidx.reserve(tstats.size());
     for (const auto & ts : tstats) { tidx[ts.tensor] = &ts; }
-    std::map<int, layer_aggregation> taggr;
 
+    std::map<int, layer_aggregation> agr;
     for (const auto & ts : tstats) {
         std::smatch match;
-        if (!std::regex_search(ts.tensor, match, pattern)) continue;
+        if (!std::regex_search(ts.tensor, match, pattern)) { continue; }
         const int blk = std::stoi(match[1]);
-        if (blk <= 0) continue;
+        if (blk <= 0) { continue; }
         std::string prev_lyr(ts.tensor);
         prev_lyr.replace(match.position(1), match.length(1), std::to_string(blk-1));
-        if (auto it_prev = tidx.find(prev_lyr); it_prev == tidx.end()) continue;
+        if (auto it_prev = tidx.find(prev_lyr); it_prev == tidx.end()) { continue; }
         const auto curr_avg = compute_tensor_averages(stats_map.at(ts.tensor));
         const auto prev_avg = compute_tensor_averages(stats_map.at(prev_lyr));
-        if (curr_avg.empty() || prev_avg.empty() || curr_avg.size() != prev_avg.size()) continue;
-        auto & [curr, prev] = taggr[blk];
+        if (curr_avg.empty() || prev_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
+        auto & [curr, prev] = agr[blk];
         curr.insert(curr.end(), curr_avg.begin(), curr_avg.end());
         prev.insert(prev.end(), prev_avg.begin(), prev_avg.end());
     }
 
-    // compute the aggregated Cosine Similarity between consecutive layers
-    for (auto & kv : taggr) {
+    for (auto & kv : agr) {
         const auto & curr = kv.second.curr_avg;
         const auto & prev = kv.second.prev_avg;
-        if (curr.size() != prev.size() || curr.empty()) continue;
-        float dot_prod = 0.0;
-        float layer1   = 0.0;
-        float layer2   = 0.0;
-        for (size_t i = 0; i < curr.size(); ++i) {
-            dot_prod += curr[i] * prev[i];
-            layer1  += curr[i] * curr[i];
-            layer2  += prev[i] * prev[i];
-        }
-        float cossim = 0.0f;
-        if (layer1 > 0.0 && layer2 > 0.0) cossim = dot_prod / (std::sqrt(layer1) * std::sqrt(layer2));
-        layer_cossim[kv.first] = cossim;
-    }
+        if (curr.size() != prev.size() || curr.empty()) { continue; }
 
-    // compute the aggregated L2 Norm (Euclidian Distance) between consecutive layers
-    for (auto & kv : taggr) {
-        const auto & curr = kv.second.curr_avg;
-        const auto & prev = kv.second.prev_avg;
-        if (curr.size() != prev.size() || curr.empty()) continue;
-        float dist = 0.0f;
+        float dot_prod = 0.0f;
+        float norm1_sq = 0.0f;
+        float norm2_sq = 0.0f;
+        float l2_dist_sq = 0.0f;
+
         for (size_t i = 0; i < curr.size(); ++i) {
-            dist += (curr[i] - prev[i]) * (curr[i] - prev[i]);
+            const float c_val = curr[i];
+            const float p_val = prev[i];
+            dot_prod += c_val * p_val;
+            norm1_sq += c_val * c_val;
+            norm2_sq += p_val * p_val;
+            const float diff = c_val - p_val;
+            l2_dist_sq += diff * diff;
         }
-        layer_l2_norm[kv.first] = std::sqrt(dist);
+
+        // Compute aggregated Cosine Similarity
+        float cossim = 0.0f;
+        if (norm1_sq > 0.0f && norm2_sq > 0.0f) {
+            cossim = dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq));
+        }
+        layer_cossim[kv.first] = cossim;
+
+        // Compute aggregated L2 Norm (Euclidean Distance)
+        layer_l2_norm[kv.first] = std::sqrt(l2_dist_sq);
     }
 }
 
@@ -1370,7 +1357,8 @@ static bool show_statistics(const common_params & params) {
         const float ecs = 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(std::fabs(tstat.cossim), 10.0f);
 
         LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
-            layer.c_str(), name.c_str(),
+            layer.c_str(),
+            name.c_str(),
             legacy_mode ? tstat.sum_values : tstat.l2_norm,
             tstat.min_values,
             tstat.max_values,
@@ -1400,8 +1388,8 @@ static bool show_statistics(const common_params & params) {
     std::map<int, float> layer_l2_norm;
     compute_layer_statistics(ts, layer_cossim, layer_l2_norm, g_collector.get_mstats());
 
-    const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
-    LOG_INF("\nComputing layer statistics (%ld layers)\n", layers);
+    const size_t layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
+    LOG_INF("\nComputing layer statistics (%zu layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
         "Layer",
         legacy_mode ? "Σ(Act²)" : "L₂ Norm",
