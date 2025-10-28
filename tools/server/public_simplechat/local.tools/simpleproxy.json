@@ -37,7 +37,8 @@
         "^theprint\\.in$",
         ".*\\.ndtv\\.com$",
         "^lwn\\.net$",
-        "^arstechnica\\.com$"
+        "^arstechnica\\.com$",
+        ".*\\.github\\.com$"
     ],
     "bearer.insecure": "NeverSecure"
 }
