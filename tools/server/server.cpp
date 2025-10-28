@@ -2946,17 +2946,15 @@ struct server_context {
             SLT_DBG(slot, "%s", "stopped by EOS\n");
         }
 
-        const auto n_ctx_train = llama_model_n_ctx_train(model);
-
-        if (slot.task->params.n_predict < 1 && slot.n_prompt_tokens() + slot.n_decoded >= n_ctx_train) {
+        if (slot.task->params.n_predict < 1 && slot.n_prompt_tokens() + slot.n_decoded >= slot.n_ctx) {
             slot.truncated      = true;
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false; // stop prediction
 
             SLT_WRN(slot,
                     "n_predict (%d) is set for infinite generation. "
-                    "Limiting generated tokens to n_ctx_train (%d) to avoid EOS-less generation infinite loop\n",
-                    slot.task->params.n_predict, n_ctx_train);
+                    "Limiting generated tokens to slot.n_ctx (%d) to avoid EOS-less generation infinite loop\n",
+                    slot.task->params.n_predict, slot.n_ctx);
         }
 
         SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", slot.n_decoded, slot.n_remaining, result.tok, token_str.c_str());
