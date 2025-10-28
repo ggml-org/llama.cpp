@@ -2234,7 +2234,7 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
                               ACL_MEM_MALLOC_HUGE_FIRST));
 
         acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
-                                                         theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
+                                                         theta_scale_ne, theta_scale_nb, 1);
 
         float start      = 0;
         float step       = 1;
@@ -2251,7 +2251,7 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
             yarn_ramp_allocator.alloc(theta_scale_length * sizeof(float));
             void * yarn_ramp_buffer = yarn_ramp_allocator.get();
             acl_yarn_ramp_tensor   = ggml_cann_create_tensor(yarn_ramp_buffer, ACL_FLOAT, sizeof(float), theta_scale_ne,
-                                                             theta_scale_nb, GGML_MAX_DIMS);
+                                                             theta_scale_nb, 1);
             float       zero_value = 0, one_value = 1;
             float       denom_safe_value = MAX(0.001f, corr_dims[1] - corr_dims[0]);
             aclScalar * low              = aclCreateScalar(&corr_dims[0], aclDataType::ACL_FLOAT);
