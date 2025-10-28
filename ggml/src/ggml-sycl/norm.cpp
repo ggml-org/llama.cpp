@@ -567,14 +567,14 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
                 }
 
                 // warp-level reduction
-                sycl::float2 xx = sycl::float2(sum_xx, 
+                sycl::float2 xx = sycl::float2(sum_xx,
 #ifndef GGML_SYCL_RMS_BACK_FAST
                     c_xx
 #else
                     0.f
 #endif
                 );
-                sycl::float2 xg = sycl::float2(sum_xg, 
+                sycl::float2 xg = sycl::float2(sum_xg,
 #ifndef GGML_SYCL_RMS_BACK_FAST
                     c_xg
 #else

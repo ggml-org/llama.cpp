@@ -3831,7 +3831,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_LEAKY_RELU:
             ggml_sycl_leaky_relu(ctx, dst);
-            break;   
+            break;
         case GGML_OP_RMS_NORM_BACK:
             ggml_sycl_rms_norm_back(ctx, dst);
             break;
