@@ -179,28 +179,40 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         activations.reserve(e.values.size());
 
         for (int i = 0; i < n_mat; ++i) {
+            const float c = (float)e.counts[i];
+            const size_t off = i * row_size;
             for (int j = 0; j < row_size; ++j) {
-                activations.push_back(e.values[i*row_size + j] / e.counts[i]);
+                if (c <= 0.0f) {
+                    activations.push_back(1.0f);  // same as legacy
+                } else {
+                    activations.push_back(e.values[off + j] / c);
+                }
             }
         }
     } else {
         activations.reserve(e.activations.size());
 
         for (int i = 0; i < n_mat; ++i) {
+            const float c = (float)e.counts[i];
+            const size_t off = i * row_size;
             for (int j = 0; j < row_size; ++j) {
-                activations.push_back(e.activations[i*row_size + j] / e.counts[i]);
+                if (c <= 0.0f) {
+                    activations.push_back(1.0f);  // same as legacy
+                } else {
+                    activations.push_back(e.activations[off + j] / c);
+                }
             }
         }
     }
 
-    const float sum             = std::accumulate(activations.begin(), activations.end(), 0.0f);
-    const float max             = *std::max_element(activations.begin(), activations.end());
-    const float min             = *std::min_element(activations.begin(), activations.end());
-    const float mean            = sum / activations.size();
-    const float sqr_sum         = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-    const float variance        = (sqr_sum / activations.size()) - (mean * mean);
-    const float std_deviation   = std::sqrt(std::max(0.0f, variance));
-    float entropy               = 0;
+    const float sum = std::accumulate(activations.begin(), activations.end(), 0.0f);
+    const float max = * std::max_element(activations.begin(), activations.end());
+    const float min = * std::min_element(activations.begin(), activations.end());
+    const float mean = sum / activations.size();
+    const float sqr_sum = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
+    const float variance = sqr_sum / activations.size() - mean * mean;
+    const float std_deviation = std::sqrt(std::max(0.0f, variance));
+    float entropy = 0;
 
     if (e.activations.empty()) {
         if (sum > 0) {
@@ -226,7 +238,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         }
     }
 
-    int zd_score = 0;
+    float zd_score = 0.0f;
     if (std_deviation > 0.0f) {
         for (const auto act : activations) {
             const float z = (act - mean) / std_deviation;
@@ -235,16 +247,16 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     }
 
     auto & ts = tstats.emplace_back();
-    ts.tensor        = name;
-    ts.stats         = e;
-    ts.sum_values    = sum;
-    ts.mean_values   = mean;
-    ts.max_values    = max;
-    ts.min_values    = min;
-    ts.elements      = static_cast<int>(activations.size());
+    ts.tensor = name;
+    ts.stats = e;
+    ts.sum_values = sum;
+    ts.mean_values = mean;
+    ts.max_values = max;
+    ts.min_values = min;
+    ts.elements = static_cast<int>(activations.size());
     ts.std_deviation = std_deviation;
-    ts.entropy       = entropy;
-    ts.zd_score      = static_cast<float>(zd_score) / ts.elements;
+    ts.entropy = entropy;
+    ts.zd_score = zd_score / ts.elements;
 
     return e.activations.empty();
 }
