@@ -5097,15 +5097,22 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
 
     // XXX TODO 'prec' is not actually allowed in mul_mat_id.
     bool prefer_fp16acc = ctx->device->fp16 /*&& prec == GGML_PREC_DEFAULT*/;
-    bool support_fp16acc = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type].f16acc != nullptr;
-    bool support_fp32acc = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type].f32acc != nullptr;
-
-    if (support_fp16acc && (prefer_fp16acc || !support_fp32acc)) {
-        return ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type].f16acc;
-    } else {
-        GGML_ASSERT(support_fp32acc);
-        return ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type].f32acc;
+    auto& mmp = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
+    if (ctx->device->coopmat_support) {
+        // coopmat may or may not have f16acc and f32acc. It may also lack some child pipelines
+        if (ctx->device->coopmat_acc_f16_support && prefer_fp16acc) {
+            return mmp.f16acc;
+        } else if (ctx->device->coopmat_acc_f32_support) {
+            return mmp.f32acc;
+        } else {
+            // No supported pipeline
+            return nullptr;
+        }
     }
+    // coopmat2 or no coopmat.
+    // coopmat2 should support both f16acc and f32acc by default with all child pipelines.
+    // No coopmat should support both f16acc and f32acc when FP16 is preferred, but only f32acc when not preferred.
+    return prefer_fp16acc ? mmp.f16acc : mmp.f32acc;
 }
 
 static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context * ctx, ggml_type a_type, ggml_type b_type) {
