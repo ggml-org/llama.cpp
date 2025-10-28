@@ -51,7 +51,6 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
 
     const int64_t nmat = ne / (ne00 * ne01);
     const int64_t n = ne00 * ne01;
-    // const int64_t n = ne01 * ne02;
     int width = ne01;
     int height = ne00;
     int x = blockIdx.x * TILE_DIM + threadIdx.x;
@@ -59,17 +58,16 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
     int tx = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
     int ty = blockIdx.x * TILE_DIM + threadIdx.y;
 
-    // __shared__ T tile[TILE_DIM * TILE_DIM];
     __shared__ T tile[TILE_DIM][TILE_DIM];
 
     for(int i = 0; i < BLOCK_NM; ++i){
-        __syncthreads();
 
         const unsigned int imat = blockIdx.z * BLOCK_NM + i;
         if(imat >= nmat)
             break;
         for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){            
-            if(imat < nmat && x < width && y + j < height){
+            // if(imat < nmat && x < width && y + j < height){
+            if(x < width && y + j < height){
                 const unsigned int idx = (y+j)*width + x;
                 const int row = threadIdx.y+j;
                 const int col = threadIdx.x ^ row;
@@ -90,10 +88,9 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
         // }
 
         for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
-            
-            if(imat < nmat && ty + j < width && tx < height){
+            // if(imat < nmat && ty + j < width && tx < height){
+            if(ty + j < width && tx < height){
                 const unsigned int idx = (ty+j)*height + tx;
-                // const int row = threadIdx.x;
                 const int col = (threadIdx.y+j) ^ threadIdx.x;
                 // dst[imat*n + idx] = tile[threadIdx.x][threadIdx.y + j];
                 dst[imat*n + idx] = tile[threadIdx.x][col];
@@ -104,25 +101,24 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
                 // }
             }
         }
-        // }
     }
 
-    if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-        // for(int j = 0; j < 32; ++j){
-        // j = 0;
-            for(int i = 0; i < 32; ++i)
-                // printf("%.2f, ", src[j*48+i]);
-                // printf("%.2f, ", src[j*48+i]);
-                printf("%.2f, ", __half2float(src[i]));
-            printf("]\n");   
-        // }
-        printf("==============================\n");
-        // for(int j = 0; j < 32; ++j){
-            for(int i = 0; i < 32; ++i)
-                printf("%.2f, ", __half2float(dst[i]));
-            printf("]\n");   
-        // }
-    }
+    // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+    //     // for(int j = 0; j < 32; ++j){
+    //     // j = 0;
+    //         for(int i = 0; i < 32; ++i)
+    //             // printf("%.2f, ", src[j*48+i]);
+    //             // printf("%.2f, ", src[j*48+i]);
+    //             printf("%.2f, ", __half2float(src[i]));
+    //         printf("]\n");   
+    //     // }
+    //     printf("==============================\n");
+    //     // for(int j = 0; j < 32; ++j){
+    //         for(int i = 0; i < 32; ++i)
+    //             printf("%.2f, ", __half2float(dst[i]));
+    //         printf("]\n");   
+    //     // }
+    // }
 }
 
 static __device__ void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
@@ -235,8 +231,8 @@ static void ggml_cpy_flt_cuda(
     if constexpr ((std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
                   std::is_same_v<src_t, float> && std::is_same_v<dst_t, float>)
                    && transpose){
-        printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
-        printf("cuda cpy transpose nb00=%d nb01=%d nb10=%d nb11=%d\n", nb00, nb01, nb10, nb11);
+        // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
+        // printf("cuda cpy transpose nb00=%d nb01=%d nb10=%d nb11=%d\n", nb00, nb01, nb10, nb11);
         // if (ne00 == ne11 && ne01 == ne10 && nb00 == nb11 && nb10 == nb01){ //transpose
         // if (transpose) { //transpose
             // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
