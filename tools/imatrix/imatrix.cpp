@@ -1260,15 +1260,16 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
 static bool show_statistics(const common_params & params) {
     std::vector<tensor_statistics> ts;
-    bool legacy_mode = false;
+    bool legacy_mode = true;
 
     if (params.in_files.empty() || params.in_files.size() > 1) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
         return false;
     }
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
-        for (const auto & [name, stats] :g_collector.get_mstats()) {
-            legacy_mode = compute_vector_statistics(ts, name, stats);
+        for (const auto & [name, stats] : g_collector.get_mstats()) {
+            const bool is_legacy = compute_vector_statistics(ts, name, stats);
+            legacy_mode = legacy_mode && is_legacy;
         }
     } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
@@ -1286,19 +1287,21 @@ static bool show_statistics(const common_params & params) {
         explicit tensor_comparer(const bool legacy) : legacy_mode(legacy) {}
 
         bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
-            std::string layer, name_a, name_b;
+            std::string layer;
+            std::string name_a;
+            std::string name_b;
             process_tensor_name(a.tensor, layer, name_a);
             process_tensor_name(b.tensor, layer, name_b);
-            return legacy_mode ? name_a < name_b || (name_a == name_b && a.sum_values > b.sum_values) :
-                name_a < name_b || (name_a == name_b && a.cossim > b.cossim);
+            return legacy_mode ? name_a < name_b || (name_a == name_b && a.sum_values > b.sum_values)
+                               : name_a < name_b || (name_a == name_b && a.cossim > b.cossim);
         }
     };
     std::sort(ts.begin(), ts.end(), tensor_comparer(legacy_mode));
 
     struct layer_stats {
         float layer_sum = 0.0f;
-        float layer_zd  = 0.0f;
-        int   n         = 0;
+        float layer_zd = 0.0f;
+        int n = 0;
     };
     std::map<int, layer_stats> ls;
 
@@ -1319,6 +1322,7 @@ static bool show_statistics(const common_params & params) {
     LOG_INF(
         "=============================================================================================================="
         "=============================================================\n");
+
     for (const auto & tstat : ts) {
         std::string layer, name;
         process_tensor_name(tstat.tensor, layer, name);
@@ -1326,36 +1330,37 @@ static bool show_statistics(const common_params & params) {
         int blk;
         try {
             blk = std::stoi(layer);
-        } catch (const std::exception & e) {
-            blk = -1;  // not a block layer
+        } catch (const std::exception &) {
+            blk = -1; // not a block layer
         }
 
+        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
+        const float ecs = 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(std::fabs(tstat.cossim), 10.0f);
+
         LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
-                layer.c_str(),
-                name.c_str(),
-                legacy_mode ? tstat.sum_values : tstat.l2_norm,
-                tstat.min_values,
-                tstat.max_values,
-                tstat.mean_values,
-                tstat.std_deviation,
-                tstat.elements,
-                100.0f * (tstat.entropy / std::log2(tstat.elements)),
-                legacy_mode ? tstat.entropy : 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(fabs(tstat.cossim), 10.0f),
-                100.0f * tstat.zd_score,
-                tstat.cossim);
+            layer.c_str(), name.c_str(),
+            legacy_mode ? tstat.sum_values : tstat.l2_norm,
+            tstat.min_values,
+            tstat.max_values,
+            tstat.mean_values,
+            tstat.std_deviation,
+            tstat.elements,
+            h_norm,
+            legacy_mode ? tstat.entropy : ecs,
+            100.0f * tstat.zd_score,
+            tstat.cossim);
 
-        const float zd     = tstat.elements * tstat.zd_score;
-
+        const float zd = tstat.elements * tstat.zd_score;
         if (ls.find(blk) != ls.end()) {
             ls[blk].layer_sum += tstat.sum_values;
-            ls[blk].layer_zd  += zd;
-            ls[blk].n         += tstat.elements;
+            ls[blk].layer_zd += zd;
+            ls[blk].n += tstat.elements;
         } else {
             layer_stats temp_ls;
             temp_ls.layer_sum = tstat.sum_values;
-            temp_ls.layer_zd  = zd;
-            temp_ls.n         = tstat.elements;
-            ls[blk]           = temp_ls;
+            temp_ls.layer_zd = zd;
+            temp_ls.n = tstat.elements;
+            ls[blk] = temp_ls;
         }
     }
 
@@ -1366,11 +1371,11 @@ static bool show_statistics(const common_params & params) {
     const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing layer statistics (%ld layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
-    "Layer",
-    legacy_mode ? "Σ(Act²)" : "L₂ Norm",
-    "ZD",
-    "CosSim",
-    legacy_mode ? "" : "ECS");
+        "Layer",
+        legacy_mode ? "Σ(Act²)" : "L₂ Norm",
+        "ZD",
+        "CosSim",
+        legacy_mode ? "" : "ECS");
     if (legacy_mode) {
         LOG_INF("============================================\n");
     } else {
@@ -1384,17 +1389,17 @@ static bool show_statistics(const common_params & params) {
         const float layer_l2n = ll2n != layer_l2_norm.end() ? ll2n->second : 0.0f;
         if (legacy_mode) {
             LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\n",
-            layer,
-            stats.layer_sum,
-            100.0f * stats.layer_zd / stats.n,
-            layer_cs);
+                layer,
+                stats.layer_sum,
+                100.0f * stats.layer_zd / stats.n,
+                layer_cs);
         } else {
             LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\t%8.4f\n",
-            layer,
-            layer_l2n,
-            100.0f * stats.layer_zd / stats.n,
-            layer_cs,
-            100.0f * std::exp(-0.01f * layer_l2n) * std::pow(fabs(layer_cs), 10.0f));
+                layer,
+                layer_l2n,
+                100.0f * stats.layer_zd / stats.n,
+                layer_cs,
+                100.0f * std::exp(-0.01f * layer_l2n) * std::pow(std::fabs(layer_cs), 10.0f));
         }
     }
     LOG_INF("\n");
