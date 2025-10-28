@@ -301,11 +301,64 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // Use the WMMA kernel if possible:
-    if (ggml_cuda_should_use_wmma_fattn(cc) && K->ne[1] % FATTN_KQ_STRIDE == 0 && Q->ne[0] != 40 && Q->ne[0] != 576) {
+#if defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+    const bool hip_wmma_decode = Q->ne[1] == 1;
+#else
+    const bool hip_wmma_decode = false;
+#endif
+    if (!hip_wmma_decode && ggml_cuda_should_use_wmma_fattn(cc) && K->ne[1] % FATTN_KQ_STRIDE == 0 && Q->ne[0] != 40 && Q->ne[0] != 576) {
         if (can_use_vector_kernel && Q->ne[1] <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }
         return BEST_FATTN_KERNEL_WMMA_F16;
+    }
+
+    // HIP decode path (Q->ne[1] == 1): fall through to generic HIP selection below (VEC/TILE),
+    // with a guard to avoid selecting a TILE shape that has no config.
+    if (hip_wmma_decode) {
+#if defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+        // Mirror the ncols2 selection from launch_fattn_tile_switch_ncols2 to predict if
+        // a multi-column TILE kernel (ncols2 != 1) would be chosen.
+        const bool nvidia_arch = GGML_CUDA_CC_IS_NVIDIA(cc);
+        const int  gqa_limit   = (nvidia_arch && gqa_ratio <= 4) ? 16 : INT_MAX;
+        const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+        int predicted_ncols2 = 1;
+        if (V->ne[0] == 512) {
+            if (use_gqa_opt && gqa_ratio % 16 == 0) predicted_ncols2 = 16;
+        } else if (V->ne[0] <= 256) {
+            if (use_gqa_opt && gqa_ratio % 8 == 0)      predicted_ncols2 = 8;
+            else if (use_gqa_opt && gqa_ratio % 4 == 0) predicted_ncols2 = 4;
+            else if (use_gqa_opt && gqa_ratio % 2 == 0) predicted_ncols2 = 2;
+        }
+
+        // Predict cols_per_block like launch_fattn_tile_switch_ncols1 does (HIP path):
+        int predicted_cols_per_block = 2;
+        if (predicted_ncols2 <= 2) {
+            predicted_cols_per_block = 2;
+        }
+        if (predicted_ncols2 <= 4 && Q->ne[1] > 2/predicted_ncols2) {
+            predicted_cols_per_block = 4;
+        }
+        if (predicted_ncols2 <= 8 && Q->ne[1] > 4/predicted_ncols2) {
+            predicted_cols_per_block = 8;
+        }
+        if (Q->ne[1] > 8/predicted_ncols2) {
+            predicted_cols_per_block = 16;
+        }
+        if (Q->ne[1] > 16/predicted_ncols2) {
+            predicted_cols_per_block = 32;
+        }
+        if (V->ne[0] <= 128 && Q->ne[1] > 32/predicted_ncols2) {
+            predicted_cols_per_block = 64;
+        }
+
+        const uint32_t cfg = ggml_cuda_fattn_tile_get_config((int)Q->ne[0], (int)V->ne[0], predicted_cols_per_block, cc);
+        if (predicted_ncols2 != 1 && cfg == 0) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+#endif // defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+        // Otherwise, fall through.
     }
 
     // If there are no tensor cores available, use the generic tile kernel:
