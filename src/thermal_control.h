@@ -10,13 +10,20 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <fstream>       
-#include <chrono>        
+#include <chrono>
 #include <errno.h>
+#include <map>
 
 #define GPU_TEMP_PATH "/sys/class/kgsl/kgsl-3d0/temp"
-#define TEMP_THRESHOLD_MC 60000  // 60도 = 60000 millidegree C
-#define TARGET_CPU_FREQ 960000
-#define CHECK_INTERVAL 10  // 10 토큰마다 한 번 체크
+#define GPU_MIN_FREQ_PATH "/sys/class/kgsl/kgsl-3d0/devfreq/min_freq"
+#define GPU_MAX_FREQ_PATH "/sys/class/kgsl/kgsl-3d0/devfreq/max_freq"
+#define CHECK_INTERVAL 2  // 10 토큰마다 한 번 체크
+
+// 온도-주파수 매핑 (온도(°C) -> GPU frequency(Hz))
+static std::map<int, int> temp_to_freq = {
+    {60, 443000000},
+    {70, 660000000}
+};
 
 // 🔥 Throughput monitoring CSV (llama.cpp에서 정의됨)
 extern std::ofstream g_csv;
@@ -41,7 +48,37 @@ static inline int read_gpu_temp() {
     return temp;
 }
 
-// CPU frequency 설정 - echo처럼
+// GPU frequency 설정 - echo처럼
+static inline bool set_gpu_freq(int freq_hz) {
+    char freq_str[32];
+    snprintf(freq_str, sizeof(freq_str), "%d\n", freq_hz);
+    
+    bool success = false;
+    
+    // min_freq 설정
+    int fd_min = open(GPU_MIN_FREQ_PATH, O_WRONLY | O_TRUNC);
+    if (fd_min >= 0) {
+        write(fd_min, freq_str, strlen(freq_str));
+        close(fd_min);
+        success = true;
+    } else {
+        fprintf(stderr, "Thermal: Cannot open %s: %s\n", GPU_MIN_FREQ_PATH, strerror(errno));
+    }
+    
+    // max_freq 설정
+    int fd_max = open(GPU_MAX_FREQ_PATH, O_WRONLY | O_TRUNC);
+    if (fd_max >= 0) {
+        write(fd_max, freq_str, strlen(freq_str));
+        close(fd_max);
+    } else {
+        fprintf(stderr, "Thermal: Cannot open %s: %s\n", GPU_MAX_FREQ_PATH, strerror(errno));
+    }
+    
+    return success;
+}
+
+// CPU frequency 설정 - echo처럼 (주석 처리)
+/*
 static inline bool set_cpu_freq(int freq_khz) {
     DIR *dir = opendir("/sys/devices/system/cpu");
     if (!dir) {
@@ -88,6 +125,7 @@ static inline bool set_cpu_freq(int freq_khz) {
     closedir(dir);
     return success;
 }
+*/
 
 // GPU 온도 읽기 (millidegree C) - FD 재사용
 static inline int read_gpu_temp_fast(int fd) {
@@ -167,22 +205,35 @@ static inline int init_cpu_freq_fds(int *fd_cache, int max_fds) {
 }
 
 // 🔥 CSV에 thermal 이벤트 기록
-static inline void log_thermal_event(const char* event, double temp_celsius, int freq_khz = 0) {
+static inline void log_thermal_event(const char* event, double temp_celsius, int freq_hz = 0) {
     if (!g_csv.is_open()) return;
     
     auto ts = std::chrono::system_clock::now().time_since_epoch();
     auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ts).count();
     
     // CSV 형식: timestamp,-1,event_type,temp,freq
-    g_csv << ts_ms << ",-1," << event << "," << temp_celsius << "," << freq_khz << "\n";
+    g_csv << ts_ms << ",-1," << event << "," << temp_celsius << "," << freq_hz << "\n";
     g_csv.flush();
 }
 
-// 온도 기반 thermal control - read_gpu_temp()와 set_cpu_freq() 사용
+// 온도에 맞는 GPU frequency 찾기
+static inline int get_freq_for_temp(int temp_celsius) {
+    // 온도가 높을수록 낮은 주파수 사용
+    // 매핑된 온도 중 현재 온도 이상인 가장 낮은 온도 찾기
+    int target_freq = 0;
+    for (auto& pair : temp_to_freq) {
+        if (temp_celsius >= pair.first) {
+            target_freq = pair.second;
+        }
+    }
+    return target_freq;
+}
+
+// 온도 기반 thermal control
 static inline void thermal_control_check() {
     static bool initialized = false;
     static int call_count = 0;
-    static bool throttled = false;
+    static int current_freq = 0;
     
     // 초기화
     if (!initialized) {
@@ -196,33 +247,29 @@ static inline void thermal_control_check() {
         return;
     }
     
-    int temp_mc = read_gpu_temp();
-    if (temp_mc < 0) return;
+    // int temp_mc = read_gpu_temp();
+    // if (temp_mc < 0) return;
     
-    double temp_celsius = temp_mc / 1000.0;
+    // int temp_celsius = temp_mc / 1000;
+    int temp_celsius = 60;
     
-    // 60도 이상이면 throttle
-    if (temp_mc >= TEMP_THRESHOLD_MC && !throttled) {
-        set_cpu_freq(TARGET_CPU_FREQ);
-        throttled = true;
-        
-        // 🔥 콘솔 출력
-        fprintf(stderr, "Thermal: GPU temp %.1f°C >= 60°C, throttling CPU to %d KHz\n", 
-                temp_celsius, TARGET_CPU_FREQ);
-        
-        // 🔥 CSV에 기록
-        log_thermal_event("THROTTLE", temp_celsius, TARGET_CPU_FREQ);
-    }
-    // 55도 이하로 내려가면 throttle 해제
-    else if (temp_mc < (TEMP_THRESHOLD_MC - 5000) && throttled) {
-        throttled = false;
-        
-        // 🔥 콘솔 출력
-        fprintf(stderr, "Thermal: GPU temp %.1f°C < 55°C, releasing throttle\n", 
-                temp_celsius);
-        
-        // 🔥 CSV에 기록
-        log_thermal_event("RELEASE", temp_celsius, 0);
+    // 온도에 맞는 주파수 찾기
+    int target_freq = get_freq_for_temp(temp_celsius);
+    
+    // 주파수가 바뀌어야 할 때만 설정
+    if (target_freq > 0 && target_freq != current_freq) {
+        if (set_gpu_freq(target_freq)) {
+            current_freq = target_freq;
+            
+            // 🔥 콘솔 출력
+            fprintf(stderr, "Thermal: wants to set GPU temp to be %d°C, setting GPU freq to %d Hz\n", 
+                    temp_celsius, target_freq);
+            
+            // 🔥 CSV에 기록
+            log_thermal_event("FREQ_CHANGE", (double)temp_celsius, target_freq);
+        } else {
+            fprintf(stderr, "Thermal: Failed to set GPU frequency (try sudo)\n");
+        }
     }
 }
 
