@@ -96,7 +96,9 @@ class ChatMessageEx {
             el.appendChild(doc.createTextNode(k[1]))
             doc.documentElement.appendChild(el)
         }
-        return new XMLSerializer().serializeToString(doc);
+        let xmlStr = new XMLSerializer().serializeToString(doc);
+        xmlStr = xmlStr.replace(/\/name><content/, '\/name>\n<content');
+        return xmlStr;
     }
 
     /**
