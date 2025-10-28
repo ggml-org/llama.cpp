@@ -38,6 +38,7 @@ The above command will output space-separated float values.
 |            | multiple embeddings          | $[[x_1,...,x_n],[x_1,...,x_n],...,[x_1,...,x_n]]$
 | 'json'     | openai style                 |
 | 'json+'    | add cosine similarity matrix |
+| 'raw'      | plain text output            |
 
 ### --embd-separator $"string"$
 | $"string"$   | |
