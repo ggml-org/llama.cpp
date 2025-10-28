@@ -150,7 +150,7 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     } else {
         // Mean
         for (size_t m = 0; m < n_mat; ++m) {
-            const float c = (float) tstats.counts[m];
+            const float c = (float)tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
                 vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
