@@ -718,21 +718,26 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   // delay to allow any file operations to complete for runtime
 
   GGML_TSAVORITE_LOG_INFO("Delaying tsi_finalize for 2 sec");
-  sleep(2);
-  tsi_finalize();
-  GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
-  tsirt::utils::TSIProfiler::finalize();
+  if (runtime_initialized == true) {
+      sleep(2);
+      runtime_initialized = false;
+      tsi_finalize();
+      tsirt::utils::TSIProfiler::finalize();
+      sleep(2);
+  }
   std::cout << "\nOPU Profiling Results:" << std::endl;
   std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
                    /*truncateFuncNames*/ true)
             << std::endl;
-  sleep(2);
+  GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+  return;
 }
 
 void
 tsi_cleanup() {
     if (runtime_initialized != true)
         return;
+    runtime_initialized = false;
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
