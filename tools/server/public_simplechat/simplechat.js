@@ -251,25 +251,25 @@ class ChatMessageEx {
         return true
     }
 
+    /**
+     * Collate all the different parts of a chat message into a single string object.
+     *
+     * This currently includes reasoning, content and toolcall parts.
+     */
     content_equiv() {
         let reasoning = ""
+        let content = ""
+        let toolcall = ""
         if (this.ns.reasoning_content.trim() !== "") {
-            reasoning = this.ns.reasoning_content.trim()
+            reasoning = `!!!Reasoning:  ${this.ns.reasoning_content.trim()} !!!\n`;
         }
         if (this.ns.content !== "") {
-            if (reasoning !== "") {
-                return `!!!Reasoning: ${reasoning}!!! ${this.ns.content}`;
-            }
-            return this.ns.content;
-        } else if (this.has_toolcall()) {
-            let ret = ""
-            if (reasoning !== "") {
-                ret = `!!!Reasoning: ${reasoning}!!!`
-            }
-            return `${ret}<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>`;
-        } else {
-            return ""
+            content = this.ns.content;
         }
+        if (this.has_toolcall()) {
+            toolcall = `\n\n<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>\n`;
+        }
+        return `${reasoning} ${content} ${toolcall}`;
     }
 
 }
@@ -495,10 +495,6 @@ class SimpleChat {
         let last = undefined;
         for(const x of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
             if (x.ns.role != Roles.ToolTemp) {
-                if (x.ns.reasoning_content.trim() === "") {
-                    let entry = ui.el_create_append_p(`>>${x.ns.role}!<<: ${x.ns.reasoning_content}`, div);
-                    entry.className = `role-${x.ns.role}`;
-                }
                 let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
                 entry.className = `role-${x.ns.role}`;
                 last = entry;
