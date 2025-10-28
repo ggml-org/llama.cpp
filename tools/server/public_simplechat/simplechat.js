@@ -353,11 +353,11 @@ class SimpleChat {
 
     /**
      * Recent chat messages.
-     * If iRecentUserMsgCnt < 0
-     *   Then return the full chat history
-     * Else
-     *   Return chat messages from latest going back till the last/latest system prompt.
-     *   While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
+     *
+     * If iRecentUserMsgCnt < 0, Then return the full chat history
+     *
+     * Else Return chat messages from latest going back till the last/latest system prompt.
+     * While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
      * @param {number} iRecentUserMsgCnt
      */
     recent_chat(iRecentUserMsgCnt) {
@@ -890,9 +890,10 @@ class MultiChatUI {
             this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         }
         let last = undefined;
-        for(const [i, x] of chat.recent_chat(gMe.chatProps.iRecentUserMsgCnt).entries()) {
+        let chatToShow = chat.recent_chat(gMe.chatProps.iRecentUserMsgCnt);
+        for(const [i, x] of chatToShow.entries()) {
             if (x.ns.role === Roles.ToolTemp) {
-                if (i == (chat.xchat.length - 1)) {
+                if (i == (chatToShow.length - 1)) {
                     this.elInUser.value = x.ns.content;
                 }
                 continue
@@ -900,8 +901,19 @@ class MultiChatUI {
             let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, this.elDivChat);
             entry.className = `role-${x.ns.role}`;
             last = entry;
-            if (x.ns.role === Roles.Tool) {
-                this.ui_reset_toolcall_as_needed(x);
+            if (x.ns.role === Roles.Assistant) {
+                let bTC = false
+                if (i == (chatToShow.length-1)) {
+                    bTC = true
+                }
+                if (i == (chatToShow.length-2)) {
+                    if (chatToShow[i+1].ns.role == Roles.ToolTemp) {
+                        bTC = true
+                    }
+                }
+                if (bTC) {
+                    this.ui_reset_toolcall_as_needed(x);
+                }
             }
         }
         if (last !== undefined) {
