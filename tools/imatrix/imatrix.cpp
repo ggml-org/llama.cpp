@@ -170,48 +170,53 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
 }
 
 static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
-    if (e.values.size() % e.counts.size() != 0) {
-        LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.values.size());
-        return false;
-    }
-    if (e.counts.empty()) {
+    const size_t n_mat = e.counts.size();
+    const size_t len = e.activations.empty() ? e.values.size() : e.activations.size();
+
+    if (n_mat == 0) {
         LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
         return false;
     }
 
-    const int n_mat = e.counts.size();
-    const int row_size = e.values.size() / n_mat;
+    if (len == 0 || (len % n_mat) != 0) {
+        LOG_ERR("%s: activation size mismatch for tensor %s (len=%zu, counts=%zu)\n", __func__, name.c_str(), len, n_mat);
+        return false;
+    }
+
+    const int row_size = (int)(len / n_mat);
 
     std::vector<float> activations;
+    activations.reserve(len);
 
     if (e.activations.empty()) {
-        activations.reserve(e.values.size());
-
-        for (int i = 0; i < n_mat; ++i) {
-            const float c = (float)e.counts[i];
+        for (size_t i = 0; i < n_mat; ++i) {
+            const auto c = (float)e.counts[i];
             const size_t off = i * row_size;
             for (int j = 0; j < row_size; ++j) {
                 if (c <= 0.0f) {
-                    activations.push_back(1.0f);  // same as legacy
+                    activations.push_back(0.0f);
                 } else {
                     activations.push_back(e.values[off + j] / c);
                 }
             }
         }
     } else {
-        activations.reserve(e.activations.size());
-
-        for (int i = 0; i < n_mat; ++i) {
-            const float c = (float)e.counts[i];
+        for (size_t i = 0; i < n_mat; ++i) {
+            const auto c = (float)e.counts[i];
             const size_t off = i * row_size;
             for (int j = 0; j < row_size; ++j) {
                 if (c <= 0.0f) {
-                    activations.push_back(1.0f);  // same as legacy
+                    activations.push_back(0.0f);
                 } else {
                     activations.push_back(e.activations[off + j] / c);
                 }
             }
         }
+    }
+
+    if (activations.empty()) {
+        LOG_ERR("%s: computed empty activation vector for tensor %s\n", __func__, name.c_str());
+        return false;
     }
 
     const float sum = std::accumulate(activations.begin(), activations.end(), 0.0f);
@@ -221,28 +226,29 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     const float sqr_sum = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
     const float variance = sqr_sum / activations.size() - mean * mean;
     const float std_deviation = std::sqrt(std::max(0.0f, variance));
-    float entropy = 0;
 
+    float entropy = 0.0f;
     if (e.activations.empty()) {
-        if (sum > 0) {
+        // classic entropy on normalized activations distribution
+        if (sum > 0.0f) {
             for (const auto act : activations) {
                 const float p = act / sum;
-                if (p > 0) { entropy -= p * std::log2(p); }
+                if (p > 0.0f) { entropy -= p * std::log2(p); }
             }
         }
     } else {
-        float div = 0.0;
+        // entropy on normalized squared weights
+        float div = 0.0f;
         std::vector<float> weights(activations.size());
         for (size_t i = 0; i < activations.size(); ++i) {
             const float w = activations[i] * activations[i];
             weights[i] = w;
             div += w;
         }
-
-        if (div > 0.0) {
-            for (float w : weights) {
+        if (div > 0.0f) {
+            for (const float w : weights) {
                 const float p = w / div;
-                if (p > 0.0) { entropy -= p * std::log2(p); }
+                if (p > 0.0f) { entropy -= p * std::log2(p); }
             }
         }
     }
