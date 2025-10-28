@@ -128,41 +128,35 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
 }
 
 static std::vector<float> compute_tensor_averages(const Stats & tstats) {
-    if (tstats.counts.empty()) return {};
+    if (tstats.counts.empty()) { return {}; }
     const size_t n_mat = tstats.counts.size();
     const size_t len = !tstats.activations.empty() ? tstats.activations.size() : tstats.values.size();
-
     if (len == 0 || n_mat == 0 || len % n_mat != 0) { return {}; }
-
     const size_t row = len / n_mat;
     std::vector<float> vec;
     vec.reserve(len);
 
     if (tstats.activations.empty()) {
-        // Use mean of squares; fill zeros for experts with zero counts to preserve shape
+        // Mean of squares
         for (size_t m = 0; m < n_mat; ++m) {
-            const float c = (float)tstats.counts[m];
+            const auto c = (float)tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
-                vec.insert(vec.end(), row, 0.0f);
+                vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
                 continue;
             }
-            for (size_t j = 0; j < row; ++j) {
-                vec.push_back(tstats.values[off + j] / c);
-            }
+            for (size_t j = 0; j < row; ++j) { vec.push_back(tstats.values[off + j] / c); }
         }
     } else {
-        // Use mean; fill zeros for experts with zero counts to preserve shape
+        // Mean
         for (size_t m = 0; m < n_mat; ++m) {
-            const float c = (float)tstats.counts[m];
+            const float c = (float) tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
-                vec.insert(vec.end(), row, 0.0f);
+                vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
                 continue;
             }
-            for (size_t j = 0; j < row; ++j) {
-                vec.push_back(tstats.activations[off + j] / c);
-            }
+            for (size_t j = 0; j < row; ++j) { vec.push_back(tstats.activations[off + j] / c); }
         }
     }
 
