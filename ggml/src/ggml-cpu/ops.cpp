@@ -5687,8 +5687,7 @@ static void ggml_compute_forward_rope_flt(
                     rotate_pairs<T>(ne0, n_dims, cache, src, dst_data);
                     break;
                   default:
-                    //rope type not supported, silently default to NORMAL
-                    rotate_pairs<T>(n_dims, 1, cache, src, dst_data, 1);
+                    GGML_ABORT("rope type not supported");
                 }
 
                 if (!is_vision) {
