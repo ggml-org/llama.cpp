@@ -310,6 +310,10 @@ static __global__ void mul_mat_vec_q(
             dst[j*stride_col_dst + threadIdx.x] = result;
         }
     }
+
+    if constexpr (!has_fusion) {
+        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, active_glu, gate_bias, x_bias, tmp_gate);
+    }
 }
 
 static std::pair<dim3, dim3> calc_launch_params(
