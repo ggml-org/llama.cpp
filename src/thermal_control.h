@@ -17,7 +17,9 @@
 #define GPU_TEMP_PATH "/sys/class/kgsl/kgsl-3d0/temp"
 #define GPU_MIN_FREQ_PATH "/sys/class/kgsl/kgsl-3d0/devfreq/min_freq"
 #define GPU_MAX_FREQ_PATH "/sys/class/kgsl/kgsl-3d0/devfreq/max_freq"
-#define CHECK_INTERVAL 2  // 10 토큰마다 한 번 체크
+// #define CHECK_INTERVAL 5  // 10 토큰마다 한 번 체크
+
+#define TARGET_TEMPERATURE 60
 
 // 온도-주파수 매핑 (온도(°C) -> GPU frequency(Hz))
 static std::map<int, int> temp_to_freq = {
@@ -232,6 +234,7 @@ static inline int get_freq_for_temp(int temp_celsius) {
 // 온도 기반 thermal control
 static inline void thermal_control_check() {
     static bool initialized = false;
+    static bool finished = false;
     static int call_count = 0;
     static int current_freq = 0;
     
@@ -241,35 +244,31 @@ static inline void thermal_control_check() {
         fprintf(stderr, "Thermal: Control initialized\n");
     }
     
-    // CHECK_INTERVAL 토큰마다만 체크
-    call_count++;
-    if (call_count % CHECK_INTERVAL != 0) {
-        return;
-    }
+    int temp_mc = read_gpu_temp();
+    if (temp_mc < 0) return;
     
-    // int temp_mc = read_gpu_temp();
-    // if (temp_mc < 0) return;
+    int temp_celsius = temp_mc / 1000;
+
+    if (temp_celsius >= temp_celsius && !finished){
+        finished = true;
     
-    // int temp_celsius = temp_mc / 1000;
-    int temp_celsius = 60;
-    
-    // 온도에 맞는 주파수 찾기
-    int target_freq = get_freq_for_temp(temp_celsius);
-    
-    // 주파수가 바뀌어야 할 때만 설정
-    if (target_freq > 0 && target_freq != current_freq) {
+        // 온도에 맞는 주파수 찾기
+        int target_freq = get_freq_for_temp(temp_celsius);
+        
+        // 주파수가 바뀌어야 할 때만 설정
         if (set_gpu_freq(target_freq)) {
             current_freq = target_freq;
             
-            // 🔥 콘솔 출력
+            // 콘솔 출력
             fprintf(stderr, "Thermal: wants to set GPU temp to be %d°C, setting GPU freq to %d Hz\n", 
                     temp_celsius, target_freq);
             
-            // 🔥 CSV에 기록
-            log_thermal_event("FREQ_CHANGE", (double)temp_celsius, target_freq);
+            // CSV에 기록
+            // log_thermal_event("FREQ_CHANGE", (double)temp_celsius, target_freq);
         } else {
             fprintf(stderr, "Thermal: Failed to set GPU frequency (try sudo)\n");
         }
+        
     }
 }
 
