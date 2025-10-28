@@ -166,44 +166,33 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
 static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
     const size_t n_mat = e.counts.size();
     const size_t len = e.activations.empty() ? e.values.size() : e.activations.size();
-
     if (n_mat == 0) {
         LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
         return false;
     }
-
     if (len == 0 || (len % n_mat) != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (len=%zu, counts=%zu)\n", __func__, name.c_str(), len, n_mat);
         return false;
     }
 
-    const int row_size = (int)(len / n_mat);
-
+    const size_t row_size = len / n_mat;
     std::vector<float> activations;
     activations.reserve(len);
 
-    if (e.activations.empty()) {
-        for (size_t i = 0; i < n_mat; ++i) {
-            const auto c = (float)e.counts[i];
-            const size_t off = i * row_size;
-            for (int j = 0; j < row_size; ++j) {
-                if (c <= 0.0f) {
-                    activations.push_back(0.0f);
-                } else {
-                    activations.push_back(e.values[off + j] / c);
-                }
-            }
+    for (size_t i = 0; i < n_mat; ++i) {
+        const auto c = (float)e.counts[i];
+        const size_t off = i * row_size;
+        if (c <= 0.0f) {
+            activations.insert(activations.end(), row_size, 0.0f);
+            continue;
         }
-    } else {
-        for (size_t i = 0; i < n_mat; ++i) {
-            const auto c = (float)e.counts[i];
-            const size_t off = i * row_size;
-            for (int j = 0; j < row_size; ++j) {
-                if (c <= 0.0f) {
-                    activations.push_back(0.0f);
-                } else {
-                    activations.push_back(e.activations[off + j] / c);
-                }
+        if (e.activations.empty()) {
+            for (size_t j = 0; j < row_size; ++j) {
+                activations.push_back(e.values[off + j] / c); // mean-of-squares
+            }
+        } else {
+            for (size_t j = 0; j < row_size; ++j) {
+                activations.push_back(e.activations[off + j] / c); // mean
             }
         }
     }
@@ -213,59 +202,63 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         return false;
     }
 
-    const float sum = std::accumulate(activations.begin(), activations.end(), 0.0f);
-    const float max = * std::max_element(activations.begin(), activations.end());
-    const float min = * std::min_element(activations.begin(), activations.end());
-    const float mean = sum / activations.size();
-    const float sqr_sum = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-    const float variance = sqr_sum / activations.size() - mean * mean;
-    const float std_deviation = std::sqrt(std::max(0.0f, variance));
+    double sum = 0.0;
+    float vmax = activations[0];
+    float vmin = activations[0];
+    for (float v : activations) {
+        sum += v;
+        vmax = std::max(vmax, v);
+        vmin = std::min(vmin, v);
+    }
+
+    const auto mean = (float)(sum / (double)activations.size());
+    double sqr_sum = 0.0;
+    for (const float v : activations) { sqr_sum += (double)v * (double)v; }
+    double variance = sqr_sum / (double)activations.size() - (double)mean * (double)mean;
+    if (variance < 0.0) { variance = 0.0; }
+    const float std_deviation = std::sqrt((float)variance);
 
     float entropy = 0.0f;
     if (e.activations.empty()) {
-        // classic entropy on normalized activations distribution
-        if (sum > 0.0f) {
-            for (const auto act : activations) {
-                const float p = act / sum;
-                if (p > 0.0f) { entropy -= p * std::log2(p); }
+        double energy_sum = 0.0;
+        for (float v : activations) { energy_sum += (double)std::max(0.0f, v); }
+        if (energy_sum > 0.0) {
+            for (const float v : activations) {
+                const double p = std::max(0.0, (double)v) / energy_sum;
+                if (p > 0.0) { entropy -= (float)(p * std::log2(p)); }
             }
         }
     } else {
-        // entropy on normalized squared weights
-        float div = 0.0f;
-        std::vector<float> weights(activations.size());
-        for (size_t i = 0; i < activations.size(); ++i) {
-            const float w = activations[i] * activations[i];
-            weights[i] = w;
-            div += w;
-        }
-        if (div > 0.0f) {
-            for (const float w : weights) {
-                const float p = w / div;
-                if (p > 0.0f) { entropy -= p * std::log2(p); }
+        double energy_sum = 0.0;
+        for (const float v : activations) { energy_sum += (double)v * (double)v; }
+        if (energy_sum > 0.0) {
+            for (const float v : activations) {
+                const double p = (double)v * (double)v / energy_sum;
+                if (p > 0.0) { entropy -= (float)(p * std::log2(p)); }
             }
         }
     }
 
-    float zd_score = 0.0f;
+    // ZD score: fraction with |z| > 1
+    double zd_count = 0.0;
     if (std_deviation > 0.0f) {
-        for (const auto act : activations) {
-            const float z = (act - mean) / std_deviation;
-            if (std::fabs(z) > 1.0f) { zd_score++; }
+        for (const float v : activations) {
+            const float z = (v - mean) / std_deviation;
+            if (std::fabs(z) > 1.0f) { zd_count += 1.0; }
         }
     }
 
     auto & ts = tstats.emplace_back();
     ts.tensor = name;
     ts.stats = e;
-    ts.sum_values = sum;
+    ts.sum_values = (float)sum;
     ts.mean_values = mean;
-    ts.max_values = max;
-    ts.min_values = min;
-    ts.elements = static_cast<int>(activations.size());
+    ts.max_values = vmax;
+    ts.min_values = vmin;
+    ts.elements = (int)activations.size();
     ts.std_deviation = std_deviation;
     ts.entropy = entropy;
-    ts.zd_score = zd_score / ts.elements;
+    ts.zd_score = ts.elements > 0 ? (float)(zd_count / (double)ts.elements) : 0.0f;
 
     return e.activations.empty();
 }
