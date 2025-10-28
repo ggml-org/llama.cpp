@@ -18,6 +18,11 @@ struct LoadVideoOptions {
     bool recursive = false;// scan subdirectories
 };
 
+struct VideoInfo {
+    double fps = 0.0;           // frames per second
+    int64_t total_frames = 0;   // total number of frames
+};
+
 // Load frames from a directory of images (jpg/png/bmp/webp etc.)
 // Returns true on success (>=1 frame loaded), false otherwise.
 bool load_frames_from_dir(mtmd_context * ctx,
@@ -32,6 +37,10 @@ size_t append_frames_from_dir(mtmd_context * ctx,
                               mtmd::bitmaps & dst,
                               const LoadVideoOptions & opts = {});
 
+// get video info (fps, total frames) via FFmpeg (mp4/mov/mkv/avi/webm...).
+// Returns true on success, false otherwise.
+bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info);
+
 // Load frames from a video file via FFmpeg (mp4/mov/mkv/avi/webm...).
 // Returns true on success (>=1 frame loaded), false otherwise.
 bool load_frames_from_file(mtmd_context * ctx,
@@ -43,8 +52,7 @@ bool load_frames_from_file(mtmd_context * ctx,
 // Returns number of frames appended (0 on failure or unsupported input).
 size_t append_frames_from_path(mtmd_context * ctx,
                                const std::string & path,
-                               mtmd::bitmaps & dst,
-                               const LoadVideoOptions & opts = {});
+                               mtmd::bitmaps & dst);
 
 } // namespace mtmd_video
 

@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <cstring>
 #include <memory>
+#include <cmath>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -148,6 +149,44 @@ struct DecodedFrameRGBA {
     std::vector<unsigned char> rgba; // size = width * height * 4
 };
 
+bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info) {
+    AVFormatContext *fmt = nullptr;
+    if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0) {
+        return false;
+    }
+
+    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, 
+        [](AVFormatContext *f){ if (f) {avformat_close_input(&f);} });
+
+    if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        return false;
+    }
+
+    // find video stream
+    int vstream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vstream < 0) {
+        return false;
+    }
+
+    AVStream *st = fmt->streams[vstream];
+
+    // get fps
+    if (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0){
+        info.fps = av_q2d(st->avg_frame_rate);
+    }else if (st->r_frame_rate.num > 0 && st->r_frame_rate.den > 0){
+        info.fps = av_q2d(st->r_frame_rate);
+    }
+    // get total frames
+    if (st->nb_frames > 0){
+        info.total_frames = st->nb_frames;
+    }else if (fmt->duration > 0 && info.fps > 0.0){
+        // estimate total frames if nb_frames is not available
+        info.total_frames = std::llround((fmt->duration / (double)AV_TIME_BASE) * info.fps);
+    }
+
+    return true;
+}
+
 static bool decode_video_ffmpeg_to_rgba(const std::string & file,
                                         std::vector<DecodedFrameRGBA> & frames,
                                         int max_frames,
@@ -239,12 +278,40 @@ bool load_frames_from_file(mtmd_context * /*ctx*/,
                            const LoadVideoOptions & /*opts*/) {
     return false;
 }
+bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info) {
+    return false;
+}
 #endif
 
 size_t append_frames_from_path(mtmd_context * ctx,
                                const std::string & path,
-                               mtmd::bitmaps & dst,
-                               const LoadVideoOptions & opts) {
+                               mtmd::bitmaps & dst) {
+    mtmd_video::LoadVideoOptions opts;
+    opts.max_frames = 32;
+    opts.stride     = 1;
+    opts.recursive  = false;
+
+    auto info = mtmd_video::VideoInfo{};
+    if(is_dir(path)) {
+        info.fps = 1;
+        std::vector<std::string> files;
+        list_files(path, files, opts.recursive);
+        info.total_frames = files.size();
+    } else {
+        mtmd_video::get_video_info_ffmpeg(path, info);
+    }
+
+    // minicpm normal speed
+    const int32_t minicpmv_max_video_frames = 64;
+    opts.max_frames = minicpmv_max_video_frames;
+    if(info.total_frames > minicpmv_max_video_frames) {
+        // uniform sample
+        opts.stride = (int)std::ceil((double)info.total_frames / minicpmv_max_video_frames);
+    } else {
+        // 1 frame per second
+        opts.stride = (info.fps > 1.0) ? (int)std::ceil(info.fps) : 1;
+    }
+
     if (is_dir(path)) {
         return append_frames_from_dir(ctx, path, dst, opts);
     } else {

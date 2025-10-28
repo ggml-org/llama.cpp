@@ -162,21 +162,10 @@ struct mtmd_cli_context {
         return true;
     }
 
-    // Load multiple frames from a directory as a "video" (sequence of images)
+    // Load multiple frames from a video file or a directory as a "video" (sequence of images)
     // Returns number of frames appended
-    size_t load_video_dir(const std::string & dir, int max_frames = 32, int stride = 1, bool recursive = false) {
-        mtmd_video::LoadVideoOptions opts;
-        opts.max_frames = max_frames;
-        opts.stride     = stride;
-        opts.recursive  = recursive;
-        return mtmd_video::append_frames_from_dir(ctx_vision.get(), dir, bitmaps, opts);
-    }
-
-    size_t load_video_path(const std::string & path, int max_frames = 32, int stride = 1) {
-        mtmd_video::LoadVideoOptions opts;
-        opts.max_frames = max_frames;
-        opts.stride     = stride;
-        return mtmd_video::append_frames_from_path(ctx_vision.get(), path, bitmaps, opts);
+    size_t load_video(const std::string & path) {
+        return mtmd_video::append_frames_from_path(ctx_vision.get(), path, bitmaps);
     }
 };
 
@@ -322,7 +311,7 @@ int main(int argc, char ** argv) {
         for (const auto & vpath : params.video) {
             // for video understanding: disable UHD slicing (overview only)
             mtmd_set_minicpmv_max_slice_nums(ctx.ctx_vision.get(), 0);
-            size_t n = ctx.load_video_path(vpath, /*max_frames*/3, /*stride*/1);
+            size_t n = ctx.load_video(vpath);
             if (n == 0) {
                 LOG_ERR("Unable to load video frames from %s\n", vpath.c_str());
                 return 1;
@@ -399,23 +388,19 @@ int main(int argc, char ** argv) {
                 }
                 std::string media_path = line.substr(7);
                 if (is_video) {
-                    // parse optional args: "/video <dir> [max_frames] [stride]"
+                    // parse optional args: "/video <file/dir path>"
                     // simple split by spaces
                     std::vector<std::string> parts = string_split(media_path, " ");
-                    std::string dir = parts.size() > 0 ? parts[0] : media_path;
-                    int max_frames = 32;
-                    int stride = 1;
-                    if (parts.size() > 1) max_frames = std::max(1, atoi(parts[1].c_str()));
-                    if (parts.size() > 2) stride     = std::max(1, atoi(parts[2].c_str()));
-                    size_t n = ctx.load_video_path(dir, max_frames, stride);
+                    std::string path = parts.size() > 0 ? parts[0] : media_path;
+                    size_t n = ctx.load_video(path);
                     if (n > 0) {
-                        LOG("%s video loaded with %zu frames\n", dir.c_str(), n);
+                        LOG("%s video loaded with %zu frames\n", path.c_str(), n);
                         // add one marker per frame to match mtmd_tokenize expectations
                         for (size_t i = 0; i < n; ++i) {
                             content += mtmd_default_marker();
                         }
                     } else {
-                        LOG_ERR("ERR: failed to load video frames from %s\n", dir.c_str());
+                        LOG_ERR("ERR: failed to load video frames from %s\n", path.c_str());
                     }
                 } else {
                     if (ctx.load_media(media_path)) {
