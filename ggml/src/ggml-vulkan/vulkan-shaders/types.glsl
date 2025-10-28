@@ -375,7 +375,7 @@ struct block_q6_K_packed16
 {
     uint16_t ql[QUANT_K_Q6_K/2/2];
     uint16_t qh[QUANT_K_Q6_K/4/2];
-    int8_t scales[QUANT_K_Q6_K/16];
+    int16_t scales[QUANT_K_Q6_K/16/2];
     float16_t d;
 };
 
