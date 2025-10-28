@@ -104,12 +104,15 @@ public:
         std::vector<output> result;
         for (const auto & diff : diffs) {
             if (!diff.reasoning_content_delta.empty()) {
+                if (!had_reasoning) {
+                    result.push_back({"Thinking... ", REASONING});
+                }
                 result.push_back({diff.reasoning_content_delta, REASONING});
                 had_reasoning = true;
             }
             if (!diff.content_delta.empty()) {
                 if (had_reasoning) {
-                    result.push_back({"\n", REASONING});
+                    result.push_back({" ...\n", REASONING});
                     had_reasoning = false;
                 }
                 result.push_back({diff.content_delta, CONTENT});
