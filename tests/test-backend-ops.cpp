@@ -2458,7 +2458,7 @@ struct test_cpy : public test_case {
 
         ggml_tensor * out = ggml_cpy(ctx, src, dst);
         if(is_transpose)
-            dst->op_params[10] = 999;
+            src->op_params[10] = 999;
         ggml_set_name(out, "out");
 
         return out;
@@ -6136,6 +6136,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_I32, {256, 2, 3, 4}, {1, 0, 2, 3}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_I32, GGML_TYPE_F32, {256, 2, 3, 4}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_I32, GGML_TYPE_F32, {256, 2, 3, 4}, {1, 0, 2, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {48, 48, 1, 1}, {1, 0, 2, 3}, {0, 0, 0, 0}, true));
 
     test_cases.emplace_back(new test_cont());
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 1 ,1}));

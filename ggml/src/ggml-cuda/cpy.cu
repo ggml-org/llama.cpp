@@ -49,10 +49,11 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
     const T* src = reinterpret_cast<const T*>(cx);
     T* dst = reinterpret_cast<T*>(cdst);
 
-    const int64_t nmat = ne /(ne00 * ne01);
+    const int64_t nmat = ne / (ne00 * ne01);
     const int64_t n = ne00 * ne01;
     // const int64_t n = ne01 * ne02;
     int width = ne01;
+    int height = ne00;
     int x = blockIdx.x * TILE_DIM + threadIdx.x;
     int y = blockIdx.y * TILE_DIM + threadIdx.y;
     int tx = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
@@ -62,29 +63,65 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, co
     __shared__ T tile[TILE_DIM][TILE_DIM];
 
     for(int i = 0; i < BLOCK_NM; ++i){
-        const unsigned int imat = blockIdx.z * BLOCK_NM + i;
-        if(imat < nmat){
-            for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
-                const unsigned int idx = (y+j)*width + x;
-                if(idx < n){
-                    const int row = threadIdx.y+j;
-                    const int col = threadIdx.x ^ row;
-                    // tile[threadIdx.y+j][threadIdx.x] = src[imat*n + idx];
-                    tile[row][col] = src[imat*n + idx];
-                }
-            }
-            __syncthreads();
+        __syncthreads();
 
-            for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
-                const unsigned int idx = (ty+j)*width + tx;
-                if(idx < n){
-                    // const int row = threadIdx.x;
-                    const int col = (threadIdx.y+j) ^ threadIdx.x;
-                    // dst[imat*n + idx] = tile[threadIdx.x][threadIdx.y + j];
-                    dst[imat*n + idx] = tile[threadIdx.x][col];
-                }
+        const unsigned int imat = blockIdx.z * BLOCK_NM + i;
+        if(imat >= nmat)
+            break;
+        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){            
+            if(imat < nmat && x < width && y + j < height){
+                const unsigned int idx = (y+j)*width + x;
+                const int row = threadIdx.y+j;
+                const int col = threadIdx.x ^ row;
+                // tile[threadIdx.y+j][threadIdx.x] = src[imat*n + idx];
+                tile[row][col] = src[imat*n + idx];
             }
         }
+        __syncthreads();
+
+        
+        // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+        //     printf("BEGIN %d\n", i);   
+        //     for(int jj = 0; jj < TILE_DIM; ++jj){
+        //         for(int ii = 0; ii < TILE_DIM; ++ii)
+        //             printf("%.f, ", tile[jj][ii]);
+        //         printf("]\n");   
+        //     }
+        // }
+
+        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
+            
+            if(imat < nmat && ty + j < width && tx < height){
+                const unsigned int idx = (ty+j)*height + tx;
+                // const int row = threadIdx.x;
+                const int col = (threadIdx.y+j) ^ threadIdx.x;
+                // dst[imat*n + idx] = tile[threadIdx.x][threadIdx.y + j];
+                dst[imat*n + idx] = tile[threadIdx.x][col];
+                // if(imat*n + idx == 4*ne00){
+                //     printf("DEBUG: (%u, %u, %u, %u, %u), j=%d, tx=%d, ty=%d, imat=%u idx=%u dst[%u]=%.2f, %f\n", 
+                //         threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z, j, tx, ty,
+                //             imat, idx, imat*n + idx, dst[imat*n + idx], tile[threadIdx.x][threadIdx.y + j]);
+                // }
+            }
+        }
+        // }
+    }
+
+    if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+        // for(int j = 0; j < 32; ++j){
+        // j = 0;
+            for(int i = 0; i < 32; ++i)
+                // printf("%.2f, ", src[j*48+i]);
+                // printf("%.2f, ", src[j*48+i]);
+                printf("%.2f, ", __half2float(src[i]));
+            printf("]\n");   
+        // }
+        printf("==============================\n");
+        // for(int j = 0; j < 32; ++j){
+            for(int i = 0; i < 32; ++i)
+                printf("%.2f, ", __half2float(dst[i]));
+            printf("]\n");   
+        // }
     }
 }
 
@@ -195,11 +232,11 @@ static void ggml_cpy_flt_cuda(
     const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
     const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
-        if constexpr ((std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
+    if constexpr ((std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
                   std::is_same_v<src_t, float> && std::is_same_v<dst_t, float>)
                    && transpose){
-        // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
-        // printf("cuda cpy transpose nb00=%d nb01=%d nb10=%d nb11=%d\n", nb00, nb01, nb10, nb11);
+        printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
+        printf("cuda cpy transpose nb00=%d nb01=%d nb10=%d nb11=%d\n", nb00, nb01, nb10, nb11);
         // if (ne00 == ne11 && ne01 == ne10 && nb00 == nb11 && nb10 == nb01){ //transpose
         // if (transpose) { //transpose
             // printf("cuda cpy transpose ne=%d ne00=%d ne01=%d ne10=%d ne11=%d\n", ne, ne00, ne01, ne10, ne11);
