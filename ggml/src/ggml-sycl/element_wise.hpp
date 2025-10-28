@@ -67,8 +67,6 @@ void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst);

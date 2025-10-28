@@ -7,6 +7,7 @@
 		ChatMessages,
 		ChatProcessingInfo,
 		EmptyFileAlertDialog,
+		ChatErrorDialog,
 		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
@@ -22,10 +23,11 @@
 		activeMessages,
 		activeConversation,
 		deleteConversation,
+		dismissErrorDialog,
+		errorDialog,
 		isLoading,
 		sendMessage,
-		stopGeneration,
-		setMaxContextError
+		stopGeneration
 	} from '$lib/stores/chat.svelte';
 	import {
 		supportsVision,
@@ -34,7 +36,6 @@
 		serverWarning,
 		serverStore
 	} from '$lib/stores/server.svelte';
-	import { contextService } from '$lib/services';
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 	import { isFileTypeSupported } from '$lib/utils/file-type';
 	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
@@ -79,6 +80,7 @@
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
+	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 
 	async function handleDeleteConfirm() {
@@ -102,6 +104,12 @@
 		dragCounter--;
 		if (dragCounter === 0) {
 			isDragOver = false;
+		}
+	}
+
+	function handleErrorDialogOpenChange(open: boolean) {
+		if (!open) {
+			dismissErrorDialog();
 		}
 	}
 
@@ -182,21 +190,6 @@
 		}
 
 		const extras = result?.extras;
-
-		// Check context limit using real-time slots data
-		const contextCheck = await contextService.checkContextLimit();
-
-		if (contextCheck && contextCheck.wouldExceed) {
-			const errorMessage = contextService.getContextErrorMessage(contextCheck);
-
-			setMaxContextError({
-				message: errorMessage,
-				estimatedTokens: contextCheck.currentUsage,
-				maxContext: contextCheck.maxContext
-			});
-
-			return false;
-		}
 
 		// Enable autoscroll for user-initiated message sending
 		userScrolledUp = false;
@@ -459,6 +452,13 @@
 			emptyFileNames = [];
 		}
 	}}
+/>
+
+<ChatErrorDialog
+	message={activeErrorDialog?.message ?? ''}
+	onOpenChange={handleErrorDialogOpenChange}
+	open={Boolean(activeErrorDialog)}
+	type={activeErrorDialog?.type ?? 'server'}
 />
 
 <style>
