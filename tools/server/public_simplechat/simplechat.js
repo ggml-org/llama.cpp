@@ -488,7 +488,7 @@ class SimpleChat {
      * @param {boolean} bClear
      * @param {boolean} bShowInfoAll
      */
-    show(div, elInUser, bClear=true, bShowInfoAll=false) {
+    showTOREMOVE(div, elInUser, bClear=true, bShowInfoAll=false) {
         if (bClear) {
             div.replaceChildren();
         }
@@ -865,6 +865,17 @@ class MultiChatUI {
 
     /**
      * Refresh UI wrt given chatId, provided it matches the currently selected chatId
+     *
+     * Show the chat contents in elDivChat.
+     * Also update
+     * * the user query input box, with ToolTemp role message, if last one.
+     * * the tool call trigger ui, with Tool role message, if last one.
+     *
+     * If requested to clear prev stuff and inturn no chat content then show
+     * * usage info
+     * * option to load prev saved chat if any
+     * * as well as settings/info.
+     *
      * @param {string} chatId
      * @param {boolean} bClear
      * @param {boolean} bShowInfoAll
@@ -874,7 +885,34 @@ class MultiChatUI {
             return false
         }
         let chat = this.simpleChats[this.curChatId];
-        chat.show(this.elDivChat, this.elInUser, bClear, bShowInfoAll)
+        if (bClear) {
+            this.elDivChat.replaceChildren();
+            this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        }
+        let last = undefined;
+        for(const [i, x] of chat.recent_chat(gMe.chatProps.iRecentUserMsgCnt).entries()) {
+            if (x.ns.role === Roles.ToolTemp) {
+                if (i == (chat.xchat.length - 1)) {
+                    this.elInUser.value = x.ns.content;
+                }
+                continue
+            }
+            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, this.elDivChat);
+            entry.className = `role-${x.ns.role}`;
+            last = entry;
+            if (x.ns.role === Roles.Tool) {
+                this.ui_reset_toolcall_as_needed(x);
+            }
+        }
+        if (last !== undefined) {
+            last.scrollIntoView(false);
+        } else {
+            if (bClear) {
+                this.elDivChat.innerHTML = gUsageMsg;
+                gMe.setup_load(this.elDivChat, chat);
+                gMe.show_info(this.elDivChat, bShowInfoAll);
+            }
+        }
         return true
     }
 
@@ -1040,7 +1078,6 @@ class MultiChatUI {
         } else {
             console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
         }
-        this.ui_reset_toolcall_as_needed(theResp);
         this.ui_reset_userinput();
     }
 
@@ -1250,7 +1287,7 @@ class Me {
             console.log("DBUG:SimpleChat:SC:Load", chat);
             chat.load();
             queueMicrotask(()=>{
-                chat.show(div, this.multiChat.elInUser, true, true);
+                this.multiChat.chat_show(chat.chatId, true, true);
                 this.multiChat.elInSystem.value = chat.get_system_latest().ns.content;
             });
         });
