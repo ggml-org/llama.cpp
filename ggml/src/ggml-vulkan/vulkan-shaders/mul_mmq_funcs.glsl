@@ -346,8 +346,8 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #endif // MMQ_SHMEM
 #endif
 
-#if defined(DATA_A_Q4_K)
-// 4-byte loads for Q4_K blocks (144 bytes)
+#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+// 4-byte loads for Q4_K blocks (144 bytes) and Q5_K blocks (176 bytes)
 ACC_TYPE mul_q8_1(const int32_t q_sum, const vec2 dma, const vec2 dsb, const int32_t sum_divisor) {
     return ACC_TYPE(dsb.x * dma.x * float(q_sum) - dma.y * dsb.y);
 }
@@ -361,10 +361,19 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     const uint qs_shift = ((iqs_k % 16) / 8) * 4;
 
     // Repack 2x4 quants into one int
+#if defined(DATA_A_Q4_K)
     const uint32_t vals0 = (data_a_packed32[ib_k].qs[qs_idx    ] >> qs_shift) & 0x0F0F0F0F;
     const uint32_t vals1 = (data_a_packed32[ib_k].qs[qs_idx + 1] >> qs_shift) & 0x0F0F0F0F;
 
     buf_a[buf_ib].qs[iqs] = vals0 | (vals1 << 4);
+#else // defined(DATA_A_Q5_K)
+    const uint qh_idx = iqs * QUANT_R_MMQ;
+    const uint qh_shift = iqs_k / 8;
+
+    buf_a[buf_ib].qs[iqs] = int32_t(((data_a_packed32[ib_k].qs[qs_idx] >> qs_shift) & 0x0F0F0F0F) |
+                                   (((data_a_packed32[ib_k].qh[qh_idx] >> qh_shift) & 0x01010101) << 4));
+#endif
+
 
     if (iqs == 0) {
         // Scale index
@@ -384,7 +393,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
     cache_a[reg_ib].dm = buf_a[buf_ib].dm;
 
-    [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
+    [[unroll]] for (uint iqs = 0; iqs < 8 / QUANT_R_MMQ; iqs++) {
         cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
     }
 }
@@ -393,7 +402,11 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
     int32_t q_sum = 0;
 
     [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+#if defined(DATA_A_Q4_K)
         const int32_t qs_a = int32_t((cache_a[ib_a].qs[iqs / 2] >> ((iqs % 2) * 4)) & 0x0F0F0F0F);
+#else // defined(DATA_A_Q5_K)
+        const int32_t qs_a = cache_a[ib_a].qs[iqs];
+#endif
 
         q_sum += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]);
     }

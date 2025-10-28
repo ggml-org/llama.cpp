@@ -567,7 +567,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 
     const uint8_t hm = uint8_t(1 << (iqs / 16));
 
-    const vec2 loadd = vec2(data_a[a_offset + ib].d);
+    const vec2 loadd = vec2(data_a[a_offset + ib].dm);
 
     const uint scidx0 = (is < 4) ? is : (is + 4);
     const uint scidx1 = (is < 4) ? is : (is - 4);

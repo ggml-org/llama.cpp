@@ -215,7 +215,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             const uint8_t hm = uint8_t(1 << (iqs / 16));
 
-            const vec2 loadd = vec2(data_a[ib].d);
+            const vec2 loadd = vec2(data_a[ib].dm);
 
             const uint scidx0 = (is < 4) ? is : (is + 4);
             const uint scidx1 = (is < 4) ? is : (is - 4);

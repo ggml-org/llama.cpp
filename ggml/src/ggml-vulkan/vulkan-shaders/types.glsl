@@ -325,7 +325,7 @@ struct block_q4_K_packed128
 
 struct block_q5_K
 {
-    f16vec2 d;
+    f16vec2 dm;
     uint8_t scales[12];
     uint8_t qh[QUANT_K_Q5_K/8];
     uint8_t qs[QUANT_K_Q5_K/2];
@@ -333,10 +333,18 @@ struct block_q5_K
 
 struct block_q5_K_packed16
 {
-    f16vec2 d;
+    f16vec2 dm;
     uint16_t scales[12/2];
     uint16_t qh[QUANT_K_Q5_K/8/2];
     uint16_t qs[QUANT_K_Q5_K/2/2];
+};
+
+struct block_q5_K_packed32
+{
+    f16vec2 dm;
+    uint32_t scales[12/4];
+    uint32_t qh[QUANT_K_Q5_K/8/4];
+    uint32_t qs[QUANT_K_Q5_K/2/4];
 };
 
 struct block_q5_K_packed128
@@ -349,6 +357,7 @@ struct block_q5_K_packed128
 #define QUANT_R 1
 #define A_TYPE block_q5_K
 #define A_TYPE_PACKED16 block_q5_K_packed16
+#define A_TYPE_PACKED32 block_q5_K_packed32
 #define DATA_A_QUANT_K
 #endif
 
