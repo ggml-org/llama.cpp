@@ -261,7 +261,7 @@ class ChatMessageEx {
         let content = ""
         let toolcall = ""
         if (this.ns.reasoning_content.trim() !== "") {
-            reasoning = `!!!Reasoning:  ${this.ns.reasoning_content.trim()} !!!\n`;
+            reasoning = `!!!Reasoning: ${this.ns.reasoning_content.trim()} !!!\n\n`;
         }
         if (this.ns.content !== "") {
             content = this.ns.content;
@@ -898,7 +898,7 @@ class MultiChatUI {
                 }
                 continue
             }
-            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, this.elDivChat);
+            let entry = ui.el_create_append_p(`[[ ${x.ns.role} ]]: ${x.content_equiv()}`, this.elDivChat);
             entry.className = `role-${x.ns.role}`;
             last = entry;
             if (x.ns.role === Roles.Assistant) {
