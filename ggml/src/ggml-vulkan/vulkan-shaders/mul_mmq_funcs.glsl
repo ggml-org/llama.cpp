@@ -279,6 +279,73 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #endif // MMQ_SHMEM
 #endif
 
+#if defined(DATA_A_Q3_K)
+// 2-byte loads for Q3_K blocks (110 bytes)
+#ifdef MMQ_SHMEM
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint ib_k = ib / 8;
+    const uint hm_idx = iqs * QUANT_R_MMQ;
+    const uint iqs_k = (ib % 8) * 8 + hm_idx;
+
+    const uint qs_idx = (iqs_k / 32) * 8 + (iqs_k % 8);
+    const uint qs_shift = ((iqs_k % 32) / 8) * 2;
+    const uint hm_shift = iqs_k / 8;
+
+    // Repack 2x4 quants into one int
+    // Add the 3rd bit instead of subtracting it to allow packing the quants
+    const i8vec2 vals00 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx * 2        ] >> qs_shift) & uint16_t(0x0303))) |
+                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[hm_idx * 2    ] >> hm_shift) & uint16_t(0x0101)) << 2));
+    const i8vec2 vals01 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx * 2 + 1    ] >> qs_shift) & uint16_t(0x0303))) |
+                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[hm_idx * 2 + 1] >> hm_shift) & uint16_t(0x0101)) << 2));
+    const i8vec2 vals10 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx * 2 + 2    ] >> qs_shift) & uint16_t(0x0303))) |
+                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[hm_idx * 2 + 2] >> hm_shift) & uint16_t(0x0101)) << 2));
+    const i8vec2 vals11 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx * 2 + 3    ] >> qs_shift) & uint16_t(0x0303))) |
+                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[hm_idx * 2 + 3] >> hm_shift) & uint16_t(0x0101)) << 2));
+    buf_a[buf_ib].qs[iqs] = pack32(u8vec4(vals00.x, vals00.y, vals01.x, vals01.y)) |
+                           (pack32(u8vec4(vals10.x, vals10.y, vals11.x, vals11.y)) << 4);
+
+    if (iqs == 0) {
+        const uint is = iqs_k / 4;
+        const i8vec2 scales = i8vec2(unpack8(((data_a_packed16[ib_k].scales[(is % 8      ) / 2] >> (4 * (is / 8))) & 0x0F0F) |
+                                            (((data_a_packed16[ib_k].scales[(8 + (is % 4)) / 2] >> (2 * (is / 4))) & 0x0303) << 4)));
+
+        buf_a[buf_ib].d_scales = FLOAT_TYPE(data_a_packed16[ib_k].d) * FLOAT_TYPE_VEC2(scales - 32);
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+    cache_a[reg_ib].d_scales = buf_a[buf_ib].d_scales;
+
+    [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+    float result = 0.0;
+    int32_t q_sum = 0;
+
+    [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
+        // Subtract 4 from the quants to correct the 3rd bit offset
+        const int32_t qs_a = pack32(unpack8(int32_t((cache_a[ib_a].qs[iqs / 2] >> ((iqs % 2) * 4)) & 0x0F0F0F0F)) - int8_t(4));
+
+        q_sum += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]);
+    }
+    result += float(cache_a[ib_a].d_scales[0]) * float(q_sum);
+    q_sum = 0;
+
+    [[unroll]] for (uint iqs = 4; iqs < 8; iqs++) {
+        const int32_t qs_a = pack32(unpack8(int32_t((cache_a[ib_a].qs[iqs / 2] >> ((iqs % 2) * 4)) & 0x0F0F0F0F)) - int8_t(4));
+
+        q_sum += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]);
+    }
+    result += float(cache_a[ib_a].d_scales[1]) * float(q_sum);
+
+    return ACC_TYPE(cache_b.ds.x * result);
+}
+#endif // MMQ_SHMEM
+#endif
+
 #if defined(DATA_A_Q4_K)
 // 4-byte loads for Q4_K blocks (144 bytes)
 ACC_TYPE mul_q8_1(const int32_t q_sum, const vec2 dma, const vec2 dsb, const int32_t sum_divisor) {
