@@ -59,9 +59,6 @@ void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
     }
 }
 
-void block_a_to_registers(const uint reg_ib, const uint buf_ib, const uint iqs) {
-}
-
 ACC_TYPE mmq_dot_product(const uint ib_a) {
     int32_t q_sum = 0;
     [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
@@ -201,6 +198,61 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
     }
 
     return mul_q8_1(q_sum, cache_a[ib_a].dm, cache_b.ds, 1);
+}
+#endif // MMQ_SHMEM
+#endif
+
+#if defined(DATA_A_MXFP4)
+// 1-byte loads for mxfp4 blocks (17 bytes)
+i32vec2 repack(uint ib, uint iqs) {
+    const uint32_t quants = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                          data_a[ib].qs[iqs * 4 + 1],
+                                          data_a[ib].qs[iqs * 4 + 2],
+                                          data_a[ib].qs[iqs * 4 + 3]));
+
+    return i32vec2( quants       & 0x0F0F0F0F,
+                   (quants >> 4) & 0x0F0F0F0F);
+}
+
+ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
+    return ACC_TYPE(da * dsb.x * float(q_sum));
+}
+
+#ifdef MMQ_SHMEM
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                      data_a[ib].qs[iqs * 4 + 1],
+                                      data_a[ib].qs[iqs * 4 + 2],
+                                      data_a[ib].qs[iqs * 4 + 3]));
+
+    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
+    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+
+    buf_a[buf_ib].qs[iqs    ] = pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w]));
+    buf_a[buf_ib].qs[iqs + 4] = pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w]));
+
+    if (iqs == 0) {
+        buf_a[buf_ib].d = FLOAT_TYPE(e8m0_to_fp32(data_a[ib].e) * 0.5);
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+    cache_a[reg_ib].d = buf_a[buf_ib].d;
+
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+    int32_t q_sum = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        const int32_t qs_a = cache_a[ib_a].qs[iqs];
+
+        q_sum += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]);
+    }
+
+    return mul_q8_1(q_sum, cache_a[ib_a].d, cache_b.ds, 1);
 }
 #endif // MMQ_SHMEM
 #endif

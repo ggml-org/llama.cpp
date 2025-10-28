@@ -1383,18 +1383,11 @@ struct block_mxfp4
     uint8_t qs[QUANT_K_MXFP4/2];
 };
 
-//struct block_mxfp4_packed16
-//{
-//    uint8_t e;
-//    uint16_t qs[QUANT_K_MXFP4/2/2];
-//};
-
 #if defined(DATA_A_MXFP4)
 #define QUANT_K QUANT_K_MXFP4
 #define QUANT_R QUANT_R_MXFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_mxfp4
-//#define A_TYPE_PACKED16 block_mxfp4_packed16
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
@@ -1417,12 +1410,12 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 
 #if defined(DATA_A_MXFP4)
-const FLOAT_TYPE kvalues_mxfp4_const[16] = {
-    FLOAT_TYPE(0.0f), FLOAT_TYPE(0.5f), FLOAT_TYPE(1.0f), FLOAT_TYPE(1.5f), FLOAT_TYPE(2.0f), FLOAT_TYPE(3.0f), FLOAT_TYPE(4.0f), FLOAT_TYPE(6.0f),
-    FLOAT_TYPE(-0.0f), FLOAT_TYPE(-0.5f), FLOAT_TYPE(-1.0f), FLOAT_TYPE(-1.5f), FLOAT_TYPE(-2.0f), FLOAT_TYPE(-3.0f), FLOAT_TYPE(-4.0f), FLOAT_TYPE(-6.0f)
+const int8_t kvalues_mxfp4_const[16] = {
+    int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
+    int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
-shared FLOAT_TYPE kvalues_mxfp4[16];
+shared int8_t kvalues_mxfp4[16];
 
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)

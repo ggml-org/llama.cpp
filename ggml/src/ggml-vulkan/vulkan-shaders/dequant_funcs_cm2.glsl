@@ -680,7 +680,7 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
     qs &= 0xF;
-    float16_t ret = float16_t(kvalues_mxfp4[qs] * d);
+    float16_t ret = float16_t(kvalues_mxfp4[qs] * d * 0.5);
     return ret;
 }
 #endif

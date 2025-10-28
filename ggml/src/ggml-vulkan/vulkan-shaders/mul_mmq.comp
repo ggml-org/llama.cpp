@@ -10,6 +10,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #endif
 
+#if defined(MUL_MAT_ID_USE_SUBGROUPS)
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#endif
+
 #ifdef MUL_MAT_ID
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
@@ -91,13 +96,9 @@ block_b_cache cache_b;
 #define LOAD_VEC_A (4 * QUANT_R_MMQ)
 #define LOAD_VEC_B 16
 
-// TODO: Recheck if this can work with mul_mat_id
-#ifdef MUL_MAT_ID
-shared u16vec2 row_ids[4096];
-#endif // MUL_MAT_ID
-
 #define NUM_WARPS (BLOCK_SIZE / WARP)
 
+#include "mul_mm_id_funcs.glsl"
 #include "mul_mmq_funcs.glsl"
 
 void main() {
@@ -146,17 +147,27 @@ void main() {
     const uint loadstride_b = BLOCK_SIZE * LOAD_VEC_B / BK;
 
 #ifdef MUL_MAT_ID
-    uint _ne1 = 0;
-    for (uint ii1 = 0; ii1 < p.nei1; ii1++) {
-        for (uint ii0 = 0; ii0 < p.nei0; ii0++) {
+#ifdef MUL_MAT_ID_USE_SUBGROUPS
+    if (bitCount(p.nei0) == 1) {
+        load_row_ids(expert_idx, true, ic);
+    } else {
+        load_row_ids(expert_idx, false, ic);
+    }
+#else
+    _ne1 = 0;
+    for (uint ii1 = 0; ii1 < p.nei1 && _ne1 < (ic + 1) * BN; ii1++) {
+        for (uint ii0 = 0; ii0 < p.nei0 && _ne1 < (ic + 1) * BN; ii0++) {
             if (data_ids[ii1*p.nbi1 + ii0] == expert_idx) {
-                row_ids[_ne1] = u16vec2(ii0, ii1);
+                if (_ne1 >= ic * BN) {
+                    row_ids[_ne1 - ic * BN] = u16vec2(ii0, ii1);
+                }
                 _ne1++;
             }
         }
     }
 
     barrier();
+#endif
 
     // Workgroup has no work
     if (ic * BN >= _ne1) return;
@@ -203,15 +214,12 @@ void main() {
             const uint buf_ib = loadc_b + l;
 
 #ifdef MUL_MAT_ID
-            const u16vec2 row_idx = row_ids[ic * BN + buf_ib];
-            const uint idx = pos_b_ib + row_idx.y * p.batch_stride_b / LOAD_VEC_B + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC_B + loadr_b;
-            const uint ib = idx / 8;
-            const uint iqs = idx & 0x7;
+            const u16vec2 row_idx = row_ids[buf_ib];
+            const uint ib = pos_b_ib + row_idx.y * p.batch_stride_b / BK + (row_idx.x % p.ne11) * p.stride_b / BK;
 #else
             const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;
-
-            const uint iqs = loadr_b;
 #endif
+            const uint iqs = loadr_b;
 
             [[unroll]] for (uint k_step = 0; k_step < BK_STEP; k_step++) {
                 block_b_to_shmem(k_step * BN + buf_ib, ib + k_step, iqs);
