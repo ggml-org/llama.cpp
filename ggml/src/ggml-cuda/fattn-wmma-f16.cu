@@ -20,9 +20,24 @@ namespace wmma = rocwmma;
 #endif // !defined(GGML_USE_HIP)
 #endif // GGML_USE_WMMA_FATTN
 
+#if defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+static constexpr int GGML_ROCWMMA_FATTN_MIN_BLOCKS_PER_SM = 2;
+#else
+static constexpr int GGML_ROCWMMA_FATTN_MIN_BLOCKS_PER_SM = 1;
+#endif
+
+template <int D>
+constexpr int ggml_wmma_fattn_kq_stride() {
+#if defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+    return D <= 128 ? 128 : FATTN_KQ_STRIDE;
+#else
+    return FATTN_KQ_STRIDE;
+#endif
+}
+
 // D == head size, VKQ_stride == num VKQ rows calculated in parallel:
 template<int D, int ncols, int nwarps, int VKQ_stride, typename KQ_acc_t, bool use_logit_softcap>
-__launch_bounds__(nwarps*ggml_cuda_get_physical_warp_size(), 1)
+__launch_bounds__(nwarps*ggml_cuda_get_physical_warp_size(), GGML_ROCWMMA_FATTN_MIN_BLOCKS_PER_SM)
 static __global__ void flash_attn_ext_f16(
         const char * __restrict__ Q,
         const char * __restrict__ K,
@@ -55,10 +70,12 @@ static __global__ void flash_attn_ext_f16(
     //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int fattn_kq_stride = ggml_wmma_fattn_kq_stride<D>();
+
+    static_assert(D <= fattn_kq_stride, "D must be <= fattn_kq_stride.");
 
     const int ic0 = ncols*blockIdx.x; // Index of the first Q/QKV column to work on.
 
-    static_assert(D <= FATTN_KQ_STRIDE, "D must be <= FATTN_KQ_STRIDE.");
     static_assert(ncols == 8 || ncols % 16 == 0, "ncols must be 8 or a multiple of 16.");
     constexpr int frag_m = ncols == 8 ? 32 : 16;
     constexpr int frag_n = ncols == 8 ?  8 : 16;
@@ -75,7 +92,7 @@ static __global__ void flash_attn_ext_f16(
 
     // Pad internal representation of KQ, KQV to reduce shared memory bank conflicts:
     constexpr int D_padded = D + 8;
-    constexpr int kqs_padded = FATTN_KQ_STRIDE + 8;
+    constexpr int kqs_padded = fattn_kq_stride + 8;
     constexpr int kqar = sizeof(KQ_acc_t)/sizeof(half);
 
     const int sequence = blockIdx.z / ne02;
@@ -168,10 +185,10 @@ static __global__ void flash_attn_ext_f16(
 
     // Iterate over ne11 == previous tokens:
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
-    for (int k_VKQ_0 = blockIdx.y*FATTN_KQ_STRIDE; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*FATTN_KQ_STRIDE) {
+    for (int k_VKQ_0 = blockIdx.y*fattn_kq_stride; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*fattn_kq_stride) {
         // Calculate tile of KQ:
 #pragma unroll
-        for (int i_KQ_0 = 0; i_KQ_0 < FATTN_KQ_STRIDE; i_KQ_0 += KQ_stride_tc) {
+        for (int i_KQ_0 = 0; i_KQ_0 < fattn_kq_stride; i_KQ_0 += KQ_stride_tc) {
             frag_c_KQ KQ_c[ncols/frag_n];
 #pragma unroll
             for (int j = 0; j < ncols/frag_n; ++j) {
@@ -201,9 +218,9 @@ static __global__ void flash_attn_ext_f16(
             const int j = j0 + threadIdx.y;
 
             if (std::is_same<KQ_acc_t, float>::value) {
-                float KQ_f_tmp[FATTN_KQ_STRIDE / warp_size];
+                float KQ_f_tmp[fattn_kq_stride / warp_size];
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     KQ_f_tmp[k0/warp_size] = KQ_f[j*kqs_padded + k];
@@ -215,7 +232,7 @@ static __global__ void flash_attn_ext_f16(
 
                 float KQ_max_new = KQ_max_f[j0/nwarps];
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     KQ_f_tmp[k0/warp_size] += mask ? __half2float(slopeh*maskh[j*(nb31/sizeof(half)) + k_VKQ_0 + k]) : 0.0f;
@@ -232,7 +249,7 @@ static __global__ void flash_attn_ext_f16(
 
                 float KQ_rowsum_add = 0.0f;
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     const float diff = KQ_f_tmp[k0/warp_size] - KQ_max_f[j0/nwarps];
@@ -248,9 +265,9 @@ static __global__ void flash_attn_ext_f16(
                 // Scale previous KQ_rowsum to account for a potential increase in KQ_max:
                 KQ_rowsum_f[j0/nwarps] = KQ_max_scale_f[j0/nwarps]*KQ_rowsum_f[j0/nwarps] + KQ_rowsum_add;
             } else {
-                half2 KQ2_tmp[FATTN_KQ_STRIDE/(2*warp_size)];
+                half2 KQ2_tmp[fattn_kq_stride/(2*warp_size)];
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE/2; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride/2; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     KQ2_tmp[k0/warp_size] = KQ2[j*(kqs_padded/2) + k];
@@ -267,7 +284,7 @@ static __global__ void flash_attn_ext_f16(
 
                 half2 KQ_max_new = KQ_max_h2[j0/nwarps];
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE/2; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride/2; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     KQ2_tmp[k0/warp_size] += mask ? slope2*mask2[(j*ne11 + k_VKQ_0)/2 + k] : make_half2(0.0f, 0.0f);
@@ -282,7 +299,7 @@ static __global__ void flash_attn_ext_f16(
 
                 half2 KQ_rowsum_add = make_half2(0.0f, 0.0f);
 #pragma unroll
-                for (int k0 = 0; k0 < FATTN_KQ_STRIDE/2; k0 += warp_size) {
+                for (int k0 = 0; k0 < fattn_kq_stride/2; k0 += warp_size) {
                     const int k = k0 + threadIdx.x;
 
                     const half2 diff = KQ2_tmp[k0/warp_size] - KQ_max_h2[j0/nwarps];
@@ -301,11 +318,11 @@ static __global__ void flash_attn_ext_f16(
 
         __syncthreads();
 
-        frag_b KQ_b[FATTN_KQ_STRIDE/(VKQ_ratio*16)][ncols/frag_n];
+        frag_b KQ_b[fattn_kq_stride/(VKQ_ratio*16)][ncols/frag_n];
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += frag_n) {
 #pragma unroll
-            for (int k0 = 0; k0 < FATTN_KQ_STRIDE; k0 += VKQ_ratio*16) {
+            for (int k0 = 0; k0 < fattn_kq_stride; k0 += VKQ_ratio*16) {
                 const int k = k0 + (threadIdx.y % VKQ_ratio)*16;
                 wmma::load_matrix_sync(
                     KQ_b[k0/(VKQ_ratio*16)][j0/frag_n],
@@ -323,7 +340,7 @@ static __global__ void flash_attn_ext_f16(
             }
 
 #pragma unroll
-            for (int k0 = 0; k0 < FATTN_KQ_STRIDE; k0 += VKQ_ratio*16) {
+            for (int k0 = 0; k0 < fattn_kq_stride; k0 += VKQ_ratio*16) {
                 const int k = k0 + (threadIdx.y % VKQ_ratio)*16;
 
                 frag_a_V v_a;
@@ -512,7 +529,12 @@ template <int D, int cols_per_block, typename KQ_acc_t>
 void ggml_cuda_flash_attn_ext_wmma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
 
+#if defined(GGML_USE_HIP) && defined(GGML_HIP_ROCWMMA_FATTN)
+    constexpr int nwarps = D <= 96 ? 8 : 4;
+#else
     constexpr int nwarps = 4;
+#endif
+    constexpr int fattn_kq_stride = ggml_wmma_fattn_kq_stride<D>();
 
     constexpr int frag_m = cols_per_block == 8 && D % 32 == 0 ? 32 : 16;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
@@ -530,7 +552,7 @@ void ggml_cuda_flash_attn_ext_wmma_f16_case(ggml_backend_cuda_context & ctx, ggm
         fattn_kernel = flash_attn_ext_f16<
             D, cols_per_block, nwarps, get_VKQ_stride(D, nwarps, frag_m), KQ_acc_t, use_logit_softcap>;
     }
-    launch_fattn<D, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, 0, FATTN_KQ_STRIDE, true, true, false, warp_size);
+    launch_fattn<D, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, 0, fattn_kq_stride, true, true, false, warp_size);
 }
 
 void ggml_cuda_flash_attn_ext_wmma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
