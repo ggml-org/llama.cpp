@@ -112,7 +112,7 @@ public:
             }
             if (!diff.content_delta.empty()) {
                 if (had_reasoning) {
-                    result.push_back({" ...\n", REASONING});
+                    result.push_back({" ...\n\n", REASONING});
                     had_reasoning = false;
                 }
                 result.push_back({diff.content_delta, CONTENT});
@@ -120,6 +120,11 @@ public:
         }
         previous = next;
         return result;
+    }
+
+    void clear() {
+        previous = common_chat_msg();
+        had_reasoning = false;
     }
 
 private:
@@ -141,6 +146,10 @@ public:
     std::string operator()(const std::string & role, const std::string & content) {
         if (role == "user") {
             formatted_cumulative.clear(); // Needed if template strips reasoning
+
+            if (partial_formatter_ptr) {
+                partial_formatter_ptr->clear(); // Remove stale data from delta
+            }
         }
 
         common_chat_msg new_msg;
