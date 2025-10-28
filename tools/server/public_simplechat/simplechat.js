@@ -367,7 +367,7 @@ class SimpleChat {
         if (iRecentUserMsgCnt == 0) {
             console.warn("WARN:SimpleChat:SC:RecentChat:iRecentUsermsgCnt of 0 means no user message/query sent");
         }
-        /** @type{ChatMessages} */
+        /** @type {ChatMessages} */
         let rchat = [];
         let sysMsg = this.get_system_latest();
         if (sysMsg.ns.content.length != 0) {
@@ -493,16 +493,16 @@ class SimpleChat {
             div.replaceChildren();
         }
         let last = undefined;
-        for(const x of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
-            if (x.ns.role != Roles.ToolTemp) {
-                let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
-                entry.className = `role-${x.ns.role}`;
-                last = entry;
-            } else {
-                if (elInUser) {
+        for(const [i, x] of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt).entries()) {
+            if (x.ns.role === Roles.ToolTemp) {
+                if (i == (this.xchat.length - 1)) {
                     elInUser.value = x.ns.content;
                 }
+                continue
             }
+            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
+            entry.className = `role-${x.ns.role}`;
+            last = entry;
         }
         if (last !== undefined) {
             last.scrollIntoView(false);
