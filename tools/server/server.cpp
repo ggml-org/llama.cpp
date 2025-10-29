@@ -3577,7 +3577,21 @@ struct server_context {
                 llama_memory_seq_rm (llama_get_memory(ctx), slot.id, n_keep            , n_keep + n_discard);
                 llama_memory_seq_add(llama_get_memory(ctx), slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
 
-                slot.prompt.tokens.keep_first(slot.prompt.tokens.size() - n_discard);
+                // add generated tokens to cache
+                // ref: https://github.com/ggml-org/llama.cpp/pull/16818#discussion_r2473269481
+                {
+                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+
+                    llama_tokens new_tokens = slot.prompt.tokens.get_text_tokens(); // copy
+                    for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
+                        new_tokens[i - n_discard] = new_tokens[i];
+                    }
+
+                    new_tokens.resize(slot.prompt.tokens.size() - n_discard);
+
+                    slot.prompt.tokens.clear();
+                    slot.prompt.tokens.insert(new_tokens);
+                }
 
                 slot.truncated = true;
             }
