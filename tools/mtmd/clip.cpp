@@ -288,8 +288,6 @@ struct clip_model {
     // GLMV-Edge projection
     ggml_tensor * mm_model_adapter_conv_w = nullptr;
     ggml_tensor * mm_model_adapter_conv_b = nullptr;
-    ggml_tensor * mm_glm_tok_boi = nullptr;
-    ggml_tensor * mm_glm_tok_eoi = nullptr;
 
     // MobileVLM projection
     ggml_tensor * mm_model_mlp_1_w = nullptr;
@@ -1505,8 +1503,8 @@ struct clip_graph {
             // note: these embeddings are not present in text model, hence we cannot process them as text tokens
             // see: https://huggingface.co/THUDM/glm-edge-v-2b/blob/main/siglip.py#L53
             {
-                embeddings = ggml_concat(ctx0, model.mm_glm_tok_boi, embeddings, 1); // BOI
-                embeddings = ggml_concat(ctx0, embeddings, model.mm_glm_tok_eoi, 1); // EOI
+                embeddings = ggml_concat(ctx0, model.mm_boi, embeddings, 1); // BOI
+                embeddings = ggml_concat(ctx0, embeddings, model.mm_eoi, 1); // EOI
             }
         }
 
@@ -2797,8 +2795,8 @@ struct clip_model_loader {
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_GLM_ADAPTER_D_H_2_4H, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_GLM_ADAPTER_GATE, "weight"));
                     model.mm_model_mlp_3_w = get_tensor(string_format(TN_GLM_ADAPTER_D_4H_2_H, "weight"));
-                    model.mm_glm_tok_boi = get_tensor(string_format(TN_TOK_GLM_BOI, "weight"));
-                    model.mm_glm_tok_eoi = get_tensor(string_format(TN_TOK_GLM_EOI, "weight"));
+                    model.mm_boi = get_tensor(string_format(TN_TOK_GLM_BOI, "weight"));
+                    model.mm_eoi = get_tensor(string_format(TN_TOK_GLM_EOI, "weight"));
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
@@ -2894,14 +2892,14 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_COGVLM:
                 {
-                    model.mm_model_proj = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_model_proj     = get_tensor(TN_MM_PROJECTOR);
                     model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_FC_NORM, "weight"));
                     model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_FC_NORM, "bias"));
-                    model.mm_h_to_4h_w = get_tensor(string_format(TN_MM_H_TO_4H, "weight"));
-                    model.mm_gate_w = get_tensor(string_format(TN_MM_GATE, "weight"));
-                    model.mm_4h_to_h_w = get_tensor(string_format(TN_MM_4H_TO_H, "weight"));
-                    model.mm_boi = get_tensor(TN_TOK_BOI);
-                    model.mm_eoi = get_tensor(TN_TOK_EOI);
+                    model.mm_h_to_4h_w      = get_tensor(string_format(TN_MM_H_TO_4H,      "weight"));
+                    model.mm_gate_w         = get_tensor(string_format(TN_MM_GATE,         "weight"));
+                    model.mm_4h_to_h_w      = get_tensor(string_format(TN_MM_4H_TO_H,      "weight"));
+                    model.mm_boi            = get_tensor(TN_TOK_BOI);
+                    model.mm_eoi            = get_tensor(TN_TOK_EOI);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3951,7 +3949,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_GLM_EDGE:
             {
                 n_patches /= 4;
-                if (ctx->model.mm_glm_tok_boi) {
+                if (ctx->model.mm_boi) {
                     n_patches += 2; // for BOI and EOI token embeddings
                 }
             } break;
@@ -4043,7 +4041,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_COGVLM:
             {
-                n_patches += 2;
+                n_patches += 2; // for BOI and EOI token embeddings
             } break;
         default:
             GGML_ABORT("unsupported projector type");
