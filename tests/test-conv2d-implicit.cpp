@@ -357,6 +357,7 @@ int main(void)
         // std::make_tuple(1280,1280,26,38,1,1),
         // std::make_tuple(256,128,768,1024,3,3),
         // std::make_tuple(256,128,768,1024,1,1),
+        // std::make_tuple(512,256,384,512,1,1),
         // std::make_tuple(1280,640,52,76,3,3),
         // std::make_tuple(1920,1280,26,38,3,3),
         // std::make_tuple(2560,1280,26,38,3,3),
@@ -388,7 +389,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -451,17 +452,17 @@ int main(void)
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        for(int i = 0; i < conv2d_data.size(); i++) {
-            // float diff = fabs(conv2d_data[i] - wino_data[i]);
-            float diff = fabs(im2col_data[i] - wino_data[i]);
-            float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
-            if(diff > 0.5) {
-                  printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
-                  im2col_data[i], conv2d_data[i],
-                  wino_data[i], diff, diff1, i);
-                // break;
-            }
-        }
+        // for(int i = 0; i < conv2d_data.size(); i++) {
+        //     // float diff = fabs(conv2d_data[i] - wino_data[i]);
+        //     float diff = fabs(im2col_data[i] - wino_data[i]);
+        //     float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
+        //     // if(diff > 0.5) {
+        //           printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
+        //           im2col_data[i], conv2d_data[i],
+        //           wino_data[i], diff, diff1, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

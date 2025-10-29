@@ -1219,8 +1219,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
             {
                     // output sts
                 uint32_t (&reg_)[2] = reinterpret_cast<uint32_t(&)[2]>(acc_register_[mma_m][mma_n]);
-                const uint idx = output_sts_addr + 
+                uint idx = output_sts_addr + 
                             mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
+                idx = idx ^ ((idx & 0b1110000000) >> 4);
                 uint32_t* dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 dst_ptr[0] = reg_[0];
                 dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx + 8 * BN / 2]);
@@ -1255,7 +1256,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 // if (n < param.n && (m_idx + i * 16 + subk) < param.k && (n_idx + j * 32) < param.Oh * param.Ow)
                 //     param.interm[outOffset] = smemoutput[output_lds_addr + subk * 32];
                     const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
-                    output[outOffset] = smemoutput[output_lds_addr + subk + j*32*BN/2];
+                    uint idx = output_lds_addr + subk + j*32*BN/2;
+                    idx = idx ^ ((idx & 0b1110000000) >> 4);
+                    // output[outOffset] = smemoutput[output_lds_addr + subk + j*32*BN/2];
+                    output[outOffset] = smemoutput[idx];
                     // if(outOffset == 32){
                     //     printf("(%u, %u, %u, %u), output[%d,%d,%d]=%f \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
                     //          n, row, col, __half2float(output[outOffset]));
