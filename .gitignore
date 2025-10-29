@@ -21,6 +21,9 @@
 *.swp
 *.tmp
 
+# OCI Go generated files
+oci-go/liboci.h
+
 # IDE / OS
 
 .cache/
