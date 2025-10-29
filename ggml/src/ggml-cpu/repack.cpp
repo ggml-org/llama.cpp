@@ -168,7 +168,7 @@ void ggml_quantize_mat_q8_K_4x4_generic(const float * GGML_RESTRICT x, void * GG
             int src_offset = (j / (4 * blck_size_interleave)) * blck_size_interleave;
             int src_id     = (j % (4 * blck_size_interleave)) / blck_size_interleave;
             src_offset += (j % blck_size_interleave);
-            int index = (((j & 31) >> 3) << 2) + ((j >> 8) << 4) + ((j >> 6) & 3);
+            int index = (((j & 15) >> 2) << 2) + ((j >> 8) << 4) + ((j >> 6) & 3);
 
             float x0 = srcv[src_id][src_offset] * iscale[src_id];
             y[i].qs[j] = nearest_int(x0);
@@ -248,8 +248,6 @@ template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_0>(const float * GGML_RESTR
 template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
-    ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
-
     ggml_quantize_mat_q8_K_4x4(x, vy, n_per_row);
 }
 
@@ -441,8 +439,8 @@ void ggml_gemv_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                 utmp[sb * 4 + 0] &= kmask1;
             }
             for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                uint8_t *scales_0 = (uint8_t*) utmp + (k / 4) * 32;
-                uint8_t *scales_1 = (uint8_t*) utmp + (k / 4) * 32 + 16;
+                uint8_t *scales_0 = (uint8_t*) utmp + (k / 8) * 32;
+                uint8_t *scales_1 = (uint8_t*) utmp + (k / 8) * 32 + 16;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumi1 = 0;
                     sumi2 = 0;
@@ -450,8 +448,8 @@ void ggml_gemv_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     for (int i = 0; i < blocklen; ++i) {
                         const int v0 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
                         const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                        sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i]);
-                        sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i + 32]);
+                        sumi1 = (v0 * a_ptr[l].qs[(k / 8) * 64 + (k % 8) * blocklen + i]);
+                        sumi2 = (v1 * a_ptr[l].qs[(k / 8) * 64 + (k % 8) * blocklen + i + 32]);
                         sumi1 = sumi1 * scales_0[j];
                         sumi2 = sumi2 * scales_1[j];
                         sumi += sumi1 + sumi2;
@@ -866,6 +864,8 @@ void ggml_gemm_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
 }
 
+// NOTE: This implementation, while correct, has different numerical results than the 8x8
+// version due to differences in the order of fp operations.
 void ggml_gemm_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
@@ -916,8 +916,8 @@ void ggml_gemm_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     utmp[sb * 4 + 0] &= kmask1;
                 }
                 for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                    uint8_t *scales_0 = (uint8_t*) utmp + (k / 4) * 32;
-                    uint8_t *scales_1 = (uint8_t*) utmp + (k / 4) * 32 + 16;
+                    uint8_t *scales_0 = (uint8_t*) utmp + (k / 8) * 32;
+                    uint8_t *scales_1 = (uint8_t*) utmp + (k / 8) * 32 + 16;
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
                             sumi1 = 0;
@@ -926,8 +926,8 @@ void ggml_gemm_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                             for (int i = 0; i < blocklen; ++i) {
                                 const int v0 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
                                 const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                                sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i]);
-                                sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i + 128]);
+                                sumi1 = (v0 * a_ptr[l].qs[(k / 8) * 256 + (k % 8) * 4 * blocklen + m * blocklen + i]);
+                                sumi2 = (v1 * a_ptr[l].qs[(k / 8) * 256 + (k % 8) * 4 * blocklen + m * blocklen + i + 128]);
                                 sumi1 = sumi1 * scales_0[j];
                                 sumi2 = sumi2 * scales_1[j];
                                 sumi += sumi1 + sumi2;
