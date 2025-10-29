@@ -786,6 +786,12 @@ class MultiChatUI {
             toolcallResponseSubmitClick: undefined
         }
 
+        /**
+         * Used for tracking presence of any chat message in show related logics
+         * @type {HTMLElement | null}
+         */
+        this.elLastChatMessage = null
+
         // the ui elements
         this.elInSystem = /** @type{HTMLInputElement} */(document.getElementById("system-in"));
         this.elDivChat = /** @type{HTMLDivElement} */(document.getElementById("chat-div"));
@@ -866,6 +872,43 @@ class MultiChatUI {
     }
 
     /**
+     * Handles showing a chat message in UI.
+     *
+     * If handling message belonging to role
+     * * ToolTemp, updates user query input element, if its the last message.
+     * * Assistant which contains a tool req, shows tool call ui if needed. ie
+     *   * if it is the last message OR
+     *   * if it is the last but one message and there is a ToolTemp message next
+     * @param {ChatMessageEx} msg
+     * @param {number} iFromLast
+     * @param {ChatMessageEx | undefined} nextMsg
+     */
+    show_message(msg, iFromLast, nextMsg) {
+        if (msg.ns.role === Roles.ToolTemp) {
+            if (iFromLast == 0) {
+                this.elInUser.value = msg.ns.content;
+            }
+            return
+        }
+        let entry = ui.el_create_append_p(`[[ ${msg.ns.role} ]]: ${msg.content_equiv()}`, this.elDivChat);
+        entry.className = `role-${msg.ns.role}`;
+        this.elLastChatMessage = entry;
+        if (msg.ns.role === Roles.Assistant) {
+            let bTC = false
+            if (iFromLast == 0) {
+                bTC = true
+            } else if ((iFromLast == 1) && (nextMsg != undefined)) {
+                if (nextMsg.ns.role == Roles.ToolTemp) {
+                    bTC = true
+                }
+            }
+            if (bTC) {
+                this.ui_reset_toolcall_as_needed(msg);
+            }
+        }
+    }
+
+    /**
      * Refresh UI wrt given chatId, provided it matches the currently selected chatId
      *
      * Show the chat contents in elDivChat.
@@ -891,35 +934,18 @@ class MultiChatUI {
             this.elDivChat.replaceChildren();
             this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         }
-        let last = undefined;
+        this.elLastChatMessage = null
         let chatToShow = chat.recent_chat(gMe.chatProps.iRecentUserMsgCnt);
         for(const [i, x] of chatToShow.entries()) {
-            if (x.ns.role === Roles.ToolTemp) {
-                if (i == (chatToShow.length - 1)) {
-                    this.elInUser.value = x.ns.content;
-                }
-                continue
+            let iFromLast = (chatToShow.length - 1)-i
+            let nextMsg = undefined
+            if (iFromLast == 1) {
+                nextMsg = chatToShow[i+1]
             }
-            let entry = ui.el_create_append_p(`[[ ${x.ns.role} ]]: ${x.content_equiv()}`, this.elDivChat);
-            entry.className = `role-${x.ns.role}`;
-            last = entry;
-            if (x.ns.role === Roles.Assistant) {
-                let bTC = false
-                if (i == (chatToShow.length-1)) {
-                    bTC = true
-                }
-                if (i == (chatToShow.length-2)) {
-                    if (chatToShow[i+1].ns.role == Roles.ToolTemp) {
-                        bTC = true
-                    }
-                }
-                if (bTC) {
-                    this.ui_reset_toolcall_as_needed(x);
-                }
-            }
+            this.show_message(x, iFromLast, nextMsg)
         }
-        if (last !== undefined) {
-            last.scrollIntoView(false);
+        if (this.elLastChatMessage != null) {
+            /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
         } else {
             if (bClear) {
                 this.elDivChat.innerHTML = gUsageMsg;
