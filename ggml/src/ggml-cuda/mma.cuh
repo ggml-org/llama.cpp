@@ -70,7 +70,30 @@ namespace ggml_cuda_mma {
         static constexpr int J  = J_;
 
 #if defined(GGML_USE_HIP)
-#if defined(CDNA)
+#if defined(RDNA4)
+        static constexpr int ne = I * J / 32;
+        T x[ne] = {0};
+
+        static __device__ __forceinline__ int get_i(const int l) {
+            if constexpr (I == 16 && J == 16) {
+                return 8 * (threadIdx.x / 16) + l;
+            } else if constexpr (I == 16 && J == 8) { // dummy shape to handle TF32, just make the compiler happle, don't use it in the real case
+                return 4 * (threadIdx.x / 16) + l;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+
+        static __device__ __forceinline__ int get_j(const int l) {
+            if constexpr (I == 16 && J == 16) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 16 && J == 8) { // dummy shape to handle TF32, just make the compiler happle, don't use it in the real case
+                return threadIdx.x % 16;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+#else
         static constexpr int ne = I * J / 64;
         T x[ne] = {0};
 
@@ -105,30 +128,7 @@ namespace ggml_cuda_mma {
                 static_assert(I == -1 && J == -1, "template specialization not implemented");
             }
         }
-#elif defined(RDNA4)
-        static constexpr int ne = I * J / 32;
-        T x[ne] = {0};
-
-        static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 16 && J == 16) {
-                return 8 * (threadIdx.x / 16) + l;
-            } else if constexpr (I == 16 && J == 8) { // dummy shape to handle TF32, just make the compiler happle, don't use it in the real case
-                return 4 * (threadIdx.x / 16) + l;
-            } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
-            }
-        }
-
-        static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 16 && J == 16) {
-                return threadIdx.x % 16;
-            } else if constexpr (I == 16 && J == 8) { // dummy shape to handle TF32, just make the compiler happle, don't use it in the real case
-                return threadIdx.x % 16;
-            } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
-            }
-        }
-#endif // defined(CDNA)
+#endif // defined(RDNA4)
 #else
         static constexpr int ne = I * J / 32;
         T x[ne] = {0};
