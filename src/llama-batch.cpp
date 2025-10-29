@@ -669,10 +669,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
     auto udata = std::make_shared<llama_ubatch::data_t>();
 
-    const int32_t n_pos_cur = batch.embd ? n_pos_per_embd : 1;
-
     const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
-    const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_cur;
+    const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
 
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
@@ -694,8 +692,13 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
             memcpy(udata->embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
         }
 
-        for (int j = 0; j < n_pos_cur; ++j) {
-            udata->pos[j*n_tokens + i] = batch.pos[j*batch.n_tokens + idxs[i]];
+        for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
+            // if we are using M-RoPE
+            //     if the current batch is text, we need to broadcast the same position across all RoPE sections
+            //     otherwise, the input batch is image embeddings, we copy the positions as-is
+            // if we are not using M-RoPE, there is only one position per token (this loop runs only once)
+            size_t src_off = batch.token ? 0 : j*batch.n_tokens;
+            udata->pos[j*n_tokens + i] = batch.pos[src_off + idxs[i]];
         }
 
         udata->n_seq_id[i] = batch.n_seq_id[idxs[i]];
