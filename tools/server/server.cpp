@@ -3707,9 +3707,9 @@ struct server_context {
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
                                 // if there is an alora invoked, don't cache after the invocation start
-                                if (slot.alora_invocation_start >= 0) {
-                                    SLT_DBG(slot, "only caching to alora invocation start (n_past=%d, alora_invocation_start=%d)\n", n_past, slot.alora_invocation_start);
-                                    n_past = std::min(n_past, slot.alora_invocation_start);
+                                if (slot.alora_invocation_start > 0) {
+                                    SLT_DBG(slot, "only caching to alora invocation start (n_past = %d, alora_invocation_start = %d)\n", n_past, slot.alora_invocation_start);
+                                    n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
@@ -3769,7 +3769,7 @@ struct server_context {
                             const auto n_swa = std::max(1, llama_model_n_swa(model));
 
                             // the largest pos_min required for a checkpoint to be useful
-                            const auto pos_min_thold = std::max(0, n_past - n_swa - 1);
+                            const auto pos_min_thold = std::max(0, n_past - n_swa);
 
                             if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
