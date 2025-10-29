@@ -879,20 +879,35 @@ class MultiChatUI {
      * * Assistant which contains a tool req, shows tool call ui if needed. ie
      *   * if it is the last message OR
      *   * if it is the last but one message and there is a ToolTemp message next
+     * @param {HTMLElement | undefined} elParent
      * @param {ChatMessageEx} msg
      * @param {number} iFromLast
      * @param {ChatMessageEx | undefined} nextMsg
      */
-    show_message(msg, iFromLast, nextMsg) {
+    show_message(elParent, msg, iFromLast, nextMsg) {
+        // Handle ToolTemp
         if (msg.ns.role === Roles.ToolTemp) {
             if (iFromLast == 0) {
                 this.elInUser.value = msg.ns.content;
             }
             return
         }
-        let entry = ui.el_create_append_p(`[[ ${msg.ns.role} ]]: ${msg.content_equiv()}`, this.elDivChat);
-        entry.className = `role-${msg.ns.role}`;
-        this.elLastChatMessage = entry;
+        // Create main section
+        let secMain = document.createElement('section')
+        secMain.classList.add(`role-${msg.ns.role}`)
+        secMain.classList.add('chat-message')
+        elParent?.append(secMain)
+        this.elLastChatMessage = secMain;
+        // Create role para
+        let entry = ui.el_create_append_p(`${msg.ns.role}`, secMain);
+        entry.className = `chat-message-role`;
+        // Create content section
+        let secContent = document.createElement('section')
+        secContent.classList.add('chat-message-content')
+        secMain.append(secContent)
+        // Add the content
+        entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContent);
+        // Handle tool call ui, if reqd
         if (msg.ns.role === Roles.Assistant) {
             let bTC = false
             if (iFromLast == 0) {
@@ -942,7 +957,7 @@ class MultiChatUI {
             if (iFromLast == 1) {
                 nextMsg = chatToShow[i+1]
             }
-            this.show_message(x, iFromLast, nextMsg)
+            this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
         if (this.elLastChatMessage != null) {
             /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
