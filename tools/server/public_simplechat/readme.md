@@ -102,6 +102,8 @@ remember to
     * the white list of allowed.domains
     * the shared bearer token between server and client ui
 
+* other builtin tool / function calls like calcultor, javascript runner, DataStore dont require simpleproxy.py
+
 
 
 ### using the front end
@@ -178,6 +180,8 @@ Once inside
   This also helps if you had forgotten to start the bundled simpleproxy.py server before hand.
   Start the simpleproxy.py server and refresh the client ui page, to get access to web access
   related tool calls.
+  * if you refreshed unknowingly, you can use the Restore feature to try load the previous chat
+    session and resume that session. This uses a basic local auto save logic that is in there.
 
 * Using NewChat one can start independent chat sessions.
   * two independent chat sessions are setup by default.
@@ -406,6 +410,8 @@ The following tools/functions are currently provided by default
 * run_javascript_function_code - which can be used to run some javascript code in the browser
   context.
 
+* data_store_get/set - allows for a basic data store to be used.
+
 Currently the ai generated code / expression is run through a simple minded eval inside a web worker
 mechanism. Use of WebWorker helps avoid exposing browser global scope to the generated code directly.
 However any shared web worker scope isnt isolated. Either way always remember to cross check the tool
@@ -450,7 +456,7 @@ The bundled simple proxy
   a non-browser entity.
 
 In future it can be further extended to help with other relatively simple yet useful tool calls like
-data / documents_store, fetch_rss and so.
+data / documents_store [wip], fetch_rss and so.
 
   * for now fetch_rss can be indirectly achieved using fetch_web_url_raw.
 
