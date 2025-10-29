@@ -643,6 +643,7 @@ class SimpleChat {
      */
     async handle_response_multipart(resp, apiEP, elDiv) {
         let elP = ui.el_create_append_p("", elDiv);
+        elP.classList.add("chat-message-content-live")
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
