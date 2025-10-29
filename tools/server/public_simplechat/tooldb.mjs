@@ -1,92 +1,95 @@
 //@ts-check
 // ALERT - Simple Stupid flow - Using from a discardable VM is better
-// Helpers to handle tools/functions calling wrt
-// * javascript interpreter
-// * simple arithmatic calculator
+// Helpers to handle tools/functions calling wrt data store
 // using a web worker.
 // by Humans for All
 //
 
 
-let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
+let gToolsDBWorker = /** @type{Worker} */(/** @type {unknown} */(null));
 
 
-let js_meta = {
+let dsget_meta = {
         "type": "function",
         "function": {
-            "name": "run_javascript_function_code",
-            "description": "Runs given code using eval within a web worker context in a browser's javascript environment and returns the console.log outputs of the execution after few seconds",
+            "name": "data_store_get",
+            "description": "Retrieve the value associated with a given key, in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {
+                    "key": {
                         "type": "string",
-                        "description": "The code that will be run using eval within a web worker in the browser's javascript interpreter environment."
+                        "description": "The key whose value should be returned."
                     }
                 },
-                "required": ["code"]
+                "required": [ "key" ],
             }
         }
     }
 
 
 /**
- * Implementation of the javascript interpretor logic. Minimal skeleton for now.
- * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
+ * Implementation of the data store get logic. Minimal skeleton for now.
+ * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
  * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function js_run(chatid, toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
+function dsget_run(chatid, toolcallid, toolname, obj) {
+    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
 }
 
 
-let calc_meta = {
+let dsset_meta = {
         "type": "function",
         "function": {
-            "name": "simple_calculator",
-            "description": "Calculates the provided arithmatic expression using console.log within a web worker of a browser's javascript interpreter environment and returns the output of the execution once it is done in few seconds",
+            "name": "data_store_set",
+            "description": "Store a value under a given key, in few seconds using a web worker",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "arithexpr":{
-                        "type":"string",
-                        "description":"The arithmatic expression that will be calculated by passing it to console.log of a browser's javascript interpreter."
+                    "key": {
+                        "type": "string",
+                        "description": "The key under which to store the value."
+                    },
+                    "value": {
+                        "type": "any",
+                        "description": "The value to store. Can be any JSON-serialisable type."
                     }
                 },
-                "required": ["arithexpr"]
-            }
+                "required": ["key", "value"]
+            },
         }
     }
 
 
 /**
- * Implementation of the simple calculator logic. Minimal skeleton for now.
- * ALERT: Has access to the javascript web worker environment and can mess with it and beyond
+ * Implementation of the data store set logic. Minimal skeleton for now.
+ * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
  * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function calc_run(chatid, toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
+function dsset_run(chatid, toolcallid, toolname, obj) {
+    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
 }
+
 
 
 /**
  * @type {Object<string, Object<string, any>>}
  */
 export let tc_switch = {
-    "run_javascript_function_code": {
-        "handler": js_run,
-        "meta": js_meta,
+    "data_store_get": {
+        "handler": dsget_run,
+        "meta": dsget_meta,
         "result": ""
     },
-    "simple_calculator": {
-        "handler": calc_run,
-        "meta": calc_meta,
+    "data_store_set": {
+        "handler": dsset_run,
+        "meta": dsset_meta,
         "result": ""
     },
 }
@@ -98,5 +101,5 @@ export let tc_switch = {
  * @param {Worker} toolsWorker
  */
 export async function init(toolsWorker) {
-    gToolsWorker = toolsWorker
+    gToolsDBWorker = toolsWorker
 }
