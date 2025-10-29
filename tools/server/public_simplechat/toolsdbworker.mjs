@@ -1,5 +1,5 @@
 //@ts-check
-// STILL DANGER DANGER DANGER - Simple and Stupid - Use from a discardable VM only
+// STILL DANGER DANGER DANGER - Simple and Stupid - Using from a discardable VM better.
 // Helpers to handle db related tool/function calling using web worker
 // by Humans for All
 //
