@@ -30,24 +30,24 @@ static std::map<int, int> temp_to_freq = {
 // 🔥 Throughput monitoring CSV (llama.cpp에서 정의됨)
 extern std::ofstream g_csv;
 
-// GPU 온도 읽기 (millidegree C)
-static inline int read_gpu_temp() {
-    int fd = open(GPU_TEMP_PATH, O_RDONLY);
-    if (fd < 0) return -1;
-    
-    char buf[32];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-    
-    // Fast parse
-    int temp = 0;
-    for (int i = 0; i < n && buf[i] >= '0' && buf[i] <= '9'; i++) {
-        temp = temp * 10 + (buf[i] - '0');
+
+// Read GPU Temperature
+
+double read_gpu_temp() {
+    const std::string path = "/sys/class/kgsl/kgsl-3d0/temp";
+    std::ifstream file(path);
+
+    if (!file.is_open()) {
+        fprintf(stderr, "Thermal: Cannot open %s: %s\n", GPU_MIN_FREQ_PATH, strerror(errno));
+        return -1.0; // 오류 시 음수 반환
     }
-    return temp;
+
+    int temp_milli = 0;
+    file >> temp_milli;
+    file.close();
+
+    // 밀리도 단위 → 섭씨
+    return temp_milli;
 }
 
 // GPU frequency 설정 - echo처럼
@@ -129,24 +129,6 @@ static inline bool set_cpu_freq(int freq_khz) {
 }
 */
 
-// GPU 온도 읽기 (millidegree C) - FD 재사용
-static inline int read_gpu_temp_fast(int fd) {
-    if (fd < 0) return -1;
-    
-    if (lseek(fd, 0, SEEK_SET) < 0) return -1;
-    
-    char buf[32];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-    
-    // Fast parse
-    int temp = 0;
-    for (int i = 0; i < n && buf[i] >= '0' && buf[i] <= '9'; i++) {
-        temp = temp * 10 + (buf[i] - '0');
-    }
-    return temp;
-}
 
 // CPU frequency 설정 - 캐시된 FD 사용
 static inline bool set_cpu_freq_cached(int *fd_cache, int num_fds, int freq_khz) {
@@ -245,11 +227,11 @@ static inline void thermal_control_check() {
     }
     
     int temp_mc = read_gpu_temp();
-    if (temp_mc < 0) return;
+    if (temp_mc <= 0) return;
     
     int temp_celsius = temp_mc / 1000;
 
-    if (temp_celsius >= temp_celsius && !finished){
+    if (temp_celsius >= TARGET_TEMPERATURE && !finished){
         finished = true;
     
         // 온도에 맞는 주파수 찾기
