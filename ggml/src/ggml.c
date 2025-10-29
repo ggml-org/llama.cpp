@@ -4585,9 +4585,9 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
         int                   p0,  // padding dimension 0
         int                   p1,  // padding dimension 1
         int                   d0,  // dilation dimension 0
-        int                   d1,
+        int                   d1){
         // 0: NHWC, 1:NCHW
-        int                   layout) {// dilation dimension 1
+        // int                   layout) {
 
     GGML_ASSERT(a->ne[2] == b->ne[2]);
     //GGML_ASSERT(a->type == b->type);
@@ -4606,12 +4606,10 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
     ggml_set_op_params_i32(result, 3, p1);
     ggml_set_op_params_i32(result, 4, d0);
     ggml_set_op_params_i32(result, 5, d1);
-    ggml_set_op_params_i32(result, 6, layout);
 
     struct ggml_tensor *ap, *bp;
-    if(layout == 0){
-        // ap = ggml_cont(ctx, ggml_permute(ctx, a, 1, 2, 0, 3));
-        // bp = ggml_cont(ctx, ggml_permute(ctx, b, 1, 2, 0, 3));
+    if(a->type == GGML_TYPE_F16 && (a->ne[0] > 1 || a->ne[1] > 1)){
+        ggml_set_op_params_i32(result, 6, 0);
         ap = ggml_reshape_4d(ctx, 
                             ggml_cont(ctx,
                             ggml_transpose(ctx, 
@@ -4623,6 +4621,7 @@ struct ggml_tensor * ggml_conv_2d_implicitgemm(
                             ggml_reshape_3d(ctx, b, b->ne[0]*b->ne[1], b->ne[2], b->ne[3]))),
                             b->ne[2], b->ne[0], b->ne[1], b->ne[3]);
     } else{
+        ggml_set_op_params_i32(result, 6, 1);
         ap = a;
         bp = b;
     }

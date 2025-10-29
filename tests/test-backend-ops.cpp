@@ -4273,7 +4273,7 @@ struct test_conv_2d_implicit : public test_case {
         // }
 
         ggml_tensor * out =
-            ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn?0:1);
+            ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
         ggml_set_name(out, "out");
         return out;
     }

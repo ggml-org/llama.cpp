@@ -262,7 +262,6 @@ struct ggml_cgraph * build_graph_2(const test_model& model) {
     int d1 = 1;
 
 
-
     // recalculate for avoid fragmentation
     // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     // ggml_set_name(conv2d_res, "conv2d_res");
@@ -271,7 +270,7 @@ struct ggml_cgraph * build_graph_2(const test_model& model) {
     // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
 
 
-    struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, 0);
+    struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     // struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     ggml_set_name(wino_res, "wino_res");
     ggml_build_forward_expand(gf, wino_res);
@@ -353,9 +352,10 @@ int main(void)
         // std::make_tuple(640,640,52,76,3,3),
         // std::make_tuple(640,640,104,152,3,3),
         // std::make_tuple(960,320,104,152,3,3),
-        std::make_tuple(1280,1280,26,38,3,3),
+        // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1280,1280,26,38,1,1),
         // std::make_tuple(256,128,768,1024,3,3),
+        std::make_tuple(128,3,768,1024,3,3),
         // std::make_tuple(256,128,768,1024,1,1),
         // std::make_tuple(512,256,384,512,1,1),
         // std::make_tuple(1280,640,52,76,3,3),
@@ -389,7 +389,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 0;
+        int iterations = 20;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
