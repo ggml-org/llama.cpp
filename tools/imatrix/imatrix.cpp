@@ -150,7 +150,7 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     } else {
         // Mean
         for (size_t m = 0; m < n_mat; ++m) {
-            const float c = (float)tstats.counts[m];
+            const auto c = (float)tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
                 vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
@@ -215,7 +215,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     double sqr_sum = 0.0;
     for (const float v : activations) { sqr_sum += (double)v * (double)v; }
     double variance = sqr_sum / (double)activations.size() - (double)mean * (double)mean;
-    if (variance < 0.0) { variance = 0.0; }
+    variance = std::max(variance, 0.0);
     const float std_deviation = std::sqrt((float)variance);
 
     float entropy = 0.0f;
@@ -1327,7 +1327,7 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%11s\t%8s\t%5s\t%10s\n",
         "Layer",
         "Tensor",
-        legacy_mode ? "Σ(Act²)" : "L₂ Norm",
+        legacy_mode ? "Σ E[Act²]" : "L₂ Norm",
         "Min",
         "Max",
         "μ",
@@ -1356,7 +1356,7 @@ static bool show_statistics(const common_params & params) {
         const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
         const float ecs = 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(std::fabs(tstat.cossim), 10.0f);
 
-        LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
+        LOG_INF("%5s\t%-20s\t%11.4f\t%10.4f\t%10.4f\t%8.4f\t%8.4f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
             layer.c_str(),
             name.c_str(),
             legacy_mode ? tstat.sum_values : tstat.l2_norm,
@@ -1392,7 +1392,7 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\nComputing layer statistics (%zu layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
         "Layer",
-        legacy_mode ? "Σ(Act²)" : "L₂ Norm",
+        legacy_mode ? "Σ E[Act²]" : "L₂ Norm",
         "ZD",
         "CosSim",
         legacy_mode ? "" : "ECS");
@@ -1402,19 +1402,19 @@ static bool show_statistics(const common_params & params) {
         LOG_INF("=========================================================\n");
     }
     for (const auto & [layer, stats] : ls) {
-        if (layer < 0 || stats.n == 0) continue;
+        if (layer < 0 || stats.n == 0) { continue; }
         const auto lcs = layer_cossim.find(layer);
         const float layer_cs = lcs != layer_cossim.end() ? lcs->second : 0.0f;
         const auto ll2n = layer_l2_norm.find(layer);
         const float layer_l2n = ll2n != layer_l2_norm.end() ? ll2n->second : 0.0f;
         if (legacy_mode) {
-            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\n",
+            LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\n",
                 layer,
                 stats.layer_sum,
                 100.0f * stats.layer_zd / stats.n,
                 layer_cs);
         } else {
-            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\t%8.4f\n",
+            LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\t%8.4f\n",
                 layer,
                 layer_l2n,
                 100.0f * stats.layer_zd / stats.n,
