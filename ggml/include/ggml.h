@@ -2241,6 +2241,16 @@ extern "C" {
               int32_t               win_local,
               int32_t               stride_global);
 
+    GGML_API void ggml_sparsek_attn_set_params(
+             struct ggml_tensor * a,
+             int32_t k_top,
+             int32_t win_local,
+             int32_t stride_global);
+
+    GGML_API int32_t ggml_sparsek_attn_get_param(
+             const struct ggml_tensor * a,
+             int index);
+
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
