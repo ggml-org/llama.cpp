@@ -56,7 +56,7 @@ struct tensor_statistics {
     float entropy       = 0.0f;
     float zd_score      = 0.0f;
     float cossim        = 0.0f;
-    float l2_norm       = 0.0f;
+    float l2_dist       = 0.0f;
 };
 
 class IMatrixCollector {
@@ -381,8 +381,8 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         }
         layer_cossim[kv.first] = cossim;
 
-        // Compute aggregated L2 Norm (Euclidean Distance)
-        layer_l2_norm[kv.first] = (float)std::sqrt(l2_dist_sq);
+        // Compute aggregated L2 Distance (Euclidean Distance)
+        layer_l2_dist[kv.first] = (float)std::sqrt(agg.sum_l2_dist_sq);
     }
 }
 
@@ -1327,7 +1327,7 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%11s\t%8s\t%5s\t%10s\n",
         "Layer",
         "Tensor",
-        legacy_mode ? "Σ E[Act²]" : "L₂ Norm",
+        legacy_mode ? "Σ E[Act²]" : "L₂ Dist",
         "Min",
         "Max",
         "μ",
@@ -1354,12 +1354,12 @@ static bool show_statistics(const common_params & params) {
         }
 
         const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
-        const float ecs = 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(std::fabs(tstat.cossim), 10.0f);
+        const float ecs = 100.0f * std::exp(-0.01f * tstat.l2_dist) * std::pow(std::fabs(tstat.cossim), 10.0f); // Euclidean-Cosine score
 
         LOG_INF("%5s\t%-20s\t%11.4f\t%10.4f\t%10.4f\t%8.4f\t%8.4f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
             layer.c_str(),
             name.c_str(),
-            legacy_mode ? tstat.sum_values : tstat.l2_norm,
+            legacy_mode ? tstat.sum_values : tstat.l2_dist,
             tstat.min_values,
             tstat.max_values,
             tstat.mean_values,
@@ -1385,14 +1385,14 @@ static bool show_statistics(const common_params & params) {
     }
 
     std::map<int, float> layer_cossim;
-    std::map<int, float> layer_l2_norm;
-    compute_layer_statistics(ts, layer_cossim, layer_l2_norm, g_collector.get_mstats());
+    std::map<int, float> layer_l2_dist;
+    compute_layer_statistics(ts, layer_cossim, layer_l2_dist, g_collector.get_mstats());
 
     const size_t layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing layer statistics (%zu layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
         "Layer",
-        legacy_mode ? "Σ E[Act²]" : "L₂ Norm",
+        legacy_mode ? "Σ E[Act²]" : "L₂ Dist",
         "ZD",
         "CosSim",
         legacy_mode ? "" : "ECS");
@@ -1405,8 +1405,8 @@ static bool show_statistics(const common_params & params) {
         if (layer < 0 || stats.n == 0) { continue; }
         const auto lcs = layer_cossim.find(layer);
         const float layer_cs = lcs != layer_cossim.end() ? lcs->second : 0.0f;
-        const auto ll2n = layer_l2_norm.find(layer);
-        const float layer_l2n = ll2n != layer_l2_norm.end() ? ll2n->second : 0.0f;
+        const auto ll2n = layer_l2_dist.find(layer);
+        const float layer_l2n = ll2n != layer_l2_dist.end() ? ll2n->second : 0.0f;
         if (legacy_mode) {
             LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\n",
                 layer,
