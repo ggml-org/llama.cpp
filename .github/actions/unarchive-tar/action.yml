@@ -1,0 +1,27 @@
+name: "Unarchive tar"
+description: "Download and unarchive tar into directory"
+inputs:
+  url:
+    description: "URL of the tar archive"
+    required: true
+  path:
+    description: "Directory to unarchive into"
+    required: true
+  type:
+    description: "Compression type (tar option)"
+    required: false
+    default: "J"
+  strip:
+    description: "Strip components"
+    required: false
+    default: "0"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Unarchive into directory
+      shell: bash
+      run: |
+        mkdir -p ${{ inputs.path }}
+        cd ${{ inputs.path }}
+        curl --no-progress-meter ${{ inputs.url }} | tar -${{ inputs.type }}x --strip-components=${{ inputs.strip }}

@@ -1,11 +1,19 @@
 
+
+# Steps to merge the branch to latest
+#git clone git@github.com:tsisw/llama.cpp.git
+#git remote add upstream https://github.com/ggml-org/llama.cpp.git
+#git fetch upstream
+#git checkout master
+#git merge upstream/master
+
 set -e
 
 #Ensure prerequisites are met as follows
 echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
-module load tsi4 gcc/13.3.0
+module load gcc/13.3.0
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.0
 echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
@@ -38,11 +46,11 @@ cd ../../
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
 if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
 elif [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
 else
-  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
+  cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
 fi
 
 cmake --build build-posix --config Release
@@ -73,14 +81,15 @@ chmod +x build-posix/bin/llama-cli
 echo 'building llama.cp, ggml for tsavorite  and other binary for fpga'
 export CC="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc"
 export CXX="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++"
-
+export CMAKE_FIND_ROOT_PATH=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/
+export TSAVORITE_SYSROOT_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include/
 if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE"
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 elif [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL"
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 else
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 fi
 
 cmake --build build-fpga --config Release

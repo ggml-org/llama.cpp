@@ -64,6 +64,9 @@ class common_chat_msg_parser {
     // Adds an array of tool calls using their "name", "id" and "arguments" fields.
     bool add_tool_calls(const nlohmann::ordered_json & arr);
 
+    // Adds a tool call using the short form: { "tool_name": { "arg1": val, "arg2": val } }
+    bool add_tool_call_short_form(const nlohmann::ordered_json & tool_call);
+
     void finish();
 
     bool consume_spaces();

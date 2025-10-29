@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_set>
 
 #include "common.h"
 #include "ggml.h"
@@ -135,6 +136,80 @@ static std::string get_gpu_info() {
     return join(gpu_list, ", ");
 }
 
+static std::vector<ggml_backend_dev_t> parse_devices_arg(const std::string & value) {
+    std::vector<ggml_backend_dev_t> devices;
+    std::string                     trimmed = string_strip(value);
+    if (trimmed.empty()) {
+        throw std::invalid_argument("no devices specified");
+    }
+    if (trimmed == "auto") {
+        return devices;
+    }
+
+    auto dev_names = string_split<std::string>(trimmed, '/');
+    if (dev_names.size() == 1 && string_strip(dev_names[0]) == "none") {
+        devices.push_back(nullptr);
+        return devices;
+    }
+
+    for (auto & name : dev_names) {
+        std::string dev_name = string_strip(name);
+        if (dev_name.empty()) {
+            throw std::invalid_argument("invalid device specification");
+        }
+        auto * dev = ggml_backend_dev_by_name(dev_name.c_str());
+        if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            throw std::invalid_argument(string_format("invalid device: %s", dev_name.c_str()));
+        }
+        devices.push_back(dev);
+    }
+
+    devices.push_back(nullptr);
+    return devices;
+}
+
+static void register_rpc_server_list(const std::string & servers) {
+    auto rpc_servers = string_split<std::string>(servers, ',');
+    if (rpc_servers.empty()) {
+        throw std::invalid_argument("no RPC servers specified");
+    }
+
+    auto * rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        throw std::invalid_argument("failed to find RPC backend");
+    }
+
+    using add_rpc_server_fn = ggml_backend_reg_t (*)(const char * endpoint);
+    auto * ggml_backend_rpc_add_server_fn = (add_rpc_server_fn) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        throw std::invalid_argument("failed to find RPC add server function");
+    }
+    for (const auto & server : rpc_servers) {
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        ggml_backend_register(reg);
+    }
+}
+
+static std::string devices_to_string(const std::vector<ggml_backend_dev_t> & devices) {
+    if (devices.empty()) {
+        return "auto";
+    }
+
+    if (devices.size() == 1 && devices[0] == nullptr) {
+        return "none";
+    }
+
+    std::vector<std::string> names;
+    for (auto * dev : devices) {
+        if (dev == nullptr) {
+            break;
+        }
+        names.push_back(ggml_backend_dev_name(dev));
+    }
+
+    return join(names, "/");
+}
+
 // command line params
 enum output_formats { NONE, CSV, JSON, JSONL, MARKDOWN, SQL };
 
@@ -250,16 +325,18 @@ struct cmd_params {
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
-    std::vector<std::string>         rpc_servers;
+    std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<bool>                flash_attn;
+    std::vector<std::vector<ggml_backend_dev_t>> devices;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                no_host;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -286,16 +363,18 @@ static const cmd_params cmd_params_defaults = {
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { 99 },
-    /* rpc_servers          */ { "" },
+    /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
+    /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* no_host              */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -323,9 +402,13 @@ static void print_usage(int /* argc */, char ** argv) {
            output_format_str(cmd_params_defaults.output_format));
     printf("  -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: %s)\n",
            output_format_str(cmd_params_defaults.output_format_stderr));
+    printf("  --list-devices                            list available devices and exit\n");
     printf("  -v, --verbose                             verbose output\n");
     printf("  --progress                                print test progress indicators\n");
     printf("  --no-warmup                               skip warmup runs before benchmarking\n");
+    if (llama_supports_rpc()) {
+        printf("  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)\n");
+    }
     printf("\n");
     printf("test parameters:\n");
     printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
@@ -353,10 +436,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --poll <0...100>                          (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                  (default: %s)\n",
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
-    if (llama_supports_rpc()) {
-        printf("  -rpc, --rpc <rpc_servers>                 (default: %s)\n",
-               join(cmd_params_defaults.rpc_servers, ",").c_str());
-    }
+    printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
+           join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>        (default: %s)\n",
            join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                       (default: %s)\n",
@@ -365,6 +446,7 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>                   (default: %s)\n",
            join(cmd_params_defaults.flash_attn, ",").c_str());
+    printf("  -dev, --device <dev0/dev1/...>            (default: auto)\n");
     printf("  -mmp, --mmap <0|1>                        (default: %s)\n",
            join(cmd_params_defaults.use_mmap, ",").c_str());
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
@@ -373,6 +455,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
+    printf("  --no-host <0|1>                           (default: %s)\n",
+           join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -529,6 +613,42 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.type_v.insert(params.type_v.end(), types.begin(), types.end());
+            } else if (arg == "-dev" || arg == "--device") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto combos = string_split<std::string>(argv[i], split_delim);
+                for (const auto & combo : combos) {
+                    try {
+                        params.devices.push_back(parse_devices_arg(combo));
+                    } catch (const std::exception & e) {
+                        fprintf(stderr, "error: %s\n", e.what());
+                        invalid_param = true;
+                        break;
+                    }
+                }
+                if (invalid_param) {
+                    break;
+                }
+            } else if (arg == "--list-devices") {
+                std::vector<ggml_backend_dev_t> devices;
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                        devices.push_back(dev);
+                    }
+                }
+                printf("Available devices:\n");
+                if (devices.empty()) {
+                    printf("  (none)\n");
+                }
+                for (auto * dev : devices) {
+                    size_t free, total;
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                }
+                exit(0);
             } else if (arg == "-t" || arg == "--threads") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -564,12 +684,25 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
+            } else if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_cpu_moe.insert(params.n_cpu_moe.end(), p.begin(), p.end());
             } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
                 if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
-                params.rpc_servers.push_back(argv[i]);
+                try {
+                    register_rpc_server_list(argv[i]);
+                } catch (const std::exception & e) {
+                    fprintf(stderr, "error: %s\n", e.what());
+                    invalid_param = true;
+                    break;
+                }
             } else if (arg == "-sm" || arg == "--split-mode") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -653,6 +786,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "--no-host") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.no_host.insert(params.no_host.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -841,8 +981,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_gpu_layers.empty()) {
         params.n_gpu_layers = cmd_params_defaults.n_gpu_layers;
     }
-    if (params.rpc_servers.empty()) {
-        params.rpc_servers = cmd_params_defaults.rpc_servers;
+    if (params.n_cpu_moe.empty()) {
+        params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
     }
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
@@ -855,6 +995,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.flash_attn.empty()) {
         params.flash_attn = cmd_params_defaults.flash_attn;
+    }
+    if (params.devices.empty()) {
+        params.devices = cmd_params_defaults.devices;
     }
     if (params.tensor_split.empty()) {
         params.tensor_split = cmd_params_defaults.tensor_split;
@@ -870,6 +1013,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
+    }
+    if (params.no_host.empty()) {
+        params.no_host = cmd_params_defaults.no_host;
     }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
@@ -901,92 +1047,78 @@ struct cmd_params_instance {
     bool               cpu_strict;
     int                poll;
     int                n_gpu_layers;
-    std::string        rpc_servers_str;
+    int                n_cpu_moe;
     llama_split_mode   split_mode;
     int                main_gpu;
     bool               no_kv_offload;
     bool               flash_attn;
+    std::vector<ggml_backend_dev_t> devices;
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               use_mmap;
     bool               embeddings;
     bool               no_op_offload;
+    bool               no_host;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
 
         mparams.n_gpu_layers = n_gpu_layers;
-        if (!rpc_servers_str.empty()) {
-            auto rpc_servers = string_split<std::string>(rpc_servers_str, ',');
-
-            // add RPC devices
-            if (!rpc_servers.empty()) {
-                ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
-                if (!rpc_reg) {
-                    fprintf(stderr, "%s: failed to find RPC backend\n", __func__);
-                    exit(1);
-                }
-
-                typedef ggml_backend_dev_t (*ggml_backend_rpc_add_device_t)(const char * endpoint);
-                ggml_backend_rpc_add_device_t ggml_backend_rpc_add_device_fn = (ggml_backend_rpc_add_device_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_device");
-                if (!ggml_backend_rpc_add_device_fn) {
-                    fprintf(stderr, "%s: failed to find RPC device add function\n", __func__);
-                    exit(1);
-                }
-                static std::vector<ggml_backend_dev_t> devices;
-                devices.clear();
-                // RPC devices should always come first for performance reasons
-                for (const std::string & server : rpc_servers) {
-                    ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
-                    if (dev) {
-                        devices.push_back(dev);
-                    } else {
-                        fprintf(stderr, "%s: failed to add RPC device for server '%s'\n", __func__, server.c_str());
-                        exit(1);
-                    }
-                }
-                // FIXME: use llama.cpp device selection logic
-                // add local GPU devices if any
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                    switch (ggml_backend_dev_type(dev)) {
-                        case GGML_BACKEND_DEVICE_TYPE_CPU:
-                        case GGML_BACKEND_DEVICE_TYPE_ACCEL:
-                            // skip CPU backends since they are handled separately
-                            break;
-
-                        case GGML_BACKEND_DEVICE_TYPE_GPU:
-                            devices.push_back(dev);
-                            break;
-
-                        case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                            // iGPUs are not used when there are RPC servers
-                            break;
-                    }
-                }
-                devices.push_back(nullptr);
-                mparams.devices = devices.data();
-            }
+        if (!devices.empty()) {
+            mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
         }
         mparams.split_mode   = split_mode;
         mparams.main_gpu     = main_gpu;
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap     = use_mmap;
+        mparams.no_host      = no_host;
 
-        if (tensor_buft_overrides.empty()) {
-            mparams.tensor_buft_overrides = nullptr;
+        if (n_cpu_moe <= 0) {
+            if (tensor_buft_overrides.empty()) {
+                mparams.tensor_buft_overrides = nullptr;
+            } else {
+                GGML_ASSERT(tensor_buft_overrides.back().pattern == nullptr &&
+                            "Tensor buffer overrides not terminated with empty pattern");
+                mparams.tensor_buft_overrides = tensor_buft_overrides.data();
+            }
         } else {
-            GGML_ASSERT(tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
-            mparams.tensor_buft_overrides = tensor_buft_overrides.data();
+            static std::vector<llama_model_tensor_buft_override> merged;
+            static std::vector<std::string> patterns;
+
+            merged.clear();
+            patterns.clear();
+
+            auto first = tensor_buft_overrides.begin();
+            auto last  = tensor_buft_overrides.end();
+            if (first != last && (last - 1)->pattern == nullptr) {
+                --last;
+            }
+            merged.insert(merged.end(), first, last);
+
+            patterns.reserve((size_t) n_cpu_moe);
+            merged.reserve(merged.size() + (size_t) n_cpu_moe + 1);
+
+            for (int i = 0; i < n_cpu_moe; ++i) {
+                patterns.push_back(llm_ffn_exps_block_regex(i));
+                merged.push_back({ patterns.back().c_str(),
+                                ggml_backend_cpu_buffer_type() });
+            }
+
+            merged.push_back({ nullptr, nullptr });
+
+            mparams.tensor_buft_overrides = merged.data();
         }
 
         return mparams;
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
-               split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
-               tensor_split == other.tensor_split && vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
+        return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
+               split_mode == other.split_mode &&
+               main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
+               devices == other.devices &&
+               no_host == other.no_host &&
+               vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
     llama_context_params to_llama_cparams() const {
@@ -1014,12 +1146,14 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     // clang-format off
     for (const auto & m : params.model)
     for (const auto & nl : params.n_gpu_layers)
-    for (const auto & rpc : params.rpc_servers)
+    for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
     for (const auto & mg : params.main_gpu)
+    for (const auto & devs : params.devices)
     for (const auto & ts : params.tensor_split)
     for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & mmp : params.use_mmap)
+    for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1051,16 +1185,18 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
-                /* .rpc_servers  = */ rpc,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1083,16 +1219,18 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
-                /* .rpc_servers  = */ rpc,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1115,16 +1253,18 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
                 /* .n_gpu_layers = */ nl,
-                /* .rpc_servers  = */ rpc,
+                /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .no_host      = */ noh,
             };
             instances.push_back(instance);
         }
@@ -1152,15 +1292,18 @@ struct test {
     ggml_type                type_k;
     ggml_type                type_v;
     int                      n_gpu_layers;
+    int                      n_cpu_moe;
     llama_split_mode         split_mode;
     int                      main_gpu;
     bool                     no_kv_offload;
     bool                     flash_attn;
+    std::vector<ggml_backend_dev_t> devices;
     std::vector<float>       tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     use_mmap;
     bool                     embeddings;
     bool                     no_op_offload;
+    bool                     no_host;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1186,15 +1329,18 @@ struct test {
         type_k         = inst.type_k;
         type_v         = inst.type_v;
         n_gpu_layers   = inst.n_gpu_layers;
+        n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
+        devices        = inst.devices;
         tensor_split   = inst.tensor_split;
         tensor_buft_overrides = inst.tensor_buft_overrides;
         use_mmap       = inst.use_mmap;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        no_host        = inst.no_host;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1224,24 +1370,36 @@ struct test {
 
     static std::string get_backend() {
         std::vector<std::string> backends;
+        bool                     rpc_used = false;
         for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
             auto *      reg  = ggml_backend_reg_get(i);
             std::string name = ggml_backend_reg_name(reg);
-            if (name != "CPU") {
-                backends.push_back(ggml_backend_reg_name(reg));
+            if (string_starts_with(name, "RPC")) {
+                if (ggml_backend_reg_dev_count(reg) > 0) {
+                    rpc_used = true;
+                }
+            } else {
+                if (name != "CPU") {
+                    backends.push_back(ggml_backend_reg_name(reg));
+                }
             }
+        }
+        if (rpc_used) {
+            backends.push_back("RPC");
         }
         return backends.empty() ? "CPU" : join(backends, ",");
     }
 
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
-            "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
-            "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
-            "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
+            "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
+            "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
+            "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
+            "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
+            "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
+            "tensor_buft_overrides",            "use_mmap",      "embeddings",     "no_op_offload",
+            "no_host",        "n_prompt",       "n_gen",          "n_depth",       "test_time",
+            "avg_ns",         "stddev_ns",      "avg_ts",         "stddev_ts"
         };
         return fields;
     }
@@ -1251,12 +1409,12 @@ struct test {
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
-            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
+            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
+            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "embeddings") {
+            field == "use_mmap" || field == "embeddings" || field == "no_host") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1320,15 +1478,18 @@ struct test {
                                             ggml_type_name(type_k),
                                             ggml_type_name(type_v),
                                             std::to_string(n_gpu_layers),
+                                            std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
                                             std::to_string(flash_attn),
+                                            devices_to_string(devices),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(no_host),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1505,6 +1666,9 @@ struct markdown_printer : public printer {
         if (field == "flash_attn") {
             return 2;
         }
+        if (field == "devices") {
+            return -12;
+        }
         if (field == "use_mmap") {
             return 4;
         }
@@ -1512,6 +1676,9 @@ struct markdown_printer : public printer {
             return 15;
         }
         if (field == "no_op_offload") {
+            return 4;
+        }
+        if (field == "no_host") {
             return 4;
         }
 
@@ -1548,6 +1715,12 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return "nopo";
         }
+        if (field == "no_host") {
+            return "noh";
+        }
+        if (field == "devices") {
+            return "dev";
+        }
         if (field == "tensor_split") {
             return "ts";
         }
@@ -1567,6 +1740,9 @@ struct markdown_printer : public printer {
                               test::get_backend().find("BLAS") != std::string::npos;
         if (!is_cpu_backend) {
             fields.emplace_back("n_gpu_layers");
+        }
+        if (params.n_cpu_moe.size() > 1) {
+            fields.emplace_back("n_cpu_moe");
         }
         if (params.n_threads.size() > 1 || params.n_threads != cmd_params_defaults.n_threads || is_cpu_backend) {
             fields.emplace_back("n_threads");
@@ -1604,6 +1780,9 @@ struct markdown_printer : public printer {
         if (params.flash_attn.size() > 1 || params.flash_attn != cmd_params_defaults.flash_attn) {
             fields.emplace_back("flash_attn");
         }
+        if (params.devices.size() > 1 || params.devices != cmd_params_defaults.devices) {
+            fields.emplace_back("devices");
+        }
         if (params.tensor_split.size() > 1 || params.tensor_split != cmd_params_defaults.tensor_split) {
             fields.emplace_back("tensor_split");
         }
@@ -1618,6 +1797,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
+            fields.emplace_back("no_host");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");

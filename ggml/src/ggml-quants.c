@@ -3721,6 +3721,7 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * GGML_RESTRICT
             }
             float best = 0;
             float scale = max/(2*kMaxQ-1);
+            for (int k = 0; k < 8; ++k) is_on_grid[k] = true;
             for (int is = -15; is <= 15; ++is) {
                 float id = (2*kMaxQ-1+is*0.2f)/max;
                 float this_scale = 1/id;

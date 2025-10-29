@@ -49,6 +49,7 @@ if (GGML_TSAVORITE)
     set(GGML_TSAVORITE_TARGET "${GGML_TSAVORITE_TARGET}" CACHE STRING "Target for tsavorite")
     set (TSAVORITE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/ggml/src/ggml-tsavorite/include)
 
+    include_directories($ENV{TSAVORITE_SYSROOT_INCLUDE_DIR})
     include_directories(${TSAVORITE_INCLUDE_DIR})
     include_directories(${MLIR_COMPILER_DIR}/include/runtime/shim)
     include_directories(${RUNTIME_DIR}/include)
@@ -142,6 +143,8 @@ option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
 
 # 3rd party libs
+option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
+option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" OFF)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 if (GGML_TSAVORITE)
