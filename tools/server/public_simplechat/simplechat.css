@@ -43,6 +43,18 @@
     writing-mode: vertical-lr;
     padding-inline: 1vmin;
 }
+.chat-message-toolcall {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+}
+.chat-message-toolcall-arg {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+}
 
 
 .gridx2 {

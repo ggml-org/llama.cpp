@@ -902,14 +902,21 @@ class MultiChatUI {
         let entry = ui.el_create_append_p(`${msg.ns.role}`, secMain);
         entry.className = `chat-message-role`;
         // Create content section
-        let secContent = document.createElement('section')
-        secContent.classList.add('chat-message-content')
-        secMain.append(secContent)
+        let secContents = document.createElement('section')
+        secContents.classList.add('chat-message-contents')
+        secMain.append(secContents)
         // Add the content
-        entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContent);
+        //entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContents);
+        for (const [name, content] of [['reasoning', msg.ns.reasoning_content], ['content', msg.ns.content]]) {
+            let cTrimmed = content.trim()
+            if (cTrimmed.length > 0) {
+                entry = ui.el_create_append_p(`${cTrimmed}`, secContents);
+                entry.classList.add(`chat-message-${name}`)
+            }
+        }
         // Handle tool call ui, if reqd
+        let bTC = false
         if (msg.ns.role === Roles.Assistant) {
-            let bTC = false
             if (iFromLast == 0) {
                 bTC = true
             } else if ((iFromLast == 1) && (nextMsg != undefined)) {
@@ -919,6 +926,22 @@ class MultiChatUI {
             }
             if (bTC) {
                 this.ui_reset_toolcall_as_needed(msg);
+            }
+        }
+        // Handle tool call non ui
+        if (msg.has_toolcall() && !bTC) {
+            let secTC = document.createElement('section')
+            secTC.classList.add('chat-message-toolcall')
+            secContents.append(secTC)
+            entry = ui.el_create_append_p(`name: ${msg.ns.tool_calls[0].function.name}`, secTC);
+            entry = ui.el_create_append_p(`id: ${msg.ns.tool_calls[0].id}`, secTC);
+            let oArgs = JSON.parse(msg.ns.tool_calls[0].function.arguments)
+            for (const k in oArgs) {
+                entry = ui.el_create_append_p(`arg: ${k}`, secTC);
+                let secArg = document.createElement('section')
+                secArg.classList.add('chat-message-toolcall-arg')
+                secTC.append(secArg)
+                secArg.innerText = oArgs[k]
             }
         }
     }
