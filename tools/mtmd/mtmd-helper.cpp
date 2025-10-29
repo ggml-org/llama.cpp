@@ -11,6 +11,8 @@
 #include "mtmd-helper.h"
 #include "llama.h"
 
+#include "mtmd-video.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <vector>
@@ -437,6 +439,10 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
 }
 
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
+    if(mtmd_video::is_video_file(fname)){
+        return mtmd_video::init_video_bitmap_from_path(ctx, fname);
+    }
+
     std::vector<unsigned char> buf;
     FILE * f = fopen(fname, "rb");
     if (!f) {

@@ -161,12 +161,6 @@ struct mtmd_cli_context {
         bitmaps.entries.push_back(std::move(bmp));
         return true;
     }
-
-    // Load multiple frames from a video file or a directory as a "video" (sequence of images)
-    // Returns number of frames appended
-    size_t load_video(const std::string & path) {
-        return mtmd_video::append_frames_from_path(ctx_vision.get(), path, bitmaps);
-    }
 };
 
 static int generate_response(mtmd_cli_context & ctx, int n_predict) {
@@ -309,14 +303,10 @@ int main(int argc, char ** argv) {
             n_loaded_media += 1;
         }
         for (const auto & vpath : params.video) {
-            // for video understanding: disable UHD slicing (overview only)
-            mtmd_set_minicpmv_max_slice_nums(ctx.ctx_vision.get(), 0);
-            size_t n = ctx.load_video(vpath);
-            if (n == 0) {
-                LOG_ERR("Unable to load video frames from %s\n", vpath.c_str());
-                return 1;
+            if (!ctx.load_media(vpath)) {
+                return 1; // error is already printed by libmtmd
             }
-            n_loaded_media += n;
+            n_loaded_media += 1;
         }
 
         // 2) build prompt content with correct number of markers
@@ -347,7 +337,7 @@ int main(int argc, char ** argv) {
             LOG("\n   /audio <path>    load an audio");
         }
         if (mtmd_support_vision(ctx.ctx_vision.get())) {
-            LOG("\n   /video <dir>     load frames from a directory as a video");
+            LOG("\n   /video <path>     load a video");
         }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
@@ -387,26 +377,9 @@ int main(int argc, char ** argv) {
                     continue;
                 }
                 std::string media_path = line.substr(7);
-                if (is_video) {
-                    // parse optional args: "/video <file/dir path>"
-                    // simple split by spaces
-                    std::vector<std::string> parts = string_split(media_path, " ");
-                    std::string path = parts.size() > 0 ? parts[0] : media_path;
-                    size_t n = ctx.load_video(path);
-                    if (n > 0) {
-                        LOG("%s video loaded with %zu frames\n", path.c_str(), n);
-                        // add one marker per frame to match mtmd_tokenize expectations
-                        for (size_t i = 0; i < n; ++i) {
-                            content += mtmd_default_marker();
-                        }
-                    } else {
-                        LOG_ERR("ERR: failed to load video frames from %s\n", path.c_str());
-                    }
-                } else {
-                    if (ctx.load_media(media_path)) {
-                        LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                        content += mtmd_default_marker();
-                    }
+                if (ctx.load_media(media_path)) {
+                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : (is_audio ? "audio" : "video"));
+                    content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd
                 continue;
