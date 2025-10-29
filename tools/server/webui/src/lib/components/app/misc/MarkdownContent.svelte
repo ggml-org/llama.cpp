@@ -8,8 +8,13 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
-	import 'highlight.js/styles/github-dark.css';
+	import { browser } from '$app/environment';
 	import 'katex/dist/katex.min.css';
+
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import { mode } from 'mode-watcher';
+	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 
 	interface Props {
 		content: string;
@@ -21,41 +26,84 @@
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
 
+	function loadHighlightTheme(isDark: boolean) {
+		if (!browser) return;
+
+		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
+		existingThemes.forEach((style) => style.remove());
+
+		const style = document.createElement('style');
+		style.setAttribute('data-highlight-theme', 'true');
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
+
+		document.head.appendChild(style);
+	}
+
+	$effect(() => {
+		const currentMode = mode.current;
+		const isDark = currentMode === 'dark';
+
+		loadHighlightTheme(isDark);
+	});
+
 	let processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkMath) // Parse $inline$ and $$block$$ math
 			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkRehype) // Convert to rehype (HTML AST)
+			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+			.use(remarkRehype) // Convert Markdown AST to rehype
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
 	function enhanceLinks(html: string): string {
+		if (!html.includes('<a')) {
+			return html;
+		}
+
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
 
 		// Make all links open in new tabs
 		const linkElements = tempDiv.querySelectorAll('a[href]');
+		let mutated = false;
+
 		for (const link of linkElements) {
+			const target = link.getAttribute('target');
+			const rel = link.getAttribute('rel');
+
+			if (target !== '_blank' || rel !== 'noopener noreferrer') {
+				mutated = true;
+			}
+
 			link.setAttribute('target', '_blank');
 			link.setAttribute('rel', 'noopener noreferrer');
 		}
 
-		return tempDiv.innerHTML;
+		return mutated ? tempDiv.innerHTML : html;
 	}
 
 	function enhanceCodeBlocks(html: string): string {
+		if (!html.includes('<pre')) {
+			return html;
+		}
+
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
 
 		const preElements = tempDiv.querySelectorAll('pre');
+		let mutated = false;
 
 		for (const [index, pre] of Array.from(preElements).entries()) {
 			const codeElement = pre.querySelector('code');
 
-			if (!codeElement) continue;
+			if (!codeElement) {
+				continue;
+			}
+
+			mutated = true;
 
 			let language = 'text';
 			const classList = Array.from(codeElement.classList);
@@ -103,12 +151,23 @@
 			pre.parentNode?.replaceChild(wrapper, pre);
 		}
 
-		return tempDiv.innerHTML;
+		return mutated ? tempDiv.innerHTML : html;
+	}
+
+	function normalizeMathDelimiters(text: string): string {
+		return text
+			.replace(/(^|[^\\])\\\[((?:\\.|[\s\S])*?)\\\]/g, (_, prefix: string, content: string) => {
+				return `${prefix}$$${content}$$`;
+			})
+			.replace(/(^|[^\\])\\\(((?:\\.|[\s\S])*?)\\\)/g, (_, prefix: string, content: string) => {
+				return `${prefix}$${content}$`;
+			});
 	}
 
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const result = await processor().process(text);
+			const normalized = normalizeMathDelimiters(text);
+			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
 

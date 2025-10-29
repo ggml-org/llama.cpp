@@ -75,7 +75,12 @@ function llamaCppBuildPlugin() {
 }
 
 export default defineConfig({
+	build: {
+		chunkSizeWarningLimit: 3072
+	},
+
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+
 	test: {
 		projects: [
 			{
@@ -123,6 +128,7 @@ export default defineConfig({
 			}
 		]
 	},
+
 	server: {
 		proxy: {
 			'/v1': 'http://localhost:8080',

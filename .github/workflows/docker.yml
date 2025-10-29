@@ -89,12 +89,15 @@ jobs:
               TYPE="-${{ matrix.config.tag }}"
           fi
           PREFIX="ghcr.io/${REPO_OWNER}/${REPO_NAME}:"
+          CACHETAGS="${PREFIX}buildcache${TYPE}"
           FULLTAGS="${PREFIX}full${TYPE},${PREFIX}full${TYPE}-${{ steps.srctag.outputs.name }}"
           LIGHTTAGS="${PREFIX}light${TYPE},${PREFIX}light${TYPE}-${{ steps.srctag.outputs.name }}"
           SERVERTAGS="${PREFIX}server${TYPE},${PREFIX}server${TYPE}-${{ steps.srctag.outputs.name }}"
+          echo "cache_output_tags=$CACHETAGS" >> $GITHUB_OUTPUT
           echo "full_output_tags=$FULLTAGS" >> $GITHUB_OUTPUT
           echo "light_output_tags=$LIGHTTAGS" >> $GITHUB_OUTPUT
           echo "server_output_tags=$SERVERTAGS" >> $GITHUB_OUTPUT
+          echo "cache_output_tags=$CACHETAGS"  # print out for debugging
           echo "full_output_tags=$FULLTAGS"  # print out for debugging
           echo "light_output_tags=$LIGHTTAGS"  # print out for debugging
           echo "server_output_tags=$SERVERTAGS"  # print out for debugging
@@ -131,11 +134,14 @@ jobs:
           target: full
           provenance: false
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
 
       - name: Build and push Light Docker image (tagged + versioned)
         if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.light == true }}
@@ -150,11 +156,14 @@ jobs:
           target: light
           provenance: false
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
 
       - name: Build and push Server Docker image (tagged + versioned)
         if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.server == true }}
@@ -169,11 +178,14 @@ jobs:
           target: server
           provenance: false
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
 
   create_tag:
     name: Create and push git tag

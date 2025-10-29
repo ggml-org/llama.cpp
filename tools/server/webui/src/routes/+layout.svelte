@@ -1,11 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import {
-		ChatSidebar,
-		ConversationTitleUpdateDialog,
-		MaximumContextAlertDialog
-	} from '$lib/components/app';
+	import { ChatSidebar, ConversationTitleUpdateDialog } from '$lib/components/app';
 	import {
 		activeMessages,
 		isLoading,
@@ -13,7 +9,7 @@
 	} from '$lib/stores/chat.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
@@ -25,6 +21,7 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
+	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
@@ -98,6 +95,15 @@
 		serverStore.fetchServerProps();
 	});
 
+	// Sync settings when server props are loaded
+	$effect(() => {
+		const serverProps = serverStore.serverProps;
+
+		if (serverProps?.default_generation_settings?.params) {
+			settingsStore.syncWithServerDefaults();
+		}
+	});
+
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
 		const apiKey = config().apiKey;
@@ -144,8 +150,6 @@
 
 <Toaster richColors />
 
-<MaximumContextAlertDialog />
-
 <ConversationTitleUpdateDialog
 	bind:open={titleUpdateDialogOpen}
 	currentTitle={titleUpdateCurrentTitle}
@@ -155,16 +159,16 @@
 />
 
 <Sidebar.Provider bind:open={sidebarOpen}>
-	<div class="flex h-screen w-full">
+	<div class="flex h-screen w-full" style:height="{innerHeight}px">
 		<Sidebar.Root class="h-full">
 			<ChatSidebar bind:this={chatSidebar} />
 		</Sidebar.Root>
 
 		<Sidebar.Trigger
-			class="transition-left absolute h-8 w-8 duration-200 ease-linear {sidebarOpen
+			class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
 				? 'md:left-[var(--sidebar-width)]'
-				: 'left-0'}"
-			style="translate: 1rem 1rem; z-index: 99999;"
+				: ''}"
+			style="translate: 1rem 1rem;"
 		/>
 
 		<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
@@ -173,4 +177,4 @@
 	</div>
 </Sidebar.Provider>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} bind:innerHeight />

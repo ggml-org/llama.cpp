@@ -1,0 +1,20 @@
+name: "Linux - Setup SpacemiT Toolchain"
+description: "Setup SpacemiT Toolchain for Linux"
+inputs:
+  path:
+    description: "Installation path"
+    required: true
+  version:
+    description: "SpacemiT toolchain version"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup SpacemiT Toolchain
+      id: setup
+      uses: ./.github/actions/unarchive-tar
+      with:
+        url: https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${{ inputs.version }}.tar.xz
+        path: ${{ inputs.path }}
+        strip: 1

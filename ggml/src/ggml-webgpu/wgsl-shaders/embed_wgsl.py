@@ -88,15 +88,20 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                     raise ValueError(f"DECLS key '{key}' not found.")
                 decls_code += decls_map[key] + "\n\n"
 
-            shader_variant = replace_placeholders(shader_template, variant["REPLS"])
-            final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
+            final_shader = re.sub(r'\bDECLS\b', decls_code, shader_template)
+            if "REPLS" in variant:
+                final_shader = replace_placeholders(final_shader, variant["REPLS"])
             final_shader = expand_includes(final_shader, input_dir)
 
-            if "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
+            if "SHADER_NAME" in variant:
+                output_name = variant["SHADER_NAME"]
+            elif "SHADER_SUFFIX" in variant:
+                output_name = f"{shader_base_name}_" + variant["SHADER_SUFFIX"]
+            elif "REPLS" in variant and "SRC0_TYPE" in variant["REPLS"] and "SRC1_TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
-            elif "TYPE_SUFFIX" in variant["REPLS"]:
-                output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE_SUFFIX"]
-            elif "TYPE" in variant["REPLS"]:
+            elif "REPLS" in variant and "SRC_TYPE" in variant["REPLS"] and "DST_TYPE" in variant["REPLS"]:
+                output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC_TYPE"], variant["REPLS"]["DST_TYPE"]])
+            elif "REPLS" in variant and "TYPE" in variant["REPLS"]:
                 output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
             else:
                 output_name = shader_base_name

@@ -32,13 +32,11 @@
 #include <thread>
 #include <vector>
 
-//#define LLAMA_USE_CURL
-
 #if defined(LLAMA_USE_CURL)
 #include <curl/curl.h>
 #include <curl/easy.h>
 #else
-#include <cpp-httplib/httplib.h>
+#include "http.h"
 #endif
 
 #ifdef __linux__
@@ -53,6 +51,13 @@
 #include <sys/syslimits.h>
 #endif
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+// isatty
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -98,6 +103,14 @@ static void write_file(const std::string & fname, const std::string & content) {
 
         throw std::runtime_error(string_format("error: failed to write file '%s'\n", fname.c_str()));
     }
+}
+
+static bool is_output_a_tty() {
+#if defined(_WIN32)
+    return _isatty(_fileno(stdout));
+#else
+    return isatty(1);
+#endif
 }
 
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
@@ -217,11 +230,54 @@ struct common_hf_file_res {
     std::string mmprojFile;
 };
 
-#ifdef LLAMA_USE_CURL
-
-bool common_has_curl() {
-    return true;
+static void write_etag(const std::string & path, const std::string & etag) {
+    const std::string etag_path = path + ".etag";
+    write_file(etag_path, etag);
+    LOG_DBG("%s: file etag saved: %s\n", __func__, etag_path.c_str());
 }
+
+static std::string read_etag(const std::string & path) {
+    std::string none;
+    const std::string etag_path = path + ".etag";
+
+    if (std::filesystem::exists(etag_path)) {
+        std::ifstream etag_in(etag_path);
+        if (!etag_in) {
+            LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
+            return none;
+        }
+        std::string etag;
+        std::getline(etag_in, etag);
+        return etag;
+    }
+
+    // no etag file, but maybe there is an old .json
+    // remove this code later
+    const std::string metadata_path = path + ".json";
+
+    if (std::filesystem::exists(metadata_path)) {
+        std::ifstream metadata_in(metadata_path);
+        try {
+            nlohmann::json metadata_json;
+            metadata_in >> metadata_json;
+            LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
+                    metadata_json.dump().c_str());
+            if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
+                std::string etag = metadata_json.at("etag");
+                write_etag(path, etag);
+                if (!std::filesystem::remove(metadata_path)) {
+                    LOG_WRN("%s: failed to delete old .json metadata file: %s\n", __func__, metadata_path.c_str());
+                }
+                return etag;
+            }
+        } catch (const nlohmann::json::exception & e) {
+            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+        }
+    }
+    return none;
+}
+
+#ifdef LLAMA_USE_CURL
 
 //
 // CURL utils
@@ -373,36 +429,15 @@ static bool common_download_head(CURL *              curl,
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
                                                const std::string & bearer_token) {
-    // If the file exists, check its JSON metadata companion file.
-    std::string metadata_path = path + ".json";
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
     for (int i = 0; i < max_attempts; ++i) {
-        nlohmann::json metadata;  // TODO @ngxson : get rid of this json, use regex instead
-        std::string    etag;
-        std::string    last_modified;
+        std::string etag;
 
         // Check if the file already exists locally
         const auto file_exists = std::filesystem::exists(path);
         if (file_exists) {
-            // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
-            std::ifstream metadata_in(metadata_path);
-            if (metadata_in.good()) {
-                try {
-                    metadata_in >> metadata;
-                    LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
-                            metadata.dump().c_str());
-                    if (metadata.contains("etag") && metadata.at("etag").is_string()) {
-                        etag = metadata.at("etag");
-                    }
-                    if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
-                        last_modified = metadata.at("lastModified");
-                    }
-                } catch (const nlohmann::json::exception & e) {
-                    LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
-                }
-            }
-            // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
+            etag = read_etag(path);
         } else {
             LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
         }
@@ -440,11 +475,6 @@ static bool common_download_file_single_online(const std::string & url,
                         headers.etag.c_str());
                 should_download              = true;
                 should_download_from_scratch = true;
-            } else if (!last_modified.empty() && last_modified != headers.last_modified) {
-                LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__,
-                        last_modified.c_str(), headers.last_modified.c_str());
-                should_download              = true;
-                should_download_from_scratch = true;
             }
         }
 
@@ -475,15 +505,9 @@ static bool common_download_file_single_online(const std::string & url,
                     }
                 }
             }
-
-            // Write the updated JSON metadata file.
-            metadata.update({
-                { "url",          url                   },
-                { "etag",         headers.etag          },
-                { "lastModified", headers.last_modified }
-            });
-            write_file(metadata_path, metadata.dump(4));
-            LOG_DBG("%s: file metadata saved: %s\n", __func__, metadata_path.c_str());
+            if (head_request_ok) {
+                write_etag(path, headers.etag);
+            }
 
             // start the download
             LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
@@ -570,82 +594,11 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 
 #else
 
-bool common_has_curl() {
-    return false;
-}
-
-struct common_url {
-    std::string scheme;
-    std::string user;
-    std::string password;
-    std::string host;
-    std::string path;
-};
-
-static common_url parse_url(const std::string & url) {
-    common_url parts;
-    auto scheme_end = url.find("://");
-
-    if (scheme_end == std::string::npos) {
-        throw std::runtime_error("invalid URL: no scheme");
-    }
-    parts.scheme = url.substr(0, scheme_end);
-
-    if (parts.scheme != "http" && parts.scheme != "https") {
-        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
+static void print_progress(size_t current, size_t total) {
+    if (!is_output_a_tty()) {
+        return;
     }
 
-    auto rest = url.substr(scheme_end + 3);
-    auto at_pos = rest.find('@');
-
-    if (at_pos != std::string::npos) {
-        auto auth = rest.substr(0, at_pos);
-        auto colon_pos = auth.find(':');
-        if (colon_pos != std::string::npos) {
-            parts.user = auth.substr(0, colon_pos);
-            parts.password = auth.substr(colon_pos + 1);
-        } else {
-            parts.user = auth;
-        }
-        rest = rest.substr(at_pos + 1);
-    }
-
-    auto slash_pos = rest.find('/');
-
-    if (slash_pos != std::string::npos) {
-        parts.host = rest.substr(0, slash_pos);
-        parts.path = rest.substr(slash_pos);
-    } else {
-        parts.host = rest;
-        parts.path = "/";
-    }
-    return parts;
-}
-
-static std::pair<httplib::Client, common_url> http_client(const std::string & url) {
-    common_url parts = parse_url(url);
-
-    if (parts.host.empty()) {
-        throw std::runtime_error("error: invalid URL format");
-    }
-
-    if (!parts.user.empty()) {
-        throw std::runtime_error("error: user:password@ not supported yet"); // TODO
-    }
-
-    httplib::Client cli(parts.scheme + "://" + parts.host);
-    cli.set_follow_location(true);
-
-    // TODO cert
-
-    return { std::move(cli), std::move(parts) };
-}
-
-static std::string show_masked_url(const common_url & parts) {
-    return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + parts.host + parts.path;
-}
-
-static void print_progress(size_t current, size_t total) { // TODO isatty
     if (!total) {
         return;
     }
@@ -662,51 +615,6 @@ static void print_progress(size_t current, size_t total) { // TODO isatty
               << current / (1024 * 1024) << " MB / "
               << total / (1024 * 1024) << " MB)\r";
     std::cout.flush();
-}
-
-struct common_file_metadata {
-    std::string etag;
-    std::string last_modified;
-};
-
-static std::optional<common_file_metadata> read_metadata(const std::string & path) {
-    if (!std::filesystem::exists(path)) {
-        return std::nullopt;
-    }
-
-    nlohmann::json metadata_json;
-    common_file_metadata metadata;
-
-    std::ifstream metadata_in(path);
-    try {
-        metadata_in >> metadata_json;
-        LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, path.c_str(),
-                metadata_json.dump().c_str());
-        if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
-            metadata.etag = metadata_json.at("etag");
-        }
-        if (metadata_json.contains("lastModified") && metadata_json.at("lastModified").is_string()) {
-            metadata.last_modified = metadata_json.at("lastModified");
-        }
-    } catch (const nlohmann::json::exception & e) {
-        LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, path.c_str(), e.what());
-        return std::nullopt;
-    }
-
-    return metadata;
-}
-
-static void write_metadata(const std::string & path,
-                           const std::string & url,
-                           const common_file_metadata & metadata) {
-    nlohmann::json metadata_json = {
-        { "url",          url                    },
-        { "etag",         metadata.etag          },
-        { "lastModified", metadata.last_modified }
-    };
-
-    write_file(path, metadata_json.dump(4));
-    LOG_DBG("%s: file metadata saved: %s\n", __func__, path.c_str());
 }
 
 static bool common_pull_file(httplib::Client & cli,
@@ -775,12 +683,10 @@ static bool common_pull_file(httplib::Client & cli,
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
                                                const std::string & bearer_token) {
-    // If the file exists, check its JSON metadata companion file.
-    std::string metadata_path = path + ".json";
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    auto [cli, parts] = http_client(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
     if (!bearer_token.empty()) {
@@ -788,12 +694,11 @@ static bool common_download_file_single_online(const std::string & url,
     }
     cli.set_default_headers(default_headers);
 
-    common_file_metadata last;
     const bool file_exists = std::filesystem::exists(path);
+
+    std::string last_etag;
     if (file_exists) {
-        if (auto opt = read_metadata(metadata_path)) {
-            last = *opt;
-        }
+        last_etag = read_etag(path);
     } else {
         LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
     }
@@ -809,14 +714,9 @@ static bool common_download_file_single_online(const std::string & url,
             }
         }
 
-        common_file_metadata current;
-        if (head_ok) {
-            if (head->has_header("ETag")) {
-                current.etag = head->get_header_value("ETag");
-            }
-            if (head->has_header("Last-Modified")) {
-                current.last_modified = head->get_header_value("Last-Modified");
-            }
+        std::string etag;
+        if (head_ok && head->has_header("ETag")) {
+            etag = head->get_header_value("ETag");
         }
 
         size_t total_size = 0;
@@ -834,16 +734,10 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         bool should_download_from_scratch = false;
-        if (head_ok) {
-            if (!last.etag.empty() && last.etag != current.etag) {
-                LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
-                        last.etag.c_str(), current.etag.c_str());
-                should_download_from_scratch = true;
-            } else if (!last.last_modified.empty() && last.last_modified != current.last_modified) {
-                LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__,
-                        last.last_modified.c_str(), current.last_modified.c_str());
-                should_download_from_scratch = true;
-            }
+        if (!last_etag.empty() && !etag.empty() && last_etag != etag) {
+            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
+                    last_etag.c_str(), etag.c_str());
+            should_download_from_scratch = true;
         }
 
         if (file_exists) {
@@ -871,9 +765,8 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         // start the download
-        LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
-                __func__, show_masked_url(parts).c_str(), path_temporary.c_str(),
-                current.etag.c_str(), current.last_modified.c_str());
+        LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
+                __func__, common_http_show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
         const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
         if (!was_pull_successful) {
             if (i + 1 < max_attempts) {
@@ -883,7 +776,6 @@ static bool common_download_file_single_online(const std::string & url,
             } else {
                 LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
             }
-
             continue;
         }
 
@@ -891,7 +783,9 @@ static bool common_download_file_single_online(const std::string & url,
             LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
             return false;
         }
-        write_metadata(metadata_path, url, current);
+        if (!etag.empty()) {
+            write_etag(path, etag);
+        }
         break;
     }
 
@@ -900,7 +794,7 @@ static bool common_download_file_single_online(const std::string & url,
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = http_client(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {{"User-Agent", "llama-cpp"}};
     for (const auto & header : params.headers) {
@@ -1721,18 +1615,14 @@ static void add_rpc_devices(const std::string & servers) {
     if (!rpc_reg) {
         throw std::invalid_argument("failed to find RPC backend");
     }
-    typedef ggml_backend_dev_t (*ggml_backend_rpc_add_device_t)(const char * endpoint);
-    ggml_backend_rpc_add_device_t ggml_backend_rpc_add_device_fn = (ggml_backend_rpc_add_device_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_device");
-    if (!ggml_backend_rpc_add_device_fn) {
-        throw std::invalid_argument("failed to find RPC device add function");
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        throw std::invalid_argument("failed to find RPC add server function");
     }
     for (const auto & server : rpc_servers) {
-        ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
-        if (dev) {
-            ggml_backend_device_register(dev);
-        } else {
-            throw std::invalid_argument("failed to register RPC device");
-        }
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        ggml_backend_register(reg);
     }
 }
 
@@ -1870,7 +1760,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
         {"-t", "--threads"}, "N",
-        string_format("number of threads to use during generation (default: %d)", params.cpuparams.n_threads),
+        string_format("number of CPU threads to use during generation (default: %d)", params.cpuparams.n_threads),
         [](common_params & params, int value) {
             params.cpuparams.n_threads = value;
             if (params.cpuparams.n_threads <= 0) {
@@ -2038,13 +1928,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--swa-checkpoints"}, "N",
-        string_format("max number of SWA checkpoints per slot to create (default: %d)\n"
-            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_swa_checkpoints),
+        {"--ctx-checkpoints", "--swa-checkpoints"}, "N",
+        string_format("max number of context checkpoints to create per slot (default: %d)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
         [](common_params & params, int value) {
-            params.n_swa_checkpoints = value;
+            params.n_ctx_checkpoints = value;
         }
-    ).set_env("LLAMA_ARG_SWA_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-ram", "-cram"}, "N",
+        string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
+        [](common_params & params, int value) {
+            params.cache_ram_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--kv-unified", "-kvu"},
         string_format("use single unified KV buffer for the KV cache of all sequences (default: %s)\n"
@@ -2695,6 +2593,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_REPACK"));
     add_opt(common_arg(
+        {"--no-host"},
+        "bypass host buffer allowing extra buffers to be used",
+        [](common_params & params) {
+            params.no_host = true;
+        }
+    ).set_env("LLAMA_ARG_NO_HOST"));
+    add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
             "KV cache data type for K\n"
@@ -3343,7 +3248,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--embd-output-format"}, "FORMAT",
-        "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix",
+        "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix, \"raw\" = plain whitespace-delimited output (one embedding per line)",
         [](common_params & params, const std::string & value) {
             params.embd_out = value;
         }
@@ -3453,7 +3358,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--chat-template-kwargs"}, "STRING",
         string_format("sets additional params for the json template parser"),
-        [](common_params & params, const std::string &  value) {
+        [](common_params & params, const std::string & value) {
             auto parsed = json::parse(value);
             for (const auto & item : parsed.items()) {
                 params.default_template_kwargs[item.key()] = item.value().dump();
@@ -3530,12 +3435,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.use_jinja = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_JINJA"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
-        "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+        "- deepseek: puts thoughts in `message.reasoning_content`\n"
+        "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
         "(default: auto)",
         [](common_params & params, const std::string & value) {
             params.reasoning_format = common_reasoning_format_from_name(value);
@@ -3664,21 +3570,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_file(common_log_main(), value.c_str());
         }
     ));
-    add_opt(common_arg({ "--log-colors" }, "[on|off|auto]",
-                       "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
-                       "'auto' enables colors when output is to a terminal",
-                       [](common_params &, const std::string & value) {
-                           if (is_truthy(value)) {
-                               common_log_set_colors(common_log_main(), LOG_COLORS_ENABLED);
-                           } else if (is_falsey(value)) {
-                               common_log_set_colors(common_log_main(), LOG_COLORS_DISABLED);
-                           } else if (is_autoy(value)) {
-                               common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
-                           } else {
-                               throw std::invalid_argument(
-                                   string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
-                           }
-                       }).set_env("LLAMA_LOG_COLORS"));
+    add_opt(common_arg(
+        {"--log-colors"}, "[on|off|auto]",
+        "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
+        "'auto' enables colors when output is to a terminal",
+        [](common_params &, const std::string & value) {
+            if (is_truthy(value)) {
+                common_log_set_colors(common_log_main(), LOG_COLORS_ENABLED);
+            } else if (is_falsey(value)) {
+                common_log_set_colors(common_log_main(), LOG_COLORS_DISABLED);
+            } else if (is_autoy(value)) {
+                common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
+            } else {
+                throw std::invalid_argument(
+                    string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_env("LLAMA_LOG_COLORS"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
@@ -3944,7 +3852,87 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
-    // model-specific
+    add_opt(common_arg(
+        {"--diffusion-steps"}, "N",
+        string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
+        [](common_params & params, int value) { params.diffusion.steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-visual"},
+        string_format("enable visual diffusion mode (show progressive generation) (default: %s)", params.diffusion.visual_mode ? "true" : "false"),
+        [](common_params & params) { params.diffusion.visual_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-eps"}, "F",
+        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
+        [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-algorithm"}, "N",
+        string_format("diffusion algorithm: 0=ORIGIN, 1=ENTROPY_BASED, 2=MARGIN_BASED, 3=RANDOM, 4=LOW_CONFIDENCE (default: %d)", params.diffusion.algorithm),
+        [](common_params & params, int value) { params.diffusion.algorithm = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-alg-temp"}, "F",
+        string_format("dream algorithm temperature (default: %.3f)", (double) params.diffusion.alg_temp),
+        [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-block-length"}, "N",
+        string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
+        [](common_params & params, int value) { params.diffusion.block_length = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cfg-scale"}, "F",
+        string_format("llada classifier-free guidance scale (default: %.3f)", (double) params.diffusion.cfg_scale),
+        [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-add-gumbel-noise"}, "F",
+        string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
+        [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "-lr", "--learning-rate" }, "ALPHA",
+        string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
+        [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
+        string_format("(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
+            (double) params.lr.lr_min),
+        [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"-decay-epochs", "--learning-rate-decay-epochs"}, "ALPHA",
+        string_format("(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)", (double) params.lr.decay_epochs),
+        [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"-wd", "--weight-decay"}, "WD",
+        string_format("adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).", (double) params.lr.wd),
+        [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"-val-split", "--val-split"}, "FRACTION",
+        string_format("fraction of data to use as validation set for training (default: %.2g).", (double) params.val_split),
+        [](common_params & params, const std::string & value) { params.val_split = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"-epochs", "--epochs"}, "N",
+        string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
+        [](common_params & params, int epochs) { params.lr.epochs = epochs; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"-opt", "--optimizer"}, "sgd|adamw", "adamw or sgd",
+        [](common_params & params, const std::string & name) {
+            params.optimizer = common_opt_get_optimizer(name.c_str());
+            if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
+                throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+            }
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+
+    // presets
     add_opt(common_arg(
         {"--tts-oute-default"},
         string_format("use default OuteTTS models (note: can download weights from the internet)"),
@@ -3957,42 +3945,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     add_opt(common_arg(
-        {"--embd-bge-small-en-default"},
-        string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
+        {"--embd-gemma-default"},
+        string_format("use default EmbeddingGemma model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
-            params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
-            params.embd_normalize = 2;
-            params.n_ctx = 512;
-            params.verbose_prompt = true;
-            params.embedding = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
-
-    add_opt(common_arg(
-        {"--embd-e5-small-en-default"},
-        string_format("use default e5-small-v2 model (note: can download weights from the internet)"),
-        [](common_params & params) {
-            params.model.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
-            params.model.hf_file = "e5-small-v2-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
-            params.embd_normalize = 2;
-            params.n_ctx = 512;
-            params.verbose_prompt = true;
-            params.embedding = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
-
-    add_opt(common_arg(
-        {"--embd-gte-small-default"},
-        string_format("use default gte-small model (note: can download weights from the internet)"),
-        [](common_params & params) {
-            params.model.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
-            params.model.hf_file = "gte-small-q8_0.gguf";
-            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
-            params.embd_normalize = 2;
-            params.n_ctx = 512;
+            params.model.hf_repo = "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF";
+            params.model.hf_file = "embeddinggemma-300M-qat-Q4_0.gguf";
+            params.port = 8011;
+            params.n_ubatch = 2048;
+            params.n_batch = 2048;
+            params.n_parallel = 32;
+            params.n_ctx = 2048*params.n_parallel;
             params.verbose_prompt = true;
             params.embedding = true;
         }
@@ -4087,96 +4049,65 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     add_opt(common_arg(
-        { "--diffusion-steps" }, "N",
-        string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
-        [](common_params & params, int value) { params.diffusion.steps = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-    add_opt(common_arg(
-        { "--diffusion-visual" },
-        string_format("enable visual diffusion mode (show progressive generation) (default: %s)",
-                      params.diffusion.visual_mode ? "true" : "false"),
-        [](common_params & params) { params.diffusion.visual_mode = true; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+        {"--gpt-oss-20b-default"},
+        string_format("use gpt-oss-20b (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gpt-oss-20b-GGUF";
+            params.model.hf_file = "gpt-oss-20b-mxfp4.gguf";
+            params.port = 8013;
+            params.n_ubatch = 2048;
+            params.n_batch = 32768;
+            params.n_parallel = 2;
+            params.n_ctx = 131072*params.n_parallel;
+            params.sampling.temp = 1.0f;
+            params.sampling.top_p = 1.0f;
+            params.sampling.top_k = 0;
+            params.sampling.min_p = 0.01f;
+            params.use_jinja = true;
+            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     add_opt(common_arg(
-        { "--diffusion-eps" }, "F",
-        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
-        [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-    add_opt(common_arg(
-        { "--diffusion-algorithm" }, "N",
-        string_format("diffusion algorithm: 0=ORIGIN, 1=ENTROPY_BASED, 2=MARGIN_BASED, 3=RANDOM, 4=LOW_CONFIDENCE (default: %d)",
-                      params.diffusion.algorithm),
-        [](common_params & params, int value) { params.diffusion.algorithm = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-    add_opt(common_arg(
-        { "--diffusion-alg-temp" }, "F",
-        string_format("dream algorithm temperature (default: %.3f)", (double) params.diffusion.alg_temp),
-        [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+        {"--gpt-oss-120b-default"},
+        string_format("use gpt-oss-120b (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gpt-oss-120b-GGUF";
+            params.port = 8013;
+            params.n_ubatch = 2048;
+            params.n_batch = 32768;
+            params.n_parallel = 2;
+            params.n_ctx = 131072*params.n_parallel;
+            params.sampling.temp = 1.0f;
+            params.sampling.top_p = 1.0f;
+            params.sampling.top_k = 0;
+            params.sampling.min_p = 0.01f;
+            params.use_jinja = true;
+            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     add_opt(common_arg(
-        { "--diffusion-block-length" }, "N",
-        string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
-        [](common_params & params, int value) { params.diffusion.block_length = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-    add_opt(common_arg(
-        { "--diffusion-cfg-scale" }, "F",
-        string_format("llada classifier-free guidance scale (default: %.3f)", (double) params.diffusion.cfg_scale),
-        [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-    add_opt(common_arg(
-        { "--diffusion-add-gumbel-noise" }, "F",
-        string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
-        [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+        {"--vision-gemma-4b-default"},
+        string_format("use Gemma 3 4B QAT (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gemma-3-4b-it-qat-GGUF";
+            params.port = 8014;
+            params.n_ctx = 0;
+            params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
-
-    add_opt(
-        common_arg({ "-lr", "--learning-rate" }, "ALPHA",
-                   string_format(
-                       "adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)",
-                       (double) params.lr.lr0),
-                   [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); })
-            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(
-        common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
-                   string_format(
-                       "(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
-                       (double) params.lr.lr_min),
-                   [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); })
-            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(
-        common_arg({ "-decay-epochs", "--learning-rate-decay-epochs" }, "ALPHA",
-                   string_format(
-                       "(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)",
-                       (double) params.lr.decay_epochs),
-                   [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); })
-            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
     add_opt(common_arg(
-                { "-wd", "--weight-decay" }, "WD",
-                string_format(
-                    "adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).",
-                    (double) params.lr.wd),
-                [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); })
-                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(common_arg({ "-val-split", "--val-split" }, "FRACTION",
-                       string_format("fraction of data to use as validation set for training (default: %.2g).",
-                                     (double) params.val_split),
-                       [](common_params & params, const std::string & value) { params.val_split = std::stof(value); })
-                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(common_arg({ "-epochs", "--epochs" }, "N",
-                       string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
-                       [](common_params & params, int epochs) { params.lr.epochs = epochs; })
-                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(common_arg({ "-opt", "--optimizer" }, "sgd|adamw", "adamw or sgd",
-                       [](common_params & params, const std::string & name) {
-                           params.optimizer = common_opt_get_optimizer(name.c_str());
-                           if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
-                               throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
-                           }
-                       })
-                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+        {"--vision-gemma-12b-default"},
+        string_format("use Gemma 3 12B QAT (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/gemma-3-12b-it-qat-GGUF";
+            params.port = 8014;
+            params.n_ctx = 0;
+            params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     return ctx_arg;
 }
