@@ -101,8 +101,9 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr, nullptr,
-                             nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
         }
 
@@ -134,18 +135,25 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
             cb(cur, "ffn_moe_out", il);
         } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE ||
                    model.arch == LLM_ARCH_JINA_BERT_V3) {
-            cur = build_ffn(cur, model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL, NULL, NULL, NULL,
-                            model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL, LLM_FFN_GELU,
-                            LLM_FFN_SEQ, il);
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+                    NULL, NULL, NULL,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
+                    LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
-            cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                            model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
-                            model.layers[il].ffn_gate ? LLM_FFN_GELU : LLM_FFN_GEGLU, LLM_FFN_PAR, il);
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up, NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
+                    model.layers[il].ffn_gate ? LLM_FFN_GELU : LLM_FFN_GEGLU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
-            cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                            model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cur = build_ffn(cur,
+                model.layers[il].ffn_up, NULL, NULL,
+                model.layers[il].ffn_gate, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         }
 

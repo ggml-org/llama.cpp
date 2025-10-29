@@ -75,8 +75,9 @@ llm_build_mpt::llm_build_mpt(const llama_model & model, const llm_graph_params &
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr, nullptr,
-                             nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
@@ -92,9 +93,11 @@ llm_build_mpt::llm_build_mpt(const llama_model & model, const llm_graph_params &
         {
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, il);
             cb(cur, "ffn_norm", il);
-            cur = build_ffn(cur, model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL, NULL, NULL, NULL,
-                            model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, model.layers[il].ffn_act,
-                            LLM_FFN_GELU, LLM_FFN_SEQ, il);
+            cur = build_ffn(cur,
+                model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+                NULL, NULL, NULL,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                model.layers[il].ffn_act, LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
         }
 

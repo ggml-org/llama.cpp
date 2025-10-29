@@ -98,8 +98,9 @@ ggml_tensor * llm_build_lfm2::build_attn_block(ggml_tensor *             cur,
     k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
                       attn_factor, beta_fast, beta_slow);
 
-    cur = build_attn(inp_attn, model.layers[il].wo, NULL, q, k, v, nullptr, nullptr, nullptr,
-                     1.0f / sqrtf(float(n_embd_head)), il);
+    cur = build_attn(inp_attn,
+            model.layers[il].wo, NULL,
+            q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
 
     cb(cur, "model.layers.{}.self_attn.out_proj", il);
 

@@ -61,8 +61,9 @@ llm_build_apertus::llm_build_apertus(const llama_model & model, const llm_graph_
             cb(Kcur, "Kcur_pos", il);
             cb(Vcur, "Vcur_pos", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr, nullptr,
-                             nullptr, kq_scale, il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 

@@ -73,8 +73,9 @@ llm_build_glm4::llm_build_glm4(const llama_model & model, const llm_graph_params
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                             1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         };
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -95,8 +96,11 @@ llm_build_glm4::llm_build_glm4(const llama_model & model, const llm_graph_params
             cb(cur, "ffn_norm", il);
 
             // MLP
-            cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, NULL, NULL, NULL, model.layers[il].ffn_down, NULL,
-                            NULL, NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up, NULL, NULL,
+                    NULL, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
 
             // Post-MLP norm

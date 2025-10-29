@@ -96,8 +96,9 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             cb(Qcur, "Qcur_pos", il);
             cb(Kcur, "Kcur_pos", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                             hparams.f_attention_scale, il);
+            cur = build_attn(inp_attn, model.layers[il].wo,
+                    NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                    hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -111,8 +112,9 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
                                  ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Qcur, "Qcur_pos", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, nullptr, nullptr, nullptr, nullptr, nullptr,
-                             hparams.f_attention_scale, il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, NULL,
+                    Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         };
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);

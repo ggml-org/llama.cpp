@@ -68,8 +68,9 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                             1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
         };
         if (il == n_layer - 1 && inp_out_ids) {
@@ -83,8 +84,11 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = build_ffn(ffn_inp, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                        model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cur = build_ffn(ffn_inp,
+                model.layers[il].ffn_up, NULL, NULL,
+                model.layers[il].ffn_gate, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL, NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, -1);

@@ -72,8 +72,9 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr, nullptr,
-                             nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         };
         if (il == n_layer - 1 && inp_out_ids) {
             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -84,8 +85,11 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
 
         // feed-forward network
         {
-            cur = build_ffn(ffn_inp, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                            model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cur = build_ffn(ffn_inp,
+                    model.layers[il].ffn_up, NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         };
         // add together residual + FFN + self-attention

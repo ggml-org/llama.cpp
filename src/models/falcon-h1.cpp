@@ -53,8 +53,9 @@ llm_build_falcon_h1::llm_build_falcon_h1(const llama_model & model, const llm_gr
         cb(Kcur, "Kcur-post-rope", il);
         cb(Vcur, "Vcur-post-rope", il);
 
-        ggml_tensor * attn_out = build_attn(inp->get_attn(), model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr,
-                                            nullptr, nullptr, kq_scale, il);
+        ggml_tensor * attn_out = build_attn(inp->get_attn(),
+                                    model.layers[il].wo, NULL,
+                                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(attn_out, "attn_out", il);
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
@@ -80,9 +81,11 @@ llm_build_falcon_h1::llm_build_falcon_h1(const llama_model & model, const llm_gr
         cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        cur = build_ffn(cur, model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL, model.layers[il].ffn_gate,
-                        model.layers[il].ffn_gate_b, NULL, model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
-                        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cur = build_ffn(cur,
+                model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         cur = ggml_add(ctx0, cur, inpSA);

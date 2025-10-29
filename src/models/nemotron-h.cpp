@@ -99,16 +99,19 @@ ggml_tensor * llm_build_nemotron_h::build_attention_layer(ggml_tensor *         
 
     const float kq_scale =
         hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-    cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                     kq_scale, il);
+    cur = build_attn(inp_attn,
+            model.layers[il].wo, model.layers[il].bo,
+            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_out", il);
     return cur;
 }
 
 ggml_tensor * llm_build_nemotron_h::build_ffn_layer(ggml_tensor * cur, const llama_model & model, const int il) {
-    cur = build_ffn(cur, model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL, NULL, NULL, NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL, LLM_FFN_RELU_SQR, LLM_FFN_PAR,
-                    il);
+    cur = build_ffn(cur,
+            model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+            NULL, NULL, NULL,
+            model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+            NULL, LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
     cb(cur, "ffn_out", il);
 
     cur = build_cvec(cur, il);

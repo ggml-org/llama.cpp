@@ -64,8 +64,9 @@ llm_build_ernie4_5_moe::llm_build_ernie4_5_moe(const llama_model & model, const 
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                             1.0f / sqrtf(float(n_embd_head)), il);
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
         };
         if (il == n_layer - 1 && inp_out_ids) {
@@ -83,25 +84,38 @@ llm_build_ernie4_5_moe::llm_build_ernie4_5_moe(const llama_model & model, const 
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                            model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up, NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
             // MoE branch
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            ggml_tensor * moe_out = build_moe_ffn(
-                cur, model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps, model.layers[il].ffn_gate_exps,
-                model.layers[il].ffn_down_exps, model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU,
-                true, false, 0.0, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il);
+            ggml_tensor * moe_out = build_moe_ffn(cur,
+                                        model.layers[il].ffn_gate_inp,
+                                        model.layers[il].ffn_up_exps,
+                                        model.layers[il].ffn_gate_exps,
+                                        model.layers[il].ffn_down_exps,
+                                        model.layers[il].ffn_exp_probs_b,
+                                        n_expert, n_expert_used,
+                                        LLM_FFN_SILU, true,
+                                        false, 0.0,
+                                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                                        il);
             cb(moe_out, "ffn_moe_out", il);
 
             // Shared expert (if present)
             if (hparams.n_ff_shexp > 0) {
                 ggml_tensor * ffn_shexp =
-                    build_ffn(cur, model.layers[il].ffn_up_shexp, NULL, NULL, model.layers[il].ffn_gate_shexp, NULL,
-                              NULL, model.layers[il].ffn_down_shexp, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+                    build_ffn(cur,
+                        model.layers[il].ffn_up_shexp, NULL, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL, NULL,
+                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);

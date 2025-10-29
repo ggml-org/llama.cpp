@@ -49,8 +49,11 @@ llm_build_plamo2::llm_build_plamo2(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_pre_norm", il);
 
         // feed-forward network
-        cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, NULL, NULL, NULL, model.layers[il].ffn_down, NULL,
-                        NULL, NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+        cur = build_ffn(cur,
+                model.layers[il].ffn_up, NULL, NULL,
+                NULL, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
 
         // post ffn norm
@@ -134,8 +137,9 @@ ggml_tensor * llm_build_plamo2::build_plamo2_attn_layer(llm_graph_input_attn_kv 
         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                              ext_factor, attn_factor, beta_fast, beta_slow);
 
-        cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, NULL,
-                         1.0f / sqrtf(float(n_embd_head_v)), il);
+        cur = build_attn(inp,
+            model.layers[il].wo, NULL,
+            Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f / sqrtf(float(n_embd_head_v)), il);
     }
 
     cb(cur, "attn_out", il);
