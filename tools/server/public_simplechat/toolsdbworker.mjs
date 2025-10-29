@@ -20,15 +20,15 @@ function db_open() {
             console.debug("DBUG:WWDb:Conn:Upgrade needed...")
             dbConn.result.createObjectStore('theDB');
             dbConn.result.onerror = (ev) => {
-                console.debug(`DBUG:WWDb:Db:Op failed [${ev}]...`)
+                console.info(`ERRR:WWDb:Db:Op failed [${ev}]...`)
             }
         };
         dbConn.onsuccess = (ev) => {
-            console.debug("DBUG:WWDb:Conn:Opened...")
+            console.debug("INFO:WWDb:Conn:Opened...")
             resolve(dbConn.result);
         }
         dbConn.onerror = (ev) => {
-            console.debug(`DBUG:WWDb:Conn:Failed [${ev}]...`)
+            console.info(`ERRR:WWDb:Conn:Failed [${ev}]...`)
             reject(ev);
         }
     });
@@ -55,9 +55,27 @@ self.onmessage = async function (ev) {
                         data: { 'status': 'ok', 'data': reqGet.result, 'msg': `DataStoreGet:Ok:${args['key']}:${reqGet.result}`}
                     });
                 }
+                reqGet.onerror = (evGet) => {
+                    console.info(`ERRR:WWDb:${ev.data.name}:transact failed:${reqGet.error}`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'error', 'msg': `DataStoreGet:Err:${args['key']}:${reqGet.error}`}
+                    });
+                }
                 break;
             case 'data_store_set':
                 let reqSet = dbOS.add(args['value'], args['key']);
+                reqSet.onerror = (evSet) => {
+                    console.info(`ERRR:WWDb:${ev.data.name}:transact failed:${reqSet.error}`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'error', 'msg': `DataStoreSet:Err:${args['key']}:${reqSet.error}`}
+                    });
+                }
                 reqSet.onsuccess = (evSet) => {
                     console.info(`DBUG:WWDb:${ev.data.name}:transact success`)
                     self.postMessage({
