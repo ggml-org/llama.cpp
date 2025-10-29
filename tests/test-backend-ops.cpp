@@ -6807,33 +6807,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, false));
     }
 
-    for (auto act_case : cases_sd) {
-        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
-        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
-
-        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
-        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
-
-        test_cases.emplace_back(new test_conv_2d_implicit(
-            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
-            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
-            GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, true));
-    }
-
-    for (auto act_case : cases_sd) {
-        GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
-        GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
-
-        uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
-        uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
-
-        test_cases.emplace_back(new test_conv_2d_implicit(
-            { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
-            { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
-            GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, true));
-    }
-
-
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
 
