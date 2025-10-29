@@ -317,11 +317,14 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
 
 static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
                                               std::map<int, float> & layer_cossim,
-                                              std::map<int, float> & layer_l2_norm,
+                                              std::map<int, float> & layer_l2_dist,
                                               const std::unordered_map<std::string, Stats> & stats_map) {
     struct layer_aggregation {
-        std::vector<float> curr_avg;
-        std::vector<float> prev_avg;
+        double sum_dot_prod = 0.0;
+        double sum_norm1_sq = 0.0;
+        double sum_norm2_sq = 0.0;
+        double sum_l2_dist_sq = 0.0;
+        int n_tensors = 0;
     };
 
     static const std::regex pattern(R"(blk\.(\d+)\.)");
@@ -335,9 +338,11 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         if (!std::regex_search(ts.tensor, match, pattern)) { continue; }
         const int blk = std::stoi(match[1]);
         if (blk <= 0) { continue; }
+
         std::string prev_lyr(ts.tensor);
         prev_lyr.replace(match.position(1), match.length(1), std::to_string(blk - 1));
         if (tidx.find(prev_lyr) == tidx.end()) { continue; }
+
         auto it_curr = stats_map.find(ts.tensor);
         auto it_prev = stats_map.find(prev_lyr);
         if (it_curr == stats_map.end() || it_prev == stats_map.end()) { continue; }
@@ -346,24 +351,15 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         const auto prev_avg = compute_tensor_averages(it_prev->second);
         if (curr_avg.empty() || prev_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
 
-        auto & entry = agr[blk];
-        entry.curr_avg.insert(entry.curr_avg.end(), curr_avg.begin(), curr_avg.end());
-        entry.prev_avg.insert(entry.prev_avg.end(), prev_avg.begin(), prev_avg.end());
-    }
-
-    for (auto & kv : agr) {
-        const auto & curr = kv.second.curr_avg;
-        const auto & prev = kv.second.prev_avg;
-        if (curr.size() != prev.size() || curr.empty()) { continue; }
-
+        // Compute statistics for each tensor pair individually
         double dot_prod = 0.0;
         double norm1_sq = 0.0;
         double norm2_sq = 0.0;
         double l2_dist_sq = 0.0;
 
-        for (size_t i = 0; i < curr.size(); ++i) {
-            const double c_val = curr[i];
-            const double p_val = prev[i];
+        for (size_t i = 0; i < curr_avg.size(); ++i) {
+            const double c_val = curr_avg[i];
+            const double p_val = prev_avg[i];
             dot_prod += c_val * p_val;
             norm1_sq += c_val * c_val;
             norm2_sq += p_val * p_val;
@@ -371,13 +367,29 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
             l2_dist_sq += diff * diff;
         }
 
+        if (norm1_sq == 0.0 && norm2_sq == 0.0) { continue; }
+
+        // Accumulate statistics for the layer
+        auto & entry = agr[blk];
+        entry.sum_dot_prod += dot_prod;
+        entry.sum_norm1_sq += norm1_sq;
+        entry.sum_norm2_sq += norm2_sq;
+        entry.sum_l2_dist_sq += l2_dist_sq;
+        entry.n_tensors++;
+    }
+
+    // Compute aggregated layer statistics
+    for (auto & kv : agr) {
+        const auto & agg = kv.second;
+        if (agg.n_tensors == 0) { continue; }
+
         // Compute aggregated Cosine Similarity
         float cossim = 0.0f;
-        if (norm1_sq > 0.0f && norm2_sq > 0.0f) {
-            cossim = dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq));
+        if (agg.sum_norm1_sq > 0.0 && agg.sum_norm2_sq > 0.0) {
+            cossim = agg.sum_dot_prod / (std::sqrt(agg.sum_norm1_sq) * std::sqrt(agg.sum_norm2_sq));
             cossim = std::min(cossim, 1.0f);
             cossim = std::max(cossim, -1.0f);
-        } else if (norm1_sq == 0.0f && norm2_sq == 0.0f) {
+        } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
             cossim = 1.0f;
         }
         layer_cossim[kv.first] = cossim;
