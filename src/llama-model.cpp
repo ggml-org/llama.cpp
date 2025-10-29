@@ -8221,7 +8221,7 @@ struct llm_build_modern_bert : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        auto * inp_attn = build_attn_inp_kv_iswa(); // TODO: support cacheless iSWA embeddings [TAG_NO_CACHE_ISWA]
+        auto * inp_attn = build_attn_inp_no_cache(); 
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
@@ -19831,7 +19831,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
-        //case LLM_ARCH_MODERN_BERT: // TODO: disabled until cacheless SWA logic is fixed [TAG_NO_CACHE_ISWA]
+        case LLM_ARCH_MODERN_BERT: 
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
