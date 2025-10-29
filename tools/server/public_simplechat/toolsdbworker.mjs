@@ -42,7 +42,7 @@ self.onmessage = async function (ev) {
         let db = await db_open();
         let dbTrans = db.transaction('theDB', 'readwrite');
         let dbOS = dbTrans.objectStore('theDB');
-        let args = JSON.parse(ev.data.args);
+        let args = ev.data.args;
         switch (ev.data.name) {
             case 'data_store_get':
                 let reqGet = dbOS.get(args['key'])
