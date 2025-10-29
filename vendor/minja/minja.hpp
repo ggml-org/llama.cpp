@@ -55,7 +55,7 @@ inline std::string normalize_newlines(const std::string & s) {
 }
 
 /* Values that behave roughly like in Python. */
-class Value : public std::enable_shared_from_this<Value> {
+class Value {
 public:
   using CallableType = std::function<Value(const std::shared_ptr<Context> &, ArgumentsValue &)>;
   using FilterType = std::function<Value(const std::shared_ptr<Context> &, ArgumentsValue &)>;
@@ -158,12 +158,14 @@ public:
   Value(const json & v) {
     if (v.is_object()) {
       auto object = std::make_shared<ObjectType>();
+      object->reserve(v.size());
       for (auto it = v.begin(); it != v.end(); ++it) {
-        (*object)[it.key()] = it.value();
+        object->emplace_back(it.key(), Value(it.value()));
       }
       object_ = std::move(object);
     } else if (v.is_array()) {
       auto array = std::make_shared<ArrayType>();
+      array->reserve(v.size());
       for (const auto& item : v) {
         array->push_back(Value(item));
       }
@@ -610,7 +612,7 @@ static std::string error_location_suffix(const std::string & source, size_t pos)
   return out.str();
 }
 
-class Context : public std::enable_shared_from_this<Context> {
+class Context {
   protected:
     Value values_;
     std::shared_ptr<Context> parent_;
@@ -1060,11 +1062,18 @@ public:
           }
         }
     }
-    void do_render(std::ostringstream &, const std::shared_ptr<Context> & macro_context) const override {
+    void do_render(std::ostringstream &, const std::shared_ptr<Context> & context) const override {
         if (!name) throw std::runtime_error("MacroNode.name is null");
         if (!body) throw std::runtime_error("MacroNode.body is null");
-        auto callable = Value::callable([this, macro_context](const std::shared_ptr<Context> & call_context, ArgumentsValue & args) {
-            auto execution_context = Context::make(Value::object(), macro_context);
+
+        // Use init-capture to avoid dangling 'this' pointer and circular references
+        auto callable = Value::callable([weak_context = std::weak_ptr<Context>(context),
+                                         name = name, params = params, body = body,
+                                         named_param_positions = named_param_positions]
+                                        (const std::shared_ptr<Context> & call_context, ArgumentsValue & args) {
+            auto context_locked = weak_context.lock();
+            if (!context_locked) throw std::runtime_error("Macro context no longer valid");
+            auto execution_context = Context::make(Value::object(), context_locked);
 
             if (call_context->contains("caller")) {
                 execution_context->set("caller", call_context->get("caller"));
@@ -1075,7 +1084,7 @@ public:
                 auto & arg = args.args[i];
                 if (i >= params.size()) throw std::runtime_error("Too many positional arguments for macro " + name->get_name());
                 param_set[i] = true;
-                auto & param_name = params[i].first;
+                const auto & param_name = params[i].first;
                 execution_context->set(param_name, arg);
             }
             for (auto & [arg_name, value] : args.kwargs) {
@@ -1094,7 +1103,7 @@ public:
             }
             return body->render(execution_context);
         });
-        macro_context->set(name->get_name(), callable);
+        context->set(name->get_name(), callable);
     }
 };
 
@@ -1641,8 +1650,12 @@ public:
         if (!expr) throw std::runtime_error("CallNode.expr is null");
         if (!body) throw std::runtime_error("CallNode.body is null");
 
-        auto caller = Value::callable([this, context](const std::shared_ptr<Context> &, ArgumentsValue &) -> Value {
-            return Value(body->render(context));
+        // Use init-capture to avoid dangling 'this' pointer and circular references
+        auto caller = Value::callable([weak_context = std::weak_ptr<Context>(context), body=body]
+                                      (const std::shared_ptr<Context> &, ArgumentsValue &) -> Value {
+            auto context_locked = weak_context.lock();
+            if (!context_locked) throw std::runtime_error("Caller context no longer valid");
+            return Value(body->render(context_locked));
         });
 
         context->set("caller", caller);
