@@ -191,6 +191,7 @@ static bool decode_video_ffmpeg_to_rgba(const std::string & file,
                                         std::vector<DecodedFrameRGBA> & frames,
                                         int max_frames,
                                         int stride) {
+    if(stride <= 0 || max_frames <= 0) return false;
     AVFormatContext * fmt = nullptr;
     if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0) return false;
     std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext *f){ if (f) avformat_close_input(&f); });
@@ -219,7 +220,7 @@ static bool decode_video_ffmpeg_to_rgba(const std::string & file,
         if (avcodec_send_packet(ctx, pkt) < 0) { av_packet_unref(pkt); break; }
         av_packet_unref(pkt);
         while (avcodec_receive_frame(ctx, frame) == 0) {
-            if (stride > 1 && (idx++ % stride != 0)) continue;
+            if (idx++ % stride != stride/2) continue;
             if (!sws) {
                 sws = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
                                      frame->width, frame->height, AV_PIX_FMT_RGBA,
@@ -235,9 +236,9 @@ static bool decode_video_ffmpeg_to_rgba(const std::string & file,
             sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dst_data, dst_linesize);
             frames.push_back(std::move(out));
             taken++;
-            if (max_frames > 0 && taken >= max_frames) break;
+            if (taken >= max_frames) break;
         }
-        if (max_frames > 0 && taken >= max_frames) break;
+        if (taken >= max_frames) break;
     }
     if (sws) sws_freeContext(sws);
     return taken > 0;
@@ -298,7 +299,9 @@ size_t append_frames_from_path(mtmd_context * ctx,
         list_files(path, files, opts.recursive);
         info.total_frames = files.size();
     } else {
-        mtmd_video::get_video_info_ffmpeg(path, info);
+        if(!mtmd_video::get_video_info_ffmpeg(path, info)) {
+            return 0;
+        }
     }
 
     // minicpm normal speed
