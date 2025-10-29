@@ -531,6 +531,10 @@ The default Chat UI theme/look changed to help differentiate between different m
 history as well as the parts of each message in a slightly better manner. Change the theme slightly
 between normal and print views (beyond previous infinite height) for better printed chat history.
 
+Initial skeletons of a builtin data store related tool calls, built on browser's indexedDB, without
+needing any proxy / additional helper to handle the store. One could use the ai assistant to store
+ones (ie end users) own data or data of ai model.
+
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
@@ -539,7 +543,7 @@ Trap error responses.
 
 Handle multimodal handshaking with ai models.
 
-Add fetch_rss and documents|data_store tool calling, through the simpleproxy.py if and where needed.
+Add fetch_rss and documents|data_store [wip] tool calling, through the simpleproxy.py if and where needed.
 
 Save used config entries along with the auto saved chat sessions and inturn give option to reload the
 same when saved chat is loaded.
