@@ -24,7 +24,7 @@
 // 온도-주파수 매핑 (온도(°C) -> GPU frequency(Hz))
 static std::map<int, int> temp_to_freq = {
     {60, 443000000},
-    {70, 660000000}
+    {65, 660000000}
 };
 
 // 🔥 Throughput monitoring CSV (llama.cpp에서 정의됨)
