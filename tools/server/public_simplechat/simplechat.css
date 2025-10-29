@@ -43,6 +43,9 @@
     writing-mode: vertical-lr;
     padding-inline: 1vmin;
 }
+.chat-message-reasoning {
+    border-block-style: dashed;
+}
 .chat-message-toolcall {
     border-style: solid;
     border-color: grey;

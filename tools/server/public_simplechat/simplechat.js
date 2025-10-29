@@ -872,6 +872,27 @@ class MultiChatUI {
     }
 
     /**
+     * Show the passed function / tool call details in specified parent element.
+     * @param {HTMLElement} elParent
+     * @param {NSToolCalls} tc
+     */
+    show_message_toolcall(elParent, tc) {
+        let secTC = document.createElement('section')
+        secTC.classList.add('chat-message-toolcall')
+        elParent.append(secTC)
+        let entry = ui.el_create_append_p(`name: ${tc.function.name}`, secTC);
+        entry = ui.el_create_append_p(`id: ${tc.id}`, secTC);
+        let oArgs = JSON.parse(tc.function.arguments)
+        for (const k in oArgs) {
+            entry = ui.el_create_append_p(`arg: ${k}`, secTC);
+            let secArg = document.createElement('section')
+            secArg.classList.add('chat-message-toolcall-arg')
+            secTC.append(secArg)
+            secArg.innerText = oArgs[k]
+        }
+    }
+
+    /**
      * Handles showing a chat message in UI.
      *
      * If handling message belonging to role
@@ -907,10 +928,16 @@ class MultiChatUI {
         secMain.append(secContents)
         // Add the content
         //entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContents);
-        for (const [name, content] of [['reasoning', msg.ns.reasoning_content], ['content', msg.ns.content]]) {
-            let cTrimmed = content.trim()
-            if (cTrimmed.length > 0) {
-                entry = ui.el_create_append_p(`${cTrimmed}`, secContents);
+        let showList = []
+        if (msg.ns.reasoning_content.trim().length > 0) {
+            showList.push(['reasoning', `!!!Reasoning: ${msg.ns.reasoning_content.trim()} !!!\n\n`])
+        }
+        if (msg.ns.content.trim().length > 0) {
+            showList.push(['content', msg.ns.content.trim()])
+        }
+        for (const [name, content] of showList) {
+            if (content.length > 0) {
+                entry = ui.el_create_append_p(`${content}`, secContents);
                 entry.classList.add(`chat-message-${name}`)
             }
         }
@@ -930,18 +957,8 @@ class MultiChatUI {
         }
         // Handle tool call non ui
         if (msg.has_toolcall() && !bTC) {
-            let secTC = document.createElement('section')
-            secTC.classList.add('chat-message-toolcall')
-            secContents.append(secTC)
-            entry = ui.el_create_append_p(`name: ${msg.ns.tool_calls[0].function.name}`, secTC);
-            entry = ui.el_create_append_p(`id: ${msg.ns.tool_calls[0].id}`, secTC);
-            let oArgs = JSON.parse(msg.ns.tool_calls[0].function.arguments)
-            for (const k in oArgs) {
-                entry = ui.el_create_append_p(`arg: ${k}`, secTC);
-                let secArg = document.createElement('section')
-                secArg.classList.add('chat-message-toolcall-arg')
-                secTC.append(secArg)
-                secArg.innerText = oArgs[k]
+            for (const i in msg.ns.tool_calls) {
+                this.show_message_toolcall(secContents, msg.ns.tool_calls[i])
             }
         }
     }
