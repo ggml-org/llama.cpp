@@ -526,6 +526,11 @@ helps ensure that
 * new fields added to http handshake in oneshot or streaming mode can be handled in a structured way
   to an extent.
 
+Chat message parts seperated out and tagged to allow theming chat message as needed in future.
+The default Chat UI theme/look changed to help differentiate between different messages in chat
+history as well as the parts of each message in a slightly better manner. Change the theme slightly
+between normal and print views (beyond previous infinite height) for better printed chat history.
+
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
