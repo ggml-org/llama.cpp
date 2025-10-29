@@ -67,7 +67,7 @@
     min-height: 40vh;
 }
 button {
-    min-width: 8vw;
+    padding-inline: 2vmin;
 }
 
 .sameline {
