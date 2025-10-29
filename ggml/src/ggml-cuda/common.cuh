@@ -625,8 +625,11 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static const uint3 init_fastdiv_values(uint32_t d) {
-    GGML_ASSERT(d != 0);
+static const uint3 init_fastdiv_values(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
+
+    uint32_t d = (uint32_t)d_64;
 
     // compute L = ceil(log2(d));
     uint32_t L = 0;
