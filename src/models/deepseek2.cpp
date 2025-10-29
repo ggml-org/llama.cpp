@@ -200,7 +200,8 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
             // FFN shared expert
             {
                 ggml_tensor * ffn_shexp =
-                    build_ffn(cur, model.layers[il].ffn_up_shexp, NULL, NULL,
+                    build_ffn(cur,
+                        model.layers[il].ffn_up_shexp, NULL, NULL,
                         model.layers[il].ffn_gate_shexp, NULL, NULL,
                         model.layers[il].ffn_down_shexp, NULL, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);

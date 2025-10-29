@@ -82,17 +82,34 @@ llm_build_grovemoe::llm_build_grovemoe(const llama_model & model, const llm_grap
         cb(probs, "ffn_moe_logits", il);
 
         ggml_tensor * moe_out =
-            build_moe_ffn(cur, nullptr, model.layers[il].ffn_up_exps, model.layers[il].ffn_gate_exps,
-                          model.layers[il].ffn_down_exps, nullptr, n_expert, n_expert_used, LLM_FFN_SILU, true, false,
-                          0.0, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il, probs);
+            build_moe_ffn(cur,
+                nullptr,
+                model.layers[il].ffn_up_exps,
+                model.layers[il].ffn_gate_exps,
+                model.layers[il].ffn_down_exps,
+                nullptr,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true,
+                false, 0.0,
+                LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                il,
+                probs);
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 
         // TODO: Only do the expert selection and weights once
-        moe_out = build_moe_ffn(cur, nullptr, model.layers[il].ffn_up_chexps, model.layers[il].ffn_gate_chexps,
-                                model.layers[il].ffn_down_chexps, nullptr, n_chunk_expert,
-                                n_expert_used > n_chunk_expert ? n_chunk_expert : n_expert_used, LLM_FFN_SILU, true,
-                                false, 0.0, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il, probs);
+        moe_out = build_moe_ffn(cur,
+                    nullptr,
+                    model.layers[il].ffn_up_chexps,
+                    model.layers[il].ffn_gate_chexps,
+                    model.layers[il].ffn_down_chexps,
+                    nullptr,
+                    n_chunk_expert, n_expert_used > n_chunk_expert ? n_chunk_expert : n_expert_used,
+                    LLM_FFN_SILU, true,
+                    false, 0.0,
+                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    il,
+                    probs);
         cb(moe_out, "ffn_adj_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ggml_scale(ctx0, moe_out, hparams.expert_group_scale));

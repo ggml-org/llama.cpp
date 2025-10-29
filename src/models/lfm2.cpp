@@ -53,18 +53,22 @@ llm_build_lfm2::llm_build_lfm2(const llama_model & model, const llm_graph_params
 }
 
 ggml_tensor * llm_build_lfm2::build_moe_feed_forward(ggml_tensor * cur, int il) const {
-    return build_moe_ffn(cur, model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
-                         model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                         model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
-                         static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
+    return build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
+                        model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
+                        static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
 }
 
 ggml_tensor * llm_build_lfm2::build_dense_feed_forward(ggml_tensor * cur, int il) const {
     GGML_ASSERT(!model.layers[il].ffn_up_b);
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
-    return build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                     model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+    return build_ffn(cur,
+        model.layers[il].ffn_up, NULL, NULL,
+        model.layers[il].ffn_gate, NULL, NULL,
+        model.layers[il].ffn_down, NULL, NULL,
+        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 
 ggml_tensor * llm_build_lfm2::build_attn_block(ggml_tensor *             cur,
