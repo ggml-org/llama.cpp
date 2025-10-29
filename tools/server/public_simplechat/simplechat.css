@@ -28,6 +28,23 @@
     background-color: lightpink;
 }
 
+.chat-message {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+    display: flex;
+}
+.chat-message-role {
+    border-style: dotted;
+    border-color: black;
+    border-width: thin;
+    border-radius: 4px;
+    writing-mode: vertical-lr;
+    padding-inline: 1vmin;
+}
+
+
 .gridx2 {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
