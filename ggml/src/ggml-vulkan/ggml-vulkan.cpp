@@ -5105,13 +5105,13 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
         } else if (ctx->device->coopmat_acc_f32_support) {
             return mmp.f32acc;
         } else {
-            // No supported pipeline
-            return nullptr;
+            // f16acc nor f32acc is supported so we just abort
+            GGML_ASSERT(false);
         }
     }
-    // coopmat2 or no coopmat.
+    // coopmat2 or no coopmat comes here.
     // coopmat2 should support both f16acc and f32acc by default with all child pipelines.
-    // No coopmat should support both f16acc and f32acc when FP16 is preferred, but only f32acc when not preferred.
+    // No coopmat should support both f16acc and f32acc when FP16 is preferred, but only f32acc when FP16 is not preferred.
     return prefer_fp16acc ? mmp.f16acc : mmp.f32acc;
 }
 
