@@ -27,10 +27,16 @@ static __global__ void mul_mat_f(
         const int stride_col_id, const int stride_row_id,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(AMD_WMMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE)
+    typedef tile<16,  8, T>     tile_A;
+    typedef tile<16,  8, T>     tile_B;
+    typedef tile<16, 16, float> tile_C;
+#else
     typedef tile<16, 8, T>     tile_A;
     typedef tile< 8, 8, T>     tile_B;
     typedef tile<16, 8, float> tile_C;
+#endif // defined(AMD_MFMA_AVAILABLE)
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int tile_k_padded = warp_size + 4;
@@ -151,11 +157,31 @@ static __global__ void mul_mat_f(
 
                     if constexpr (!has_ids) {
                         const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
+#if !defined(GGML_USE_HIP)
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+#else
+                        if constexpr (std::is_same<T, half2>::value) {
+                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
+                        } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
+                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
+                        } else {
+                            static_assert(0, "unsupported type");
+                        }
+#endif // !defined(GGML_USE_HIP)
                     } else {
                         const bool valid = j < cols_per_block && (col_base + j) < ncols_dst_total && slot_map[j] >= 0;
                         float2 tmp = valid ? *(const float2*) &y[slot_map[j]*stride_channel_y + 2*(j*stride_col_y + col)] : make_float2(0.0f, 0.0f);
+#if !defined(GGML_USE_HIP)
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+#else
+                        if constexpr (std::is_same<T, half2>::value) {
+                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
+                        } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
+                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
+                        } else {
+                            static_assert(std::is_same_v<T, void>, "unsupported type");
+                        }
+#endif // !defined(GGML_USE_HIP)
                     }
                 }
             } else {
@@ -229,7 +255,7 @@ static __global__ void mul_mat_f(
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
     NO_DEVICE_CODE;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif // defined(AMD_WMMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 }
 
 
@@ -244,10 +270,16 @@ static __global__ void mul_mat_f_ids(
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const uint3 sis1_fd, const uint3 nch_fd) {
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(AMD_WMMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE)
+    typedef tile<16,  8, T>     tile_A;
+    typedef tile<16,  8, T>     tile_B;
+    typedef tile<16, 16, float> tile_C;
+#else
     typedef tile<16, 8, T>     tile_A;
     typedef tile< 8, 8, T>     tile_B;
     typedef tile<16, 8, float> tile_C;
+#endif // defined(AMD_MFMA_AVAILABLE)
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int tile_k_padded = warp_size + 4;
@@ -389,7 +421,17 @@ static __global__ void mul_mat_f_ids(
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const float2 tmp = vals_buf[curr_buf][j0];
+#if !defined(GGML_USE_HIP)
                     tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
+#else
+                    if constexpr (std::is_same<T, half2>::value) {
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
+                    } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
+                         tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
+                    } else {
+                        static_assert(std::is_same_v<T, void>, "unsupported type");
+                    }
+#endif // !defined(GGML_USE_HIP)
                 }
 
                 if (itB + 1 < ntB) {
@@ -473,7 +515,7 @@ static __global__ void mul_mat_f_ids(
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, sis1_fd, nch_fd);
     NO_DEVICE_CODE;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif // defined(AMD_WMMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 }
 
 template<typename T, int cols_per_block, int nwarps>
@@ -533,8 +575,13 @@ void mul_mat_f_cuda(
         const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst, const int64_t nsamples_x,
         const int64_t nsamples_dst, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
         cudaStream_t stream, const mmf_ids_data * ids_data) {
+#if defined(GGML_USE_HIP)
+    typedef tile<16, 8, T>     tile_A;
+    typedef tile<16, 8, T>     tile_B;
+#else
     typedef tile<16, 8, T>     tile_A;
     typedef tile< 8, 8, T>     tile_B;
+#endif // defined(GGML_USE_HIP)
 
     GGML_ASSERT(ncols_x      % 2 == 0);
     GGML_ASSERT(stride_row   % 2 == 0);
