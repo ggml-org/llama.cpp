@@ -36,47 +36,42 @@ static __global__ void cpy_flt(const char * cx, char * cdst, const int ne,
 }
 
 template <typename T>
-static __global__ void cpy_flt_transpose(const char * cx, char * cdst_direct, const int ne,
+static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int ne,
                                const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
-                               const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
-
-    char * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index]: cdst_direct;
+                               const int nb12, const int nb13) {
 
     const T* src = reinterpret_cast<const T*>(cx);
     T* dst = reinterpret_cast<T*>(cdst);
 
     const int64_t nmat = ne / (ne00 * ne01);
     const int64_t n = ne00 * ne01;
-    int width = ne01;
-    int height = ne00;
-    int x = blockIdx.x * TILE_DIM + threadIdx.x;
-    int y = blockIdx.y * TILE_DIM + threadIdx.y;
-    int tx = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
-    int ty = blockIdx.x * TILE_DIM + threadIdx.y;
 
-    __shared__ T tile[TILE_DIM][TILE_DIM];
+    int x = blockIdx.x * CUDA_CPY_TILE_DIM + threadIdx.x;
+    int y = blockIdx.y * CUDA_CPY_TILE_DIM + threadIdx.y;
+    int tx = blockIdx.y * CUDA_CPY_TILE_DIM + threadIdx.x;  // transpose block offset
+    int ty = blockIdx.x * CUDA_CPY_TILE_DIM + threadIdx.y;
 
-    for(int i = 0; i < BLOCK_NM; ++i){
+    __shared__ T tile[CUDA_CPY_TILE_DIM][CUDA_CPY_TILE_DIM];
 
-        const unsigned int imat = blockIdx.z * BLOCK_NM + i;
+    for(int i = 0; i < CUDA_CPY_BLOCK_NM; ++i){
+
+        const unsigned int imat = blockIdx.z * CUDA_CPY_BLOCK_NM + i;
         if(imat >= nmat)
             break;
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
-            if(x < width && y + j < height){
-                const unsigned int idx = (y+j)*width + x;
+        for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
+            if(x < ne01 && y + j < ne00){
                 const int row = threadIdx.y+j;
                 const int col = threadIdx.x ^ row;
-                tile[row][col] = src[imat*n + idx];
+                tile[row][col] = src[imat*n + (y+j)*ne01 + x];
             }
         }
         __syncthreads();
 
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS){
-            if(ty + j < width && tx < height){
-                const unsigned int idx = (ty+j)*height + tx;
+        for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
+            if(ty + j < ne01 && tx < ne00){
                 const int col = (threadIdx.y+j) ^ threadIdx.x;
-                dst[imat*n + idx] = tile[threadIdx.x][col];
+                dst[imat*n + (ty+j)*ne00 + tx] = tile[threadIdx.x][col];
             }
         }
     }
@@ -188,14 +183,16 @@ static void ggml_cpy_flt_cuda(
     const char * cx, char * cdst, const int ne,
     const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
     const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream) {
+
     if constexpr ((std::is_same_v<src_t, half> && std::is_same_v<dst_t, half> ||
                   std::is_same_v<src_t, float> && std::is_same_v<dst_t, float>)
-                   && transpose){
-            dim3 dimGrid( (ne01 + TILE_DIM - 1) / TILE_DIM,
-                          (ne00 + TILE_DIM - 1) / TILE_DIM,
-                          (ne/(ne00*ne01) + BLOCK_NM - 1) / BLOCK_NM );
-            dim3 dimBlock(TILE_DIM, BLOCK_ROWS, 1);
-            cpy_flt_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+                   && transpose){ //transpose
+
+            dim3 dimGrid( (ne01 + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
+                          (ne00 + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
+                          (ne/(ne00*ne01) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM );
+            dim3 dimBlock(CUDA_CPY_TILE_DIM, CUDA_CPY_BLOCK_ROWS, 1);
+            cpy_flt_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
     } else{ // other
         const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
         cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
@@ -378,7 +375,11 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
         }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
-        ggml_cpy_flt_cuda<float, float>           (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        if(src0->op == GGML_OP_TRANSPOSE){
+            ggml_cpy_flt_cuda<float, float, true> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_flt_cuda<float, float> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_BF16) {
         if (contiguous_srcs) {
             ggml_cpy_flt_contiguous_cuda<float, nv_bfloat16> (src0_ddc, src1_ddc, ne, main_stream);
@@ -417,7 +418,11 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     } else if (src0->type == GGML_TYPE_Q5_1 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_q5_1_f32_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
-        ggml_cpy_flt_cuda<half, half>               (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        if(src0->op == GGML_OP_TRANSPOSE){
+            ggml_cpy_flt_cuda<half, half, true> (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_flt_cuda<half, half>       (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_BF16) {
         if (contiguous_srcs) {
             ggml_cpy_flt_contiguous_cuda<half, nv_bfloat16>  (src0_ddc, src1_ddc, ne, main_stream);
