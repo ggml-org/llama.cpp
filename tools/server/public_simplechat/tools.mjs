@@ -64,7 +64,9 @@ export function setup(cb) {
         cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
     }
     gToolsDBWorker.onmessage = function (ev) {
-        cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data))
+        cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
+            return (v === undefined) ? '__UNDEFINED__' : v;
+        }));
     }
 }
 
