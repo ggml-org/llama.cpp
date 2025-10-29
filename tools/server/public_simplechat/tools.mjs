@@ -10,6 +10,7 @@ import * as tweb from './toolweb.mjs'
 
 
 let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
+let gToolsDBWorker = new Worker('./toolsdbworker.mjs', { type: 'module' });
 /**
  * Maintain currently available tool/function calls
  * @type {Object<string,Object<string,any>>}
@@ -53,6 +54,9 @@ export function meta() {
  */
 export function setup(cb) {
     gToolsWorker.onmessage = function (ev) {
+        cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
+    }
+    gToolsDBWorker.onmessage = function (ev) {
         cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
     }
 }
