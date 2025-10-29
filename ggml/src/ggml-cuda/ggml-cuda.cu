@@ -3120,7 +3120,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 ggml_tensor * node = cgraph->nodes[i];
 
 
-#ifndef GGML_CUDA_DEBUG
+#ifdef GGML_CUDA_DEBUG
                 const int nodes_fused = i - prev_i - 1;
                 prev_i = i;
                 if (nodes_fused > 0) {
