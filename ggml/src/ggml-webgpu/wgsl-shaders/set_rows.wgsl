@@ -52,7 +52,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     var i = gid.x;
     let i_src3 = i / (params.ne2 * params.n_rows);
-    let i_dst3 = i / (params.ne2 * 3);
 
     i = i % (params.ne2 * params.n_rows);
     let i_src2 = i / params.n_rows;

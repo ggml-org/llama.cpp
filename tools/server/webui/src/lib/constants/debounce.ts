@@ -1,0 +1,1 @@
+export const SLOTS_DEBOUNCE_INTERVAL = 100;
