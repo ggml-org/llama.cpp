@@ -7,6 +7,7 @@
 
 import * as tjs from './tooljs.mjs'
 import * as tweb from './toolweb.mjs'
+import * as tdb from './tooldb.mjs'
 
 
 let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
@@ -26,6 +27,12 @@ export async function init() {
     await tjs.init(gToolsWorker).then(()=>{
         for (const key in tjs.tc_switch) {
             tc_switch[key] = tjs.tc_switch[key]
+            toolNames.push(key)
+        }
+    })
+    await tdb.init(gToolsDBWorker).then(()=>{
+        for (const key in tdb.tc_switch) {
+            tc_switch[key] = tdb.tc_switch[key]
             toolNames.push(key)
         }
     })
