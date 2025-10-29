@@ -3,6 +3,8 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
+# AMD64 镜像官方仓库可以下载
+# ARM64 的本action目前运行失败，仓库代码有问题issue
 # GitHub recommends pinning actions to a commit SHA.
 # To get a newer version, you will need to update the SHA.
 # You can also reference a tag or branch, but the action may change without warning.
