@@ -8280,11 +8280,11 @@ struct llm_build_modern_bert : public llm_graph_context {
 
             // re-add the layer input
             cur = ggml_add(ctx0, cur, inpL);
-
+            
+            ggml_tensor * ffn_inp = cur;
             // attention layer norm
             cur = build_norm(cur, model.layers[il].ffn_norm, nullptr, LLM_NORM, il);
 
-            ggml_tensor * ffn_inp = cur;
             cb(ffn_inp, "ffn_inp", il);
 
             cur = build_ffn(cur,
