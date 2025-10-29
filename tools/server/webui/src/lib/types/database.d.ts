@@ -34,11 +34,22 @@ export interface DatabaseMessageExtraPdfFile {
 	processedAsImages: boolean; // Whether PDF was processed as images
 }
 
+/**
+ * Legacy format from old webui - pasted content was stored as "context" type
+ * @deprecated Use DatabaseMessageExtraTextFile instead
+ */
+export interface DatabaseMessageExtraLegacyContext {
+	type: 'context';
+	name: string;
+	content: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
-	| DatabaseMessageExtraPdfFile;
+	| DatabaseMessageExtraPdfFile
+	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
 	id: string;
@@ -54,3 +65,18 @@ export interface DatabaseMessage {
 	timings?: ChatMessageTimings;
 	model?: string;
 }
+
+/**
+ * Represents a single conversation with its associated messages,
+ * typically used for import/export operations.
+ */
+export type ExportedConversation = {
+	conv: DatabaseConversation;
+	messages: DatabaseMessage[];
+};
+
+/**
+ * Type representing one or more exported conversations.
+ * Can be a single conversation object or an array of them.
+ */
+export type ExportedConversations = ExportedConversation | ExportedConversation[];
