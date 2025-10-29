@@ -22,7 +22,7 @@ let dsget_meta = {
                         "description": "The key whose value should be returned."
                     }
                 },
-                "required": [ "key" ],
+                "required": ["key"],
             }
         }
     }
@@ -54,8 +54,8 @@ let dsset_meta = {
                         "description": "The key under which to store the value."
                     },
                     "value": {
-                        "type": "any",
-                        "description": "The value to store. Can be any JSON-serialisable type."
+                        "type": "string",
+                        "description": "The value to store, complex objects could be passed in JSON Stringified format."
                     }
                 },
                 "required": ["key", "value"]
