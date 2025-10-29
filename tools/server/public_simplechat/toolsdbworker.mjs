@@ -66,7 +66,7 @@ self.onmessage = async function (ev) {
                 }
                 break;
             case 'data_store_set':
-                let reqSet = dbOS.add(args['value'], args['key']);
+                let reqSet = dbOS.put(args['value'], args['key']);
                 reqSet.onerror = (evSet) => {
                     console.info(`ERRR:WWDb:${ev.data.name}:transact failed:${reqSet.error}`)
                     self.postMessage({

@@ -13,7 +13,7 @@ let dsget_meta = {
         "type": "function",
         "function": {
             "name": "data_store_get",
-            "description": "Retrieve the value associated with a given key, in few seconds",
+            "description": "Retrieve the value associated with a given key, in few seconds using a web worker. If key doesnt exist, then __UNDEFINED__ is returned as the value.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -45,7 +45,7 @@ let dsset_meta = {
         "type": "function",
         "function": {
             "name": "data_store_set",
-            "description": "Store a value under a given key, in few seconds using a web worker",
+            "description": "Store a value under a given key, in few seconds using a web worker. If the key already exists, its value will be updated to the new value",
             "parameters": {
                 "type": "object",
                 "properties": {
