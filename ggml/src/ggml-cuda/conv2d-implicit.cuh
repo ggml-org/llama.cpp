@@ -137,7 +137,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && 
+        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
             curR < param.r && curS < param.s && curC < param.c){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
@@ -199,7 +199,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
-        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && 
+        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
             curR < param.r && curS < param.s && curC < param.c){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
@@ -215,7 +215,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     GGML_UNUSED(inChannelOffset);
     GGML_UNUSED(param);
     NO_DEVICE_CODE;
-#endif    
+#endif
 }
 
 
@@ -299,7 +299,7 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
-    
+
     // flatten out 2d grid of threads into in order of increasing threadIdx.x
     const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
 
@@ -312,7 +312,7 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
-    
+
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++)
     {
