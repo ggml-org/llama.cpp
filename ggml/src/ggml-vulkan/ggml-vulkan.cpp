@@ -146,14 +146,11 @@ struct vk_matmul_pipeline_struct {
     vk_pipeline l, m, s;
     vk_pipeline a_l, a_m, a_s;
     // Returns true when all member pipelines are null
-    bool is_empty() const;
+    bool is_empty() const {
+        return l == nullptr && m == nullptr && s == nullptr &&
+            a_l == nullptr && a_m == nullptr && a_s == nullptr;
+    }
 };
-
-bool vk_matmul_pipeline_struct::is_empty() const {
-    return l == nullptr && m == nullptr && s == nullptr &&
-        a_l == nullptr && a_m == nullptr && a_s == nullptr;
-}
-
 typedef std::shared_ptr<vk_matmul_pipeline_struct> vk_matmul_pipeline;
 
 struct vk_matmul_pipeline2 {
