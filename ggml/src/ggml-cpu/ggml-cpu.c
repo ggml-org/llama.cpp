@@ -1955,7 +1955,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_SPARSEK_ATTN:
             {
                 ggml_compute_forward_sparsek_attn(params, tensor);
-            } break;          
+            } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
                 int32_t t = ggml_get_op_params_i32(tensor, 0);

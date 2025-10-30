@@ -2234,9 +2234,9 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_sparsek_attn(
               struct ggml_context * ctx,
-              struct ggml_tensor  * Q,   
-              struct ggml_tensor  * K,  
-              struct ggml_tensor  * V,   
+              struct ggml_tensor  * Q,
+              struct ggml_tensor  * K,
+              struct ggml_tensor  * V,
               int32_t               k_top,
               int32_t               win_local,
               int32_t               stride_global);
