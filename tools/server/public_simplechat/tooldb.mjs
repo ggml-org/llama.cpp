@@ -28,19 +28,6 @@ let dsget_meta = {
     }
 
 
-/**
- * Implementation of the data store get logic. Minimal skeleton for now.
- * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
- * @param {string} chatid
- * @param {string} toolcallid
- * @param {string} toolname
- * @param {any} obj
- */
-function dsget_run(chatid, toolcallid, toolname, obj) {
-    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
-}
-
-
 let dsset_meta = {
         "type": "function",
         "function": {
@@ -64,19 +51,6 @@ let dsset_meta = {
     }
 
 
-/**
- * Implementation of the data store set logic. Minimal skeleton for now.
- * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
- * @param {string} chatid
- * @param {string} toolcallid
- * @param {string} toolname
- * @param {any} obj
- */
-function dsset_run(chatid, toolcallid, toolname, obj) {
-    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
-}
-
-
 let dsdel_meta = {
         "type": "function",
         "function": {
@@ -96,19 +70,6 @@ let dsdel_meta = {
     }
 
 
-/**
- * Implementation of the data store delete logic. Minimal skeleton for now.
- * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
- * @param {string} chatid
- * @param {string} toolcallid
- * @param {string} toolname
- * @param {any} obj
- */
-function dsdel_run(chatid, toolcallid, toolname, obj) {
-    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
-}
-
-
 let dslist_meta = {
         "type": "function",
         "function": {
@@ -124,14 +85,14 @@ let dslist_meta = {
 
 
 /**
- * Implementation of the data store list logic. Minimal skeleton for now.
+ * Implementation of the minimal needed plumbing for data store related ops triggering.
  * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
  * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function dslist_run(chatid, toolcallid, toolname, obj) {
+function dsops_run(chatid, toolcallid, toolname, obj) {
     gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
 }
 
@@ -142,22 +103,22 @@ function dslist_run(chatid, toolcallid, toolname, obj) {
  */
 export let tc_switch = {
     "data_store_get": {
-        "handler": dsget_run,
+        "handler": dsops_run,
         "meta": dsget_meta,
         "result": ""
     },
     "data_store_set": {
-        "handler": dsset_run,
+        "handler": dsops_run,
         "meta": dsset_meta,
         "result": ""
     },
     "data_store_delete": {
-        "handler": dsdel_run,
+        "handler": dsops_run,
         "meta": dsdel_meta,
         "result": ""
     },
     "data_store_list": {
-        "handler": dslist_run,
+        "handler": dsops_run,
         "meta": dslist_meta,
         "result": ""
     },
