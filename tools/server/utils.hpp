@@ -1088,6 +1088,7 @@ private: // disallow accessing these members directly, risking out-of-sync
     //   if the token is LLAMA_TOKEN_NULL, it indicates that this position is occupied by media chunk
     //   otherwise, it is a normal text token
     // note: a non-text chunk can occupy multiple tokens (aka memory cells) in the token list
+    // note(2): for M-RoPE, an image can occupy different number of pos; do not assume 1-to-1 mapping tokens <-> pos
     llama_tokens tokens;
 
     // for ex. with input of 5 text tokens and 2 images (each image occupies 3 tokens and 2 pos):
@@ -1366,7 +1367,7 @@ public:
                 llama_context * ctx,
                 mtmd_context * mctx,
                 size_t idx,
-                llama_pos n_past,
+                llama_pos pos,
                 int32_t seq_id,
                 size_t & n_tokens_out) const {
         const auto & chunk = find_chunk(idx);
@@ -1378,7 +1379,7 @@ public:
         llama_pos new_n_past; // unused for now
         int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
             chunk.get(),
-            n_past,
+            pos,
             seq_id,
             n_batch,
             true, // logits last

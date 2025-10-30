@@ -3728,6 +3728,8 @@ struct server_context {
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                 if (params_base.n_cache_reuse > 0) {
+                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+
                                     size_t head_c = n_past; // cache
                                     size_t head_p = n_past; // current prompt
 
@@ -3836,6 +3838,9 @@ struct server_context {
                                 }
 
                                 if (pos_min > pos_min_thold) {
+                                    // TODO: support can be added in the future when corresponding vision models get released
+                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+
                                     SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
 
                                     // search for a context checkpoint
@@ -3908,8 +3913,9 @@ struct server_context {
                     }
 
                     // truncate any tokens that are beyond n_past for this slot
-                    if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d\n", slot.prompt.n_tokens());
+                    const llama_pos p0 = slot.prompt.tokens.pos_next();
+                    if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
+                        SLT_WRN(slot, "failed to truncate tokens with position >= %d\n", p0);
                         llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
 
                         // there is no common part left
@@ -3918,10 +3924,7 @@ struct server_context {
                         slot.prompt.tokens.clear();
                     }
 
-                    SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), slot.prompt.n_tokens());
-
-                    // remove the non-common part from the cache
-                    slot.prompt.tokens.keep_first(slot.prompt.n_tokens());
+                    SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
