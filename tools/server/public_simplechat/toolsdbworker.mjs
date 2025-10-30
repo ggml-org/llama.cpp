@@ -53,7 +53,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'ok', 'data': reqList.result, 'msg': `DataStoreList:Ok:${args['key']}:${reqList.result}`}
+                        data: { 'status': 'ok', 'data': reqList.result, 'msg': `DataStoreList:Ok:${reqList.result}`}
                     });
                 }
                 reqList.onerror = (evList) => {
@@ -62,7 +62,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'error', 'msg': `DataStoreList:Err:${args['key']}:${reqList.error}`}
+                        data: { 'status': 'error', 'msg': `DataStoreList:Err:${reqList.error}`}
                     });
                 }
                 break;
