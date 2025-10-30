@@ -865,7 +865,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context &              ctx,
                                            ggml_tensor *                 dst,
                                            webgpu_pipeline &             pipeline,
                                            bool                          in_place,
-                                           const std::vector<uint32_t> & xielu_params = {}) {
+                                           const std::vector<uint32_t> & extra_params = {}) {
     uint32_t ne = (uint32_t) ggml_nelements(dst);
 
     std::vector<uint32_t> params = {
@@ -881,7 +881,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context &              ctx,
         (uint32_t) dst->ne[1], (uint32_t) dst->ne[2]
     };
 
-    params.insert(params.end(), xielu_params.begin(), xielu_params.end());
+    params.insert(params.end(), extra_params.begin(), extra_params.end());
 
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0,
