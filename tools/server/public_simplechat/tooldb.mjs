@@ -77,6 +77,38 @@ function dsset_run(chatid, toolcallid, toolname, obj) {
 }
 
 
+let dsdel_meta = {
+        "type": "function",
+        "function": {
+            "name": "data_store_delete",
+            "description": "Remove the entry associated with a given key, in few seconds using a web worker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "The key that should be deleted along with its entry."
+                    }
+                },
+                "required": ["key"],
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the data store delete logic. Minimal skeleton for now.
+ * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
+ * @param {string} chatid
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function dsdel_run(chatid, toolcallid, toolname, obj) {
+    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
+}
+
+
 
 /**
  * @type {Object<string, Object<string, any>>}
@@ -90,6 +122,11 @@ export let tc_switch = {
     "data_store_set": {
         "handler": dsset_run,
         "meta": dsset_meta,
+        "result": ""
+    },
+    "data_store_delete": {
+        "handler": dsdel_run,
+        "meta": dsdel_meta,
         "result": ""
     },
 }
