@@ -112,12 +112,22 @@ llama_context::llama_context(
         }
     }
 
-    cparams.n_ctx_seq = cparams.kv_unified ? cparams.n_ctx : cparams.n_ctx / cparams.n_seq_max;
+    if (cparams.kv_unified) {
+        cparams.n_ctx_seq = cparams.n_ctx;
+    } else {
+        cparams.n_ctx_seq = cparams.n_ctx / cparams.n_seq_max;
+    }
 
     if (cparams.n_ctx_seq > hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: capping n_ctx_seq (%u) to n_ctx_train (%u)\n", __func__, cparams.n_ctx_seq, hparams.n_ctx_train);
 
         cparams.n_ctx_seq = hparams.n_ctx_train;
+    }
+
+    if (cparams.kv_unified) {
+        cparams.n_ctx = cparams.n_ctx_seq;
+    } else {
+        cparams.n_ctx = cparams.n_ctx_seq * cparams.n_seq_max;
     }
 
     LLAMA_LOG_INFO("%s: n_seq_max     = %u\n",   __func__, cparams.n_seq_max);
