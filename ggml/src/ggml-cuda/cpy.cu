@@ -8,6 +8,9 @@
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
 const int CUDA_CPY_TILE_DIM = 16;
+const int CUDA_CPY_TILE_DIM_2D = 32;
+const int CUDA_CPY_BLOCK_NM = 8;
+const int CUDA_CPY_BLOCK_ROWS = 8;
 
 template <cpy_kernel_t cpy_1>
 static __global__ void cpy_flt(const char * cx, char * cdst, const int ne,
@@ -37,47 +40,47 @@ static __global__ void cpy_flt(const char * cx, char * cdst, const int ne,
     cpy_1(cx + x_offset, cdst + dst_offset);
 }
 
-// template <typename T>
-// static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int ne,
-//                                const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-//                                const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
-//                                const int nb12, const int nb13) {
+template <typename T>
+static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int ne,
+                               const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
+                               const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                               const int nb12, const int nb13) {
 
-//     const T* src = reinterpret_cast<const T*>(cx);
-//     T* dst = reinterpret_cast<T*>(cdst);
+    const T* src = reinterpret_cast<const T*>(cx);
+    T* dst = reinterpret_cast<T*>(cdst);
 
-//     const int64_t nmat = ne / (ne00 * ne01);
-//     const int64_t n = ne00 * ne01;
+    const int64_t nmat = ne / (ne00 * ne01);
+    const int64_t n = ne00 * ne01;
 
-//     int x = blockIdx.x * CUDA_CPY_TILE_DIM + threadIdx.x;
-//     int y = blockIdx.y * CUDA_CPY_TILE_DIM + threadIdx.y;
-//     int tx = blockIdx.y * CUDA_CPY_TILE_DIM + threadIdx.x;  // transpose block offset
-//     int ty = blockIdx.x * CUDA_CPY_TILE_DIM + threadIdx.y;
+    int x = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
+    int y = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
+    int tx = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
+    int ty = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
 
-//     __shared__ T tile[CUDA_CPY_TILE_DIM][CUDA_CPY_TILE_DIM];
+    __shared__ T tile[CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D];
 
-//     for(int i = 0; i < CUDA_CPY_BLOCK_NM; ++i){
+    for(int i = 0; i < CUDA_CPY_BLOCK_NM; ++i){
 
-//         const unsigned int imat = blockIdx.z * CUDA_CPY_BLOCK_NM + i;
-//         if(imat >= nmat)
-//             break;
-//         for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
-//             if(x < ne01 && y + j < ne00){
-//                 const int row = threadIdx.y+j;
-//                 const int col = threadIdx.x ^ row;
-//                 tile[row][col] = src[imat*n + (y+j)*ne01 + x];
-//             }
-//         }
-//         __syncthreads();
+        const unsigned int imat = blockIdx.z * CUDA_CPY_BLOCK_NM + i;
+        if(imat >= nmat)
+            break;
+        for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
+            if(x < ne01 && y + j < ne00){
+                const int row = threadIdx.y+j;
+                const int col = threadIdx.x ^ row;
+                tile[row][col] = src[imat*n + (y+j)*ne01 + x];
+            }
+        }
+        __syncthreads();
 
-//         for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
-//             if(ty + j < ne01 && tx < ne00){
-//                 const int col = (threadIdx.y+j) ^ threadIdx.x;
-//                 dst[imat*n + (ty+j)*ne00 + tx] = tile[threadIdx.x][col];
-//             }
-//         }
-//     }
-// }
+        for (int j = 0; j < CUDA_CPY_TILE_DIM; j += CUDA_CPY_BLOCK_ROWS){
+            if(ty + j < ne01 && tx < ne00){
+                const int col = (threadIdx.y+j) ^ threadIdx.x;
+                dst[imat*n + (ty+j)*ne00 + tx] = tile[threadIdx.x][col];
+            }
+        }
+    }
+}
 
 
 template <typename T, const int zero_at, const int one_at>
@@ -302,54 +305,63 @@ static void ggml_cpy_flt_cuda(
         // printf("c %zu, %zu, %zu, %zu, \n", nb00, nb01, nb02, nb03);
         // printf("d %zu, %zu, %zu, %zu, \n", nb10, nb11, nb12, nb13);
         GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
-        std::vector<std::tuple<int, int, int>> v;
-        v.emplace_back(std::make_tuple(nb00, ne00, 0));
-        v.emplace_back(std::make_tuple(nb01, ne01, 1));
-        v.emplace_back(std::make_tuple(nb02, ne02, 2));
-        std::sort(v.begin(), v.end(),
-              [](auto &a, auto &b) {
-                  return std::get<0>(a) < std::get<0>(b);
-              });
-        const int ne0_new = std::get<1>(v[0]);
-        const int ne1_new = std::get<1>(v[1]);
-        const int ne2_new = std::get<1>(v[2]);
-        int nidx[3];
-        nidx[0] = std::get<2>(v[0]);
-        nidx[1] = std::get<2>(v[1]);
-        nidx[2] = std::get<2>(v[2]);
-        // printf(" nidx: [%d, %d, %d] \n", nidx[0], nidx[1], nidx[2]);
-        // printf(" ne_new: [%d, %d, %d] \n", ne0_new, ne1_new, ne2_new);
-        const int zero_at = nidx[2] == 0 ? 2 : (nidx[1] == 0 ? 1 : 0);
-        const int one_at =  nidx[2] == 1 ? 2 : (nidx[1] == 1 ? 1 : 0);
-
-        dim3 dimGrid( (ne0_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
-                      (ne1_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
-                      (ne2_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM);
-        dim3 dimBlock(CUDA_CPY_TILE_DIM, CUDA_CPY_TILE_DIM, 1);
-        if(zero_at == 2){
-            if(one_at == 1){
-                cpy_flt_coalesced<dst_t, 2, 1><<<dimGrid, dimBlock, 0, stream>>>(
-                    cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
-                    nb10, nb11, nb12, nb13);
-            }else{
-                cpy_flt_coalesced<dst_t, 2, 0><<<dimGrid, dimBlock, 0, stream>>>(
-                    cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
-                    nb10, nb11, nb12, nb13);
-            }
-        } else if(zero_at == 1){
-            if(one_at == 2){
-                cpy_flt_coalesced<dst_t, 1, 2><<<dimGrid, dimBlock, 0, stream>>>(
-                    cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
-                    nb10, nb11, nb12, nb13);
-            }else{
-                cpy_flt_coalesced<dst_t, 1, 0><<<dimGrid, dimBlock, 0, stream>>>(
-                    cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
-                    nb10, nb11, nb12, nb13);
-            }
+        if(ne02 == 1) {
+            dim3 dimGrid( (ne01 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                          (ne00 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                           (ne/(ne01*ne00) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM);
+            dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
+            cpy_flt_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>
+            (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
         } else{
-            cpy_flt_coalesced<dst_t, 0, 2><<<dimGrid, dimBlock, 0, stream>>>(
-                cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
-                nb10, nb11, nb12, nb13);
+            std::vector<std::tuple<int, int, int>> v;
+            v.emplace_back(std::make_tuple(nb00, ne00, 0));
+            v.emplace_back(std::make_tuple(nb01, ne01, 1));
+            v.emplace_back(std::make_tuple(nb02, ne02, 2));
+            std::sort(v.begin(), v.end(),
+                [](auto &a, auto &b) {
+                    return std::get<0>(a) < std::get<0>(b);
+                });
+            const int ne0_new = std::get<1>(v[0]);
+            const int ne1_new = std::get<1>(v[1]);
+            const int ne2_new = std::get<1>(v[2]);
+            int nidx[3];
+            nidx[0] = std::get<2>(v[0]);
+            nidx[1] = std::get<2>(v[1]);
+            nidx[2] = std::get<2>(v[2]);
+            // printf(" nidx: [%d, %d, %d] \n", nidx[0], nidx[1], nidx[2]);
+            // printf(" ne_new: [%d, %d, %d] \n", ne0_new, ne1_new, ne2_new);
+            const int zero_at = nidx[2] == 0 ? 2 : (nidx[1] == 0 ? 1 : 0);
+            const int one_at =  nidx[2] == 1 ? 2 : (nidx[1] == 1 ? 1 : 0);
+
+            dim3 dimGrid( (ne0_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
+                        (ne1_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM,
+                        (ne2_new + CUDA_CPY_TILE_DIM - 1) / CUDA_CPY_TILE_DIM);
+            dim3 dimBlock(CUDA_CPY_TILE_DIM, CUDA_CPY_TILE_DIM, 1);
+            if(zero_at == 2){
+                if(one_at == 1){
+                    cpy_flt_coalesced<dst_t, 2, 1><<<dimGrid, dimBlock, 0, stream>>>(
+                        cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                        nb10, nb11, nb12, nb13);
+                }else{
+                    cpy_flt_coalesced<dst_t, 2, 0><<<dimGrid, dimBlock, 0, stream>>>(
+                        cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                        nb10, nb11, nb12, nb13);
+                }
+            } else if(zero_at == 1){
+                if(one_at == 2){
+                    cpy_flt_coalesced<dst_t, 1, 2><<<dimGrid, dimBlock, 0, stream>>>(
+                        cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                        nb10, nb11, nb12, nb13);
+                }else{
+                    cpy_flt_coalesced<dst_t, 1, 0><<<dimGrid, dimBlock, 0, stream>>>(
+                        cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                        nb10, nb11, nb12, nb13);
+                }
+            } else{
+                cpy_flt_coalesced<dst_t, 0, 2><<<dimGrid, dimBlock, 0, stream>>>(
+                    cx, cdst, ne, ne0_new, ne1_new, ne2_new, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                    nb10, nb11, nb12, nb13);
+            }
         }
     } else{ // other
         const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
