@@ -3709,6 +3709,8 @@ template [[host_name("kernel_mul_mv_bf16_f32_short")]]  kernel mul_mv_t_t_short_
 template [[host_name("kernel_mul_mv_bf16_bf16_short")]] kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<bfloat, bfloat>;
 #endif
 
+constant bool FC_rope_is_imrope [[function_constant(FC_ROPE + 0)]];
+
 static float rope_yarn_ramp(const float low, const float high, const int i0) {
     const float y = (i0 / 2 - low) / max(0.001f, high - low);
     return 1.0f - min(1.0f, max(0.0f, y));
@@ -3889,14 +3891,26 @@ kernel void kernel_rope_multi(
             const int sector    = ic % sect_dims;
 
             float theta_base;
-            if (sector < args.sect_0) {
-                theta_base = (float) pos[i2];
-            } else if (sector < sec_w01) {
-                theta_base = (float) pos[i2 + args.ne02];
-            } else if (sector < sec_w012) {
-                theta_base = (float) pos[i2 + args.ne02 * 2];
+            if (FC_rope_is_imrope) {
+                if (sector % 3 == 1 && sector < 3 * args.sect_1) { // h
+                    theta_base = (float) pos[i2 + args.ne02 * 1];
+                } else if (sector % 3 == 2 && sector < 3 * args.sect_2) { // w
+                    theta_base = (float) pos[i2 + args.ne02 * 2];
+                } else if (sector % 3 == 0 && sector < 3 * args.sect_0) { // t
+                    theta_base = (float) pos[i2 + args.ne02 * 0];
+                } else { // e
+                    theta_base = (float) pos[i2 + args.ne02 * 3];
+                }
             } else {
-                theta_base = (float) pos[i2 + args.ne02 * 3];
+                if (sector < args.sect_0) {
+                    theta_base = (float) pos[i2];
+                } else if (sector < sec_w01) {
+                    theta_base = (float) pos[i2 + args.ne02 * 1];
+                } else if (sector < sec_w012) {
+                    theta_base = (float) pos[i2 + args.ne02 * 2];
+                } else {
+                    theta_base = (float) pos[i2 + args.ne02 * 3];
+                }
             }
             // end of mrope
 

@@ -138,7 +138,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
     struct ggml_tensor * x;
 
     // rope f32
-    for (int m = 0; m < 5; ++m) {
+    for (int m = 0; m < 6; ++m) {
         const int ndims = 4;
 
         const int64_t n_rot = 128;
@@ -180,7 +180,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
             struct ggml_tensor * p2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2] * 4);
 
             int sections[4] = {16, 24, 24, 0};
-            mode = (m == 3) ? GGML_ROPE_TYPE_MROPE : GGML_ROPE_TYPE_VISION;
+            mode = (m == 3) ? GGML_ROPE_TYPE_MROPE : (m == 4) ? GGML_ROPE_TYPE_VISION : GGML_ROPE_TYPE_IMROPE;
 
             for (int i = 0; i < ne[2]; ++i) {
                 for (int j = 0; j < 4; ++j) {
