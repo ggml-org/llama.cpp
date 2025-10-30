@@ -7916,7 +7916,7 @@ static void ggml_compute_forward_sparsek_attn_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
 
-    // Single-threaded baseline version (expand later for parallelism)
+    // Single-threaded baseline version 
     if (params->ith != 0) return;
 
     const struct ggml_tensor * Q = dst->src[0];
