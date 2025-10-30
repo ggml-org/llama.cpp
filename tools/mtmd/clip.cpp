@@ -28,6 +28,7 @@
 #include <numeric>
 #include <functional>
 
+// TODO: allow to pass callback from user code
 struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
 
 enum ffn_op_type {
@@ -3188,6 +3189,11 @@ struct clip_model_loader {
                         size / 1024.0 / 1024.0);
             }
         }
+
+        const int n_splits = ggml_backend_sched_get_n_splits(ctx_clip.sched.get());
+        const int n_nodes  = ggml_graph_n_nodes(gf);
+
+        LOG_INF("%s: graph splits = %d, nodes = %d\n", __func__,  n_splits, n_nodes);
     }
 
     void get_bool(const std::string & key, bool & output, bool required = true) {
@@ -4371,6 +4377,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     //                we don't need true batching support because the cgraph will gonna be big anyway
     if (batch_size != 1) {
         return false; // only support batch size of 1
+    }
+
+    if (ggml_backend_sched_get_n_splits(ctx->sched.get()) > 1) {
+        LOG_WRN("%s: *****************************************************************\n", __func__);
+        LOG_WRN("%s: WARNING: the CLIP graph uses unsupported operators by the backend\n", __func__);
+        LOG_WRN("%s:          the performance will be suboptimal                      \n", __func__);
+        LOG_WRN("%s:                                                                  \n", __func__);
+        LOG_WRN("%s: ref: https://github.com/ggml-org/llama.cpp/pull/16837#issuecomment-3461676118\n", __func__);
+        LOG_WRN("%s: *****************************************************************\n", __func__);
     }
 
     // build the inference graph
