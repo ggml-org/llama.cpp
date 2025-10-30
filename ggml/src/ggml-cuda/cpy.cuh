@@ -1,9 +1,6 @@
 #include "common.cuh"
 
 #define CUDA_CPY_BLOCK_SIZE 64
-#define CUDA_CPY_TILE_DIM 32
-#define CUDA_CPY_BLOCK_ROWS  8
-#define CUDA_CPY_BLOCK_NM 8
 
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1);
 
