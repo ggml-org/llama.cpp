@@ -465,9 +465,9 @@ void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
         div_nb[i] = div_nb[i - 1] * div_ne[i - 1];
     }
-    aclTensor *          acl_div      = ggml_cann_create_tensor(buffer, ACL_FLOAT, type_size, div_ne, div_nb, 4);
+    aclTensor *          acl_div      = ggml_cann_create_tensor(buffer, ACL_FLOAT, type_size, div_ne, div_nb, GGML_MAX_DIMS);
 
-     std::vector<int64_t> norm_dims = { 3 };
+    std::vector<int64_t> norm_dims = { 3 };
     aclIntArray * dims_array = aclCreateIntArray(norm_dims.data(), norm_dims.size());
 
     float p_value = 2.0f;
