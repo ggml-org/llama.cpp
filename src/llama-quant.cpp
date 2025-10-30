@@ -631,6 +631,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::map<int, std::string> & mapped,
     const std::unordered_map<std::string, std::vector<float>> * values_data,
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
+    const std::unordered_map<std::string, std::vector<float>> * statistics_data,
     const llama_model_quantize_params * params,
     int nthread
 ) {
@@ -1815,6 +1816,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
     const std::unordered_map<std::string, std::vector<float>> * values_data = nullptr;
     const std::unordered_map<std::string, std::vector<float>> * activations_data = nullptr;
+    const std::unordered_map<std::string, std::vector<float>> * statistics_data = nullptr;
     if (params->imatrix) {
         values_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
         if (values_data) {
@@ -1843,6 +1845,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
                 }
             }
+        }
+    }
+    if (params->statistics) {
+        statistics_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->statistics);
+        if (statistics_data) {
+            LLAMA_LOG_INFO(" and %d statistics",int(statistics_data->size()));
         }
     }
     LLAMA_LOG_INFO("\n");
@@ -1999,15 +2007,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
     if (params->target_bpw != -1.0f && !params->only_copy) {
         if (params->imatrix) {
-            if (params->activations) {
-                LLAMA_LOG_INFO("%s: imatrix with activations provided, target bpw quantization will be more accurate\n",__func__);
-            } else {
-                LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate\n", __func__);
-            }
+            const char* base_msg = params->activations
+                ? (params->statistics
+                    ? "imatrix with activations and statistics provided, process will be more accurate\n"
+                    : "imatrix with activations provided, process will be accurate\n")
+                : "imatrix without activations provided, process will be less accurate\n";
+            if (params->activations) { LLAMA_LOG_INFO("%s: %s", __func__, base_msg); }
+            else { LLAMA_LOG_WARN("%s: %s", __func__, base_msg); }
+
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
-            bpw_overrides = target_bpw_type(ml, model, tensors, mapped, values_data, activations_data, params, nthread);
+            bpw_overrides = target_bpw_type(ml, model, tensors, mapped, values_data, activations_data, statistics_data, params, nthread);
         } else {
-            LLAMA_LOG_WARN("%s: no imatrix provided, target bpw will not apply\n", __func__);
+            LLAMA_LOG_WARN("%s: --target-bpw requires an imatrix but none was provided, option will be ignored\n", __func__);
         }
     }
 
@@ -2269,7 +2280,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
         /*.keep_bpw_state              =*/ false,
-        /*.bpw_state                   =*/ nullptr
+        /*.bpw_state                   =*/ nullptr,
+        /*.statistics                  =*/ nullptr
     };
 
     return result;
