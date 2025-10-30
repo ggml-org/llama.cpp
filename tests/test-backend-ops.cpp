@@ -7258,8 +7258,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     uint32_t Cin_idx = 3;
     uint32_t B_idx = 4;
     std::vector<std::array<int, 5>> cases = {
-  //{IWH, KWH, Cout, Cin, B}
-  // K=CRS=NPQ=4096 conv2d matmul performance
+// {IWH, KWH, Cout, Cin, B}
+// K=CRS=NPQ=4096 conv2d matmul performance
         {19,   4, 4096, 256, 16},
  // K=128, CRS=128, NPQ=4096
         { 19,  4, 128,  8,   16},
