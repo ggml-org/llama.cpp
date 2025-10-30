@@ -102,7 +102,8 @@ remember to
     * the white list of allowed.domains
     * the shared bearer token between server and client ui
 
-* other builtin tool / function calls like calcultor, javascript runner, DataStore dont require simpleproxy.py
+* other builtin tool / function calls like calculator, javascript runner, DataStore dont require the
+  simpleproxy.py helper.
 
 
 
@@ -390,6 +391,15 @@ needed to help generate better responses. this can also be used for
   * searching for specific topics and summarising the results
   * or so
 
+* save collated data or generated analysis or more to the provided data store and retrieve
+them later to augment the analysis / generation then. Also could be used to summarise chat
+session till a given point and inturn save the summary into data store and later retrieve
+the summary and continue the chat session using the summary and thus with a reduced context
+window to worry about.
+
+* use your imagination and ai models capabilities as you see fit, without restrictions from
+others.
+
 The tool calling feature has been tested with Gemma3N, Granite4 and GptOss.
 
 ALERT: The simple minded way in which this is implemented, it provides some minimal safety
@@ -410,7 +420,7 @@ The following tools/functions are currently provided by default
 * run_javascript_function_code - which can be used to run some javascript code in the browser
   context.
 
-* data_store_get/set - allows for a basic data store to be used.
+* data_store_get/set/delete/list - allows for a basic data store to be used.
 
 Currently the ai generated code / expression is run through a simple minded eval inside a web worker
 mechanism. Use of WebWorker helps avoid exposing browser global scope to the generated code directly.
@@ -456,7 +466,7 @@ The bundled simple proxy
   a non-browser entity.
 
 In future it can be further extended to help with other relatively simple yet useful tool calls like
-data / documents_store [wip], fetch_rss and so.
+fetch_rss and so.
 
   * for now fetch_rss can be indirectly achieved using fetch_web_url_raw.
 
@@ -482,8 +492,8 @@ Update the tc_switch to include a object entry for the tool, which inturn includ
   It should pass these along to the tools web worker, if used.
 * the result key (was used previously, may use in future, but for now left as is)
 
-Look into tooljs.mjs for javascript and inturn web worker based tool calls and toolweb.mjs
-for the simpleproxy.py based tool calls.
+Look into tooljs.mjs and tooldb.mjs for javascript and inturn web worker based tool calls and
+toolweb.mjs for the simpleproxy.py based tool calls.
 
 #### OLD: Mapping tool calls and responses to normal assistant - user chat flow
 
@@ -537,9 +547,9 @@ The default Chat UI theme/look changed to help differentiate between different m
 history as well as the parts of each message in a slightly better manner. Change the theme slightly
 between normal and print views (beyond previous infinite height) for better printed chat history.
 
-Initial skeletons of a builtin data store related tool calls, built on browser's indexedDB, without
-needing any proxy / additional helper to handle the store. One could use the ai assistant to store
-ones (ie end users) own data or data of ai model.
+A builtin data store related tool calls, inturn built on browser's indexedDB, without needing any
+proxy / additional helper to handle the store. One could use the ai assistant to store ones (ie end
+users) own data or data of ai model.
 
 #### ToDo
 
@@ -549,7 +559,8 @@ Trap error responses.
 
 Handle multimodal handshaking with ai models.
 
-Add fetch_rss and documents|data_store [wip] tool calling, through the simpleproxy.py if and where needed.
+Add fetch_rss and may be different document formats processing related tool calling, in turn through
+the simpleproxy.py if and where needed.
 
 Save used config entries along with the auto saved chat sessions and inturn give option to reload the
 same when saved chat is loaded.
