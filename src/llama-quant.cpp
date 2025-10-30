@@ -1571,12 +1571,25 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
-        const auto important = tensor_name == "output.weight" ||
-                                    tensor_name.find(".ffn_down.weight") != std::string::npos ||
-                                    tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
-                                    tensor_name.find(".attn_output.weight") != std::string::npos ||
-                                    tensor_name.find(".time_mix_output.weight") != std::string::npos ||
-                                    tensor_name.find(".attn_o.weight") != std::string::npos;
+        bool important = false;
+
+        if (statistics_data) {
+            float ecs = 0.0f; // Euclidean-Cosine score
+            const std::string key = remap_imatrix(tensor_name, mapped);
+            const auto tstats = statistics_data->find(key);
+            if (tstats != statistics_data->end() && !tstats->second.empty()) {
+                ecs = tstats->second.front();
+                important = ecs == 100.0f; // mark as important if ecs is 100%
+            }
+        } else {
+            important = tensor_name == "output.weight" ||
+                        tensor_name.find(".ffn_down.weight") != std::string::npos ||
+                        tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
+                        tensor_name.find(".attn_output.weight") != std::string::npos ||
+                        tensor_name.find(".time_mix_output.weight") != std::string::npos ||
+                        tensor_name.find(".attn_o.weight") != std::string::npos;
+        }
+
         return important;
     };
 
