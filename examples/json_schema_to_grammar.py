@@ -371,8 +371,17 @@ class SchemaConverter:
                         raise ValueError(f'Unsupported ref {ref}')
 
                     for sel in ref.split('#')[-1].split('/')[1:]:
-                        assert target is not None and sel in target, f'Error resolving ref {ref}: {sel} not in {target}'
-                        target = target[sel]
+                        assert target is not None, f'Error resolving ref {ref}: {sel} not in {target}'
+                        if isinstance(target, list):
+                            try:
+                                sel_index = int(sel)
+                            except ValueError:
+                                raise ValueError(f'Error resolving ref {ref}: {sel} not in {target}')
+                            assert 0 <= sel_index < len(target), f'Error resolving ref {ref}: {sel} not in {target}'
+                            target = target[sel_index]
+                        else:
+                            assert sel in target, f'Error resolving ref {ref}: {sel} not in {target}'
+                            target = target[sel]
 
                     self._refs[ref] = target
                 else:
@@ -547,7 +556,8 @@ class SchemaConverter:
 
 
     def _resolve_ref(self, ref):
-        ref_name = ref.split('/')[-1]
+        ref_fragment = ref.split('#')[-1]
+        ref_name = 'ref' + re.sub(r'[^a-zA-Z0-9-]+', '-', ref_fragment)
         if ref_name not in self._rules and ref not in self._refs_being_resolved:
             self._refs_being_resolved.add(ref)
             resolved = self._refs[ref]

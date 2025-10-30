@@ -211,11 +211,14 @@ static inline void hex_format_op_names(char * str, const struct ggml_tensor * t)
 // ** backend sessions
 
 struct ggml_hexagon_session {
-    ggml_hexagon_session(int dev_id) noexcept(false);
+    ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
     ~ggml_hexagon_session() noexcept(true);
 
     void allocate(int dev_id) noexcept(false);
     void release() noexcept(true);
+
+    void enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync = false);
+    void flush();
 
     ggml_backend_buffer_type buffer_type;
     ggml_backend_buffer_type repack_buffer_type;
@@ -237,15 +240,37 @@ struct ggml_hexagon_session {
     uint32_t         prof_pkts;
 };
 
-// Packet callback
-static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * context) {
-    auto sess = static_cast<ggml_hexagon_session *>(context);
+void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
+    // Bump pending flag (cleared in the session::flush once we get the responce)
+    this->op_pending++;  // atomic inc
+
+    int err = dspqueue_write(this->queue,
+                             0,                       // flags - the framework will autoset this
+                             n_bufs,                  // number of buffers
+                             bufs,                    // buffer references
+                             sizeof(req),
+                             (const uint8_t *) &req,  // Message
+                             1000000                  // Timeout
+    );
+
+    if (err != 0) {
+        GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->name.c_str(), (unsigned) err);
+    }
+
+    if (sync) {
+        flush();
+    }
+}
+
+// Flush HTP response queue i.e wait for all outstanding requests to complete
+void ggml_hexagon_session::flush() {
+    dspqueue_t q = this->queue;
 
     // Repeatedly read packets from the queue until it's empty. We don't
     // necessarily get a separate callback for each packet, and new packets
     // may arrive while we're processing the previous one.
 
-    while (1) {
+    while (this->op_pending) {
         struct htp_general_rsp rsp;
         uint32_t               rsp_size;
         uint32_t               flags;
@@ -253,22 +278,23 @@ static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * contex
         struct dspqueue_buffer bufs[HTP_MAX_PACKET_BUFFERS];
         uint32_t               n_bufs;
 
-        // Read packet from queue
-        int err = dspqueue_read_noblock(queue, &flags,
-                                        HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
-                                        &n_bufs,                 // Number of buffer references
-                                        bufs,                    // Buffer references
-                                        sizeof(rsp),             // Max message length
-                                        &rsp_size,               // Message length
-                                        (uint8_t *) &rsp);
+        // Read response packet from queue
+        int err = dspqueue_read(q, &flags,
+                                   HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
+                                   &n_bufs,                 // Number of buffer references
+                                   bufs,                    // Buffer references
+                                   sizeof(rsp),             // Max message length
+                                   &rsp_size,               // Message length
+                                   (uint8_t *) &rsp,
+                                   1000000);                // Timeout
 
-        if (err == AEE_EWOULDBLOCK) {
-            // Consumed all packets available for now
-            return;
+        if (err == AEE_EEXPIRED) {
+            // TODO: might need to bail out if the HTP is stuck on something
+            continue;
         }
 
         if (err != 0) {
-            GGML_ABORT("ggml-hex: dspqueue_read_noblock failed: 0x%08x\n", (unsigned) err);
+            GGML_ABORT("ggml-hex: dspqueue_read failed: 0x%08x\n", (unsigned) err);
         }
 
         // Basic sanity checks
@@ -281,19 +307,13 @@ static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * contex
             // TODO: handle errors
         }
 
-        // FIXME: update profiling implementation
-        sess->prof_usecs  = rsp.prof_usecs;
-        sess->prof_cycles = rsp.prof_cycles;
-        sess->prof_pkts   = rsp.prof_pkts;
+        // TODO: update profiling implementation, currently only works for opt_opsync mode
+        this->prof_usecs  = rsp.prof_usecs;
+        this->prof_cycles = rsp.prof_cycles;
+        this->prof_pkts   = rsp.prof_pkts;
 
-        sess->op_pending--;  // atomic dec
+        this->op_pending--;  // atomic dec
     }
-}
-
-// Error callback - simply terminates with an error. Used where we don't
-// expect errors.
-[[noreturn]] static void htp_error_callback(dspqueue_t queue, AEEResult error, void * context) {
-    GGML_ABORT("ggml-hex: dspcall general error 0x%x: for queue %p\n", error, (void *) queue);
 }
 
 // ** backend buffers
@@ -1564,7 +1584,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
                           0,              // Flags
                           128 * 1024,     // Request  queue size (in bytes)
                           64 * 1024,      // Response queue size (in bytes)
-                          htp_packet_callback, htp_error_callback,
+                          nullptr,        // Read packet callback (we handle reads explicitly)
+                          nullptr,        // Error callback (we handle errors during reads)
                           (void *) this,  // Callback context
                           &queue);
     if (err != 0) {
@@ -1631,9 +1652,12 @@ void ggml_hexagon_session::release() noexcept(true) {
     }
 }
 
-ggml_hexagon_session::ggml_hexagon_session(int dev_id) noexcept(false) {
+ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false) {
     buffer_type.context        = nullptr;
     repack_buffer_type.context = nullptr;
+
+    buffer_type.device         = dev;
+    repack_buffer_type.device  = dev;
 
     try {
         allocate(dev_id);
@@ -2202,7 +2226,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     bufs[0].ptr    = src0->data;
     bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_REF;
+    bufs[0].flags  = 0;
 
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
@@ -2212,8 +2236,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     bufs[1].ptr    = src1->data;
     bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
     bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Third buffer Output Activations. We'll handle DSP
@@ -2224,7 +2247,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     bufs[2].ptr    = dst->data;
     bufs[2].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[2].size   = ggml_nbytes(dst);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
 
     // Primary DSP session from the src0 (normally weight) tensor
     auto sess = src0_buf->sess;
@@ -2252,27 +2275,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 3,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000                  // Timeout
-        );
-
-        if (err != 0) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 3, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2328,7 +2331,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     bufs[0].ptr    = src0->data;
     bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_REF;
+    bufs[0].flags  = 0;
 
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
@@ -2338,8 +2341,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     bufs[1].ptr    = src1->data;
     bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
     bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Third buffer expert IDs. This is a buffer that the CPU
@@ -2350,8 +2352,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     bufs[2].ptr    = src2->data;
     bufs[2].offset = (uint8_t *) src2->data - src2_buf->base;
     bufs[2].size   = ggml_nbytes(src2);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Forth buffer Output Activations. We'll handle DSP
@@ -2362,7 +2363,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     bufs[3].ptr    = dst->data;
     bufs[3].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[3].size   = ggml_nbytes(dst);
-    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
 
     // Primary DSP session from the src0 (normally weight) tensor
     auto sess = src0_buf->sess;
@@ -2391,27 +2392,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 4,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000                  // Timeout
-        );
-
-        if (err != 0) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 4, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2484,8 +2465,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     bufs[0].ptr    = src0->data;
     bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
 
     // Second buffer = Second Operand of Binary op
@@ -2497,8 +2477,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     bufs[1].ptr    = src1->data;
     bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
     bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Third buffer = Output Activations. We'll handle DSP
@@ -2509,7 +2488,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     bufs[2].ptr    = dst->data;
     bufs[2].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[2].size   = ggml_nbytes(dst);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
 
     // Primary DSP session from the src0 tensor
     ggml_hexagon_session * sess = src0_buf->sess;
@@ -2537,26 +2516,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 3,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 3, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2621,8 +2581,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     bufs[0].ptr    = src0->data;
     bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
 
     // Second buffer = experts bias
@@ -2630,8 +2589,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     bufs[1].ptr    = src1->data;
     bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
     bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Third buffer = activated experts
@@ -2639,8 +2597,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     bufs[2].ptr    = src2->data;
     bufs[2].offset = (uint8_t *) src2->data - src2_buf->base;
     bufs[2].size   = ggml_nbytes(src2);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                      DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
 
     // Forth buffer = output activations
@@ -2648,7 +2605,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     bufs[3].ptr    = dst->data;
     bufs[3].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[3].size   = ggml_nbytes(dst);
-    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
 
     // Primary DSP session from the src0 tensor
     ggml_hexagon_session * sess = src0_buf->sess;
@@ -2678,26 +2635,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 4,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 4, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2795,8 +2733,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     bufs[n_bufs].ptr    = src0->data;
     bufs[n_bufs].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[n_bufs].size   = ggml_nbytes(src0);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                           DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
     ++n_bufs;
 
@@ -2811,8 +2748,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         bufs[n_bufs].ptr    = src1->data;
         bufs[n_bufs].offset = (uint8_t *) src1->data - src1_buf->base;
         bufs[n_bufs].size   = ggml_nbytes(src1);
-        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                              DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                               DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
         ++n_bufs;
     }
@@ -2827,7 +2763,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     bufs[n_bufs].ptr    = dst->data;
     bufs[n_bufs].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[n_bufs].size   = ggml_nbytes(dst);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
     ++n_bufs;
 
     // Primary DSP session from the src0 tensor
@@ -2860,26 +2796,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 n_bufs,                  // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, n_bufs, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2953,8 +2870,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     bufs[n_bufs].ptr    = src0->data;
     bufs[n_bufs].offset = (uint8_t *) src0->data - src0_buf->base;
     bufs[n_bufs].size   = ggml_nbytes(src0);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                           DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
     ++n_bufs;
 
@@ -2968,8 +2884,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     bufs[n_bufs].ptr    = src1->data;
     bufs[n_bufs].offset = (uint8_t *) src1->data - src1_buf->base;
     bufs[n_bufs].size   = ggml_nbytes(src1);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                           DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
     ++n_bufs;
 
@@ -2984,8 +2899,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
         bufs[n_bufs].ptr    = src2->data;
         bufs[n_bufs].offset = (uint8_t *) src2->data - src2_buf->base;
         bufs[n_bufs].size   = ggml_nbytes(src2);
-        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                              DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
+        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush CPU
                               DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
         ++n_bufs;
     }
@@ -3000,7 +2914,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     bufs[n_bufs].ptr    = dst->data;
     bufs[n_bufs].offset = (uint8_t *) dst->data - dst_buf->base;
     bufs[n_bufs].size   = ggml_nbytes(dst);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
     ++n_bufs;
 
     // Primary DSP session from the src0 tensor
@@ -3033,26 +2947,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 n_bufs,                  // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, n_bufs, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -3197,9 +3092,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     }
 
     // Wait until all pending ops complete
-    while (sess->op_pending) {
-        ;
-    }
+    sess->flush();
 
     return GGML_STATUS_SUCCESS;
 }
@@ -3210,9 +3103,7 @@ static void ggml_backend_hexagon_synchronize(ggml_backend_t backend) {
     HEX_VERBOSE("ggml-hex: %s synchronize\n", sess->name.c_str());
 
     // Wait until all pending ops complete
-    while (sess->op_pending) {
-        ;
-    }
+    sess->flush();
 }
 
 struct node_info {
@@ -3628,7 +3519,7 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         devices[i].iface   = ggml_backend_hexagon_device_i;
         devices[i].reg     = reg;
         try {
-            devices[i].context = new ggml_hexagon_session(i);
+            devices[i].context = new ggml_hexagon_session(i, &devices[i]);
         } catch (std::exception const &exc) {
             GGML_LOG_ERROR("ggml-hex: failed to create device/session %zu\n", i);
             devices[i].context = nullptr;

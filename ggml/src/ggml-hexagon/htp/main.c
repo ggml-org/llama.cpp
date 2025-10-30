@@ -395,28 +395,14 @@ static void proc_matmul_req(struct htp_context *     ctx,
                             struct htp_general_req * req,
                             struct dspqueue_buffer * bufs,
                             size_t                   n_bufs) {
-    // Prep response buffer structs (needed for error responses, etc)
-    struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
+    struct dspqueue_buffer rsp_bufs[1];
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[2].fd     = bufs[2].fd;
-    rsp_bufs[2].ptr    = bufs[2].ptr;
-    rsp_bufs[2].size   = bufs[2].size;
-    rsp_bufs[2].offset = bufs[2].offset;
-    rsp_bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                         DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
+    rsp_bufs[0].fd     = bufs[2].fd;
+    rsp_bufs[0].ptr    = bufs[2].ptr;
+    rsp_bufs[0].size   = bufs[2].size;
+    rsp_bufs[0].offset = bufs[2].offset;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -444,41 +430,21 @@ static void proc_matmul_req(struct htp_context *     ctx,
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 3, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_matmul_id_req(struct htp_context *     ctx,
                                struct htp_general_req * req,
                                struct dspqueue_buffer * bufs,
                                size_t                   n_bufs) {
-    // Prep response buffer structs (needed for error responses, etc)
-    struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[2].fd     = bufs[2].fd;
-    rsp_bufs[2].ptr    = bufs[2].ptr;
-    rsp_bufs[2].size   = bufs[2].size;
-    rsp_bufs[2].offset = bufs[2].offset;
-    rsp_bufs[2].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
+    struct dspqueue_buffer rsp_bufs[1];
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[3].fd     = bufs[3].fd;
-    rsp_bufs[3].ptr    = bufs[3].ptr;
-    rsp_bufs[3].size   = bufs[3].size;
-    rsp_bufs[3].offset = bufs[3].offset;
-    rsp_bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                         DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
+    rsp_bufs[0].fd     = bufs[3].fd;
+    rsp_bufs[0].ptr    = bufs[3].ptr;
+    rsp_bufs[0].size   = bufs[3].size;
+    rsp_bufs[0].offset = bufs[3].offset;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -508,32 +474,18 @@ static void proc_matmul_id_req(struct htp_context *     ctx,
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 4, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_binary_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
-    struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
-
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
+    struct dspqueue_buffer rsp_bufs[1];
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[2].fd     = bufs[2].fd;
-    rsp_bufs[2].ptr    = bufs[2].ptr;
-    rsp_bufs[2].offset = bufs[2].offset;
-    rsp_bufs[2].size   = bufs[2].size;
-    rsp_bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                         DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
+    rsp_bufs[0].fd     = bufs[2].fd;
+    rsp_bufs[0].ptr    = bufs[2].ptr;
+    rsp_bufs[0].offset = bufs[2].offset;
+    rsp_bufs[0].size   = bufs[2].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -561,38 +513,18 @@ static void proc_binary_req(struct htp_context * ctx, struct htp_general_req * r
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 3, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_add_id_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
-    struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
-
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[2].fd     = bufs[2].fd;
-    rsp_bufs[2].ptr    = bufs[2].ptr;
-    rsp_bufs[2].offset = bufs[2].offset;
-    rsp_bufs[2].size   = bufs[2].size;
-    rsp_bufs[2].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
+    struct dspqueue_buffer rsp_bufs[1];
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[3].fd     = bufs[3].fd;
-    rsp_bufs[3].ptr    = bufs[3].ptr;
-    rsp_bufs[3].offset = bufs[3].offset;
-    rsp_bufs[3].size   = bufs[3].size;
-    rsp_bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                         DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
+    rsp_bufs[0].fd     = bufs[3].fd;
+    rsp_bufs[0].ptr    = bufs[3].ptr;
+    rsp_bufs[0].offset = bufs[3].offset;
+    rsp_bufs[0].size   = bufs[3].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -622,26 +554,18 @@ static void proc_add_id_req(struct htp_context * ctx, struct htp_general_req * r
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 4, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_unary_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
     struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
-
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                         DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
+    rsp_bufs[0].fd     = bufs[1].fd;
+    rsp_bufs[0].ptr    = bufs[1].ptr;
+    rsp_bufs[0].offset = bufs[1].offset;
+    rsp_bufs[0].size   = bufs[1].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -669,7 +593,7 @@ static void proc_unary_req(struct htp_context * ctx, struct htp_general_req * re
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 2, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_activations_req(struct htp_context *     ctx,
@@ -677,33 +601,16 @@ static void proc_activations_req(struct htp_context *     ctx,
                                  struct dspqueue_buffer * bufs,
                                  uint32_t                 n_bufs) {
     struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
 
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    int write_idx = 1;
-    if (3 == n_bufs) {
-        rsp_bufs[1].fd     = bufs[1].fd;
-        rsp_bufs[1].ptr    = bufs[1].ptr;
-        rsp_bufs[1].offset = bufs[1].offset;
-        rsp_bufs[1].size   = bufs[1].size;
-        rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-        write_idx = 2;
-    }
+    int write_idx = (n_bufs == 3) ? 2 : 1;
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[write_idx].fd     = bufs[write_idx].fd;
-    rsp_bufs[write_idx].ptr    = bufs[write_idx].ptr;
-    rsp_bufs[write_idx].offset = bufs[write_idx].offset;
-    rsp_bufs[write_idx].size   = bufs[write_idx].size;
-    rsp_bufs[write_idx].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                                 DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
-                                 DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+    rsp_bufs[0].fd     = bufs[write_idx].fd;
+    rsp_bufs[0].ptr    = bufs[write_idx].ptr;
+    rsp_bufs[0].offset = bufs[write_idx].offset;
+    rsp_bufs[0].size   = bufs[write_idx].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT); // Invalidate CPU
 
     // Setup Op context
     struct htp_ops_context octx = { 0 };
@@ -742,7 +649,7 @@ static void proc_activations_req(struct htp_context *     ctx,
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, n_bufs, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void proc_rope_req(struct htp_context *     ctx,
@@ -750,39 +657,16 @@ static void proc_rope_req(struct htp_context *     ctx,
                           struct dspqueue_buffer * bufs,
                           uint32_t                 n_bufs) {
     struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
-    memset(rsp_bufs, 0, sizeof(rsp_bufs));
 
-    rsp_bufs[0].fd     = bufs[0].fd;
-    rsp_bufs[0].ptr    = bufs[0].ptr;
-    rsp_bufs[0].offset = bufs[0].offset;
-    rsp_bufs[0].size   = bufs[0].size;
-    rsp_bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    rsp_bufs[1].fd     = bufs[1].fd;
-    rsp_bufs[1].ptr    = bufs[1].ptr;
-    rsp_bufs[1].offset = bufs[1].offset;
-    rsp_bufs[1].size   = bufs[1].size;
-    rsp_bufs[1].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-    int write_idx = 2;
-    if (4 == n_bufs) {
-        rsp_bufs[write_idx].fd     = bufs[write_idx].fd;
-        rsp_bufs[write_idx].ptr    = bufs[write_idx].ptr;
-        rsp_bufs[write_idx].offset = bufs[write_idx].offset;
-        rsp_bufs[write_idx].size   = bufs[write_idx].size;
-        rsp_bufs[write_idx].flags  = DSPQUEUE_BUFFER_FLAG_DEREF;  // Release reference
-
-        write_idx++;
-    }
+    int write_idx = (n_bufs == 4) ? 3 : 2;
 
     // We had written to the output buffer, we'd also need to flush it
-    rsp_bufs[write_idx].fd     = bufs[write_idx].fd;
-    rsp_bufs[write_idx].ptr    = bufs[write_idx].ptr;
-    rsp_bufs[write_idx].offset = bufs[write_idx].offset;
-    rsp_bufs[write_idx].size   = bufs[write_idx].size;
-    rsp_bufs[write_idx].flags  = (DSPQUEUE_BUFFER_FLAG_DEREF |                 // Release reference
-                                 DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush NSP
-                                 DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+    rsp_bufs[0].fd     = bufs[write_idx].fd;
+    rsp_bufs[0].ptr    = bufs[write_idx].ptr;
+    rsp_bufs[0].offset = bufs[write_idx].offset;
+    rsp_bufs[0].size   = bufs[write_idx].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT); // Invalidate CPU
 
     // Setup Op context
     struct htp_ops_context octx = { 0 };
@@ -819,7 +703,7 @@ static void proc_rope_req(struct htp_context *     ctx,
     }
 
     profile_stop(&prof);
-    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, n_bufs, &prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
