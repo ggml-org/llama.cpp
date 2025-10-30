@@ -384,6 +384,13 @@ struct llama_layer {
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 
+    // cogvlm
+    struct ggml_tensor * visexp_attn_wqkv = nullptr;
+    struct ggml_tensor * visexp_attn_wo   = nullptr;
+    struct ggml_tensor * visexp_ffn_gate  = nullptr;
+    struct ggml_tensor * visexp_ffn_down  = nullptr;
+    struct ggml_tensor * visexp_ffn_up    = nullptr;
+
     // xIELU activation parameters for Apertus
     struct ggml_tensor * ffn_act_alpha_n = nullptr;
     struct ggml_tensor * ffn_act_alpha_p = nullptr;
@@ -500,9 +507,8 @@ struct llama_model {
 
     ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
 
-    // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface
-    llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams) const;
+    llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
     // TODO: move this to new llm_arch_model_i interface
     ggml_cgraph * build_graph(const llm_graph_params & params) const;

@@ -42,6 +42,7 @@
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/element_wise.hpp"
+#include "ggml-sycl/norm.hpp"
 #include "ggml-sycl/presets.hpp"
 #include "ggml-sycl/gemm.hpp"
 #include "ggml-sycl/set_rows.hpp"
@@ -50,6 +51,7 @@
 #include "ggml-sycl/getrows.hpp"
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/quantize.hpp"
+#include "ggml-sycl/ssm_conv.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -2636,6 +2638,11 @@ static void ggml_sycl_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     ggml_sycl_op_rms_norm(ctx, dst);
 }
 
+static void ggml_sycl_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    ggml_sycl_op_rms_norm_back(ctx, dst);
+}
+
 static void ggml_sycl_l2_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_l2_norm(ctx, dst);
@@ -3826,6 +3833,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_LEAKY_RELU:
             ggml_sycl_leaky_relu(ctx, dst);
             break;
+        case GGML_OP_RMS_NORM_BACK:
+            ggml_sycl_rms_norm_back(ctx, dst);
+            break;
         case GGML_OP_RMS_NORM:
             ggml_sycl_rms_norm(ctx, dst);
             break;
@@ -3921,6 +3931,8 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_GATED_LINEAR_ATTN:
             ggml_sycl_op_gated_linear_attn(ctx, dst);
             break;
+        case GGML_OP_SSM_CONV:
+            ggml_sycl_ssm_conv(ctx, dst);
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
             break;
@@ -4568,6 +4580,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_RMS_NORM:
             return ((op->src[0]->ne[0] % WARP_SIZE) == 0);
+        case GGML_OP_RMS_NORM_BACK:
+            return ((op->src[0]->ne[0] % WARP_SIZE) == 0);
         case GGML_OP_SCALE:
             return true;
         case GGML_OP_CONT:
@@ -4602,6 +4616,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_GATED_LINEAR_ATTN:
             return true;
+        case GGML_OP_SSM_CONV:
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_ROLL:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_ARANGE:
