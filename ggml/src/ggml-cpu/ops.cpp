@@ -7909,14 +7909,30 @@ void ggml_compute_forward_argsort(
 }
 
 //------------------------------------------------------------------------------
-// SparseK Attention (CPU)
+// SparseK Attention (CPU, final optimized version)
 //------------------------------------------------------------------------------
+//
+// Implements SparseK Attention as a GGML operator for the CPU backend.
+// Features:
+//  • Top-K filtering using nth_element (O(N))
+//  • Optional local window (win_local)
+//  • Optional global stride (stride_glb)
+//  • Numerically stable softmax
+//  • Preallocated buffers for performance
+//
+// Author: Yael Shuker (yael-works)
+//------------------------------------------------------------------------------
+
+#include <algorithm>
+#include <vector>
+#include <cmath>
+#include <limits>
 
 static void ggml_compute_forward_sparsek_attn_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
 
-    // Single-threaded baseline version 
+    // Single-threaded baseline version
     if (params->ith != 0) return;
 
     const struct ggml_tensor * Q = dst->src[0];
@@ -7929,80 +7945,132 @@ static void ggml_compute_forward_sparsek_attn_f32(
     GGML_ASSERT(V->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
+    // Operator parameters
     const int32_t k_top      = ggml_get_op_params_i32(dst, 0);
-    const int32_t win_local  = ggml_get_op_params_i32(dst, 1);
-    const int32_t stride_glb = ggml_get_op_params_i32(dst, 2);
-    GGML_UNUSED(win_local);
-    GGML_UNUSED(stride_glb);
+    const int32_t win_local  = ggml_get_op_params_i32(dst, 1); // -1 ⇒ no local window
+    const int32_t stride_glb = ggml_get_op_params_i32(dst, 2); // ≤1 ⇒ no global stride
 
-    // Tensor dimensions according to GGML layout: ne[0]=d, ne[1]=seq, ne[2]=head, ne[3]=batch
+    const bool use_local  = (win_local  >= 0);
+    const bool use_stride = (stride_glb >  1);
+
+    // GGML tensor dimensions: ne[0]=D, ne[1]=T, ne[2]=H, ne[3]=B
     const int64_t D = Q->ne[0];
     const int64_t T = Q->ne[1];
     const int64_t H = Q->ne[2];
     const int64_t B = Q->ne[3];
 
-    // Temporary buffer for attention scores for one query row
-    std::vector<float> attn_row(T, 0.0f);
+    // Dimension validation
+    GGML_ASSERT(K->ne[0] == D && V->ne[0] == D);
+    GGML_ASSERT(K->ne[1] == T && V->ne[1] == T);
+    GGML_ASSERT(K->ne[2] == H && V->ne[2] == H);
+    GGML_ASSERT(K->ne[3] == B && V->ne[3] == B);
 
-    const float scale = 1.0f / sqrtf((float) D);
+    // Parameter sanity checks
+    GGML_ASSERT(k_top >= 0 && k_top <= (int32_t)T);
+    GGML_ASSERT(win_local >= -1);
+    GGML_ASSERT(stride_glb >= 0);
 
-    // Loops over batch, head, and query token
+    const float scale = 1.0f / sqrtf((float)D);
+    const float NINF  = -std::numeric_limits<float>::infinity();
+
+    // Preallocated buffers to avoid heap churn
+    std::vector<float>   attn_row((size_t)T, NINF);
+    std::vector<int32_t> cand_idx; cand_idx.reserve((size_t)T);
+    std::vector<float>   scores;   scores.reserve((size_t)T);
+
     for (int64_t b = 0; b < B; ++b) {
         for (int64_t h = 0; h < H; ++h) {
             for (int64_t iq = 0; iq < T; ++iq) {
 
-                // (1) Compute dot products Q·K within same (b,h)
-                const char * qbase = (const char *) Q->data + b*Q->nb[3] + h*Q->nb[2] + iq*Q->nb[1];
-                const float * qv = (const float *) qbase;
+                // (0) Build candidate index list (always include self)
+                cand_idx.clear();
+                scores.clear();
 
-                for (int64_t j = 0; j < T; ++j) {
-                    const char * kbase = (const char *) K->data + b*K->nb[3] + h*K->nb[2] + j*K->nb[1];
-                    const float * kv = (const float *) kbase;
-
-                    float dot = 0.0f;
-                    for (int64_t d = 0; d < D; ++d) {
-                        dot += qv[d] * kv[d];
+                if (!use_local && !use_stride) {
+                    // No sparsity: attend to all tokens
+                    for (int64_t j = 0; j < T; ++j)
+                        cand_idx.push_back((int32_t)j);
+                } else {
+                    // Apply local window and/or global stride
+                    for (int64_t j = 0; j < T; ++j) {
+                        const int64_t dist = iq >= j ? iq - j : j - iq;
+                        const bool pass_local  = use_local  && (dist <= (int64_t)win_local);
+                        const bool pass_stride = use_stride && (stride_glb > 0 && j % stride_glb == 0);
+                        if (pass_local || pass_stride || j == iq)
+                            cand_idx.push_back((int32_t)j);
                     }
+                }
+
+                // Edge case: no candidates or k_top==0 → output zeros
+                if (k_top == 0 || cand_idx.empty()) {
+                    float * y0 = (float *)((char *)dst->data + b*dst->nb[3] + h*dst->nb[2] + iq*dst->nb[1]);
+                    std::fill(y0, y0 + D, 0.0f);
+                    continue;
+                }
+
+                // (1) Compute scaled dot-product Q·K only for candidates
+                std::fill(attn_row.begin(), attn_row.end(), NINF);
+                const float * qv = (const float *)((const char *)Q->data + b*Q->nb[3] + h*Q->nb[2] + iq*Q->nb[1]);
+
+                for (int32_t j : cand_idx) {
+                    const float * kv = (const float *)((const char *)K->data + b*K->nb[3] + h*K->nb[2] + (int64_t)j*K->nb[1]);
+                    float dot = 0.0f;
+                    for (int64_t d = 0; d < D; ++d)
+                        dot += qv[d] * kv[d];
                     attn_row[j] = dot * scale;
                 }
 
-                // (2) Select top-k threshold using nth_element
-                const int kk = std::max<int>(1, std::min<int>((int)T, k_top));
-                std::vector<float> tmp(attn_row.begin(), attn_row.end());
-                std::nth_element(tmp.begin(), tmp.begin() + (kk - 1), tmp.end(), std::greater<float>());
-                const float thr = tmp[kk - 1];
+                // (2) Determine true Top-K threshold using nth_element
+                const int num_candidates = (int)cand_idx.size();
+                const int kk = std::min<int>(std::max<int>(1, k_top), num_candidates);
 
-                for (int64_t j = 0; j < T; ++j) {
-                    if (attn_row[j] < thr) attn_row[j] = -INFINITY;
+                if (kk < num_candidates) {
+                    scores.resize((size_t)num_candidates);
+                    for (size_t i = 0; i < cand_idx.size(); ++i)
+                        scores[i] = attn_row[cand_idx[i]];
+
+                    std::nth_element(scores.begin(), scores.begin() + (kk - 1), scores.end(), std::greater<float>());
+                    const float thr = scores[kk - 1];
+
+                    // Mask all values below the threshold
+                    for (int32_t j : cand_idx)
+                        if (attn_row[j] < thr) attn_row[j] = NINF;
                 }
 
-                // (3) Numerically stable softmax on the masked row
-                float maxv = -INFINITY;
-                for (int64_t j = 0; j < T; ++j) {
+                // (3) Numerically stable softmax
+                float maxv = NINF;
+                for (int32_t j : cand_idx)
                     maxv = std::max(maxv, attn_row[j]);
+
+                // Handle all-masked rows
+                if (!std::isfinite(maxv)) {
+                    float * y0 = (float *)((char *)dst->data + b*dst->nb[3] + h*dst->nb[2] + iq*dst->nb[1]);
+                    std::fill(y0, y0 + D, 0.0f);
+                    continue;
                 }
+
                 float sum = 0.0f;
-                for (int64_t j = 0; j < T; ++j) {
-                    float v = attn_row[j] - maxv;
-                    float e = expf(v);
+                for (int32_t j : cand_idx) {
+                    if (attn_row[j] == NINF) continue;
+                    const float e = expf(attn_row[j] - maxv);
                     attn_row[j] = e;
                     sum += e;
                 }
-                const float inv_sum = sum > 0.0f ? 1.0f / sum : 0.0f;
-                for (int64_t j = 0; j < T; ++j) {
+
+                const float inv_sum = (sum > 0.0f) ? (1.0f / sum) : 0.0f;
+                for (int32_t j : cand_idx) {
+                    if (attn_row[j] == NINF) continue;
                     attn_row[j] *= inv_sum;
                 }
 
-                // (4) Compute output = A·V (weighted sum)
-                float * y = (float *) ((char *) dst->data + b*dst->nb[3] + h*dst->nb[2] + iq*dst->nb[1]);
-
+                // (4) Compute output y = A·V
+                float * y = (float *)((char *)dst->data + b*dst->nb[3] + h*dst->nb[2] + iq*dst->nb[1]);
                 for (int64_t d = 0; d < D; ++d) {
                     float acc = 0.0f;
-                    for (int64_t j = 0; j < T; ++j) {
+                    for (int32_t j : cand_idx) {
                         const float aij = attn_row[j];
-                        if (aij == 0.0f) continue; // skip masked entries
-                        const char * vbase = (const char *) V->data + b*V->nb[3] + h*V->nb[2] + j*V->nb[1];
-                        const float * vv = (const float *) vbase;
+                        if (!(aij > 0.0f)) continue; // skip zero or masked
+                        const float * vv = (const float *)((const char *)V->data + b*V->nb[3] + h*V->nb[2] + (int64_t)j*V->nb[1]);
                         acc += aij * vv[d];
                     }
                     y[d] = acc;
@@ -8012,7 +8080,7 @@ static void ggml_compute_forward_sparsek_attn_f32(
     }
 
     GGML_PRINT_DEBUG("[SPARSEK CPU] k_top=%d win_local=%d stride=%d\n",
-        k_top, win_local, stride_glb);
+                     k_top, win_local, stride_glb);
 }
 
 void ggml_compute_forward_sparsek_attn(
