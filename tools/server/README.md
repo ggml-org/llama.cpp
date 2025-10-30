@@ -587,7 +587,7 @@ These words will not be included in the completion, so make sure to add them to 
   - `word`: Stopped due to encountering a stopping word from `stop` JSON array provided
 - `stopping_word`: The stopping word encountered which stopped the generation (or "" if not stopped due to a stopping word)
 - `timings`: Hash of timing information about the completion such as the number of tokens `predicted_per_second`
-- `tokens_cached`: Number of tokens from the prompt which could be re-used from previous completion (`n_past`)
+- `tokens_cached`: Number of tokens from the prompt which could be re-used from previous completion
 - `tokens_evaluated`: Number of tokens evaluated in total from the prompt
 - `truncated`: Boolean indicating if the context size was exceeded during generation, i.e. the number of tokens provided in the prompt (`tokens_evaluated`) plus tokens generated (`tokens predicted`) exceeded the context size (`n_ctx`)
 
@@ -1045,7 +1045,7 @@ Available metrics:
 - `llamacpp:kv_cache_tokens`: KV-cache tokens.
 - `llamacpp:requests_processing`: Number of requests processing.
 - `llamacpp:requests_deferred`: Number of requests deferred.
-- `llamacpp:n_past_max`: High watermark of the context size observed.
+- `llamacpp:n_tokens_max`: High watermark of the context size observed.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
