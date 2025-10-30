@@ -2585,8 +2585,8 @@ struct server_context {
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
             /* enable_thinking       */ enable_thinking,
-	    /* local_media_max_size_mb */ params_base.local_media_max_size_mb,
-	    /* allowed_local_media_path */ params_base.allowed_local_media_path,
+            /* local_media_max_size_mb */ params_base.local_media_max_size_mb,
+            /* allowed_local_media_path */ params_base.allowed_local_media_path,
         };
     }
 
