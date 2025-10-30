@@ -3623,7 +3623,7 @@ struct server_context {
 
             slot.i_batch = batch.n_tokens;
 
-            common_batch_add(batch, slot.sampled, slot.prompt.n_tokens(), { slot.id }, true);
+            common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
 
             slot.prompt.tokens.push_back(slot.sampled);
 
@@ -3926,8 +3926,8 @@ struct server_context {
                     // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
-                        int32_t new_n_past;
-                        int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.id, new_n_past);
+                        size_t n_tokens_out = 0;
+                        int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
@@ -3935,7 +3935,7 @@ struct server_context {
                             continue;
                         }
 
-                        slot.n_prompt_tokens_processed += new_n_past - slot.prompt.n_tokens();
+                        slot.n_prompt_tokens_processed += n_tokens_out;
 
                         // add the image chunk to cache
                         {
@@ -3992,7 +3992,11 @@ struct server_context {
                         }
 
                         // embedding requires all tokens in the batch to be output
-                        common_batch_add(batch, cur_tok, slot.prompt.n_tokens(), { slot.id }, slot.need_embd());
+                        common_batch_add(batch,
+                            cur_tok,
+                            slot.prompt.tokens.pos_next(),
+                            { slot.id },
+                            slot.need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
 
                         slot.n_prompt_tokens_processed++;
@@ -4287,10 +4291,10 @@ struct server_context {
 
                 // construct the speculation batch
                 common_batch_clear(slot.batch_spec);
-                common_batch_add  (slot.batch_spec, id, slot.prompt.n_tokens(), { slot.id }, true);
+                common_batch_add  (slot.batch_spec, id, slot.prompt.tokens.pos_next(), { slot.id }, true);
 
                 for (size_t i = 0; i < draft.size(); ++i) {
-                    common_batch_add(slot.batch_spec, draft[i], slot.prompt.n_tokens() + 1 + i, { slot.id }, true);
+                    common_batch_add(slot.batch_spec, draft[i], slot.prompt.tokens.pos_next() + 1 + i, { slot.id }, true);
                 }
 
                 SLT_DBG(slot, "decoding speculative batch, size = %d\n", slot.batch_spec.n_tokens);
