@@ -3612,7 +3612,6 @@ struct ggml_tensor * ggml_transpose(
 
     result->op     = GGML_OP_TRANSPOSE;
     result->src[0] = a;
-    result->op_params[10] = 999; // the transpose flag
 
     return result;
 }

@@ -2,11 +2,6 @@
 
 #define CUDA_CPY_BLOCK_SIZE 64
 
-const int TILE_DIM = 32;
-const int BLOCK_ROWS = 8;
-const int BLOCK_NM = 8;
-
-
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1,  bool disable_indirection = false);
 
 void ggml_cuda_dup(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
