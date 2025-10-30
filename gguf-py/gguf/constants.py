@@ -3062,6 +3062,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
+    LIGHTONOCR = "lightonocr"
 
 
 # Items here are (block size, type size)

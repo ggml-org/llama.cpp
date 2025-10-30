@@ -5,6 +5,15 @@
 
 #include "llama.h"
 
+// fix problem with std::min and std::max
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
@@ -274,6 +283,11 @@ struct mtmd_context {
             // <img> ... (image embeddings) ... </img>
             img_beg = "<img>";
             img_end = "</img>";
+
+        } else if (proj == PROJECTOR_TYPE_LIGHTONOCR) {
+            // <|im_start|> ... (image embeddings) ... <|im_end|>
+            img_beg = "<|im_start|>";
+            img_end = "<|im_end|>";
 
         }
     }
@@ -1026,7 +1040,9 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
-        return 1; // for M-RoPE, the whole image is 1 in temporal dimension
+        // for M-RoPE, temporal dimension = max(t,h,w)
+        // t is omitted as we don't support video input
+        return std::max(image_tokens->nx, image_tokens->ny);
     }
     return image_tokens->n_tokens();
 }

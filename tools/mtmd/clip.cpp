@@ -171,7 +171,7 @@ struct clip_hparams {
     int32_t n_head;
     int32_t n_layer;
     // idefics3
-    int32_t preproc_image_size = 0;
+    int32_t preproc_image_size = 0; // aka max_dimension
     int32_t proj_scale_factor = 0;
 
     float image_mean[3];
@@ -621,7 +621,7 @@ struct clip_graph {
         }
 
         // arrangement of the [IMG_BREAK] token
-        {
+        if (model.token_embd_img_break) {
             // not efficient, but works
             // the trick is to view the embeddings as a 3D tensor with shape [n_embd, n_patches_per_row, n_rows]
             // and then concatenate the [IMG_BREAK] token to the end of each row, aka n_patches_per_row dimension
@@ -2095,6 +2095,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
                 res = graph.build_siglip();
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
+        case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 res = graph.build_pixtral();
             } break;
@@ -2380,6 +2381,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.proj_scale_factor, false);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
+                case PROJECTOR_TYPE_LIGHTONOCR:
                     {
                         hparams.rope_theta = 10000.0f;
                         hparams.warmup_image_size = hparams.patch_size * 8;
@@ -2719,6 +2721,15 @@ struct clip_model_loader {
                     // [IMG_BREAK] token embedding
                     model.token_embd_img_break = get_tensor(TN_TOK_IMG_BREAK);
                     // for mistral small 3.1
+                    model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM,     false);
+                    model.mm_patch_merger_w = get_tensor(TN_MM_PATCH_MERGER, false);
+                } break;
+            case PROJECTOR_TYPE_LIGHTONOCR:
+                {
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM,     false);
                     model.mm_patch_merger_w = get_tensor(TN_MM_PATCH_MERGER, false);
                 } break;
@@ -3210,8 +3221,8 @@ struct image_manipulation {
             return {0, 0};
         }
 
-        float scale = std::min(1.0f, std::min(static_cast<float>(max_dimension) / inp_size.width,
-                                              static_cast<float>(max_dimension) / inp_size.height));
+        float scale = std::min(static_cast<float>(max_dimension) / inp_size.width,
+                               static_cast<float>(max_dimension) / inp_size.height);
 
         float target_width_f  = static_cast<float>(inp_size.width)  * scale;
         float target_height_f = static_cast<float>(inp_size.height) * scale;
@@ -3374,7 +3385,7 @@ struct llava_uhd {
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
-        image_manipulation::bicubic_resize(*img, *resized_img, inst.overview_size.width, inst.overview_size.height);
+        image_manipulation::resize_and_pad_image(*img, *resized_img, inst.overview_size);
         output.push_back(std::move(resized_img));
         if (inst.slices.empty()) {
             // no slices, just return the resized image
@@ -3576,6 +3587,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
         const clip_image_size refined_size = image_manipulation::calc_size_preserved_ratio(
             original_size, params.image_size, params.preproc_image_size);
+        // LOG_INF("%s: original size: %d x %d, refined size: %d x %d\n",
+        //         __func__, original_size.width, original_size.height,
+        //         refined_size.width, refined_size.height);
 
         llava_uhd::slice_instructions instructions;
         instructions.overview_size = clip_image_size{params.image_size, params.image_size};
@@ -3586,6 +3600,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         };
         for (int y = 0; y < refined_size.height; y += params.image_size) {
             for (int x = 0; x < refined_size.width; x += params.image_size) {
+                // LOG_INF("%s: adding slice at x=%d, y=%d\n", __func__, x, y);
                 instructions.slices.push_back(llava_uhd::slice_coordinates{
                     /* x    */x,
                     /* y    */y,
@@ -3622,7 +3637,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
 
-    } else if (ctx->proj_type() == PROJECTOR_TYPE_PIXTRAL) {
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_PIXTRAL
+            || ctx->proj_type() == PROJECTOR_TYPE_LIGHTONOCR
+    ) {
         clip_image_u8 resized_image;
         auto new_size = image_manipulation::calc_size_preserved_ratio(original_size, params.patch_size, params.image_size);
         image_manipulation::bilinear_resize(*img, resized_image, new_size.width, new_size.height);
@@ -3865,12 +3882,17 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
+        case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // dynamic size
                 int n_merge = params.spatial_merge_size;
                 int n_patches_x = img->nx / patch_size / (n_merge > 0 ? n_merge : 1);
                 int n_patches_y = img->ny / patch_size / (n_merge > 0 ? n_merge : 1);
-                n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
+                if (ctx->model.token_embd_img_break) {
+                    n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
+                } else {
+                    n_patches = n_patches_y * n_patches_x;
+                }
             } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
@@ -4247,6 +4269,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // set the 2D positions
                 int n_patches_per_col = image_size_width / patch_size;
@@ -4377,6 +4400,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_peg_0_b->ne[0];
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_PIXTRAL:
+        case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];

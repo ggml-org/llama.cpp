@@ -8,6 +8,7 @@ export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.sv
 export { default as ChatFormActions } from './chat/ChatForm/ChatFormActions.svelte';
 export { default as ChatFormActionFileAttachments } from './chat/ChatForm/ChatFormActionFileAttachments.svelte';
 export { default as ChatFormActionRecord } from './chat/ChatForm/ChatFormActionRecord.svelte';
+export { default as ChatFormModelSelector } from './chat/ChatForm/ChatFormModelSelector.svelte';
 export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperText.svelte';
 export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormFileInputInvisible.svelte';
 
@@ -32,7 +33,6 @@ export { default as ParameterSourceIndicator } from './chat/ChatSettings/Paramet
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
-
 export { default as ChatErrorDialog } from './dialogs/ChatErrorDialog.svelte';
 export { default as EmptyFileAlertDialog } from './dialogs/EmptyFileAlertDialog.svelte';
 
