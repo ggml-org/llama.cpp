@@ -35,7 +35,6 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     constexpr int BLOCK_SIZE = 256;
     const int     num_blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    // Precompute inverse sizes to replace integer divisions with multiplications
     const float inv_ne0      = 1.0f / ne0;
     const float inv_ne_01    = 1.0f / (ne0 * ne1);
     const float inv_ne_012   = 1.0f / (ne0 * ne1 * ne2);
@@ -51,7 +50,6 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                                  return;
                              }
 
-                             // Compute multidimensional indices (i0,i1,i2,i3) from the flattened linear index i
                              const int i3 = (int) (i * inv_ne_012);
                              const int i2 = (int) (i * inv_ne_01) - i3 * ne2;
                              const int i1 = (int) (i * inv_ne0) - (int) (i * inv_ne_01) * ne1;
@@ -66,7 +64,6 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                                                       (i2 + j2 * ne2) * nb2 + (i3 + j3 * ne3) * nb3);
                                  acc += *ptr;
 
-                                 // Manual carry propagation simulates nested loops efficiently
                                  int carry = (++j0 >= nr0);
                                  j0 -= carry * nr0;
                                  carry = (carry && (++j1 >= nr1));
