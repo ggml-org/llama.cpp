@@ -4432,6 +4432,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.n_parallel == 1 && params.kv_unified == false) {
+        LOG_WRN("%s: setting n_parallel = 4 and kv_unified = true\n", __func__);
+
+        params.n_parallel = 4;
+        params.kv_unified = true;
+    }
+
     common_init();
 
     // struct that contains llama context and inference
