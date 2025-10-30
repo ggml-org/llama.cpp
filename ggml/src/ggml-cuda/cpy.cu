@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "cpy.cuh"
 #include "dequantize.cuh"
 #include "cpy-utils.cuh"
