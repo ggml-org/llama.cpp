@@ -9329,7 +9329,7 @@ class SmallThinkerModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-            
+
 
 @ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
 class ModernBertModel(BertModel):
@@ -9368,7 +9368,6 @@ class ModernBertModel(BertModel):
             name = name[6:]
 
         return super().modify_tensors(data_torch, name, bid)
-    
 
 
 @ModelBase.register("ApertusForCausalLM")

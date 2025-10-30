@@ -855,7 +855,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         type = LLM_TYPE_149M; break; // modern-bert-base
                     case 28:
                         type = LLM_TYPE_395M; break; // modern-bert-large
-                    default: type = LLM_TYPE_UNKNOWN; 
+                    default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
         case LLM_ARCH_JINA_BERT_V2:
@@ -2993,11 +2993,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.layer_out_norm_b = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM, "bias", i),   {n_embd}, 0);
                     }
                 } break;
-            case LLM_ARCH_MODERN_BERT: 
+            case LLM_ARCH_MODERN_BERT:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
                     tok_norm = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
-                                        
+
                     output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
                     for(int i = 0; i < n_layer; ++i) {
@@ -3006,7 +3006,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         if ( i != 0 ) {
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
                         } else{
-                            // layer 0 uses identity 
+                            // layer 0 uses identity
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
                         }
 
@@ -3014,7 +3014,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, 3 * n_embd }, 0);
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,   "weight", i), {n_embd, n_embd}, 0);
 
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2 * n_ff}, 0); 
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2 * n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                     }
@@ -8209,7 +8209,7 @@ struct llm_build_modern_bert : public llm_graph_context {
 
         ggml_tensor * cur = nullptr;
         ggml_tensor * inpL = nullptr;
-        ggml_tensor * inp_pos = build_inp_pos(); 
+        ggml_tensor * inp_pos = build_inp_pos();
 
         // construct input embeddings (token, type, position)
         inpL = build_inp_embd(model.tok_embd);
@@ -8221,7 +8221,7 @@ struct llm_build_modern_bert : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        auto * inp_attn = build_attn_inp_no_cache(); 
+        auto * inp_attn = build_attn_inp_no_cache();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
@@ -19831,7 +19831,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
-        case LLM_ARCH_MODERN_BERT: 
+        case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
