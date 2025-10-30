@@ -109,6 +109,33 @@ function dsdel_run(chatid, toolcallid, toolname, obj) {
 }
 
 
+let dslist_meta = {
+        "type": "function",
+        "function": {
+            "name": "data_store_list",
+            "description": "List all keys wrt key-value pairs currently stored in the data store. This will take few seconds and uses a web worker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                },
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the data store list logic. Minimal skeleton for now.
+ * NOTE: Has access to the javascript web worker environment and can mess with it and beyond
+ * @param {string} chatid
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function dslist_run(chatid, toolcallid, toolname, obj) {
+    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
+}
+
+
 
 /**
  * @type {Object<string, Object<string, any>>}
@@ -127,6 +154,11 @@ export let tc_switch = {
     "data_store_delete": {
         "handler": dsdel_run,
         "meta": dsdel_meta,
+        "result": ""
+    },
+    "data_store_list": {
+        "handler": dslist_run,
+        "meta": dslist_meta,
         "result": ""
     },
 }
