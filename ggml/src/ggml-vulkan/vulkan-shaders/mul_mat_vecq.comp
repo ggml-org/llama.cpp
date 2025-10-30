@@ -12,12 +12,12 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 #define K_PER_ITER 8
 
-#include "mul_mmq_funcs.glsl"
-
 uint a_offset, b_offset, d_offset;
 
 int32_t cache_b_qs[2];
 vec2 cache_b_ds;
+
+#include "mul_mat_vecq_funcs.glsl"
 
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -43,27 +43,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
             const uint a_block_idx = (ibi + col)/QUANT_K + a_offset;
             ibi += p.ncols;
 
-            int32_t q_sum = 0;
-#if QUANT_R == 2
-            const i32vec2 data_a_qs = repack(a_block_idx, b_qs_idx);
-            q_sum += dotPacked4x8EXT(data_a_qs.x,
-                                     cache_b_qs[0]);
-            q_sum += dotPacked4x8EXT(data_a_qs.y,
-                                     cache_b_qs[1]);
-#else
-            int32_t data_a_qs = repack(a_block_idx, b_qs_idx * 2);
-            q_sum += dotPacked4x8EXT(data_a_qs,
-                                     cache_b_qs[0]);
-            data_a_qs = repack(a_block_idx, b_qs_idx * 2 + 1);
-            q_sum += dotPacked4x8EXT(data_a_qs,
-                                     cache_b_qs[1]);
-#endif
-
-#if QUANT_AUXF == 1
-            temp[j][n] += mul_q8_1(q_sum,  get_d(a_block_idx), cache_b_ds, 4);
-#else
-            temp[j][n] += mul_q8_1(q_sum, get_dm(a_block_idx), cache_b_ds, 4);
-#endif
+            temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx, 4);
         }
     }
 }
