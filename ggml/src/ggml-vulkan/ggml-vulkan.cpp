@@ -5230,7 +5230,7 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
     if (src1_type == GGML_TYPE_Q8_1) {
         vk_matmul_pipeline pipelines = ctx->device->pipeline_dequant_mul_mat_mat_id_q8_1[src0_type].f32acc;
 
-        if (pipelines->s == nullptr && pipelines->m == nullptr && pipelines->l == nullptr) {
+        if (pipelines->is_empty()) {
             return nullptr;
         }
 
