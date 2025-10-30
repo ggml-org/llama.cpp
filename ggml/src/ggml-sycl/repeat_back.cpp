@@ -62,8 +62,9 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                              float acc = 0.0f;
 
                              for (int j = 0; j < repeat_count; ++j) {
-                                 const float * ptr =  (const float *) (base + (i0 + j0 * ne0) * nb0 + (i1 + j1 * ne1) * nb1 +
-                                                        (i2 + j2 * ne2) * nb2 + (i3 + j3 * ne3) * nb3);
+                                 const float * ptr =
+                                     (const float *) (base + (i0 + j0 * ne0) * nb0 + (i1 + j1 * ne1) * nb1 +
+                                                      (i2 + j2 * ne2) * nb2 + (i3 + j3 * ne3) * nb3);
                                  acc += *ptr;
 
                                  // Manual carry propagation simulates nested loops efficiently
@@ -77,5 +78,4 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                              }
                              dst_dd[i] = acc;
                          });
-
 }

@@ -1,4 +1,3 @@
-//בס"ד
 #ifndef GGML_SYCL_REPEAT_BACK_HPP
 #define GGML_SYCL_REPEAT_BACK_HPP
 
