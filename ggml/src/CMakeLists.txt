@@ -189,10 +189,6 @@ endif()
 
 # ggml
 
-if (GGML_BACKEND_DL AND NOT BUILD_SHARED_LIBS)
-    message(FATAL_ERROR "GGML_BACKEND_DL requires BUILD_SHARED_LIBS")
-endif()
-
 add_library(ggml-base
             ../include/ggml.h
             ../include/ggml-alloc.h
@@ -266,7 +262,7 @@ function(ggml_add_backend_library backend)
     target_link_libraries(${backend} PRIVATE ggml-base)
     target_include_directories(${backend} PRIVATE ..)
 
-    if (${BUILD_SHARED_LIBS})
+    if (${BUILD_SHARED_LIBS} OR GGML_BACKEND_DL)
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_BUILD)
         target_compile_definitions(${backend} PUBLIC  GGML_BACKEND_SHARED)
     endif()
@@ -447,7 +443,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "visionOS")
     target_compile_definitions(ggml-base PUBLIC _DARWIN_C_SOURCE)
 endif()
 
-if (BUILD_SHARED_LIBS)
+if (BUILD_SHARED_LIBS OR GGML_BACKEND_DL)
     foreach (target ggml-base ggml)
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
         target_compile_definitions(${target} PRIVATE GGML_BUILD)
