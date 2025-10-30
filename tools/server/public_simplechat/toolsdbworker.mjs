@@ -45,6 +45,28 @@ self.onmessage = async function (ev) {
         let args = ev.data.args;
         switch (ev.data.name) {
 
+            case 'data_store_list':
+                let reqList = dbOS.getAllKeys()
+                reqList.onsuccess = (evList) => {
+                    console.info(`DBUG:WWDb:${ev.data.name}:transact success`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'ok', 'data': reqList.result, 'msg': `DataStoreList:Ok:${args['key']}:${reqList.result}`}
+                    });
+                }
+                reqList.onerror = (evList) => {
+                    console.info(`ERRR:WWDb:${ev.data.name}:transact failed:${reqList.error}`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'error', 'msg': `DataStoreList:Err:${args['key']}:${reqList.error}`}
+                    });
+                }
+                break;
+
             case 'data_store_get':
                 let reqGet = dbOS.get(args['key'])
                 reqGet.onsuccess = (evGet) => {
