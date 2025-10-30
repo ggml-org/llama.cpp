@@ -541,6 +541,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
             GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
             continue;
         }
+        GGML_LOG_INFO("%s: searching for %s in %s\n", __func__, path_str(name_path).c_str(), path_str(search_path).c_str());
         fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
         for (const auto & entry : dir_it) {
             if (entry.is_regular_file()) {
@@ -586,6 +587,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         // Try loading backend with just the library name, leave to dlopen path resolution.
         fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
         best_path = filename;
+        GGML_LOG_INFO("%s: trying to load %s\n", __func__, path_str(best_path).c_str());
     }
 
     return get_reg().load_backend(best_path, silent);
