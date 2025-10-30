@@ -990,6 +990,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
 
 static void conv2d_implicit_cuda_f32(ggml_backend_cuda_context & ctx, const float * X_D, const float * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
     conv2d_implicit_cuda<float, 1>(X_D, K_D, Y_D, P, st);
+    GGML_UNUSED(ctx);
 }
 
 void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -1033,14 +1034,13 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint OC = kernel->ne[3];  // ouptut_chanles
     const uint B  = input->ne[3];   // n_batches
 
-    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW };
-    params.SC_fastdiv = init_fastdiv_values(KW*IC);
-    params.OW_fastdiv = init_fastdiv_values(OW);
-    params.OHOW_fastdiv = init_fastdiv_values(OW*OH);
-    params.C_fastdiv = init_fastdiv_values(IC);
-    params.RS_fastdiv = init_fastdiv_values(KW*KH);
-    params.S_fastdiv = init_fastdiv_values(KW);
-    // params.layout = LT;
+    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW,
+                      init_fastdiv_values(KW*IC),
+                      init_fastdiv_values(OW),
+                      init_fastdiv_values(IC),
+                      init_fastdiv_values(KW*KH),
+                      init_fastdiv_values(KW),
+                      init_fastdiv_values(OW*OH)};
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_implicit_cuda_f16(ctx, X_D, (half *) K_D, Y_D, cc, params, st);
