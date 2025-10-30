@@ -515,7 +515,7 @@ static fs::path backend_filename_extension() {
 static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent, const char * user_search_path) {
     // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
     const fs::path name_path = fs::u8path(name);
-    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
+    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native();
     const fs::path file_extension = backend_filename_extension();
 
     std::vector<fs::path> search_paths;
@@ -526,6 +526,9 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
         search_paths.push_back(fs::current_path());
+
+        // Android does not require prepending path, the .apk will have embedded the dynamic .so, only the name is needed for dlopen
+        // TODO add here prebuild/ search patch for Desktop platforms where we want to support dynamic loading
     } else {
         search_paths.push_back(fs::u8path(user_search_path));
     }
@@ -550,19 +553,16 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                     }
                     if (handle) {
                         auto score_fn = (ggml_backend_score_t) dl_get_sym(handle.get(), "ggml_backend_score");
+                        int s = 1;
                         if (score_fn) {
-                            int s = score_fn();
-#ifndef NDEBUG
-                            GGML_LOG_DEBUG("%s: %s score: %d\n", __func__, path_str(entry.path()).c_str(), s);
+                            s = score_fn();
+                        }
+#ifdef NDEBUG
+                        GGML_LOG_DEBUG("%s: %s score: %d\n", __func__, path_str(entry.path()).c_str(), s);
 #endif
-                            if (s > best_score) {
-                                best_score = s;
-                                best_path = entry.path();
-                            }
-                        } else {
-                            if (!silent) {
-                                GGML_LOG_INFO("%s: failed to find ggml_backend_score in %s\n", __func__, path_str(entry.path()).c_str());
-                            }
+                        if (s > best_score) {
+                            best_score = s;
+                            best_path = entry.path();
                         }
                     }
                 }
@@ -579,7 +579,13 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                 return get_reg().load_backend(path, silent);
             }
         }
-        return nullptr;
+    }
+
+    // In the case of Android, we can load with just the library filename, without pre-pending any path
+    if(best_path.empty()) {
+        // Try loading backend with just the library name, leave to dlopen path resolution.
+        fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
+        best_path = filename;
     }
 
     return get_reg().load_backend(best_path, silent);
