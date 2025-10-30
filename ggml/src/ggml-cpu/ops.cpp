@@ -9,6 +9,7 @@
 
 #include <float.h>
 #include <algorithm>
+#include <vector>
 
 // ggml_compute_forward_dup
 
@@ -7915,7 +7916,8 @@ static void ggml_compute_forward_sparsek_attn_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
 
-    if (params->ith != 0) return; // main thread only
+    // Single-threaded baseline version (expand later for parallelism)
+    if (params->ith != 0) return;
 
     const struct ggml_tensor * Q = dst->src[0];
     const struct ggml_tensor * K = dst->src[1];
@@ -7925,56 +7927,87 @@ static void ggml_compute_forward_sparsek_attn_f32(
     GGML_ASSERT(Q->type == GGML_TYPE_F32);
     GGML_ASSERT(K->type == GGML_TYPE_F32);
     GGML_ASSERT(V->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     const int32_t k_top      = ggml_get_op_params_i32(dst, 0);
     const int32_t win_local  = ggml_get_op_params_i32(dst, 1);
     const int32_t stride_glb = ggml_get_op_params_i32(dst, 2);
+    GGML_UNUSED(win_local);
+    GGML_UNUSED(stride_glb);
 
-    const int64_t D = Q->ne[0];   // embedding dim
-    const int64_t T = Q->ne[1];   // sequence length
+    // Tensor dimensions according to GGML layout: ne[0]=d, ne[1]=seq, ne[2]=head, ne[3]=batch
+    const int64_t D = Q->ne[0];
+    const int64_t T = Q->ne[1];
+    const int64_t H = Q->ne[2];
+    const int64_t B = Q->ne[3];
 
-    const float * q = (const float *) Q->data;
-    const float * k = (const float *) K->data;
-    const float * v = (const float *) V->data;
-    float * out     = (float *) dst->data;
+    // Temporary buffer for attention scores for one query row
+    std::vector<float> attn_row(T, 0.0f);
 
-    
-    for (int64_t i = 0; i < T; ++i) {
-        for (int64_t j = 0; j < T; ++j) {
-            float dot = 0.0f;
-            for (int64_t d = 0; d < D; ++d)
-                dot += q[i*D + d] * k[j*D + d];
-            out[i*T + j] = dot / sqrtf((float) D);
-        }
-    }
+    const float scale = 1.0f / sqrtf((float) D);
 
-    for (int64_t i = 0; i < T; ++i) {
-        float * row = &out[i*T];
-        for (int64_t j = 0; j < T; ++j)
-            if (row[j] < row[k_top]) row[j] = -INFINITY;
-    }
+    // Loops over batch, head, and query token
+    for (int64_t b = 0; b < B; ++b) {
+        for (int64_t h = 0; h < H; ++h) {
+            for (int64_t iq = 0; iq < T; ++iq) {
 
-    for (int64_t i = 0; i < T; ++i) {
-        float maxv = -INFINITY;
-        for (int64_t j = 0; j < T; ++j)
-            if (out[i*T + j] > maxv) maxv = out[i*T + j];
-        float sum = 0.0f;
-        for (int64_t j = 0; j < T; ++j) {
-            out[i*T + j] = expf(out[i*T + j] - maxv);
-            sum += out[i*T + j];
-        }
-        for (int64_t j = 0; j < T; ++j)
-            out[i*T + j] /= sum;
-    }
+                // (1) Compute dot products Q·K within same (b,h)
+                const char * qbase = (const char *) Q->data + b*Q->nb[3] + h*Q->nb[2] + iq*Q->nb[1];
+                const float * qv = (const float *) qbase;
 
+                for (int64_t j = 0; j < T; ++j) {
+                    const char * kbase = (const char *) K->data + b*K->nb[3] + h*K->nb[2] + j*K->nb[1];
+                    const float * kv = (const float *) kbase;
 
-    float * result = (float *) dst->data;
-    for (int64_t i = 0; i < T; ++i) {
-        for (int64_t d = 0; d < D; ++d) {
-            float sum = 0.0f;
-            for (int64_t j = 0; j < T; ++j)
-                sum += out[i*T + j] * v[j*D + d];
-            result[i*D + d] = sum;
+                    float dot = 0.0f;
+                    for (int64_t d = 0; d < D; ++d) {
+                        dot += qv[d] * kv[d];
+                    }
+                    attn_row[j] = dot * scale;
+                }
+
+                // (2) Select top-k threshold using nth_element
+                const int kk = std::max<int>(1, std::min<int>((int)T, k_top));
+                std::vector<float> tmp(attn_row.begin(), attn_row.end());
+                std::nth_element(tmp.begin(), tmp.begin() + (kk - 1), tmp.end(), std::greater<float>());
+                const float thr = tmp[kk - 1];
+
+                for (int64_t j = 0; j < T; ++j) {
+                    if (attn_row[j] < thr) attn_row[j] = -INFINITY;
+                }
+
+                // (3) Numerically stable softmax on the masked row
+                float maxv = -INFINITY;
+                for (int64_t j = 0; j < T; ++j) {
+                    maxv = std::max(maxv, attn_row[j]);
+                }
+                float sum = 0.0f;
+                for (int64_t j = 0; j < T; ++j) {
+                    float v = attn_row[j] - maxv;
+                    float e = expf(v);
+                    attn_row[j] = e;
+                    sum += e;
+                }
+                const float inv_sum = sum > 0.0f ? 1.0f / sum : 0.0f;
+                for (int64_t j = 0; j < T; ++j) {
+                    attn_row[j] *= inv_sum;
+                }
+
+                // (4) Compute output = A·V (weighted sum)
+                float * y = (float *) ((char *) dst->data + b*dst->nb[3] + h*dst->nb[2] + iq*dst->nb[1]);
+
+                for (int64_t d = 0; d < D; ++d) {
+                    float acc = 0.0f;
+                    for (int64_t j = 0; j < T; ++j) {
+                        const float aij = attn_row[j];
+                        if (aij == 0.0f) continue; // skip masked entries
+                        const char * vbase = (const char *) V->data + b*V->nb[3] + h*V->nb[2] + j*V->nb[1];
+                        const float * vv = (const float *) vbase;
+                        acc += aij * vv[d];
+                    }
+                    y[d] = acc;
+                }
+            }
         }
     }
 
@@ -7985,7 +8018,13 @@ static void ggml_compute_forward_sparsek_attn_f32(
 void ggml_compute_forward_sparsek_attn(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
-    ggml_compute_forward_sparsek_attn_f32(params, dst);
+    switch (dst->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_sparsek_attn_f32(params, dst);
+            break;
+        default:
+            GGML_ASSERT(false && "sparsek_attn: unsupported dst type");
+    }
 }
 
 
