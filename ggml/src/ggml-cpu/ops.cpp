@@ -7920,7 +7920,7 @@ void ggml_compute_forward_argsort(
 //  • Numerically stable softmax
 //  • Preallocated buffers for performance
 //
-// Author: Yael Shuker (yael-works)
+// Author: Yael Shuker & Gitty Burstein
 //------------------------------------------------------------------------------
 
 #include <algorithm>

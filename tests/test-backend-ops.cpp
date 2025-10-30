@@ -7208,7 +7208,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                         continue;
                     }
                     for (bool with_bias : {false, true}) {
-                        if (!with_gate && !with_bias) {
+                         if (!with_gate && !with_bias) {
                             continue;
                         }
                         for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
@@ -7252,12 +7252,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     // Conv2d: K=CRS=NPQ=4096 matmul performance
-    uint32_t                        iwh_idx  = 0;
-    uint32_t                        kwh_idx  = 1;
-    uint32_t                        Cout_idx = 2;
-    uint32_t                        Cin_idx  = 3;
-    uint32_t                        B_idx    = 4;
-    std::vector<std::array<int, 5>> cases    = {
+    uint32_t iwh_idx = 0;
+    uint32_t kwh_idx = 1;
+    uint32_t Cout_idx = 2;
+    uint32_t Cin_idx = 3;
+    uint32_t B_idx = 4;
+    std::vector<std::array<int, 5>> cases = {
   //{IWH, KWH, Cout, Cin, B}
   // K=CRS=NPQ=4096 conv2d matmul performance
         {19,   4, 4096, 256, 16},
