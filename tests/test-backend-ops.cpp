@@ -7135,7 +7135,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             if (hsk != 192 && hsk != 576 && hsk != hsv) continue;
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
-          
+
             for (bool mask : { true, false } ) {
                 for (bool sinks : { true, false } ) {
                     for (float max_bias : { 0.0f, 8.0f }) {
