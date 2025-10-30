@@ -4570,7 +4570,7 @@ struct ggml_tensor * ggml_conv_2d_direct(
     return result;
 }
 
-// ggml_conv_3d
+// ggml_conv_3d_direct
 
 struct ggml_tensor * ggml_conv_3d_direct(
         struct ggml_context * ctx,
