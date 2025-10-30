@@ -44,6 +44,7 @@ self.onmessage = async function (ev) {
         let dbOS = dbTrans.objectStore('theDB');
         let args = ev.data.args;
         switch (ev.data.name) {
+
             case 'data_store_get':
                 let reqGet = dbOS.get(args['key'])
                 reqGet.onsuccess = (evGet) => {
@@ -65,6 +66,7 @@ self.onmessage = async function (ev) {
                     });
                 }
                 break;
+
             case 'data_store_set':
                 let reqSet = dbOS.put(args['value'], args['key']);
                 reqSet.onerror = (evSet) => {
@@ -86,9 +88,33 @@ self.onmessage = async function (ev) {
                     });
                 }
                 break;
+
+            case 'data_store_delete':
+                let reqDel = dbOS.delete(args['key'])
+                reqDel.onsuccess = (evDel) => {
+                    console.info(`DBUG:WWDb:${ev.data.name}:transact success`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'ok', 'msg': `DataStoreDelete:Ok:${args['key']}:${reqDel.result}`}
+                    });
+                }
+                reqDel.onerror = (evDel) => {
+                    console.info(`ERRR:WWDb:${ev.data.name}:transact failed:${reqDel.error}`)
+                    self.postMessage({
+                        cid: ev.data.cid,
+                        tcid: ev.data.tcid,
+                        name: ev.data.name,
+                        data: { 'status': 'error', 'msg': `DataStoreDelete:Err:${args['key']}:${reqDel.error}`}
+                    });
+                }
+                break;
+
             default:
                 console.info(`ERRR:WWDb:${ev.data.name}:OnMessage:Unknown func call...`)
                 break;
+
         }
         console.info(`DBUG:WWDb:${ev.data.name}:OnMessage end`)
     } catch (/** @type {any} */error) {
