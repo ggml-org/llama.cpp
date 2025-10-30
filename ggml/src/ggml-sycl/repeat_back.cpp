@@ -1,4 +1,3 @@
-//בס"ד
 #include "repeat_back.hpp"
 
 #include "common.hpp"
