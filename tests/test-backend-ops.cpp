@@ -7208,7 +7208,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                         continue;
                     }
                     for (bool with_bias : {false, true}) {
-                         if (!with_gate && !with_bias) {
+                        if (!with_gate && !with_bias) {
                             continue;
                         }
                         for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
