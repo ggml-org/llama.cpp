@@ -13,18 +13,18 @@ constexpr uint WARPSIZE = 32;
 
 
 //currently not use; in future for split-k kernels
-static __global__ void reduce_f32(const float * __restrict__ x, float * __restrict__ dst, const int ncols, const int nrows) {
-    const int row = blockIdx.x;
-    const int col = threadIdx.x;
+// static __global__ void reduce_f32(const float * __restrict__ x, float * __restrict__ dst, const int ncols, const int nrows) {
+//     const int row = blockIdx.x;
+//     const int col = threadIdx.x;
 
-    float     sum        = 0.0f;
-    if (row * blockDim.x + col < ncols) {
-        for (int i = 0; i < nrows; ++i){
-            sum += x[i * ncols + row * blockDim.x + col];
-        }
-        dst[row * blockDim.x + col] = sum;
-    }
-}
+//     float     sum        = 0.0f;
+//     if (row * blockDim.x + col < ncols) {
+//         for (int i = 0; i < nrows; ++i){
+//             sum += x[i * ncols + row * blockDim.x + col];
+//         }
+//         dst[row * blockDim.x + col] = sum;
+//     }
+// }
 
 template <typename src_T, typename dst_T>
 static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, const int ne00, const int ne01){
@@ -1032,8 +1032,6 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     const uint OC = kernel->ne[3];  // ouptut_chanles
     const uint B  = input->ne[3];   // n_batches
-
-    const int64_t total  = B * OC * OH * OW;
 
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW };
     params.SC_fastdiv = init_fastdiv_values(KW*IC);
