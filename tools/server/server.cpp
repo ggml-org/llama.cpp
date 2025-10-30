@@ -2699,7 +2699,7 @@ struct server_context {
 
     // return true if at least one slot has been purged
     // TODO: improve logic
-    //       - smarter decision which slot to purge
+    //       - smarter decision which slot to purge (LRU or longest prompt?)
     //       - move slot to level 2 cache instead of removing?
     //       - instead of purging, try to store and resume later?
     bool try_purge_idle_slots() {
@@ -4159,7 +4159,7 @@ struct server_context {
                     std::string err;
 
                     if (n_batch == 1 && ret == 1) {
-                        // TODO: try to terminate only the largest active slot and continue
+                        // TODO: try to terminate only the largest active slot/sequence and continue with the rest
                         //       need to remove the tokens from the current batch too
                         err = "Context size has been exceeded.";
                     }
