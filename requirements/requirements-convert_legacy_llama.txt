@@ -1,7 +1,6 @@
 numpy~=1.26.4
 sentencepiece~=0.2.0
 
-# Support for Qwen3-VL:
 transformers>=4.57.1,<5.0.0
 
 gguf>=0.1.0
