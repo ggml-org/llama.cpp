@@ -3282,6 +3282,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
     add_opt(common_arg(
+        {"--allowed-local-media-path"}, "PATH",
+        string_format("path from which local media files are allowed to be read from (default: none)"),
+        [](common_params & params, const std::string & value) {
+            params.allowed_local_media_path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ALLOWED_LOCAL_MEDIA_PATH"));
+    add_opt(common_arg(
+        {"--local-media-max-size-mb"}, "N",
+        string_format("max size in mb for local media files (default: %d)", 15), // 15MB
+        [](common_params & params, int value) {
+            params.local_media_max_size_mb = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_LOCAL_MEDIA_MAX_SIZE_MB"));
+    add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
         [](common_params & params, const std::string & value) {

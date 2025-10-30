@@ -528,6 +528,8 @@ struct oaicompat_parser_options {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    int32_t local_media_max_size_mb;
+    std::string allowed_local_media_path;
 };
 
 // used by /chat/completions endpoint
@@ -637,10 +639,20 @@ static json oaicompat_chat_params_parse(
                     }
 
                 } else if (string_starts_with(url, "file://")) {
-		    // Strip off the leading "file://"
-		    std::string fname = url.substr(7);
-		    // load local file path
-		    raw_buffer buf;
+                    // Strip off the leading "file://"
+                    std::string fname = url.substr(7);
+                    std::vector<std::string> fparts = string_split<std::string>(fname, std::filesystem::path::preferred_separator);
+                    for (const auto &piece : fparts) {
+                        if (piece != "" && !fs_validate_filename(piece)) {
+                            throw std::runtime_error("Invalid filename piece '" + piece + "': " + fname);
+                        }
+                    }
+                    // Check allowed local media path - fs_validate_filename already validated that there is no ".." or "."
+                    if (opt.allowed_local_media_path == "" || !string_starts_with(fname, opt.allowed_local_media_path)) {
+                        throw std::runtime_error("File path not allowed");
+                    }
+                    // load local file path
+                    raw_buffer buf;
                     FILE * f = fopen(fname.c_str(), "rb");
                     if (!f) {
                         LOG_ERR("Unable to open file %s: %s\n", fname.c_str(), strerror(errno));
@@ -648,6 +660,10 @@ static json oaicompat_chat_params_parse(
                     }
                     fseek(f, 0, SEEK_END);
                     long file_size = ftell(f);
+                    if (file_size > opt.local_media_max_size_mb * 1024 * 1024) {
+                        fclose(f);
+                        throw std::runtime_error("Local file exceeds maximum allowed size");
+                    }
                     fseek(f, 0, SEEK_SET);
                     buf.resize(file_size);
                     size_t n_read = fread(buf.data(), 1, file_size, f);
@@ -656,9 +672,9 @@ static json oaicompat_chat_params_parse(
                         LOG_ERR("Failed to read entire file %s", fname.c_str());
                         throw std::runtime_error("Failed to read entire image file");
                     }
-		    out_files.push_back(buf);
+                    out_files.push_back(buf);
 
-		} else {
+                } else {
                     // try to decode base64 image
                     std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
                     if (parts.size() != 2) {
