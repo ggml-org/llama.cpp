@@ -7178,7 +7178,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t d_qk : {64, 128}) {
         for (int64_t d_v : {64, 128}) {
             for (int64_t n_head : {4, 8}) {
-                for (int64_t kv : {113, 512}) {  
+                for (int64_t kv : {113, 512}) {
                     for (int64_t b : {1, 4}) {
                         for (int32_t k_top : {16, 32}) {
                             for (int32_t win_local : {32, 64}) {
