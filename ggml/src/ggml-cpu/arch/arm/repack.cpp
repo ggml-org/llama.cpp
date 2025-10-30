@@ -2171,11 +2171,11 @@ void ggml_gemm_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 for (int sb = 0; sb < QK_K / 64; sb++) {
                     // Int accumulators for qs vecdot (4 row x 2 col quartets)
-                    int32x4_t sb_acc_lo[acc_size];
-                    int32x4_t sb_acc_hi[acc_size];
+                    int32x4_t acc_lo[acc_size];
+                    int32x4_t acc_hi[acc_size];
                     for (int i = 0; i < acc_size; i++) {
-                        sb_acc_lo[i] = vdupq_n_s32(0);
-                        sb_acc_hi[i] = vdupq_n_s32(0);
+                        acc_lo[i] = vdupq_n_s32(0);
+                        acc_hi[i] = vdupq_n_s32(0);
                     }
                     // Need scales for the low and high nibbles
                     // 2 * 12 = 24 bytes per subblock, 4 sbs -> 4 * 24 = 96 bytes total
@@ -2200,28 +2200,28 @@ void ggml_gemm_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         const int8x16_t q4_0123_lo = vreinterpretq_s8_u8(vandq_u8(q4_0123, m4b));
                         const int8x16_t q4_0123_hi = vreinterpretq_s8_u8(vshrq_n_u8(q4_0123, 4));
 
-                        sb_acc_lo[0] = vdotq_laneq_s32(sb_acc_lo[0], q4_0123_lo, q8_blk0, 0);  //  0..3  r0 c0123
-                        sb_acc_lo[1] = vdotq_laneq_s32(sb_acc_lo[1], q4_0123_lo, q8_blk0, 1);  //  0..3  r1 c0123
-                        sb_acc_lo[2] = vdotq_laneq_s32(sb_acc_lo[2], q4_0123_lo, q8_blk0, 2);  //  0..3  r2 c0123
-                        sb_acc_lo[3] = vdotq_laneq_s32(sb_acc_lo[3], q4_0123_lo, q8_blk0, 3);  //  0..3  r3 c0123
+                        acc_lo[0] = vdotq_laneq_s32(acc_lo[0], q4_0123_lo, q8_blk0, 0);  //  0..3  r0 c0123
+                        acc_lo[1] = vdotq_laneq_s32(acc_lo[1], q4_0123_lo, q8_blk0, 1);  //  0..3  r1 c0123
+                        acc_lo[2] = vdotq_laneq_s32(acc_lo[2], q4_0123_lo, q8_blk0, 2);  //  0..3  r2 c0123
+                        acc_lo[3] = vdotq_laneq_s32(acc_lo[3], q4_0123_lo, q8_blk0, 3);  //  0..3  r3 c0123
 
-                        sb_acc_hi[0] = vdotq_laneq_s32(sb_acc_hi[0], q4_0123_hi, q8_blk1, 0);  // 32..35 r0 c0123
-                        sb_acc_hi[1] = vdotq_laneq_s32(sb_acc_hi[1], q4_0123_hi, q8_blk1, 1);  // 32..35 r1 c0123
-                        sb_acc_hi[2] = vdotq_laneq_s32(sb_acc_hi[2], q4_0123_hi, q8_blk1, 2);  // 32..35 r2 c0123
-                        sb_acc_hi[3] = vdotq_laneq_s32(sb_acc_hi[3], q4_0123_hi, q8_blk1, 3);  // 32..35 r3 c0123
+                        acc_hi[0] = vdotq_laneq_s32(acc_hi[0], q4_0123_hi, q8_blk1, 0);  // 32..35 r0 c0123
+                        acc_hi[1] = vdotq_laneq_s32(acc_hi[1], q4_0123_hi, q8_blk1, 1);  // 32..35 r1 c0123
+                        acc_hi[2] = vdotq_laneq_s32(acc_hi[2], q4_0123_hi, q8_blk1, 2);  // 32..35 r2 c0123
+                        acc_hi[3] = vdotq_laneq_s32(acc_hi[3], q4_0123_hi, q8_blk1, 3);  // 32..35 r3 c0123
 
                         const uint8x16_t q4_4567_lo = vreinterpretq_s8_u8(vandq_u8(q4_4567, m4b));
                         const uint8x16_t q4_4567_hi = vreinterpretq_s8_u8(vshrq_n_u8(q4_4567, 4));
 
-                        sb_acc_lo[4] = vdotq_laneq_s32(sb_acc_lo[4], q4_4567_lo, q8_blk0, 0);  //  0..3  r0 c4567
-                        sb_acc_lo[5] = vdotq_laneq_s32(sb_acc_lo[5], q4_4567_lo, q8_blk0, 1);  //  0..3  r1 c4567
-                        sb_acc_lo[6] = vdotq_laneq_s32(sb_acc_lo[6], q4_4567_lo, q8_blk0, 2);  //  0..3  r2 c4567
-                        sb_acc_lo[7] = vdotq_laneq_s32(sb_acc_lo[7], q4_4567_lo, q8_blk0, 3);  //  0..3  r3 c4567
+                        acc_lo[4] = vdotq_laneq_s32(acc_lo[4], q4_4567_lo, q8_blk0, 0);  //  0..3  r0 c4567
+                        acc_lo[5] = vdotq_laneq_s32(acc_lo[5], q4_4567_lo, q8_blk0, 1);  //  0..3  r1 c4567
+                        acc_lo[6] = vdotq_laneq_s32(acc_lo[6], q4_4567_lo, q8_blk0, 2);  //  0..3  r2 c4567
+                        acc_lo[7] = vdotq_laneq_s32(acc_lo[7], q4_4567_lo, q8_blk0, 3);  //  0..3  r3 c4567
 
-                        sb_acc_hi[4] = vdotq_laneq_s32(sb_acc_hi[4], q4_4567_hi, q8_blk1, 0);  // 32..35 r0 c4567
-                        sb_acc_hi[5] = vdotq_laneq_s32(sb_acc_hi[5], q4_4567_hi, q8_blk1, 1);  // 32..35 r1 c4567
-                        sb_acc_hi[6] = vdotq_laneq_s32(sb_acc_hi[6], q4_4567_hi, q8_blk1, 2);  // 32..35 r2 c4567
-                        sb_acc_hi[7] = vdotq_laneq_s32(sb_acc_hi[7], q4_4567_hi, q8_blk1, 3);  // 32..35 r3 c4567
+                        acc_hi[4] = vdotq_laneq_s32(acc_hi[4], q4_4567_hi, q8_blk1, 0);  // 32..35 r0 c4567
+                        acc_hi[5] = vdotq_laneq_s32(acc_hi[5], q4_4567_hi, q8_blk1, 1);  // 32..35 r1 c4567
+                        acc_hi[6] = vdotq_laneq_s32(acc_hi[6], q4_4567_hi, q8_blk1, 2);  // 32..35 r2 c4567
+                        acc_hi[7] = vdotq_laneq_s32(acc_hi[7], q4_4567_hi, q8_blk1, 3);  // 32..35 r3 c4567
                     }
 
                     // Scale and bias application
@@ -2234,14 +2234,14 @@ void ggml_gemm_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         // Bias correction
                         // row c0123 blk0 and blk1
                         const float32x4_t sumf_0123 =
-                            vcvtq_f32_s32(vaddq_s32(vmulq_s32(vmovl_s16(sc_0123_lo), sb_acc_lo[row]),
-                                                    vmulq_s32(vmovl_s16(sc_0123_hi), sb_acc_hi[row])));
+                            vcvtq_f32_s32(vaddq_s32(vmulq_s32(vmovl_s16(sc_0123_lo), acc_lo[row]),
+                                                    vmulq_s32(vmovl_s16(sc_0123_hi), acc_hi[row])));
                         acc_f32[2 * row] = vfmaq_f32(acc_f32[2 * row], sbd_scale_0123[row], sumf_0123);
 
                         // row c4567 blk0 and blk1
                         const float32x4_t sumf_4567 =
-                            vcvtq_f32_s32(vaddq_s32(vmulq_s32(vmovl_s16(sc_4567_lo), sb_acc_lo[row + 4]),
-                                                    vmulq_s32(vmovl_s16(sc_4567_hi), sb_acc_hi[row + 4])));
+                            vcvtq_f32_s32(vaddq_s32(vmulq_s32(vmovl_s16(sc_4567_lo), acc_lo[row + 4]),
+                                                    vmulq_s32(vmovl_s16(sc_4567_hi), acc_hi[row + 4])));
                         acc_f32[2 * row + 1] = vfmaq_f32(acc_f32[2 * row + 1], sbd_scale_4567[row], sumf_4567);
 
                         // Bias
