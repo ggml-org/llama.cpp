@@ -63,6 +63,7 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backwrad compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
+#define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
 #define TN_ATTN_K          "%s.blk.%d.attn_k.%s"
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
@@ -116,6 +117,14 @@
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
 #define TN_MM_NORM_MID  "mm.a.norm_mid.%s"
 
+// cogvlm
+#define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
+#define TN_MM_H_TO_4H      "mm.up.%s"
+#define TN_MM_GATE         "mm.gate.%s"
+#define TN_MM_4H_TO_H      "mm.down.%s"
+#define TN_TOK_BOI         "v.boi"
+#define TN_TOK_EOI         "v.eoi"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -141,6 +150,7 @@ enum projector_type {
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_UNKNOWN,
+    PROJECTOR_TYPE_COGVLM,
 };
 
 static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -163,6 +173,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
+    { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
