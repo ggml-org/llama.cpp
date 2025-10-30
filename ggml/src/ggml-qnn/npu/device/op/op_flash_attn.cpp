@@ -58,10 +58,10 @@ void flash_attn_impl(hexagon::tensor *         out,
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
     const auto &         k_type_traits = hexagon::get_type_traits(kKvDataType);
-    const auto           q_to_vec_dot  = k_type_traits.from_float;
+    const auto           q_to_kv_type  = k_type_traits.from_float;
     constexpr const auto kq_vec_dot    = _IsKvF16 ? hexagon::type_erase_dot_func<hexagon::vec_dot_product_f16_f16> :
                                                     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>;
-    if (!q_to_vec_dot) {
+    if (!q_to_kv_type) {
         DEVICE_LOG_ERROR("flash_attn_impl: unsupported data type for q, k, or v\n");
         return;
     }
@@ -134,7 +134,7 @@ void flash_attn_impl(hexagon::tensor *         out,
                                                                    (iq3 % mask->get_ne(3)) * mask->get_nb(3)) :
                        nullptr;
 
-        q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK);
+        q_to_kv_type(reinterpret_cast<const float *>(q_data), Q_q, DK);
 
         if (kHasMask) {
             hexagon::l2fetch_row(reinterpret_cast<const uint8_t *>(mp), mask->get_nb(1));

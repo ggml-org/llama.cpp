@@ -339,13 +339,13 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_output_type * d
     const int    nb      = count / qk;
     const auto * src_ptr = reinterpret_cast<const npu_device_block_q4_0 *>(src);
 
-    hexagon::dequant_output_type * dst_ptr = dst;  // TODO: opt for aligned access
-
-    int i = 0;
+    hexagon::dequant_output_type * dst_ptr = dst;
+    int                            i       = 0;
     for (; i + 5 < nb; i += 6) {
-        auto qs    = load_hexa_block_generic(src_ptr + i, qs_indices, scale_indices);
-        auto res01 = dequantize_vec_q40_qf16_4blocks(qs.val[0], qs.val[1], qs.val[2], table);
-        auto res2  = dequantize_vec_q40_qf16_2blocks(qs.val[3], qs.val[4], table);
+        auto       qs      = load_hexa_block_generic(src_ptr + i, qs_indices, scale_indices);
+        auto       res01   = dequantize_vec_q40_qf16_4blocks(qs.val[0], qs.val[1], qs.val[2], table);
+        HVX_Vector block45 = Q6_V_vror_VR(qs.val[0], kSizeOfQs * 4);
+        auto       res2    = dequantize_vec_q40_qf16_2blocks(block45, qs.val[3], table);
         if constexpr (_IsDstAligned) {
             reinterpret_cast<HVX_Vector *>(dst_ptr)[0] = Q6_Vhf_equals_Vqf16(res01.val[0]);
             reinterpret_cast<HVX_Vector *>(dst_ptr)[1] = Q6_Vhf_equals_Vqf16(res01.val[1]);
@@ -372,7 +372,8 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_output_type * d
     }
 
     for (; i + 1 < nb; i += 2) {
-        auto res = load_dequant_vec_q40_qf16_2blocks(src_ptr + i, qs_indices, scale_indices, table);
+        auto qs  = load_dual_block_generic(src_ptr + i, qs_indices, scale_indices);
+        auto res = dequantize_vec_q40_qf16_2blocks(qs.val[0], qs.val[1], table);
         if constexpr (_IsDstAligned) {
             *reinterpret_cast<HVX_Vector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(res);
         } else {
@@ -469,8 +470,14 @@ void dequantize_row_q4_K(const void * src, hexagon::dequant_output_type * dst, s
         HVX_Vector     q_hi = Q6_Vub_vlsr_VubR(qv, 4);
         HVX_VectorPair qp   = Q6_W_vshuff_VVR(q_hi, q_lo, kQuantSubBlockSize * 3);
 
-        dual_pair.p[0] = Q6_Wh_vlut16_VbVhR_nomatch(Q6_Vb_vshuff_Vb(Q6_V_lo_W(qp)), table, 0);
-        dual_pair.p[1] = Q6_Wh_vlut16_VbVhR_nomatch(Q6_Vb_vshuff_Vb(Q6_V_hi_W(qp)), table, 0);
+        q_lo = Q6_V_lo_W(qp);
+        q_hi = Q6_V_hi_W(qp);
+
+        q_lo = Q6_Vb_vshuff_Vb(q_lo);
+        q_hi = Q6_Vb_vshuff_Vb(q_hi);
+
+        dual_pair.p[0] = Q6_Wh_vlut16_VbVhR_nomatch(q_lo, table, 0);
+        dual_pair.p[1] = Q6_Wh_vlut16_VbVhR_nomatch(q_hi, table, 0);
 
         const __fp16 d   = reinterpret_cast<const __fp16 &>(src_ptr[i].d);
         const __fp16 min = reinterpret_cast<const __fp16 &>(src_ptr[i].dmin);
@@ -533,13 +540,14 @@ void copy_row_f16(const void * src, hexagon::dequant_output_type * dst, size_t c
     hexagon::vec_cpy_f16(reinterpret_cast<const npu_device_fp16_t *>(src), dst, count);
 }
 
-void copy_row_f32(const void * src, hexagon::dequant_output_type * dst, size_t count, HVX_Vector) {
+template <typename _TSrc, typename _TDst, typename... _TExtArgs>
+void copy_row_f32(const _TSrc * src, _TDst * dst, size_t count, _TExtArgs...) {
     hexagon::vec_cpy_f32(reinterpret_cast<const float *>(src), reinterpret_cast<float *>(dst), count);
 }
 
 constexpr const hexagon::device_type_traits kDeviceTypeTraits[] = {
-    { NPU_DATA_TYPE_F32, "F32", 1, sizeof(float), false, copy_row_f32, nullptr,
-     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>,
+    { NPU_DATA_TYPE_F32, "F32", 1, sizeof(float), false, copy_row_f32<void, hexagon::dequant_output_type, HVX_Vector>,
+     copy_row_f32<float, void>, hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>,
      hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f32_f32>,
      hexagon::type_erase_dot_func<hexagon::is_f32_f32_dot_product_aligned> },
     { NPU_DATA_TYPE_F16, "F16", 1, sizeof(npu_device_fp16_t), false, copy_row_f16, quantize_row_fp16,
@@ -547,6 +555,7 @@ constexpr const hexagon::device_type_traits kDeviceTypeTraits[] = {
      hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f16_f16>,
      hexagon::type_erase_dot_func<hexagon::is_f16_f16_dot_product_aligned> },
     { NPU_DATA_TYPE_I32, "I32", 1, sizeof(int32_t), false },
+    { NPU_DATA_TYPE_I64, "I64", 1, sizeof(int64_t), false },
     { NPU_DATA_TYPE_Q8_0, "Q8_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q8_0), true, dequantize_row_q8_0,
      quantize_row_q8_0 },
     { NPU_DATA_TYPE_Q4_0, "Q4_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q4_0), true, dequantize_row_q4_0,
@@ -563,6 +572,8 @@ static_assert(kDeviceTypeTraits[NPU_DATA_TYPE_F16].type == NPU_DATA_TYPE_F16,
               "kDeviceTypeTraits F16 type mismatch with npu_device_tensor_data_type enum");
 static_assert(kDeviceTypeTraits[NPU_DATA_TYPE_I32].type == NPU_DATA_TYPE_I32,
               "kDeviceTypeTraits I32 type mismatch with npu_device_tensor_data_type enum");
+static_assert(kDeviceTypeTraits[NPU_DATA_TYPE_I64].type == NPU_DATA_TYPE_I64,
+              "kDeviceTypeTraits I64 type mismatch with npu_device_tensor_data_type enum");
 static_assert(kDeviceTypeTraits[NPU_DATA_TYPE_Q8_0].type == NPU_DATA_TYPE_Q8_0,
               "kDeviceTypeTraits Q8_0 type mismatch with npu_device_tensor_data_type enum");
 static_assert(kDeviceTypeTraits[NPU_DATA_TYPE_Q4_0].type == NPU_DATA_TYPE_Q4_0,

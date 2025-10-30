@@ -67,6 +67,8 @@ void backend_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                size_t                size) {
     SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_set_tensor.size.%zu",
                                (void *) get_buffer_object(buffer), size);
+
+    // TODO: use DMA instead of memcpy?
     memcpy((char *) tensor->data + offset, data, size);
 }
 
@@ -76,12 +78,15 @@ void backend_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                size_t                offset,
                                size_t                size) {
     SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_get_tensor", (void *) get_buffer_object(buffer));
+
+    // TODO: use DMA instead of memcpy?
     memcpy(data, (const char *) tensor->data + offset, size);
 }
 
 bool backend_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_cpy_tensor", (void *) get_buffer_object(buffer));
     if (ggml_backend_buffer_is_host(src->buffer)) {
+        // TODO: use DMA instead of memcpy?
         memcpy(dst->data, src->data, ggml_nbytes(src));
         return true;
     }

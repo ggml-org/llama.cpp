@@ -1,7 +1,7 @@
 
 #include "graph.hpp"
 
-#include "op_impl.hpp"
+#include "op_registry.hpp"
 #include "util.hpp"
 #include "vtcm_mem.hpp"
 

@@ -37,6 +37,12 @@ enum npu_device_tensor_op op_to_npu_op(ggml_op op) {
             return NPU_OP_ROPE;
         case GGML_OP_GLU:
             return NPU_OP_GLU;
+        case GGML_OP_GET_ROWS:
+            return NPU_OP_GET_ROWS;
+        case GGML_OP_SET_ROWS:
+            return NPU_OP_SET_ROWS;
+        case GGML_OP_CPY:
+            return NPU_OP_CPY;
         default:
             return NPU_OP_COUNT;
     }
@@ -60,6 +66,12 @@ const char * get_npu_op_desc(enum npu_device_tensor_op op) {
             return ggml_op_name(GGML_OP_ROPE);
         case NPU_OP_GLU:
             return ggml_op_name(GGML_OP_GLU);
+        case NPU_OP_GET_ROWS:
+            return ggml_op_name(GGML_OP_GET_ROWS);
+        case NPU_OP_SET_ROWS:
+            return ggml_op_name(GGML_OP_SET_ROWS);
+        case NPU_OP_CPY:
+            return ggml_op_name(GGML_OP_CPY);
         default:
             return "UNKNOWN";
     }
@@ -73,6 +85,8 @@ enum npu_device_tensor_data_type type_to_npu_type(ggml_type type) {
             return NPU_DATA_TYPE_F16;
         case GGML_TYPE_I32:
             return NPU_DATA_TYPE_I32;
+        case GGML_TYPE_I64:
+            return NPU_DATA_TYPE_I64;
         case GGML_TYPE_Q4_K:
             return NPU_DATA_TYPE_Q4_K;
         case GGML_TYPE_Q4_0:
@@ -178,30 +192,15 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
         switch (dims) {
             default:
             case 4:
-                snprintf(out,
-                         max_len,
-                         "%s[%ldx%ldx%ldx%ld]",
-                         ggml_type_name(tensor->type),
-                         (long) tensor->ne[0],
-                         (long) tensor->ne[1],
-                         (long) tensor->ne[2],
-                         (long) tensor->ne[3]);
+                snprintf(out, max_len, "%s[%ldx%ldx%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
+                         (long) tensor->ne[1], (long) tensor->ne[2], (long) tensor->ne[3]);
                 break;
             case 3:
-                snprintf(out,
-                         max_len,
-                         "%s[%ldx%ldx%ld]",
-                         ggml_type_name(tensor->type),
-                         (long) tensor->ne[0],
-                         (long) tensor->ne[1],
-                         (long) tensor->ne[2]);
+                snprintf(out, max_len, "%s[%ldx%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
+                         (long) tensor->ne[1], (long) tensor->ne[2]);
                 break;
             case 2:
-                snprintf(out,
-                         max_len,
-                         "%s[%ldx%ld]",
-                         ggml_type_name(tensor->type),
-                         (long) tensor->ne[0],
+                snprintf(out, max_len, "%s[%ldx%ld]", ggml_type_name(tensor->type), (long) tensor->ne[0],
                          (long) tensor->ne[1]);
                 break;
             case 1:
@@ -233,14 +232,8 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
                 print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
                 char src3_desc[256];
                 print_tensor(dst->src[3], src3_desc, sizeof(src3_desc));
-                snprintf(out,
-                         max_len,
-                         "dst: %s, src0: %s, src1: %s, src2: %s, src3: %s",
-                         dst_desc,
-                         src0_desc,
-                         src1_desc,
-                         src2_desc,
-                         src3_desc);
+                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s, src3: %s", dst_desc, src0_desc,
+                         src1_desc, src2_desc, src3_desc);
                 return;
             }
         case 3:
@@ -251,8 +244,8 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
                 print_tensor(dst->src[1], src1_desc, sizeof(src1_desc));
                 char src2_desc[256];
                 print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
-                snprintf(
-                    out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s", dst_desc, src0_desc, src1_desc, src2_desc);
+                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s", dst_desc, src0_desc, src1_desc,
+                         src2_desc);
                 return;
             }
         case 2:

@@ -48,8 +48,7 @@ inline void glu_vec_op_f32_f32(const float *              src0,
                                size_t                     count,
                                hexagon::HVX_VectorPair_x4 coeff) {
     using namespace hexagon::vec;
-    vec_trans_with_param_impl<float, hexagon::HVX_VectorPair_x4, hexagon::vec_swiglu_f32_f32>(src0, src1, dst, count,
-                                                                                              coeff);
+    vec_trans_impl<hexagon::vec_swiglu_f32_f32, float, hexagon::HVX_VectorPair_x4>(src0, src1, dst, count, coeff);
 }
 
 template <auto _GluRowFunc, auto _CoeffLoadFunc>

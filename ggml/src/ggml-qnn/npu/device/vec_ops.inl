@@ -380,6 +380,31 @@ inline _TRet vec_dot_product_mix_aligned_impl(const _TElem0 * src0, const _TElem
     return _ReduceFunc(_AddFunc(sum0, sum1));
 }
 
+inline HVX_Vector_x2 vec_dot_accum_pair(HVX_VectorPair s0,
+                                        HVX_Vector     curr10,
+                                        HVX_Vector     curr11,
+                                        HVX_Vector     prev1,
+                                        HVX_Vector_x2  sums,
+                                        size_t         offset,
+                                        HVX_Vector     zero) {
+    HVX_Vector l0 = Q6_V_lo_W(s0);
+    HVX_Vector l1 = Q6_V_valign_VVR(curr10, prev1, offset);
+
+    HVX_Vector h0 = Q6_V_hi_W(s0);
+    HVX_Vector h1 = Q6_V_valign_VVR(curr11, curr10, offset);
+
+    l1 = Q6_Vqf32_vadd_VsfVsf(zero, l1);
+    h1 = Q6_Vqf32_vadd_VsfVsf(zero, h1);
+
+    HVX_Vector mpy0 = Q6_Vqf32_vmpy_Vqf32Vqf32(l0, l1);
+    HVX_Vector mpy1 = Q6_Vqf32_vmpy_Vqf32Vqf32(h0, h1);
+
+    HVX_Vector_x2 result;
+    result.val[0] = Q6_Vqf32_vadd_Vqf32Vqf32(mpy0, sums.val[0]);
+    result.val[1] = Q6_Vqf32_vadd_Vqf32Vqf32(mpy1, sums.val[1]);
+    return result;
+}
+
 template <typename _TQuantElem0,
           typename _TElem1,
           typename _TRet,
@@ -422,8 +447,7 @@ inline _TRet vec_dot_product_quant_impl(const _TQuantElem0 * src0,
     HVX_Vector           sum              = kZeroV;
 
     if (src1_vec_ptr_end - src1_vec_ptr > 1) {
-        HVX_Vector sum0 = kZeroV;
-        HVX_Vector sum1 = kZeroV;
+        HVX_Vector_x2 sums = { kZeroV, kZeroV };
 
         while (src1_vec_ptr_end - src1_vec_ptr > 3) {
             HVX_VectorPair_x2 s01     = _DequantQuadFunc(src0_ptr, qs_indices, scale_indices, table);
@@ -432,37 +456,9 @@ inline _TRet vec_dot_product_quant_impl(const _TQuantElem0 * src0,
             HVX_Vector        curr110 = src1_vec_ptr[2];
             HVX_Vector        curr111 = src1_vec_ptr[3];
 
-            HVX_Vector l00 = Q6_V_lo_W(s01.val[0]);
-            HVX_Vector l10 = Q6_V_valign_VVR(curr100, prev1, (size_t) src1);
-
-            HVX_Vector l01 = Q6_V_lo_W(s01.val[1]);
-            HVX_Vector l11 = Q6_V_valign_VVR(curr110, curr101, (size_t) src1);
-
-            HVX_Vector h00 = Q6_V_hi_W(s01.val[0]);
-            HVX_Vector h10 = Q6_V_valign_VVR(curr101, curr100, (size_t) src1);
-
-            HVX_Vector h01 = Q6_V_hi_W(s01.val[1]);
-            HVX_Vector h11 = Q6_V_valign_VVR(curr111, curr110, (size_t) src1);
-
-            l10 = Q6_Vqf32_vadd_VsfVsf(kZeroV, l10);
-            l11 = Q6_Vqf32_vadd_VsfVsf(kZeroV, l11);
-
-            HVX_Vector mpy0 = Q6_Vqf32_vmpy_Vqf32Vqf32(l00, l10);
-            HVX_Vector mpy1 = Q6_Vqf32_vmpy_Vqf32Vqf32(l01, l11);
-
-            h10 = Q6_Vqf32_vadd_VsfVsf(kZeroV, h10);
-            h11 = Q6_Vqf32_vadd_VsfVsf(kZeroV, h11);
-
-            HVX_Vector mpy2 = Q6_Vqf32_vmpy_Vqf32Vqf32(h00, h10);
-            HVX_Vector mpy3 = Q6_Vqf32_vmpy_Vqf32Vqf32(h01, h11);
-
+            sums  = vec_dot_accum_pair(s01.val[0], curr100, curr101, prev1, sums, (size_t) src1, kZeroV);
+            sums  = vec_dot_accum_pair(s01.val[1], curr110, curr111, curr101, sums, (size_t) src1, kZeroV);
             prev1 = curr111;
-
-            sum0 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy0, sum0);
-            sum1 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy1, sum1);
-
-            sum0 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy2, sum0);
-            sum1 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy3, sum1);
 
             src0_ptr += 4;
             src1_vec_ptr += 4;
@@ -473,28 +469,14 @@ inline _TRet vec_dot_product_quant_impl(const _TQuantElem0 * src0,
             HVX_Vector     curr10 = src1_vec_ptr[0];
             HVX_Vector     curr11 = src1_vec_ptr[1];
 
-            HVX_Vector l0 = Q6_V_lo_W(s0);
-            HVX_Vector l1 = Q6_V_valign_VVR(curr10, prev1, (size_t) src1);
-
-            HVX_Vector h0 = Q6_V_hi_W(s0);
-            HVX_Vector h1 = Q6_V_valign_VVR(curr11, curr10, (size_t) src1);
-
-            l1 = Q6_Vqf32_vadd_VsfVsf(kZeroV, l1);
-            h1 = Q6_Vqf32_vadd_VsfVsf(kZeroV, h1);
-
-            HVX_Vector mpy0 = Q6_Vqf32_vmpy_Vqf32Vqf32(l0, l1);
-            HVX_Vector mpy1 = Q6_Vqf32_vmpy_Vqf32Vqf32(h0, h1);
-
+            sums  = vec_dot_accum_pair(s0, curr10, curr11, prev1, sums, (size_t) src1, kZeroV);
             prev1 = curr11;
-
-            sum0 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy0, sum0);
-            sum1 = Q6_Vqf32_vadd_Vqf32Vqf32(mpy1, sum1);
 
             src0_ptr += 2;
             src1_vec_ptr += 2;
         }
 
-        sum = Q6_Vqf32_vadd_Vqf32Vqf32(sum0, sum1);
+        sum = Q6_Vqf32_vadd_Vqf32Vqf32(sums.val[0], sums.val[1]);
     }
 
     if (src1_vec_ptr_end - src1_vec_ptr > 0) {
@@ -614,8 +596,16 @@ template <typename _TData> inline void vec_zero_impl(_TData * src, size_t count)
     }
 }
 
-template <HVX_Vector (*_OpBinaryTransform)(HVX_Vector, HVX_Vector), typename _TyData>
-inline void vec_trans_impl(const _TyData * src0, const _TyData * src1, _TyData * dst, size_t count) {
+template <auto * _OpBinaryTransform, typename _TyData, typename... _TyParams>
+inline void vec_trans_impl(const _TyData * src0,
+                           const _TyData * src1,
+                           _TyData *       dst,
+                           size_t          count,
+                           _TyParams... params) {
+    static_assert(std::is_same_v<decltype(_OpBinaryTransform), HVX_Vector (*)(HVX_Vector, HVX_Vector, _TyParams...)>,
+                  "Function type mismatch: _OpBinaryTransform must be of type HVX_Vector (*)(HVX_Vector, HVX_Vector, "
+                  "_TyParams...)");
+
     constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(_TyData);
 
     HVX_Vector *       src0_vec_ptr     = ((HVX_Vector *) src0);
@@ -632,11 +622,11 @@ inline void vec_trans_impl(const _TyData * src0, const _TyData * src1, _TyData *
 
             HVX_Vector l0  = Q6_V_valign_VVR(Q6_V_lo_W(curr0), prev0, (size_t) src0);
             HVX_Vector l1  = Q6_V_valign_VVR(Q6_V_lo_W(curr1), prev1, (size_t) src1);
-            dst_vec_ptr[0] = _OpBinaryTransform(l0, l1);
+            dst_vec_ptr[0] = _OpBinaryTransform(l0, l1, params...);
 
             HVX_Vector h0  = Q6_V_valign_VVR(Q6_V_hi_W(curr0), Q6_V_lo_W(curr0), (size_t) src0);
             HVX_Vector h1  = Q6_V_valign_VVR(Q6_V_hi_W(curr1), Q6_V_lo_W(curr1), (size_t) src1);
-            dst_vec_ptr[1] = _OpBinaryTransform(h0, h1);
+            dst_vec_ptr[1] = _OpBinaryTransform(h0, h1, params...);
 
             prev0 = Q6_V_hi_W(curr0);
             prev1 = Q6_V_hi_W(curr1);
@@ -653,7 +643,7 @@ inline void vec_trans_impl(const _TyData * src0, const _TyData * src1, _TyData *
         HVX_Vector curr1 = *src1_vec_ptr++;
         HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
-        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1);
+        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1, params...);
 
         prev0 = curr0;
         prev1 = curr1;
@@ -675,7 +665,7 @@ inline void vec_trans_impl(const _TyData * src0, const _TyData * src1, _TyData *
         HVX_Vector curr1 = should_fetch_src1 ? *src1_vec_ptr : prev1;
         HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
-        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1);
+        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1, params...);
 
         src0_vec_ptr += should_fetch_src0 ? 1 : 0;
         src1_vec_ptr += should_fetch_src1 ? 1 : 0;
@@ -697,98 +687,98 @@ inline void vec_trans_impl(const _TyData * src0, const _TyData * src1, _TyData *
                                prev1;
         curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
-        q6op_vstu_variable_ARV(dst_vec_ptr, leftover_bytes, _OpBinaryTransform(curr0, curr1));
+        q6op_vstu_variable_ARV(dst_vec_ptr, leftover_bytes, _OpBinaryTransform(curr0, curr1, params...));
     }
 }
 
-template <typename _TyData, typename _TyParam, HVX_Vector (*_OpBinaryTransform)(HVX_Vector, HVX_Vector, _TyParam)>
-inline void vec_trans_with_param_impl(const _TyData * src0,
-                                      const _TyData * src1,
-                                      _TyData *       dst,
-                                      size_t          count,
-                                      _TyParam        param) {
+template <auto * _OpUnaryTransform, typename _TyData, typename _TyDataRet, typename... _TyParams>
+inline void vec_trans_with_half_ret_impl(const _TyData * src0, _TyDataRet * dst, size_t count, _TyParams... params) {
+    static_assert(std::is_same_v<decltype(_OpUnaryTransform), HVX_Vector (*)(HVX_VectorPair, _TyParams...)>,
+                  "Function type mismatch: _OpUnaryTransform must be of type HVX_Vector (*)(HVX_Vector, HVX_Vector, "
+                  "_TyParams...)");
+
+    static_assert(sizeof(_TyData) / sizeof(_TyDataRet) == 2,
+                  "Element size mismatch: _TyData must be twice the size of _TyDataRet");
+
     constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(_TyData);
+    const HVX_Vector       kZero              = Q6_V_vzero();
 
     HVX_Vector *       src0_vec_ptr     = ((HVX_Vector *) src0);
     HVX_Vector * const src0_vec_ptr_end = ((HVX_Vector *) src0) + count / kElementsPerVector;
-    HVX_Vector *       src1_vec_ptr     = ((HVX_Vector *) src1);
     HVX_Vector *       dst_vec_ptr      = ((HVX_Vector *) dst);  // framework will ensure the dst is aligned
     HVX_Vector         prev0            = *src0_vec_ptr++;
-    HVX_Vector         prev1            = *src1_vec_ptr++;
 
     {
         while (src0_vec_ptr_end - src0_vec_ptr > 1) {
             HVX_VectorPair curr0 = reinterpret_cast<HVX_VectorPair *>(src0_vec_ptr)[0];
-            HVX_VectorPair curr1 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[0];
 
-            HVX_Vector l0  = Q6_V_valign_VVR(Q6_V_lo_W(curr0), prev0, (size_t) src0);
-            HVX_Vector l1  = Q6_V_valign_VVR(Q6_V_lo_W(curr1), prev1, (size_t) src1);
-            dst_vec_ptr[0] = _OpBinaryTransform(l0, l1, param);
+            HVX_Vector l0 = Q6_V_valign_VVR(Q6_V_lo_W(curr0), prev0, (size_t) src0);
+            HVX_Vector h0 = Q6_V_valign_VVR(Q6_V_hi_W(curr0), Q6_V_lo_W(curr0), (size_t) src0);
 
-            HVX_Vector h0  = Q6_V_valign_VVR(Q6_V_hi_W(curr0), Q6_V_lo_W(curr0), (size_t) src0);
-            HVX_Vector h1  = Q6_V_valign_VVR(Q6_V_hi_W(curr1), Q6_V_lo_W(curr1), (size_t) src1);
-            dst_vec_ptr[1] = _OpBinaryTransform(h0, h1, param);
+            dst_vec_ptr[0] = _OpUnaryTransform(Q6_W_vcombine_VV(h0, l0), params...);
 
             prev0 = Q6_V_hi_W(curr0);
-            prev1 = Q6_V_hi_W(curr1);
             src0_vec_ptr += 2;
-            src1_vec_ptr += 2;
-            dst_vec_ptr += 2;
+            dst_vec_ptr++;
         }
     }
 
+    HVX_Vector result;
+    uint32_t   processed_bytes = 0;
     if (src0_vec_ptr_end - src0_vec_ptr > 0) {
         HVX_Vector curr0 = *src0_vec_ptr++;
         HVX_Vector s0    = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-
-        HVX_Vector curr1 = *src1_vec_ptr++;
-        HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-
-        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1, param);
-
-        prev0 = curr0;
-        prev1 = curr1;
-        dst_vec_ptr++;
+        prev0            = curr0;
+        result           = _OpUnaryTransform(Q6_W_vcombine_VV(kZero, s0), params...);
+        processed_bytes  = kElementsPerVector * sizeof(_TyDataRet);
     }
 
-    const size_t leftover = count % kElementsPerVector;
+    static const HVX_VectorPred mask = Q6_Q_vsetq_R(hexagon::kBytesPerVector / 2);
+
+    const size_t src_leftover = count % kElementsPerVector;
     if ((src0_vec_ptr_end - ((HVX_Vector *) src0)) > 0) {
         // handle the last vector
         // see also:
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool should_fetch_src0 = leftover != 0 || !hexagon::is_addr_aligned(src0_vec_ptr);
-        bool should_fetch_src1 = leftover != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
+        bool should_fetch_src0 = src_leftover != 0 || !hexagon::is_addr_aligned(src0_vec_ptr);
 
         HVX_Vector curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector s0    = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
 
-        HVX_Vector curr1 = should_fetch_src1 ? *src1_vec_ptr : prev1;
-        HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-
-        dst_vec_ptr[0] = _OpBinaryTransform(s0, s1, param);
+        if (processed_bytes) {
+            s0             = _OpUnaryTransform(Q6_W_vcombine_VV(s0, kZero), params...);
+            dst_vec_ptr[0] = Q6_V_vmux_QVV(mask, result, s0);  // only update the lower half of the result vector
+            dst_vec_ptr++;
+        } else {
+            result = _OpUnaryTransform(Q6_W_vcombine_VV(kZero, s0), params...);
+        }
 
         src0_vec_ptr += should_fetch_src0 ? 1 : 0;
-        src1_vec_ptr += should_fetch_src1 ? 1 : 0;
         prev0 = curr0;
-        prev1 = curr1;
-        dst_vec_ptr++;
+        processed_bytes += kElementsPerVector * sizeof(_TyDataRet);
     }
 
-    if (leftover > 0) {
+    if (src_leftover > 0) {
         // handle the leftover elements
-        const size_t leftover_bytes = leftover * sizeof(_TyData);
-        HVX_Vector   curr0 = (leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
+        const size_t src_leftover_bytes = src_leftover * sizeof(_TyData);
+        HVX_Vector   curr0 = (src_leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
                                  *src0_vec_ptr :
                                  prev0;
         curr0              = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
 
-        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
-                               *src1_vec_ptr :
-                               prev1;
-        curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
+        if (processed_bytes % hexagon::kBytesPerVector) {
+            curr0 = _OpUnaryTransform(Q6_W_vcombine_VV(curr0, kZero), params...);
+            curr0 = Q6_V_vmux_QVV(mask, result, curr0);
+        } else {
+            curr0 = _OpUnaryTransform(Q6_W_vcombine_VV(kZero, curr0), params...);
+        }
 
-        q6op_vstu_variable_ARV(dst_vec_ptr, leftover_bytes, _OpBinaryTransform(curr0, curr1, param));
+        processed_bytes += src_leftover * sizeof(_TyDataRet);
+        q6op_vstu_variable_ARV(dst_vec_ptr, processed_bytes % hexagon::kBytesPerVector, curr0);
+    } else if (processed_bytes % hexagon::kBytesPerVector) {
+        // TODO: This conditional write-back is suboptimal because it may result in an extra memory write.
+        q6op_vstu_variable_ARV(dst_vec_ptr, processed_bytes % hexagon::kBytesPerVector, result);
     }
 }
 

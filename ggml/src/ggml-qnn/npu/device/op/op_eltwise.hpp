@@ -1,18 +1,10 @@
+#pragma once
 
-
-#include "op_impl.hpp"
-
-#include "op_flash_attn.hpp"
-#include "op_glu.hpp"
-#include "op_mul_mat.hpp"
-#include "op_rope.hpp"
+#include "op_types.hpp"
 #include "type_traits.hpp"
 #include "vec_ops.hpp"
 
-#include <cmath>
-#include <type_traits>
-
-namespace {
+namespace hexagon {
 
 template <HVX_Vector (*_OpBinaryTransform)(HVX_Vector, HVX_Vector)>
 inline void vec_op_f32_f32(const float * src0, const float * src1, float * dst, size_t count) {
@@ -41,6 +33,14 @@ inline void vec_op_f16_f16(const npu_device_fp16_t * src0,
     vec_trans_impl<_OpBinaryTransform, npu_device_fp16_t>(src0, src1, dst, count);
 }
 
+template <HVX_Vector (*_OpUnaryTransform)(HVX_VectorPair)>
+inline void unary_vec_op_f16_f32(const float * src, npu_device_fp16_t * dst, size_t count, size_t) {
+    // TODO: remove the unused param
+
+    using namespace hexagon::vec;
+    vec_trans_with_half_ret_impl<_OpUnaryTransform, float, npu_device_fp16_t>(src, dst, count);
+}
+
 inline HVX_Vector vadd_f16_f16(HVX_Vector a, HVX_Vector b) {
     // TODO: fix this since qf16 has less precision than fp16
     return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_VhfVhf(a, b));
@@ -55,16 +55,25 @@ inline HVX_Vector vmul_f16_f16(HVX_Vector a, HVX_Vector b) {
     return Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(a, b));
 }
 
+inline HVX_Vector vequals_f16_f32(HVX_VectorPair a) {
+    const HVX_Vector kZeroV = Q6_V_vzero();
+    HVX_Vector       lo     = Q6_Vqf32_vadd_Vqf32Vsf(kZeroV, Q6_V_lo_W(a));
+    HVX_Vector       hi     = Q6_Vqf32_vadd_Vqf32Vsf(kZeroV, Q6_V_hi_W(a));
+    a                       = Q6_W_vcombine_VV(hi, lo);
+    return Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(a));
+}
+
 template <typename T> struct get_data_type {};
 
 template <typename _TyData> struct get_data_type<void (*)(const _TyData *, const _TyData *, _TyData *, size_t)> {
     using type = _TyData;
 };
 
-template <typename _TyData, typename _TyParam>
-struct get_data_type<void (*)(const _TyData *, _TyData *, size_t, _TyParam)> {
-    using type       = _TyData;
-    using param_type = typename std::remove_cv<typename std::remove_reference<_TyParam>::type>::type;
+template <typename _TyInput, typename _TyOutput, typename _TyParam>
+struct get_data_type<void (*)(const _TyInput *, _TyOutput *, size_t, _TyParam)> {
+    using type        = _TyInput;
+    using output_type = _TyOutput;
+    using param_type  = typename std::remove_cv<typename std::remove_reference<_TyParam>::type>::type;
 };
 
 template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::compute_params * params) {
@@ -280,8 +289,9 @@ void rms_norm_vec_f32(const float * src, float * dst, size_t count, float eps) {
 
 // TODO: merge with element_wise_op?
 template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_params * params) {
-    using data_type  = typename get_data_type<decltype(_RowFunc)>::type;
-    using param_type = typename get_data_type<decltype(_RowFunc)>::param_type;
+    using input_type  = typename get_data_type<decltype(_RowFunc)>::type;
+    using output_type = typename get_data_type<decltype(_RowFunc)>::output_type;
+    using param_type  = typename get_data_type<decltype(_RowFunc)>::param_type;
 
     if (!out) {
         return false;
@@ -311,7 +321,7 @@ template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_p
     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER(out, params->get_thread_index());
 
     const auto   param           = out->get_op_param<param_type>(0);
-    const size_t valid_row_bytes = src0->get_ne(0) * sizeof(data_type);
+    const size_t valid_row_bytes = src0->get_ne(0) * sizeof(input_type);
     for (int64_t ir = start_end.first; ir < start_end.second; ++ir) {
         const auto i03 = ir / rows_per_cube;
         const auto i02 = ir / out->get_ne(1) - i03 * out->get_ne(2);
@@ -323,7 +333,7 @@ template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_p
             hexagon::l2fetch_row(src0_row + src0->get_nb(1), valid_row_bytes);
         }
 
-        _RowFunc(reinterpret_cast<const data_type *>(src0_row), reinterpret_cast<data_type *>(dst_row),
+        _RowFunc(reinterpret_cast<const input_type *>(src0_row), reinterpret_cast<output_type *>(dst_row),
                  static_cast<size_t>(out->get_ne(0)), param);
     }
 
@@ -336,7 +346,7 @@ bool is_unary_op_supported(const npu_device_tensor_op_spec * op_spec,
                            const npu_device_tensor_spec *    srcs,
                            size_t                            src_len) {
     const auto op = op_spec->op;
-    if (op != NPU_OP_RMS_NORM) {
+    if (op != NPU_OP_RMS_NORM && op != NPU_OP_CPY) {
         DEVICE_LOG_DEBUG("[%s]unsupported\n", hexagon::op_get_name(op));
         return false;
     }
@@ -347,21 +357,36 @@ bool is_unary_op_supported(const npu_device_tensor_op_spec * op_spec,
     }
 
     const auto & src0 = srcs[0];
-    if (dst->type != src0.type) {
-        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
-                         hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
-        return false;
-    }
-
-    if (dst->type != NPU_DATA_TYPE_F32) {
-        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
-                         hexagon::get_type_name(dst->type));
-        return false;
-    }
-
     if (!hexagon::is_same_shape(src0, *dst)) {
         DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
         return false;
+    }
+
+    if (op == NPU_OP_RMS_NORM) {
+        if (dst->type != src0.type) {
+            DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
+                             hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
+            return false;
+        }
+
+        if (dst->type != NPU_DATA_TYPE_F32) {
+            DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op),
+                             hexagon::get_type_name(dst->type));
+            return false;
+        }
+    } else {
+        if (dst->nb[1] < dst->nb[0] || src0.nb[1] < src0.nb[0]) {
+            // TODO: support non-continuous row
+            DEVICE_LOG_DEBUG("[%s]unsupported non-continuous row\n", hexagon::op_get_name(op));
+            return false;
+        }
+
+        if (dst->type != NPU_DATA_TYPE_F16 || src0.type != NPU_DATA_TYPE_F32) {
+            // TODO: support more types
+            DEVICE_LOG_DEBUG("[%s]unsupported data type src:%s dst:%s\n", hexagon::op_get_name(op),
+                             hexagon::get_type_name(src0.type), hexagon::get_type_name(dst->type));
+            return false;
+        }
     }
 
     return true;
@@ -376,134 +401,6 @@ bool is_unary_op_required_sync(npu_device_tensor_op       prev_op,
     NPU_UNUSED(ne);
     return prev_op != NPU_OP_ADD && prev_op != NPU_OP_SUB && prev_op != NPU_OP_MUL && prev_op != NPU_OP_RMS_NORM &&
            prev_op != NPU_OP_COUNT;
-}
-
-struct op_capabilities {
-    npu_device_tensor_op                op;
-    hexagon::op_is_supported_func_type  is_supported;
-    hexagon::op_required_sync_func_type requires_thread_barrier_func;
-    hexagon::compute_func_type          compute_funcs[NPU_DATA_TYPE_COUNT];
-};
-
-constexpr const op_capabilities kOpCapabilities[] = {
-    {
-     NPU_OP_MUL_MAT,                   hexagon::is_mul_mat_supported,
-     hexagon::is_mul_mat_required_sync,
-     {
-            hexagon::mul_mat_f32,  // NPU_DATA_TYPE_F32
-            nullptr,               // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_ADD,                               is_element_wise_op_supported,
-     is_element_wise_op_required_sync,                                     {
-            element_wise_op<vec_op_f32_f32<vadd_f32_f32>>,  // NPU_DATA_TYPE_F32
-            element_wise_op<vec_op_f16_f16<vadd_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_SUB, is_element_wise_op_supported,
-     is_element_wise_op_required_sync, {
-            element_wise_op<vec_op_f32_f32<vsub_f32_f32>>,  // NPU_DATA_TYPE_F32
-            element_wise_op<vec_op_f16_f16<vsub_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_MUL,                       is_element_wise_op_supported,
-     is_element_wise_op_required_sync,               {
-            element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
-            element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_RMS_NORM,                               is_unary_op_supported,
-     is_unary_op_required_sync,                                     {
-            unary_op<rms_norm_vec_f32>,  // NPU_DATA_TYPE_F32
-            nullptr,                     // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_FLASH_ATTN, hexagon::is_flash_attn_supported,
-     hexagon::is_flash_attn_required_sync,
-     {
-            hexagon::flash_attn_f32,  // NPU_DATA_TYPE_F32
-            nullptr,                  // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_ROPE,                  hexagon::is_rope_supported,
-     hexagon::is_rope_required_sync,
-     {
-            hexagon::rope_f32,  // NPU_DATA_TYPE_F32
-            nullptr,            // NPU_DATA_TYPE_F16
-        }, },
-    {
-     NPU_OP_GLU,                               hexagon::is_glu_op_supported,
-     hexagon::is_glu_required_sync,
-     {
-            hexagon::glu_f32,  // NPU_DATA_TYPE_F32
-            hexagon::glu_f16,  // NPU_DATA_TYPE_F16
-        }, },
-};
-
-static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] == hexagon::mul_mat_f32,
-              "kOpArray[NPU_OP_MUL_MAT] != mul_mat_f32");
-
-static_assert(std::size(kOpCapabilities) == NPU_OP_COUNT);
-static_assert(kOpCapabilities[NPU_OP_MUL_MAT].op == NPU_OP_MUL_MAT, "kOpArray[NPU_OP_MUL_MAT].op != NPU_OP_MUL_MAT");
-static_assert(kOpCapabilities[NPU_OP_MUL].op == NPU_OP_MUL, "kOpArray[NPU_OP_MUL].op != NPU_OP_MUL");
-static_assert(kOpCapabilities[NPU_OP_RMS_NORM].op == NPU_OP_RMS_NORM,
-              "kOpArray[NPU_OP_RMS_NORM].op != NPU_OP_RMS_NORM");
-static_assert(kOpCapabilities[NPU_OP_FLASH_ATTN].op == NPU_OP_FLASH_ATTN,
-              "kOpArray[NPU_OP_FLASH_ATTN].op != NPU_OP_FLASH_ATTN");
-static_assert(kOpCapabilities[NPU_OP_ROPE].op == NPU_OP_ROPE, "kOpArray[NPU_OP_ROPE].op != NPU_OP_ROPE");
-static_assert(kOpCapabilities[NPU_OP_GLU].op == NPU_OP_GLU, "kOpArray[NPU_OP_GLU].op != NPU_OP_GLU");
-
-hexagon::compute_func_type get_compute_func_impl(npu_device_tensor_op op, npu_device_tensor_data_type type) {
-    if (op >= NPU_OP_COUNT) {
-        return nullptr;
-    }
-
-    return kOpCapabilities[op].compute_funcs[type];
-}
-
-}  // namespace
-
-namespace hexagon {
-
-compute_func_type get_compute_func(tensor * dst) {
-    return get_compute_func_impl(dst->get_op(), dst->get_type());
-}
-
-bool requires_thread_barrier(npu_device_tensor_op       prev_op,
-                             const npu_device_ne_type & prev_ne,
-                             npu_device_tensor_op       op,
-                             const npu_device_ne_type & ne) {
-    if (op >= NPU_OP_COUNT) {
-        return false;
-    }
-
-    auto requires_thread_barrier_func = kOpCapabilities[op].requires_thread_barrier_func;
-    return requires_thread_barrier_func && requires_thread_barrier_func(prev_op, prev_ne, op, ne);
-}
-
-bool support_op(const npu_device_tensor_op_spec * op_spec,
-                const npu_device_tensor_spec *    dst,
-                const npu_device_tensor_spec *    srcs,
-                size_t                            src_len) {
-    if (!op_spec) {
-        DEVICE_LOG_ERROR("[hexagon-npu]invalid op_spec\n");
-        return false;
-    }
-
-    const auto op                = op_spec->op;
-    auto       is_supported_func = kOpCapabilities[op].is_supported;
-    if (!is_supported_func || !is_supported_func(op_spec, dst, srcs, src_len)) {
-        DEVICE_LOG_DEBUG("[%s]unsupported, is_supported_func return false\n", op_get_name(op));
-        return false;
-    }
-
-    if (get_compute_func_impl(op, dst->type) == nullptr) {
-        DEVICE_LOG_DEBUG("[%s]unsupported, get_compute_func failed, type: %s\n", op_get_name(op),
-                         get_type_name(dst->type));
-        return false;
-    }
-
-    return true;
 }
 
 }  // namespace hexagon

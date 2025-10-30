@@ -1,7 +1,7 @@
 
 #include "graph.hpp"
 #include "hexagon_npu.h"
-#include "op_impl.hpp"
+#include "op_registry.hpp"
 #include "remote.h"
 #include "tensor.hpp"
 #include "thread_pool.hpp"
