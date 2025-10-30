@@ -80,7 +80,8 @@ class SettingsStore {
 		if (!browser) return;
 
 		try {
-			const savedVal = JSON.parse(localStorage.getItem('config') || '{}');
+			const storedConfigRaw = localStorage.getItem('config');
+			const savedVal = JSON.parse(storedConfigRaw || '{}');
 
 			// Merge with defaults to prevent breaking changes
 			this.config = {

@@ -402,6 +402,7 @@ ggml_add_backend(Vulkan)
 ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
+ggml_add_backend(Hexagon)
 ggml_add_backend(QNN)
 
 foreach (target ggml-base ggml)
