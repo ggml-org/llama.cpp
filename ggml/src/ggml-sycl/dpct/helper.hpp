@@ -13,10 +13,10 @@
 #ifndef GGML_SYCL_DPCT_HELPER_HPP
 #define GGML_SYCL_DPCT_HELPER_HPP
 
-#include <map>
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
 #include <syclcompat/math.hpp>
+#include <map>
 
 #ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
@@ -115,36 +115,6 @@ inline auto get_onemath_backend(sycl::queue& queue)
     return queue;
 #else
     static_assert(false, "Unsupported backend");
-#endif
-}
-
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    namespace syclex = sycl::ext::oneapi::experimental;
-#endif
-
-template <int NR, typename Func>
-__dpct_inline__ void sycl_parallel_for(sycl::handler & cgh, sycl::nd_range<NR> nd_range, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::nd_launch(cgh, nd_range, func);
-#else
-    cgh.parallel_for(nd_range, func);
-#endif
-}
-
-template <int NR, typename Func>
-__dpct_inline__ void sycl_parallel_for(sycl::queue * q, sycl::nd_range<NR> nd_range, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::nd_launch(*q, nd_range, func);
-#else
-    q->parallel_for(nd_range, func);
-#endif
-}
-
-template <typename Func> __dpct_inline__ void sycl_launch(sycl::queue * stream, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::submit(*stream, func);
-#else
-    stream->submit(func);
 #endif
 }
 
@@ -306,6 +276,26 @@ namespace dpct
         };
 
     } // namespace detail
+
+    // COPY from DPCT head files
+    /// dim3 is used to store 3 component dimensions.
+    class dim3 {
+        public:
+        unsigned x, y, z;
+
+        constexpr dim3(unsigned x = 1, unsigned y = 1, unsigned z = 1)
+            : x(x), y(y), z(z) {}
+
+        dim3(const sycl::id<3> &r) : dim3(r[2], r[1], r[0]) {}
+
+        operator sycl::range<3>() const { return sycl::range<3>(z, y, x); }
+    }; // namespace dim3
+
+    inline dim3 operator*(const dim3 &a, const dim3 &b) {
+    return dim3{a.x * b.x, a.y * b.y, a.z * b.z};
+    }
+    // COPY from DPCT head files
+
 
     /// Pitched 2D/3D memory data.
     class pitched_data

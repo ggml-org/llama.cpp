@@ -18,8 +18,6 @@ if %errorlevel% neq 0 goto ERROR
 ::  for FP32
 cmake -G "Ninja" .. -DLLAMA_CURL=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
 if %errorlevel% neq 0 goto ERROR
-::  build example/main only
-::  make main
 
 ::  build all binary
 cmake --build . -j

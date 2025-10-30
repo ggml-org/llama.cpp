@@ -333,17 +333,17 @@ static void print_params(struct my_llama_hparams * params) {
 }
 
 static void print_tensor_info(const struct ggml_context * ctx) {
-    for (auto t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+    for (auto * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         LOG_INF("%s: Allocating ", __func__);
         int64_t total = 1;
         int i = 0;
         for (; i < ggml_n_dims(t); ++i) {
-            if (i > 0) LOG("x ");
-            LOG("[%" PRId64 "] ", t->ne[i]);
+            if (i > 0) { LOG_INF("x "); }
+            LOG_INF("[%" PRId64 "] ", t->ne[i]);
             total *= t->ne[i];
         }
-        if (i > 1) LOG("= [%" PRId64 "] ", total);
-        LOG("float space for %s\n", ggml_get_name(t));
+        if (i > 1) { LOG_INF("= [%" PRId64 "] ", total); }
+        LOG_INF("float space for %s\n", ggml_get_name(t));
     }
 }
 

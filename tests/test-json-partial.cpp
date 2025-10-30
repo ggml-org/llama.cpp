@@ -58,7 +58,7 @@ static void test_json_healing() {
       for (const auto & input : inputs) {
         common_json out;
         assert_equals(true, common_json_parse(input, "$foo", out));
-        assert_equals<std::string>(expected, out.json.dump());
+        assert_equals<std::string>(expected, out.json.dump(/* indent */ -1, /* indent_char */ ' ', /* ensure_ascii */ true));
         assert_equals<std::string>(expected_marker, out.healing_marker.json_dump_marker);
       }
   };
@@ -227,6 +227,56 @@ static void test_json_healing() {
     },
     R"({"key":"$foo"})",
     R"(:"$foo)"
+  );
+  // Test unicode escape sequences
+  test(
+    {
+      R"({"a":"\u)",
+    },
+    R"({"a":"\u0000$foo"})",
+    R"(0000$foo)"
+  );
+  test(
+    {
+      R"({"a":"\u00)",
+    },
+    R"({"a":"\u0000$foo"})",
+    R"(00$foo)"
+  );
+  test(
+    {
+      R"({"a":"\ud300)",
+    },
+    R"({"a":"\ud300$foo"})",
+    R"($foo)"
+  );
+  test(
+    {
+      R"({"a":"\ud800)",
+    },
+    R"({"a":"\ud800\udc00$foo"})",
+    R"(\udc00$foo)"
+  );
+  test(
+    {
+      R"({"a":"\ud800\)",
+    },
+    R"({"a":"\ud800\udc00$foo"})",
+    R"(udc00$foo)"
+  );
+  test(
+    {
+      R"({"a":"\ud800\u)",
+    },
+    R"({"a":"\ud800\udc00$foo"})",
+    R"(dc00$foo)"
+  );
+  test(
+    {
+      R"({"a":"\ud800\udc00)",
+    },
+    R"({"a":"\ud800\udc00$foo"})",
+    R"($foo)"
   );
 }
 

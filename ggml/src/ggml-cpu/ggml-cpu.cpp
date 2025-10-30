@@ -18,6 +18,10 @@
 #    include "kleidiai/kleidiai.h"
 #endif
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+#    include "spacemit/ime.h"
+#endif
+
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
@@ -35,13 +39,19 @@
 
 // ggml-backend interface
 
-std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type() {
+std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_types() {
     static std::vector<ggml_backend_buffer_type_t> bufts = []() {
         std::vector<ggml_backend_buffer_type_t> bufts;
 
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
         if (ggml_backend_amx_buffer_type()) {
             bufts.push_back(ggml_backend_amx_buffer_type());
+        }
+#endif
+
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+        if (ggml_backend_cpu_riscv64_spacemit_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_riscv64_spacemit_buffer_type());
         }
 #endif
 
@@ -57,8 +67,6 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
         }
 #endif
 
-        bufts.push_back(NULL);
-
         return bufts;
     }();
 
@@ -66,14 +74,20 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
 }
 
 static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_type(ggml_backend_dev_t device) {
-    return ggml_backend_cpu_get_extra_buffers_type().data();
+    static std::vector<ggml_backend_buffer_type_t> extra_bufts = [] {
+        std::vector<ggml_backend_buffer_type_t> bufts = ggml_backend_cpu_get_extra_buffer_types();
+        bufts.push_back(nullptr);
+        return bufts;
+    }();
+
+    return extra_bufts.data();
 
     GGML_UNUSED(device);
 }
 
 static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buft) {
-    for (auto * extra : ggml_backend_cpu_get_extra_buffers_type()) {
-        if (extra && extra == buft) {
+    for (auto * extra : ggml_backend_cpu_get_extra_buffer_types()) {
+        if (extra == buft) {
             return true;
         }
     }
@@ -186,6 +200,7 @@ static const struct ggml_backend_i ggml_backend_cpu_i = {
     /* .graph_compute           = */ ggml_backend_cpu_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_cpu_guid(void) {
@@ -210,10 +225,10 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback_data = NULL;
 
     ggml_backend_t cpu_backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_cpu_guid(),
-        /* .interface = */ ggml_backend_cpu_i,
-        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context   = */ ctx,
+        /* .guid    = */ ggml_backend_cpu_guid(),
+        /* .iface   = */ ggml_backend_cpu_i,
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
+        /* .context = */ ctx,
     };
 
     if (cpu_backend == NULL) {
@@ -344,8 +359,10 @@ static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * 
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
     *total = pages * page_size;
+
+    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
     *free = *total;
-#endif
+#endif // _WIN32
 
     GGML_UNUSED(dev);
 }
@@ -397,20 +414,13 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         return true;
     }
 
-    // extra_buffer_op?
-    for (auto extra : ggml_backend_cpu_get_extra_buffers_type()) {
-        if (extra) {
-            auto buf_extra = (ggml::cpu::extra_buffer_type*) extra->context;
-            if (buf_extra && buf_extra->supports_op(dev, op)) {
-                return true;
-            }
-        }
-    }
-
-    // the other case need host buffer.
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (op->src[i] && op->src[i]->buffer && !ggml_backend_buft_is_host(op->src[i]->buffer->buft)) {
-            return false;
+    // check extra buffer types
+    // note: only the first sources are checked for extra buffer types to reduce overhead, increase if necessary
+    for (int i = 0; i < 4; i++) {
+        if (op->src[i] && op->src[i]->buffer &&
+            ggml_backend_cpu_is_extra_buffer_type(op->src[i]->buffer->buft)) {
+            auto * buf_extra = (ggml::cpu::extra_buffer_type *) op->src[i]->buffer->buft->context;
+            return buf_extra->supports_op(dev, op);
         }
     }
 
@@ -578,9 +588,6 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         }
         if (ggml_cpu_has_vxe()) {
             features.push_back({ "VXE", "1" });
-        }
-        if (ggml_cpu_has_nnpa()) {
-            features.push_back({ "NNPA", "1" });
         }
         if (ggml_cpu_has_wasm_simd()) {
             features.push_back({ "WASM_SIMD", "1" });

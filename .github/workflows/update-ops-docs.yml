@@ -1,0 +1,42 @@
+name: Update Operations Documentation
+
+on:
+    push:
+        paths:
+            - 'docs/ops.md'
+            - 'docs/ops/**'
+            - 'scripts/create_ops_docs.py'
+    pull_request:
+        paths:
+            - 'docs/ops.md'
+            - 'docs/ops/**'
+            - 'scripts/create_ops_docs.py'
+
+jobs:
+    update-ops-docs:
+        runs-on: ubuntu-latest
+
+        steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Set up Python
+          uses: actions/setup-python@v5
+          with:
+              python-version: '3.x'
+
+        - name: Generate operations documentation to temporary file
+          run: |
+              mkdir -p /tmp/ops_check
+              ./scripts/create_ops_docs.py /tmp/ops_check/ops.md
+
+        - name: Check if docs/ops.md matches generated version
+          run: |
+              if ! diff -q docs/ops.md /tmp/ops_check/ops.md; then
+                  echo "Operations documentation (docs/ops.md) is not up to date with the backend CSV files."
+                  echo "To fix: run ./scripts/create_ops_docs.py and commit the updated docs/ops.md along with your changes"
+                  echo "Differences found:"
+                  diff docs/ops.md /tmp/ops_check/ops.md || true
+                  exit 1
+              fi
+              echo "Operations documentation is up to date."

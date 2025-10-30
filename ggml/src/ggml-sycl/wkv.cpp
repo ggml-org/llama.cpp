@@ -207,11 +207,12 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Submit kernel
     if (C / H == WKV_BLOCK_SIZE) {
-        sycl_launch(stream, [&](sycl::handler & cgh) {
+        stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            sycl_parallel_for(
-                cgh, sycl::nd_range<3>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv6_f32_kernel<WKV_BLOCK_SIZE>(
                         B, T, C, H, k_d, v_d, r_d, tf_d, td_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
@@ -219,11 +220,12 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 });
         });
     } else {
-        sycl_launch(stream, [&](sycl::handler & cgh) {
+        stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            sycl_parallel_for(
-                cgh, sycl::nd_range<3>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv6_f32_kernel<WKV_BLOCK_SIZE * 2>(
                         B, T, C, H, k_d, v_d, r_d, tf_d, td_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
@@ -262,11 +264,12 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Submit kernel
     if (C / H == WKV_BLOCK_SIZE) {
-        sycl_launch(stream, [&](sycl::handler & cgh) {
+        stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            sycl_parallel_for(
-                cgh, sycl::nd_range<3>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE>(
                         B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
@@ -274,11 +277,12 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 });
         });
     } else {
-        sycl_launch(stream, [&](sycl::handler & cgh) {
+        stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
-            sycl_parallel_for(
-                cgh, sycl::nd_range<3>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE * 2>(
                         B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()

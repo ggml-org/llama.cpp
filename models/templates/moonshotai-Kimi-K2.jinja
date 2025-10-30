@@ -1,0 +1,43 @@
+{%- if tools -%}
+  <|im_system|>tool_declare<|im_middle|>{{ tools | tojson }}<|im_end|>
+{%- endif -%}
+{%- for message in messages -%}
+  {%- if loop.first and messages[0]['role'] != 'system' -%}
+    <|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|>
+  {%- endif -%}
+  {%- if message['role'] == 'system' -%}
+    <|im_system|>system<|im_middle|>
+  {%- elif message['role'] == 'user' -%}
+    <|im_user|>user<|im_middle|>
+  {%- elif message['role'] == 'assistant' -%}
+    <|im_assistant|>assistant<|im_middle|>
+  {%- elif message['role'] == 'tool' -%}
+    <|im_system|>tool<|im_middle|>
+  {%- endif -%}
+  {%- if message['role'] == 'assistant' and message.get('tool_calls') -%}
+    {%- if message['content'] -%}{{ message['content'] }}{%- endif -%}
+    <|tool_calls_section_begin|>
+    {%- for tool_call in message['tool_calls'] -%}
+      {%- set func_name = tool_call['function']['name'] -%}
+      {%- set formatted_id = 'functions.' + func_name + ':' + loop.index0|string -%}
+      <|tool_call_begin|>{{ formatted_id }}<|tool_call_argument_begin|>{{ tool_call['function']['arguments'] | tojson}}<|tool_call_end|>
+    {%- endfor -%}
+    <|tool_calls_section_end|>
+  {%- elif message['role'] == 'tool' -%}
+    ## Return of {{ message.tool_call_id }}\n{{ message['content'] }}
+  {%- elif message['content'] is string -%}
+    {{ message['content'] }}
+  {%- elif message['content'] is not none -%}
+    {% for content in message['content'] -%}
+      {% if content['type'] == 'image' or 'image' in content or 'image_url' in content -%}
+        <|media_start|>image<|media_content|><|media_pad|><|media_end|>
+      {% else -%}
+        {{ content['text'] }}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  <|im_end|>
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  <|im_assistant|>assistant<|im_middle|>
+{%- endif -%}

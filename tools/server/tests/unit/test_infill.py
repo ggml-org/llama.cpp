@@ -3,7 +3,7 @@ from utils import *
 
 server = ServerPreset.tinyllama_infill()
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama_infill()

@@ -13,7 +13,8 @@ class TensorNameMap:
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
-            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2 granite-hybrid
+            "embed_tokens",                              # embeddinggemma
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "language_model.embedding.word_embeddings",  # persimmon
@@ -32,6 +33,8 @@ class TensorNameMap:
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
+            "model.transformer.wte",                     # llada
+            "embed_tokens",                              # qwen3-embedding
         ),
 
         # Token type embeddings
@@ -50,6 +53,7 @@ class TensorNameMap:
             "model.pre_ln",               # rwkv7
             "model.layers.0.pre_norm",    # rwkv7
             "backbone.norm",              # wavtokenizer
+            "model.embedding_norm",       # lfm2
         ),
 
         # Position embeddings
@@ -62,7 +66,7 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
-            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe plamo2
             "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
@@ -70,13 +74,19 @@ class TensorNameMap:
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
             "lm_head",                   # llama4
+            "model.transformer.ff_out",  # llada
         ),
-
+        MODEL_TENSOR.DENSE_2_OUT: (
+            "dense_2_out",  # embeddinggemma
+        ),
+        MODEL_TENSOR.DENSE_3_OUT: (
+            "dense_3_out",  # embeddinggemma
+        ),
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
-            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe
+            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe plamo2
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
             "ln_f",                                    # refact bloom qwen gpt2
@@ -93,6 +103,8 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
+            "model.transformer.ln_f",                  # llada
+            "model.norm",                              # cogvlm
         ),
 
         # Rope frequencies
@@ -118,24 +130,31 @@ class TensorNameMap:
             "transformer.h.{bid}.input_layernorm",                  # falcon7b
             "h.{bid}.input_layernorm",                              # bloom
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
-            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe granite-hybrid
             "layers.{bid}.attention_norm",                          # llama-pth
             "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
             "model.layers.{bid}.ln1",                               # yi
             "h.{bid}.ln_1",                                         # gpt2
             "transformer.h.{bid}.ln",                               # phi2
             "model.layers.layers.{bid}.norm",                       # plamo
+            "model.layers.layers.{bid}.pre_mixer_norm",             # plamo2
             "model.layers.{bid}.attention_norm",                    # internlm2
             "model.layers.{bid}.norm",                              # mamba-qbert
             "backbone.layers.{bid}.norm",                           # mamba
             "transformer.decoder_layer.{bid}.rms_norm",             # Grok
+            "model.layers.{bid}.pre_attn_norm",                     # grok-2
             "transformer.blocks.{bid}.norm_attn_norm.norm_1",       # dbrx
             "encoder.layers.{bid}.input_layernorm",                 # chatglm
             "transformer.layers.{bid}.attn_norm",                   # openelm
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
+            "layers.{bid}.input_layernorm",                         # embeddinggemma
             "transformer_encoder.{bid}.attention_norm",             # neobert
+            "model.layers.{bid}.operator_norm",                     # lfm2
+            "model.transformer.blocks.{bid}.attn_norm",             # llada
+            "layers.{bid}.input_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.attention_layernorm"                # apertus
         ),
 
         # Attention norm 2
@@ -144,6 +163,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.layer_norm_1",             # jina-v2-code
             "rwkv.blocks.{bid}.ln2",                        # rwkv6
             "model.layers.{bid}.ln2",                       # rwkv7
+            "model.layers.{bid}.post_attention_layernorm",  # cogvlm
         ),
 
         # Attention query-key-value
@@ -156,19 +176,23 @@ class TensorNameMap:
             "h.{bid}.self_attention.query_key_value",                              # bloom
             "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
+            "model.layers.{bid}.attention.query_key_value",                        # bailingmoe2
             "h.{bid}.attn.c_attn",                                                 # gpt2
             "transformer.h.{bid}.mixer.Wqkv",                                      # phi2
             "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
             "encoder.layers.{bid}.mixer.Wqkv",                                     # jina
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
+            "model.layers.layers.{bid}.mixer.qkv_proj",                            # plamo2
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
+            "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
         ),
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
+            "layers.{bid}.self_attn.q_proj",                             # embeddinggemma
             "model.layers.{bid}.self_attn.q_proj_no_perm",               # llama-custom
             "layers.{bid}.attention.wq",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.query",                  # bert
@@ -179,11 +203,15 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "model.transformer.blocks.{bid}.q_proj",                     # llada
+            "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
         ),
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
+            "layers.{bid}.self_attn.k_proj",                           # embeddinggemma
             "model.layers.{bid}.self_attn.k_proj_no_perm",             # llama-custom
             "layers.{bid}.attention.wk",                               # llama-pth
             "encoder.layer.{bid}.attention.self.key",                  # bert
@@ -195,11 +223,15 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "model.transformer.blocks.{bid}.k_proj",                   # llada
+            "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
+            "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
         ),
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
+            "layers.{bid}.self_attn.v_proj",                             # embeddinggemma
             "layers.{bid}.attention.wv",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.value",                  # bert
             "transformer.layer.{bid}.attention.v_lin",                   # distillbert
@@ -210,6 +242,9 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
+            "model.transformer.blocks.{bid}.v_proj",                     # llada
+            "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
         ),
 
         # Attention output
@@ -220,6 +255,8 @@ class TensorNameMap:
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
+            "layers.{bid}.self_attn.o_proj",                                # embeddinggemma
+            "model.layers.{bid}.self_attn.out_proj",                        # lfm2
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
@@ -227,9 +264,11 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
             "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
             "model.layers.{bid}.self_attn.dense",                           # persimmon
+            "model.layers.{bid}.attention.dense",                           # bailingmoe2
             "h.{bid}.attn.c_proj",                                          # gpt2
             "transformer.h.{bid}.mixer.out_proj",                           # phi2
             "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
+            "model.layers.layers.{bid}.mixer.o_proj",                       # plamo2
             "model.layers.{bid}.attention.wo",                              # internlm2
             "encoder.layers.{bid}.attn.out_proj",                           # nomic-bert
             "encoder.layers.{bid}.mixer.out_proj",                          # jina
@@ -240,6 +279,10 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
             "transformer_encoder.{bid}.wo",                                 # neobert
+            "model.transformer.blocks.{bid}.attn_out",                      # llada
+            "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
+            "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
+            "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
         ),
 
         # Attention output norm
@@ -248,12 +291,15 @@ class TensorNameMap:
             "transformer.layer.{bid}.sa_layer_norm",           # distillbert
             "encoder.layers.{bid}.norm1",                      # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
+            "model.layers.{bid}.post_attn_norm",               # grok-2
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
-            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
+            "model.layers.{bid}.post_attention_layernorm",       # gemma2 olmo2    # ge
+            "layers.{bid}.post_attention_layernorm",             # embeddinggemma
+            "model.layers.{bid}.post_self_attn_layernorm",       # glm-4-0414
+            "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
         ),
 
         # Rotary embeddings
@@ -262,6 +308,10 @@ class TensorNameMap:
             "layers.{bid}.attention.inner_attention.rope.freqs",       # llama-pth
             "model.layers.layers.{bid}.self_attn.rotary_emb.inv_freq", # plamo
             "transformer.h.{bid}.attn.rotary_emb.inv_freq",            # codeshell
+        ),
+
+        MODEL_TENSOR.ATTN_SINKS: (
+            "model.layers.{bid}.self_attn.sinks", # openai-moe
         ),
 
         # Feed-forward norm
@@ -277,21 +327,34 @@ class TensorNameMap:
             "h.{bid}.ln_2",                                                  # gpt2
             "model.layers.{bid}.ffn_norm",                                   # internlm2
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
+            "model.layers.{bid}.pre_moe_norm",                               # grok-2
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
+            "model.layers.{bid}.pre_ff_layernorm",                           # jamba granite-hybrid
+            "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
+            "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
+            "model.transformer.blocks.{bid}.ff_norm",                        # llada
+            "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
+            "model.layers.{bid}.feedforward_layernorm",                      # apertus
         ),
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
+            "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma
+            "model.layers.{bid}.pre_ff_layernorm.weight",
         ),
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
-            "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
-            "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
+            "model.layers.{bid}.post_feedforward_layernorm",  # gemma2 olmo2
+            "layers.{bid}.post_feedforward_layernorm",        # embeddinggemma
+            "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
+            "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
+            "model.layers.{bid}.feed_forward.up_proj",
+            "model.layers.{bid}.post_moe_norm",               # grok-2
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -301,8 +364,12 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
-            "model.layers.{bid}.feed_forward.router",           # llama4
+            "model.layers.{bid}.feed_forward.router",           # llama4 jamba
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
+            "model.layers.{bid}.mlp.router",                    # openai-moe
+            "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
+            "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
+            "model.layers.{bid}.feed_forward.gate",               # lfm2moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -310,7 +377,10 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
-            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
+            "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
+            "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
         ),
 
         # Feed-forward up
@@ -321,6 +391,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.dense_h_to_4h",                  # falcon
             "h.{bid}.mlp.dense_h_to_4h",                              # bloom
             "model.layers.{bid}.mlp.up_proj",                         # llama-hf refact nemotron olmo2
+            "layers.{bid}.mlp.up_proj",                               # embeddinggemma
             "layers.{bid}.feed_forward.w3",                           # llama-pth
             "encoder.layer.{bid}.intermediate.dense",                 # bert
             "transformer.layer.{bid}.ffn.lin1",                       # distillbert
@@ -334,6 +405,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.fc1",                             # phi2
             "model.layers.{bid}.mlp.gate_up_proj",                    # phi3 glm-4-0414
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
+            "model.layers.layers.{bid}.mlp.gate_up_proj",             # plamo2
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
             "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe
@@ -344,24 +416,36 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
-            "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
+            "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
+            "model.transformer.blocks.{bid}.up_proj",                 # llada
+            "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
+            "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
+            "model.layers.{bid}.mlp.language_mlp.up_proj",            # cogvlm
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
-            "layers.{bid}.feed_forward.experts.w3",           # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_v",   # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.v1",    # dbrx
-            "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.up_proj", # llama4
-            "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
+            "layers.{bid}.feed_forward.experts.w3",                 # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_v",         # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.v1",          # dbrx
+            "model.layers.{bid}.mlp.experts.up_proj",               # qwen2moe olmoe (merged) ernie4.5-moe
+            "model.layers.{bid}.block_sparse_moe.experts.w3",       # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.up_proj",      # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
+            "model.layers.{bid}.block_sparse_moe.experts.up", # smallthinker
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.up_proj",          # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
+            "model.layers.{bid}.feed_forward.down_proj",
+            "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_UP_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.up_proj",           # grovemoe
         ),
 
         # AWQ-activation gate
@@ -371,33 +455,43 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
-            "model.layers.{bid}.mlp.gate_proj",           # llama-hf refact olmo2
-            "layers.{bid}.feed_forward.w1",               # llama-pth
-            "transformer.h.{bid}.mlp.w2",                 # qwen
-            "transformer.h.{bid}.mlp.c_fc2",              # jais
-            "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
-            "model.layers.{bid}.feed_forward.w1",         # internlm2
-            "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
-            "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
-            "transformer.h.{bid}.mlp.linear_1",           # refact
-            "model.layers.{bid}.residual_mlp.w1",         # arctic
-            "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",  # llama4
+            "model.layers.{bid}.mlp.gate_proj",               # llama-hf refact olmo2
+            "layers.{bid}.mlp.gate_proj",                     # embeddinggemma
+            "layers.{bid}.feed_forward.w1",                   # llama-pth
+            "transformer.h.{bid}.mlp.w2",                     # qwen
+            "transformer.h.{bid}.mlp.c_fc2",                  # jais
+            "model.layers.layers.{bid}.mlp.gate_proj",        # plamo
+            "model.layers.{bid}.feed_forward.w1",             # internlm2
+            "encoder.layers.{bid}.mlp.fc12",                  # nomic-bert
+            "encoder.layer.{bid}.mlp.gated_layers_w",         # jina-bert-v2 (split up/gate, no longer used)
+            "transformer.h.{bid}.mlp.linear_1",               # refact
+            "model.layers.{bid}.residual_mlp.w1",             # arctic
+            "transformer.h.{bid}.mlp.c_fc_0",                 # exaone
+            "model.layers.{bid}.feed_forward.gate_proj",      # llama4 jamba granite-hybrid
+            "model.transformer.blocks.{bid}.ff_proj",         # llada
+            "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
+            "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
-            "layers.{bid}.feed_forward.experts.w1",              # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear",        # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w1",       # dbrx
-            "model.layers.{bid}.mlp.experts.gate_proj",          # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.experts.w1",    # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.gate_proj", # llama4
+            "layers.{bid}.feed_forward.experts.w1",                     # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear",               # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w1",              # dbrx
+            "model.layers.{bid}.mlp.experts.gate_proj",                 # qwen2moe olmoe (merged) ernie4.5-moe
+            "model.layers.{bid}.block_sparse_moe.experts.w1",           # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.gate_proj",        # llama4
+            "model.layers.{bid}.block_sparse_moe.experts.gate",         # smallthinker
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.gate_proj",          # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.gate_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
+            "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_GATE_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
         # Feed-forward down
@@ -408,6 +502,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.dense_4h_to_h",                  # falcon
             "h.{bid}.mlp.dense_4h_to_h",                              # bloom
             "model.layers.{bid}.mlp.down_proj",                       # llama-hf nemotron olmo2
+            "layers.{bid}.mlp.down_proj",                             # embeddinggemma
             "layers.{bid}.feed_forward.w2",                           # llama-pth
             "encoder.layer.{bid}.output.dense",                       # bert
             "transformer.layer.{bid}.ffn.lin2",                       # distillbert
@@ -427,19 +522,25 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
-            "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
+            "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
+            "model.transformer.blocks.{bid}.ff_out",                  # llada
+            "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
+            "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
+            "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
-            "layers.{bid}.feed_forward.experts.w2",              # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_1",      # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w2",       # dbrx
-            "model.layers.{bid}.mlp.experts.down_proj",          # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
-            "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.down_proj", # llama4
-            "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
+            "layers.{bid}.feed_forward.experts.w2",                 # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_1",         # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w2",          # dbrx
+            "model.layers.{bid}.mlp.experts.down_proj",             # qwen2moe olmoe (merged) ernie4.5-moe
+            "model.layers.{bid}.block_sparse_moe.output_linear",    # granitemoe
+            "model.layers.{bid}.block_sparse_moe.experts.w2",       # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.down_proj",    # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w2",              # nomic-bert-moe
+            "model.layers.{bid}.block_sparse_moe.experts.down",     # smallthinker
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -447,24 +548,41 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_experts.down_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
             "model.layers.{bid}.shared_mlp.output_linear",             # granitemoe
+            "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
+        ),
+
+        MODEL_TENSOR.FFN_DOWN_CHEXP: (
+            "model.layers.{bid}.mlp.chunk_experts.down_proj",           # grovemoe
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.q_layernorm",
             "model.layers.{bid}.self_attn.q_layernorm",                       # persimmon
+            "model.layers.{bid}.self_attn.query_layernorm",                   # hunyuan
+            "model.layers.{bid}.attention.query_layernorm",                   # bailingmoe2
             "model.layers.{bid}.self_attn.q_norm",                            # cohere olmoe chameleon olmo2
+            "layers.{bid}.self_attn.q_norm",                                  # embeddinggemma
             "transformer.blocks.{bid}.attn.q_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.q",                              # plamo2
+            "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.query_layernorm",                   # apertus
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.k_layernorm",
             "model.layers.{bid}.self_attn.k_layernorm",                       # persimmon
+            "model.layers.{bid}.self_attn.key_layernorm",                     # hunyuan
+            "model.layers.{bid}.attention.key_layernorm",                     # bailingmoe2
             "model.layers.{bid}.self_attn.k_norm",                            # cohere olmoe chameleon olmo2
+            "layers.{bid}.self_attn.k_norm",                                  # embeddinggemma
             "transformer.blocks.{bid}.attn.k_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.k",                              # plamo2
+            "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -477,7 +595,8 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm2",                   # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_3",   # Grok
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
-            "encoder.layer.{bid}.layer_norm_2"              # jina-v2-code
+            "encoder.layer.{bid}.layer_norm_2",             # jina-v2-code
+            "model.layers.{bid}.final_layernorm",           # bailingmoe2
         ),
 
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
@@ -545,38 +664,74 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_IN: (
-            "model.layers.{bid}.in_proj",
-            "backbone.layers.{bid}.mixer.in_proj",
+            "model.layers.{bid}.in_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.in_proj",      # mamba
+            "model.layers.{bid}.mamba.in_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.in_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
-            "model.layers.{bid}.conv1d",
-            "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.conv1d",               # mamba-hf
+            "backbone.layers.{bid}.mixer.conv1d",      # mamba
+            "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_X: (
-            "model.layers.{bid}.x_proj",
-            "backbone.layers.{bid}.mixer.x_proj",
+            "model.layers.{bid}.x_proj",                  # mamba-hf
+            "backbone.layers.{bid}.mixer.x_proj",         # mamba
+            "model.layers.{bid}.mamba.x_proj",            # jamba
+            "model.layers.layers.{bid}.mixer.bcdt_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_DT: (
-            "model.layers.{bid}.dt_proj",
-            "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.dt_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.dt_proj",      # mamba
+            "model.layers.{bid}.mamba.dt_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
+            "model.layers.{bid}.mamba.dt_layernorm",  # jamba
         ),
 
         MODEL_TENSOR.SSM_A: (
-            "model.layers.{bid}.A_log",
-            "backbone.layers.{bid}.mixer.A_log",
+            "model.layers.{bid}.A_log",               # mamba-hf
+            "backbone.layers.{bid}.mixer.A_log",      # mamba
+            "model.layers.{bid}.mamba.A_log",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.A_log",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_B_NORM: (
+            "model.layers.{bid}.mamba.b_layernorm",           # jamba
+            "model.layers.{bid}.mamba.B_layernorm",           # mini-jamba
+            "model.layers.layers.{bid}.mixer.B_norm.weight",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_C_NORM: (
+            "model.layers.{bid}.mamba.c_layernorm",           # jamba
+            "model.layers.{bid}.mamba.C_layernorm",           # mini-jamba
+            "model.layers.layers.{bid}.mixer.C_norm.weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_D: (
-            "model.layers.{bid}.D",
-            "backbone.layers.{bid}.mixer.D",
+            "model.layers.{bid}.D",               # mamba-hf
+            "backbone.layers.{bid}.mixer.D",      # mamba
+            "model.layers.{bid}.mamba.D",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.D",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.mamba.norm", # falcon-h1 granite-hybrid
+            "backbone.layers.{bid}.mixer.norm",  # mamba2
         ),
 
         MODEL_TENSOR.SSM_OUT: (
-            "model.layers.{bid}.out_proj",
-            "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.out_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.out_proj",      # mamba
+            "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
@@ -899,6 +1054,26 @@ class TensorNameMap:
             "encoder.block.{bid}.layer.1.DenseReluDense.wo", # t5
         ),
 
+        MODEL_TENSOR.VISEXP_UP: (
+            "model.layers.{bid}.mlp.vision_mlp.up_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_GATE: (
+            "model.layers.{bid}.mlp.vision_mlp.gate_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_DOWN: (
+            "model.layers.{bid}.mlp.vision_mlp.down_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_ATTN_OUT: (
+            "model.layers.{bid}.self_attn.vision_expert_dense",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_ATTN_QKV: (
+            "model.layers.{bid}.self_attn.vision_expert_query_key_value",  # cogvlm
+        ),
+
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
@@ -978,6 +1153,18 @@ class TensorNameMap:
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
         ),
 
+        MODEL_TENSOR.SHORTCONV_CONV: (
+            "model.layers.{bid}.conv.conv",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_INPROJ: (
+            "model.layers.{bid}.conv.in_proj",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_OUTPROJ: (
+            "model.layers.{bid}.conv.out_proj",
+        ),
+
         #############################################################################
         ## Vision encoder
 
@@ -988,6 +1175,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
+            "model.vision.linear_proj.linear_proj", # cogvlm
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
@@ -1002,126 +1190,178 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_EMBD_CLS: (
             "vision_tower.vision_model.embeddings.class_embedding",
+            "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
+            "model.vision.patch_embedding.cls_embedding", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
             "vision_tower.vision_model.embeddings.patch_embedding",
+            "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
-            "vision_tower.patch_conv", # pixtral
+            "vision_tower.patch_conv", # pixtral-hf
+            "vision_encoder.patch_conv", # pixtral
             "vision_model.patch_embedding.linear", # llama 4
             "visual.patch_embed.proj", # qwen2vl
+            "vision_tower.patch_embed.proj", # kimi-vl
+            "model.vision.patch_embedding.proj", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
             "vision_tower.vision_model.embeddings.position_embedding",
+            "model.vision_tower.embeddings.position_embeddings", # Intern-S1
             "vpm.embeddings.position_embedding",
             "model.vision_model.embeddings.position_embedding", # SmolVLM
             "vision_model.positional_embedding_vlm", # llama 4
+            "vision_tower.patch_embed.pos_emb", # kimi-vl
+            "visual.pos_embed", # qwen3vl
+            "model.vision.patch_embedding.position_embedding", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "visual.blocks.{bid}.attn.qkv", # qwen3vl
+            "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
+            "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wq", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
+            "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.q_norm", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.attention.q_norm", # Intern-S1
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "model.vision_tower.encoder.layer.{bid}.attention.k_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wk", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
+            "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.k_norm", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.attention.k_norm", # Intern-S1
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "model.vision_tower.encoder.layer.{bid}.attention.v_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wv", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
+            "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
             "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.layernorm_before", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
-            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention_norm", # pixtral
             "vision_model.model.layers.{bid}.input_layernorm", # llama4
             "visual.blocks.{bid}.norm1", # qwen2vl
+            "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
+            "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
             "visual.blocks.{bid}.attn.proj", # qwen2vl
+            "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
+            "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.layernorm_after", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
             "vision_model.model.layers.{bid}.post_attention_layernorm", # llama4
-            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
+            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.ffn_norm", # pixtral
             "visual.blocks.{bid}.norm2", # qwen2vl
+            "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
+            "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
+            "model.vision_tower.encoder.layer.{bid}.mlp.fc1", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3
-            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w3", # pixtral
             "vision_model.model.layers.{bid}.mlp.fc1", # llama4
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
+            "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
+            "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
+            "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
-            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
+            "model.vision_tower.encoder.layer.{bid}.mlp.fc2", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3
-            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w2", # pixtral
             "vision_model.model.layers.{bid}.mlp.fc2", # llama4
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
+            "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
+            "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
+            "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
+            "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
-            "vision_tower.ln_pre", # pixtral
+            "vision_tower.ln_pre", # pixtral-hf
+            "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
         ),
 
@@ -1130,6 +1370,7 @@ class TensorNameMap:
             "model.vision_model.post_layernorm", # SmolVLM
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
+            "vision_tower.encoder.final_layernorm", # kimi-vl
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1138,6 +1379,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_NORM: (
             "multi_modal_projector.norm",
+            "multi_modal_projector.layer_norm",
+            "multi_modal_projector.pre_norm",
+            "pre_mm_projector_norm",
+            "model.vision.linear_proj.norm1", # cogvlm
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1193,7 +1438,44 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
-            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
+            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
+            "patch_merger.merging_layer", # mistral
+        ),
+
+        MODEL_TENSOR.V_DS_NORM: (
+            "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC1: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc1", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC2: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_MM_POST_FC_NORM: (
+            "model.vision.linear_proj.norm1", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_MM_UP: (
+            "model.vision.linear_proj.dense_h_to_4h", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_MM_DOWN: (
+            "model.vision.linear_proj.dense_4h_to_h", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_MM_GATE: (
+            "model.vision.linear_proj.gate_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_TOK_BOI: (
+            "model.vision.boi", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_TOK_EOI: (
+            "model.vision.eoi", # cogvlm
         ),
 
         # audio (mtmd)
@@ -1265,6 +1547,31 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MM_NORM_MID: (
             "audio.multi_modal_projector.ln_mid", # ultravox
+        ),
+
+        # NextN/MTP tensors for GLM4_MOE
+        MODEL_TENSOR.NEXTN_EH_PROJ: (
+            "model.layers.{bid}.eh_proj",
+        ),
+
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS: (
+            "model.layers.{bid}.embed_tokens",
+        ),
+
+        MODEL_TENSOR.NEXTN_ENORM: (
+            "model.layers.{bid}.enorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM: (
+            "model.layers.{bid}.hnorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
+            "model.layers.{bid}.shared_head.head",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
+            "model.layers.{bid}.shared_head.norm",
         ),
     }
 

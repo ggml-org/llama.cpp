@@ -13,7 +13,7 @@ If there are differences in usage, please refer to the official build [documenta
 
 Clone llama.cpp:
 ```bash
-git clone https://github.com/ggerganov/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 ```
 
@@ -29,8 +29,8 @@ cmake --build build --config Release
 Convert PyTorch model to gguf files (You can also download the converted [gguf](https://huggingface.co/openbmb/MiniCPM-o-2_6-gguf) by us)
 
 ```bash
-python ./tools/mtmd/minicpmv-surgery.py -m ../MiniCPM-o-2_6
-python ./tools/mtmd/minicpmv-convert-image-encoder-to-gguf.py -m ../MiniCPM-o-2_6 --minicpmv-projector ../MiniCPM-o-2_6/minicpmv.projector --output-dir ../MiniCPM-o-2_6/ --image-mean 0.5 0.5 0.5 --image-std 0.5 0.5 0.5 --minicpmv_version 4
+python ./tools/mtmd/legacy-models/minicpmv-surgery.py -m ../MiniCPM-o-2_6
+python ./tools/mtmd/legacy-models/minicpmv-convert-image-encoder-to-gguf.py -m ../MiniCPM-o-2_6 --minicpmv-projector ../MiniCPM-o-2_6/minicpmv.projector --output-dir ../MiniCPM-o-2_6/ --minicpmv_version 4
 python ./convert_hf_to_gguf.py ../MiniCPM-o-2_6/model
 
 # quantize int4 version

@@ -56,6 +56,7 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    http.h
     json-partial.cpp
     json-partial.h
     json-schema-to-grammar.cpp
@@ -86,9 +87,44 @@ if (LLAMA_CURL)
     endif()
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
-    find_library(CURL_LIBRARY curl REQUIRED)
-    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARY})
-endif ()
+    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
+endif()
+
+if (LLAMA_OPENSSL)
+    find_package(OpenSSL)
+    if (OpenSSL_FOUND)
+        include(CheckCSourceCompiles)
+        set(SAVED_CMAKE_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
+        set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
+        check_c_source_compiles("
+        #include <openssl/opensslv.h>
+        #if defined(OPENSSL_IS_BORINGSSL) || defined(LIBRESSL_VERSION_NUMBER)
+        #    if OPENSSL_VERSION_NUMBER < 0x1010107f
+        #        error bad version
+        #    endif
+        #else
+        #    if OPENSSL_VERSION_NUMBER < 0x30000000L
+        #        error bad version
+        #    endif
+        #endif
+        int main() { return 0; }
+        " OPENSSL_VERSION_SUPPORTED)
+        set(CMAKE_REQUIRED_INCLUDES ${SAVED_CMAKE_REQUIRED_INCLUDES})
+        if (OPENSSL_VERSION_SUPPORTED)
+            message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
+            target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+            target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+            if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+                target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+                find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+                find_library(SECURITY_FRAMEWORK Security REQUIRED)
+                target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
+            endif()
+        endif()
+    else()
+        message(STATUS "OpenSSL not found, SSL support disabled")
+    endif()
+endif()
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)
@@ -112,13 +148,13 @@ if (LLAMA_LLGUIDANCE)
 
     ExternalProject_Add(llguidance_ext
         GIT_REPOSITORY https://github.com/guidance-ai/llguidance
-        # v0.7.20 (+ fix to build on GCC 15):
-        GIT_TAG b5b8b64dba11c4e4ee6b1d1450d3a3ae279891e8
+        # v1.0.1:
+        GIT_TAG d795912fedc7d393de740177ea9ea761e7905774
         PREFIX ${CMAKE_BINARY_DIR}/llguidance
         SOURCE_DIR ${LLGUIDANCE_SRC}
         BUILD_IN_SOURCE TRUE
         CONFIGURE_COMMAND ""
-        BUILD_COMMAND cargo build --release
+        BUILD_COMMAND cargo build --release --package llguidance
         INSTALL_COMMAND ""
         BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
         UPDATE_COMMAND ""
