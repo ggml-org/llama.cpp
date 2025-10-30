@@ -239,49 +239,6 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     return gf;
 }
 
-struct ggml_cgraph * build_graph_2(const test_model& model) {
-    static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
-    static std::vector<uint8_t> buf(buf_size);
-
-    struct ggml_init_params params0 = {
-        /*.mem_size   =*/ buf_size,
-        /*.mem_buffer =*/ buf.data(),
-        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_gallocr_alloc_graph()
-    };
-
-    // create a temporally context to build the graph
-    struct ggml_context * ctx0 = ggml_init(params0);
-
-    struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
-
-    int s0 = 1;
-    int s1 = 1;
-    int p0 = 1;
-    int p1 = 1;
-    int d0 = 1;
-    int d1 = 1;
-
-
-    // recalculate for avoid fragmentation
-    // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    // ggml_set_name(conv2d_res, "conv2d_res");
-    // ggml_build_forward_expand(gf, conv2d_res);
-    // int64_t *ne = conv2d_res->ne;
-    // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
-
-
-    struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    // struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    ggml_set_name(wino_res, "wino_res");
-    ggml_build_forward_expand(gf, wino_res);
-    // ne = wino_res->ne;
-    // printf("wino: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
-    ggml_free(ctx0);
-    return gf;
-}
-
-
-
 
 std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr,
             build_graph_t build_graph, int iters, double *t) {
@@ -352,10 +309,10 @@ int main(void)
         // std::make_tuple(640,640,52,76,3,3),
         // std::make_tuple(640,640,104,152,3,3),
         // std::make_tuple(960,320,104,152,3,3),
-        // std::make_tuple(1280,1280,26,38,3,3),
+        std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1280,1280,26,38,1,1),
         // std::make_tuple(256,128,768,1024,3,3),
-        std::make_tuple(128,3,768,1024,3,3),
+        // std::make_tuple(128,3,768,1024,3,3),
         // std::make_tuple(256,128,768,1024,1,1),
         // std::make_tuple(512,256,384,512,1,1),
         // std::make_tuple(1280,640,52,76,3,3),
@@ -389,7 +346,7 @@ int main(void)
        
 
         struct ggml_cgraph * gf_res_0 = NULL;    
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -418,51 +375,31 @@ int main(void)
 
         ggml_gallocr_free(allocr);
 
-        allocr = NULL;
-
-        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-
-        //create the worst case graph for memory usage estimation
-        gf = build_graph_2(model);
-
-        // compute the required memory
-        ggml_gallocr_reserve(allocr, gf);
-        size_t mem_size2 = ggml_gallocr_get_buffer_size(allocr, 0);
-            // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
-
-
-        struct ggml_cgraph * gf_res_2 = NULL;
-
-        double run_time2;
-        std::vector<float> wino_data = compute_graph(model, allocr, build_graph_2, iterations, &run_time2);
-
-
         if(k==0) { 
             k = 1;
-            fprintf(stderr, "| (IC, OC, IW, IH) | im2col+GEMM TIME | im2col+GEMM VRAM | direct TIME |  direct VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
-            fprintf(stderr, "| --- | --- | --- |  --- | --- | --- | --- \n");
+            fprintf(stderr, "| (IC, OC, IW, IH) | im2col+GEMM TIME | im2col+GEMM VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
+            fprintf(stderr, "| --- | --- | --- | --- | --- \n");
         }
 
-        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
+        fprintf(stderr, " | (%d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
                 std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), std::get<4>(c), std::get<5>(c),
                 run_time0, mem_size0/1024.0f/1024.0f,
-                run_time1, mem_size1/1024.0f/1024.0f,
-                run_time2, mem_size2/1024.0f/1024.0f);
+                run_time1, mem_size1/1024.0f/1024.0f
+                );
 
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        // for(int i = 0; i < conv2d_data.size(); i++) {
-        //     // float diff = fabs(conv2d_data[i] - wino_data[i]);
-        //     float diff = fabs(im2col_data[i] - wino_data[i]);
-        //     float diff1 = fabs(im2col_data[i] - conv2d_data[i]);
-        //     // if(diff > 0.5) {
-        //           printf("(%7.3f, %7.3f, %7.3f, %.2f, %.2f, %d) \n",
-        //           im2col_data[i], conv2d_data[i],
-        //           wino_data[i], diff, diff1, i);
-        //         // break;
-        //     // }
-        // }
+        for(int i = 0; i < conv2d_data.size(); i++) {
+            // float diff = fabs(conv2d_data[i] - wino_data[i]);            
+            float diff = fabs(im2col_data[i] - conv2d_data[i]);
+            // if(diff > 0.5) {
+                  printf("(%7.3f, %7.3f, %.2f, %d) \n",
+                  im2col_data[i], conv2d_data[i],
+                  diff, i);
+                // break;
+            // }
+        }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

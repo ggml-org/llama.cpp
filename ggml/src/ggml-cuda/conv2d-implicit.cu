@@ -7,6 +7,9 @@
 
 typedef unsigned int uint;
 constexpr uint WARPSIZE = 32;
+#define CUDA_NCHW_2_NHWC_TILE_DIM 32
+#define CUDA_NCHW_2_NHWC_BLOCK_NM 8
+#define CUDA_NCHW_2_NHWC_BLOCK_ROWS 8
 
 
 //currently not use; in future for split-k kernels
@@ -23,6 +26,41 @@ static __global__ void reduce_f32(const float * __restrict__ x, float * __restri
     }
 }
 
+template <typename src_T, typename dst_T>
+static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, const int ne00, const int ne01){
+
+    const int64_t nmat = ne / (ne00 * ne01);
+    const int64_t n = ne00 * ne01;
+
+    int x  = blockIdx.x * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.x;
+    int y  = blockIdx.y * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.y;
+    int tx = blockIdx.y * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.x;  // transpose block offset
+    int ty = blockIdx.x * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.y;
+
+    __shared__ src_T tile[CUDA_NCHW_2_NHWC_TILE_DIM][CUDA_NCHW_2_NHWC_TILE_DIM];
+
+    for(int i = 0; i < CUDA_NCHW_2_NHWC_BLOCK_NM; ++i){
+
+        const unsigned int imat = blockIdx.z * CUDA_NCHW_2_NHWC_BLOCK_NM + i;
+        if(imat >= nmat)
+            break;
+        for (int j = 0; j < CUDA_NCHW_2_NHWC_TILE_DIM; j += CUDA_NCHW_2_NHWC_BLOCK_ROWS){
+            if(x < ne01 && y + j < ne00){
+                const int row = threadIdx.y+j;
+                const int col = threadIdx.x ^ row;
+                tile[row][col] = src[imat*n + (y+j)*ne01 + x];
+            }
+        }
+        __syncthreads();
+
+        for (int j = 0; j < CUDA_NCHW_2_NHWC_TILE_DIM; j += CUDA_NCHW_2_NHWC_BLOCK_ROWS){
+            if(ty + j < ne01 && tx < ne00){
+                const int col = (threadIdx.y+j) ^ threadIdx.x;
+                dst[imat*n + (ty+j)*ne00 + tx] = ggml_cuda_cast<dst_T>(tile[threadIdx.x][col]);
+            }
+        }
+    }
+}
 
 template<typename T, const int BM, const int BN, const int BK, const int WM, const int WN,
           const int WNITER, const int TM, const int TN, const int NUM_THREADS,
@@ -882,26 +920,40 @@ static void conv2d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
     int threadz = 1;   // threadz number per block
     dim3 thblock(NUM_THREADS, thready, threadz);
     dim3 grid(blockx, blocky, blockz);
-    if(P.c % 4 == 0){
-        if(P.layout == 0)
-            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
-                WNITER, TM, TN, NUM_THREADS, 0, true, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
-        else if(P.layout == 1)
-            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
-                WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
-    } else{
-        if(P.layout == 0)
-            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
-                WNITER, TM, TN, NUM_THREADS, 0, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
-        else if(P.layout == 1)
-            conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
-                WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
-    }
+ 
+    conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+          WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
 }
 
 static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
 
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && P.layout == 0 && P.c % 8 == 0) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
+
+        int id = ggml_cuda_get_device();
+
+        int64_t ne = P.c * P.h * P.w * P.n;
+        int64_t ne00 = P.c;
+        int64_t ne01 = P.h * P.w;
+        ggml_cuda_pool_alloc<half> input_f16(ctx.pool(id), ne);
+
+        dim3 dimGrid( (ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
+        dim3 dimBlock(CUDA_NCHW_2_NHWC_TILE_DIM,CUDA_NCHW_2_NHWC_BLOCK_ROWS, 1);
+        NCHW2NHWC<float, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
+
+        ne = P.c * P.r * P.s * P.k;
+        ne01 = P.r * P.s;
+        ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
+        dim3 dimGrid1((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
+        NCHW2NHWC<half, half><<<dimGrid1, dimBlock, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+
+        const half *X_H = input_f16.get();
+        const half *K_H = kernel_f16.get();
+        ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
+
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
         constexpr unsigned int BK_dim = 32;
@@ -925,19 +977,9 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
 
-        int id = ggml_cuda_get_device();
-        ggml_cuda_pool_alloc<half> x_f16(ctx.pool(id));
-
-        const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(GGML_TYPE_F32);
-        GGML_ASSERT(to_fp16_cuda != nullptr);
-        size_t ne = P.c * P.h * P.w * P.n;
-        x_f16.alloc(ne);
-        to_fp16_cuda(X_D, x_f16.get(), ne, st);
-        const half *X_H = x_f16.get();
-        ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
         conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim,
             WM_dim, WN_dim, WK_dim, NumThreads>
-            <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_D, Y_H.get(), P);
+            <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
         to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow * P.n, st);
     } else{
@@ -971,28 +1013,28 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int       PD_Y = p[3];  // padding_y
     const int       DL_X = p[4];  // dilation_x
     const int       DL_Y = p[5];  // dilation_y
-    const int       LT   = p[6];  // layout
+    // const int       LT   = p[6];  // layout
 
-    GGML_ASSERT(LT == 0 || LT == 1);
+    // GGML_ASSERT(LT == 0 || LT == 1);
 
     // same number of input channels
-    GGML_ASSERT(LT == 0 ? input->ne[0] == kernel->ne[0] : input->ne[2] == kernel->ne[2]);
+    // GGML_ASSERT(LT == 0 ? input->ne[0] == kernel->ne[0] : input->ne[2] == kernel->ne[2]);
     // No cwhn
-    GGML_ASSERT(p[7] == false);
+    GGML_ASSERT(p[6] == false);
 
-    const int IW = input->ne[LT == 0 ? 1 : 0];   // input_w
-    const int IH = input->ne[LT == 0 ? 2 : 1];   // input_h
+    const int IW = input->ne[0];   // input_w
+    const int IH = input->ne[1];   // input_h
     const int OW = dst->ne[0];     // output_w
     const int OH = dst->ne[1];     // output_h
-    const int KW = kernel->ne[LT == 0 ? 1 : 0];  // kernel_w
-    const int KH = kernel->ne[LT == 0 ? 2 : 1];  // kernel_h
-    const int IC = input->ne[LT == 0 ? 0: 2];   // input_channels
+    const int KW = kernel->ne[0];  // kernel_w
+    const int KH = kernel->ne[1];  // kernel_h
+    const int IC = input->ne[2];   // input_channels
 
     const int OC = kernel->ne[3];  // ouptut_chanles
     const int B  = input->ne[3];   // n_batches
-    
+
     const int64_t total  = B * OC * OH * OW;
-    
+
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW };
     params.SC_fastdiv = init_fastdiv_values(KW*IC);
     params.OW_fastdiv = init_fastdiv_values(OW);
@@ -1000,7 +1042,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     params.C_fastdiv = init_fastdiv_values(IC);
     params.RS_fastdiv = init_fastdiv_values(KW*KH);
     params.S_fastdiv = init_fastdiv_values(KW);
-    params.layout = LT;
+    // params.layout = LT;
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_implicit_cuda_f16(ctx, X_D, (half *) K_D, Y_D, cc, params, st);

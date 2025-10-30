@@ -4191,94 +4191,6 @@ struct test_conv_2d : public test_case {
     }
 };
 
-// CONV_2D_IMPLICIT
-struct test_conv_2d_implicit : public test_case {
-    const std::array<int64_t, 4> ne_input;
-    const std::array<int64_t, 4> ne_kernel;
-    const ggml_type              type_kernel;
-    const int                    stride0;
-    const int                    stride1;
-    const int                    padding0;
-    const int                    padding1;
-    const int                    dilation0;
-    const int                    dilation1;
-    // Whether the inputs are contiguous in the channel dim or the width dim
-    const bool                   cwhn;
-
-    
-
-    std::string vars() override {
-        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
-    }
-
-    double max_nmse_err() override {
-        return 5e-4;
-    }
-
-    uint64_t op_flops(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        // Just counting matmul costs:
-        // KxCRS @ CRSxNPQ = KxNPQ --> KxNPQx(CRS+CRS-1) flops
-
-        // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
-        auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
-            return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
-        };
-
-        int64_t W    = ne_input[0];
-        int64_t H    = ne_input[1];
-        int64_t KW   = ne_kernel[0];
-        int64_t KH   = ne_kernel[1];
-        int64_t Cin  = ne_kernel[2];
-        int64_t Cout = ne_kernel[3];
-        int64_t N    = ne_input[3];
-        int64_t OH   = calc_conv_output_size(H, KH, stride0, padding0, dilation0);
-        int64_t OW   = calc_conv_output_size(W, KW, stride0, padding0, dilation0);
-
-        int64_t K   = Cout;
-        int64_t CRS = Cin * KH * KW;
-        int64_t NPQ = N * OH * OW;
-
-        return K * NPQ * (2 * CRS - 1);
-    }
-
-    test_conv_2d_implicit(std::array<int64_t, 4> ne_input  = { 64, 64, 16, 1 },
-                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, ggml_type type_kernel = GGML_TYPE_F32, int stride0 = 1,
-                 int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
-        ne_input(ne_input),
-        ne_kernel(ne_kernel),
-        type_kernel(type_kernel),
-        stride0(stride0),
-        stride1(stride1),
-        padding0(padding0),
-        padding1(padding1),
-        dilation0(dilation0),
-        dilation1(dilation1),
-        cwhn(cwhn) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
-        ggml_set_name(input, "input");
-
-        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
-        ggml_set_name(kernel, "kernel");
-
-        // if (cwhn) {
-        //     // change memory layout to channel-most-contiguous (CWHN),
-        //     // then permute it back so NE matches the original input
-        //     input  = ggml_cont(ctx, ggml_permute(ctx, input, 1, 2, 0, 3));
-        //     input  = ggml_permute(ctx, input, 2, 0, 1, 3);
-        //     kernel = ggml_cont(ctx, ggml_permute(ctx, kernel, 2, 3, 1, 0));
-        //     kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
-        // }
-
-        ggml_tensor * out =
-            ggml_conv_2d_implicitgemm(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
-        ggml_set_name(out, "out");
-        return out;
-    }
-};
-
 // GGML_OP_CONV_2D_DW
 struct test_conv_2d_dw : public test_case {
     const std::array<int64_t, 4> ne_input;
@@ -5941,30 +5853,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (uint32_t s0 : { 1, 3 }) {
-        for (uint32_t p1 : { 2, 5 }) {
-            for (uint32_t Cin : { 1, 25 }) {
-                for (uint32_t Cout : { 1, 12 }) {
-                    for (uint32_t KH : { 1, 2, 3, 11 }) {
-                        for (uint32_t KW : { 1, 2, 3, 11 }) {
-                            for (uint32_t H : { 1, 133 }) {
-                                for (uint32_t W : { 1, 141 }) {
-                                    if (calc_conv_output_size(W, KW, s0, p0, d0) > 0 &&
-                                        calc_conv_output_size(H, KH, s1, p1, d1) > 0) {
-                                        for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
-                                            test_cases.emplace_back(new test_conv_2d_implicit(
-                                                { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, kernel_type, s0, s1, p0, p1, d0, d1, false));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)
     // however these cases need to alloc more memory which may fail in some devices (Intel Arc770, etc.)
@@ -6732,16 +6620,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
-        for (auto act_case : cases) {
-            // Direct CONV_2D
-            test_cases.emplace_back(new test_conv_2d_implicit(
-                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
-                kernel_type, 1, 1, 0, 0, 1, 1, false));
-        }
-    }
-
     // Stable-diffusion layers
     std::map<std::string, uint32_t> idx_sd{
         { "iw",   0 },
@@ -6788,7 +6666,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
         uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
 
-        test_cases.emplace_back(new test_conv_2d_implicit(
+        test_cases.emplace_back(new test_conv_2d(
             { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
             { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
             GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, false));
@@ -6801,11 +6679,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
         uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
 
-        test_cases.emplace_back(new test_conv_2d_implicit(
+        test_cases.emplace_back(new test_conv_2d(
             { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
             { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
             GGML_TYPE_F32, 1, 1, p0, p1, 1, 1, false));
     }
+
+    // for (auto act_case : cases_sd) {
+    //     GGML_ASSERT(act_case[idx_sd["kw"]] == 3 || act_case[idx_sd["kw"]] == 1);
+    //     GGML_ASSERT(act_case[idx_sd["kh"]] == 3 || act_case[idx_sd["kh"]] == 1);
+
+    //     uint32_t p0 = act_case[idx_sd["kw"]] == 3 ? 1 : 0;
+    //     uint32_t p1 = act_case[idx_sd["kh"]] == 3 ? 1 : 0;
+
+    //     test_cases.emplace_back(new test_conv_2d_implicit(
+    //         { act_case[idx_sd["iw"]], act_case[idx_sd["ih"]], act_case[idx_sd["Cin"]], act_case[idx_sd["B"]] },
+    //         { act_case[idx_sd["kw"]], act_case[idx_sd["kh"]], act_case[idx_sd["Cin"]], act_case[idx_sd["Cout"]] },
+    //         GGML_TYPE_F16, 1, 1, p0, p1, 1, 1, false));
+    // }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
