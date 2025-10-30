@@ -636,7 +636,29 @@ static json oaicompat_chat_params_parse(
                         throw std::runtime_error("Failed to download image");
                     }
 
-                } else {
+                } else if (string_starts_with(url, "file://")) {
+		    // Strip off the leading "file://"
+		    std::string fname = url.substr(7);
+		    // load local file path
+		    raw_buffer buf;
+                    FILE * f = fopen(fname.c_str(), "rb");
+                    if (!f) {
+                        LOG_ERR("Unable to open file %s: %s\n", fname.c_str(), strerror(errno));
+                        throw std::runtime_error("Unable to open image file");
+                    }
+                    fseek(f, 0, SEEK_END);
+                    long file_size = ftell(f);
+                    fseek(f, 0, SEEK_SET);
+                    buf.resize(file_size);
+                    size_t n_read = fread(buf.data(), 1, file_size, f);
+                    fclose(f);
+                    if (n_read != (size_t)file_size) {
+                        LOG_ERR("Failed to read entire file %s", fname.c_str());
+                        throw std::runtime_error("Failed to read entire image file");
+                    }
+		    out_files.push_back(buf);
+
+		} else {
                     // try to decode base64 image
                     std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
                     if (parts.size() != 2) {
