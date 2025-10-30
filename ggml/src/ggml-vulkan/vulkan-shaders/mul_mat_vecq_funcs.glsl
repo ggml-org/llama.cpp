@@ -10,15 +10,15 @@ FLOAT_TYPE get_dm(uint ib) {
 }
 #endif
 
-#if defined(DATA_A_MXFP4)
-FLOAT_TYPE get_dm(uint ib) {
-    return FLOAT_TYPE(e8m0_to_fp32(data_a[ib].e));
-}
-#endif
-
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
 FLOAT_TYPE_VEC2 get_dm(uint ib) {
     return FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+}
+#endif
+
+#if defined(DATA_A_MXFP4)
+FLOAT_TYPE get_dm(uint ib) {
+    return FLOAT_TYPE(e8m0_to_fp32(data_a[ib].e));
 }
 #endif
 
@@ -115,22 +115,25 @@ ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 i32vec2 repack(uint ib, uint iqs) {
-    const uint32_t quants = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
-                                          data_a[ib].qs[iqs * 4 + 1],
-                                          data_a[ib].qs[iqs * 4 + 2],
-                                          data_a[ib].qs[iqs * 4 + 3]));
+    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                      data_a[ib].qs[iqs * 4 + 1],
+                                      data_a[ib].qs[iqs * 4 + 2],
+                                      data_a[ib].qs[iqs * 4 + 3]));
 
-    return i32vec2( quants       & 0x0F0F0F0F,
-                   (quants >> 4) & 0x0F0F0F0F);
+    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
+    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w])),
+                   pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w])));
 }
 
 ACC_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
-    return ACC_TYPE(da * dsb.x * float(q_sum));
+    return ACC_TYPE(da * dsb.x * float(q_sum) * 0.5);
 }
 #endif
 
 #if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
-FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs, const int32_t sum_divisor) {
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     int32_t q_sum = 0;
 #if QUANT_R == 2
     const i32vec2 data_a_qs = repack(ib_a, iqs);
@@ -147,7 +150,8 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs, const int32_t sum_d
                              cache_b_qs[1]);
 #endif
 
-    return mul_q8_1(q_sum, get_dm(ib_a), cache_b_ds, sum_divisor);
+    // 2 quants per call => divide sums by 8/2 = 4
+    return mul_q8_1(q_sum, get_dm(ib_a), cache_b_ds, 4);
 }
 #endif
 
@@ -170,8 +174,23 @@ uint8_t get_scale(uint ib, uint iqs) {
     return data_a[ib_k].scales[iqs_k / 4];
 }
 
-ACC_TYPE mul_q8_1(const int32_t sum_d, const int32_t sum_m, const vec2 dma, const vec2 dsb, const int32_t sum_divisor) {
-    return ACC_TYPE(dsb.x * (dma.x * float(sum_d) - dma.y * float(sum_m)));
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    int32_t sum_d = 0;
+    int32_t sum_m = 0;
+
+    const int32_t qs_a0 = repack(ib_a, iqs * 2);
+    const int32_t qs_a1 = repack(ib_a, iqs * 2 + 1);
+    const uint8_t scale = get_scale(ib_a, iqs * 2);
+    const int32_t scale_m = int32_t(scale >> 4) * 0x01010101; // Duplicate 8-bit value across 32-bits.
+
+    sum_d += dotPacked4x8EXT(qs_a0, cache_b_qs[0]) * (scale & 0xF);
+    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[0]);
+
+    sum_d += dotPacked4x8EXT(qs_a1, cache_b_qs[1]) * (scale & 0xF);
+    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[1]);
+
+    const vec2 dm = get_dm(ib_a);
+    return ACC_TYPE(float(cache_b_ds.x) * (float(dm.x) * float(sum_d) - float(dm.y) * float(sum_m) / 4));
 }
 #endif
 

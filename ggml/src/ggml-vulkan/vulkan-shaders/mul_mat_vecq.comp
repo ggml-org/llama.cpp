@@ -43,7 +43,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
             const uint a_block_idx = (ibi + col)/QUANT_K + a_offset;
             ibi += p.ncols;
 
-            temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx, 4);
+            temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx);
         }
     }
 }
@@ -107,6 +107,10 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
 void main() {
     const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
+#endif
 
     // do NUM_ROWS at a time, unless there aren't enough remaining rows
     if (first_row + NUM_ROWS <= p.stride_d) {
