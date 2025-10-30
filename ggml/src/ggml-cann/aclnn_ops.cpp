@@ -459,7 +459,7 @@ void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_cann_pool_alloc temp_buffer_allocator(ctx.pool(), n_bytes);
     void *               buffer       = temp_buffer_allocator.get();
 
-    int64_t div_ne[] = {1, src->ne[1], src->ne[2], src->ne[3]}; 
+    int64_t div_ne[] = {1, src->ne[1], src->ne[2], src->ne[3]};
     size_t  div_nb[GGML_MAX_DIMS];
     div_nb[0] = sizeof(float);
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
