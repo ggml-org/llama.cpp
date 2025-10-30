@@ -1007,12 +1007,12 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int cc            = ggml_cuda_info().devices[ctx.device].cc;
 
     const int32_t * p    = (const int32_t *) dst->op_params;
-    const int       ST_X = p[0];  // stride_x
-    const int       ST_Y = p[1];  // stride_y
-    const int       PD_X = p[2];  // padding_x
-    const int       PD_Y = p[3];  // padding_y
-    const int       DL_X = p[4];  // dilation_x
-    const int       DL_Y = p[5];  // dilation_y
+    const uint       ST_X = p[0];  // stride_x
+    const uint       ST_Y = p[1];  // stride_y
+    const uint       PD_X = p[2];  // padding_x
+    const uint       PD_Y = p[3];  // padding_y
+    const uint       DL_X = p[4];  // dilation_x
+    const uint       DL_Y = p[5];  // dilation_y
     // const int       LT   = p[6];  // layout
 
     // GGML_ASSERT(LT == 0 || LT == 1);
@@ -1022,16 +1022,16 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     // No cwhn
     GGML_ASSERT(p[6] == false);
 
-    const int IW = input->ne[0];   // input_w
-    const int IH = input->ne[1];   // input_h
-    const int OW = dst->ne[0];     // output_w
-    const int OH = dst->ne[1];     // output_h
-    const int KW = kernel->ne[0];  // kernel_w
-    const int KH = kernel->ne[1];  // kernel_h
-    const int IC = input->ne[2];   // input_channels
+    const uint IW = input->ne[0];   // input_w
+    const uint IH = input->ne[1];   // input_h
+    const uint OW = dst->ne[0];     // output_w
+    const uint OH = dst->ne[1];     // output_h
+    const uint KW = kernel->ne[0];  // kernel_w
+    const uint KH = kernel->ne[1];  // kernel_h
+    const uint IC = input->ne[2];   // input_channels
 
-    const int OC = kernel->ne[3];  // ouptut_chanles
-    const int B  = input->ne[3];   // n_batches
+    const uint OC = kernel->ne[3];  // ouptut_chanles
+    const uint B  = input->ne[3];   // n_batches
 
     const int64_t total  = B * OC * OH * OW;
 
