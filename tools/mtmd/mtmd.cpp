@@ -96,8 +96,7 @@ enum mtmd_slice_tmpl {
 
 // video schema, used to tokenize video frames 
 enum mtmd_video_schema {
-    MTMD_VIDEO_SCHEMA_NONE,
-    MTMD_VIDEO_SCHEMA_MINICPMV_2_6,
+    MTMD_VIDEO_SCHEMA_MINICPMV_2_6, // add overview image only (no slicing)
     MTMD_VIDEO_SCHEMA_MINICPMV_4_5,
 };
 
@@ -136,7 +135,7 @@ struct mtmd_context {
     // for llava-uhd style models, we need special tokens in-between slices
     // minicpmv calls them "slices", llama 4 calls them "tiles"
     mtmd_slice_tmpl slice_tmpl    = MTMD_SLICE_TMPL_NONE;
-    mtmd_video_schema video_sch   = MTMD_VIDEO_SCHEMA_NONE;
+    mtmd_video_schema video_sch   = MTMD_VIDEO_SCHEMA_MINICPMV_2_6;
     llama_token tok_ov_img_start  = LLAMA_TOKEN_NULL; // overview image
     llama_token tok_ov_img_end    = LLAMA_TOKEN_NULL; // overview image
     llama_token tok_slices_start  = LLAMA_TOKEN_NULL; // start of all slices
@@ -234,7 +233,6 @@ struct mtmd_context {
             // minicpmv 2.6 format:
             // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
             slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
-            video_sch         = MTMD_VIDEO_SCHEMA_MINICPMV_2_6;
             tok_ov_img_start  = lookup_token("<image>");
             tok_ov_img_end    = lookup_token("</image>");
             tok_sli_img_start = lookup_token("<slice>");

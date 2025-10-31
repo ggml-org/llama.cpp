@@ -153,8 +153,8 @@ struct mtmd_cli_context {
         );
     }
 
-    bool load_media(const std::string & fname) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str()));
+    bool load_media(const std::string & path) {
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), path.c_str()));
         if (!bmp.ptr) {
             return false;
         }
