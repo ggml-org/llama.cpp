@@ -363,77 +363,31 @@ class ChatStore {
 
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
-		const PROPS_REFRESH_RETRY_DELAY_MS = 1_000;
-		let serverPropsRefreshRequested = false;
-		let lastPropsRefreshAttempt = 0;
 		const currentConfig = config();
 		const preferServerPropsModel = !currentConfig.modelSelectorEnabled;
+		let serverPropsRefreshed = false;
+		let updateModelFromServerProps: ((persistImmediately?: boolean) => void) | null = null;
 
-		const resetPropsRefreshGate = (options?: { immediate?: boolean }) => {
-			serverPropsRefreshRequested = false;
-			if (options?.immediate) {
-				lastPropsRefreshAttempt = Date.now() - PROPS_REFRESH_RETRY_DELAY_MS;
-			} else {
-				lastPropsRefreshAttempt = Date.now();
-			}
-		};
-
-		const ensureServerPropsRefresh = () => {
-			const now = Date.now();
-
-			if (serverPropsRefreshRequested) {
-				if (resolvedModel) {
-					const currentModel = serverStore.modelName;
-					const normalizedStoreModel = currentModel ? normalizeModelName(currentModel) : null;
-
-					if (!normalizedStoreModel || normalizedStoreModel !== resolvedModel) {
-						resetPropsRefreshGate({ immediate: true });
-					} else {
-						return;
-					}
-				} else {
-					return;
-				}
-			}
-
-			if (now - lastPropsRefreshAttempt < PROPS_REFRESH_RETRY_DELAY_MS) {
+		const refreshServerPropsOnce = () => {
+			if (serverPropsRefreshed) {
 				return;
 			}
 
-			serverPropsRefreshRequested = true;
-			lastPropsRefreshAttempt = now;
+			serverPropsRefreshed = true;
 
 			const hasExistingProps = serverStore.serverProps !== null;
 
 			serverStore
 				.fetchServerProps({ silent: hasExistingProps })
 				.then(() => {
-					if (!resolvedModel) {
-						return;
-					}
-
-					const currentModel = serverStore.modelName;
-
-					if (!currentModel) {
-						resetPropsRefreshGate({ immediate: true });
-						return;
-					}
-
-					const normalizedStoreModel = normalizeModelName(currentModel);
-
-					if (!normalizedStoreModel || normalizedStoreModel !== resolvedModel) {
-						resetPropsRefreshGate({ immediate: true });
-					}
+					updateModelFromServerProps?.(true);
 				})
 				.catch((error) => {
-					console.error('Failed to refresh server props during streaming:', error);
-					resetPropsRefreshGate();
+					console.warn('Failed to refresh server props after streaming started:', error);
 				});
 		};
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
-			ensureServerPropsRefresh();
-
 			const serverModelName = serverStore.modelName;
 			const preferredModelSource = preferServerPropsModel
 				? (serverModelName ?? modelName ?? null)
@@ -468,9 +422,7 @@ class ChatStore {
 		};
 
 		if (preferServerPropsModel) {
-			const hasExistingProps = serverStore.serverProps !== null;
-
-			const updateModelFromServerProps = (persistImmediately = true) => {
+			updateModelFromServerProps = (persistImmediately = true) => {
 				const currentServerModel = serverStore.modelName;
 
 				if (!currentServerModel) {
@@ -481,15 +433,6 @@ class ChatStore {
 			};
 
 			updateModelFromServerProps(false);
-
-			serverStore
-				.fetchServerProps({ silent: hasExistingProps })
-				.then(() => {
-					updateModelFromServerProps(true);
-				})
-				.catch((error) => {
-					console.warn('Failed to fetch server props before streaming:', error);
-				});
 		}
 
 		slotsService.startStreaming();
@@ -500,9 +443,10 @@ class ChatStore {
 			{
 				...this.getApiOptions(),
 
+				onFirstValidChunk: () => {
+					refreshServerPropsOnce();
+				},
 				onChunk: (chunk: string) => {
-					ensureServerPropsRefresh();
-
 					streamedContent += chunk;
 					this.setConversationStreaming(
 						assistantMessage.convId,
@@ -517,8 +461,6 @@ class ChatStore {
 				},
 
 				onReasoningChunk: (reasoningChunk: string) => {
-					ensureServerPropsRefresh();
-
 					streamedReasoningContent += reasoningChunk;
 
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
@@ -535,8 +477,6 @@ class ChatStore {
 					reasoningContent?: string,
 					timings?: ChatMessageTimings
 				) => {
-					ensureServerPropsRefresh();
-
 					slotsService.stopStreaming();
 
 					const updateData: {
