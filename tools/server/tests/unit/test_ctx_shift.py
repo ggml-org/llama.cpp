@@ -45,7 +45,7 @@ def test_ctx_shift_enabled():
 
 @pytest.mark.parametrize("n_predict,n_token_output,truncated", [
     (64, 64, False),
-    (-1, 120, True),
+    (-1, 248, True), # 8 tokens prompt + 248 tokens generated = 256 tokens total
 ])
 def test_ctx_shift_disabled_short_prompt(n_predict: int, n_token_output: int, truncated: bool):
     global server
