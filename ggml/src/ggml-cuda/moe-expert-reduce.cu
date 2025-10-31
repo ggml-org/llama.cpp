@@ -121,7 +121,7 @@ bool ggml_cuda_should_use_moe_expert_reduce(const ggml_cgraph * cgraph, int star
     }
 
     //check if all the adds are in increasing order
-    const ggml_tensor * prev_add_src = view_nodes.size() ? view_nodes[0] : nullptr;
+    const ggml_tensor * prev_add_src = view_nodes.empty() ? nullptr : view_nodes[0];
     int                 num_adds     = 0;
     int                 num_views    = view_nodes.size();
     while (current_node < end_index && cgraph->nodes[current_node]->op == GGML_OP_ADD) {
