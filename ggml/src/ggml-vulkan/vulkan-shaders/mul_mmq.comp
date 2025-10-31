@@ -82,8 +82,12 @@ layout (constant_id = 10) const uint WARP = 32;
 
 #include "mul_mmq_shmem_types.glsl"
 
+#ifdef MUL_MAT_ID
+#define BK_STEP 1
+#else
 #ifndef BK_STEP
 #define BK_STEP 4
+#endif
 #endif
 
 // Shared memory cache
