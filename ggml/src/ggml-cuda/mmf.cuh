@@ -36,7 +36,7 @@ static __global__ void mul_mat_f(
         return;
     }
 
-    constexpr int I_preferred = I_16_supported ? 16 : 32; // For Turing MMA both work butr 16 is ~1% faster.
+    constexpr int I_preferred = I_16_supported ? 16 : 32; // For Turing MMA both work but 16 is ~1% faster.
 
     typedef tile<I_preferred, 8, T>     tile_A;
     typedef tile<8,           8, T>     tile_B;
