@@ -5625,7 +5625,7 @@ static void ggml_compute_forward_rope_flt(
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
     const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
-    const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, note: also true for vision (24 & 8 == true)
+    const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, note: also true for vision (24 & 8 == true) and for imrope
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
     if (mrope_used) {
@@ -5680,7 +5680,8 @@ static void ggml_compute_forward_rope_flt(
                     rotate_pairs<T>(n_dims, 1, cache, src, dst_data, 1);
                     break;
                   case GGML_ROPE_TYPE_NEOX:
-                  case GGML_ROPE_TYPE_MROPE: //pure, not vision
+                  case GGML_ROPE_TYPE_MROPE:
+                  case GGML_ROPE_TYPE_IMROPE:
                     rotate_pairs<T>(n_dims, n_dims/2, cache, src, dst_data);
                     break;
                   case GGML_ROPE_TYPE_VISION:
