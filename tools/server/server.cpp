@@ -3796,7 +3796,7 @@ struct server_context {
 
                                 // when the prompt prefix does not match, print the tokens around the mismatch
                                 // this is useful for debugging prompt caching
-                                {
+                                if (slots_debug) {
                                     const int np0 = std::max<int>(n_past - 4, 0);
                                     const int np1 = std::min<int>(n_past + 6, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
 
