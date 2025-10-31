@@ -7139,6 +7139,7 @@ class MiniMaxM2Model(TextModel):
         self.hparams["num_experts"] = self.hparams["num_local_experts"]
 
     def set_gguf_parameters(self):
+        super().set_gguf_parameters()
         if self.hparams["scoring_func"] == "sigmoid":
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         elif self.hparams["scoring_func"] == "softmax":
@@ -7146,11 +7147,8 @@ class MiniMaxM2Model(TextModel):
         else:
             raise ValueError(f"Unsupported scoring_func value: {self.hparams['scoring_func']}")
 
-        block_count = self.find_hparam(["num_hidden_layers", "n_layer"])
         self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_block_count(block_count)
         self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
-        super().set_gguf_parameters()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         if name.endswith("e_score_correction_bias"):
