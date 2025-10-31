@@ -5583,6 +5583,8 @@ struct ggml_tensor * ggml_gated_linear_attn(
     return result;
 }
 
+// ggml_rwkv_wkv7
+
 struct ggml_tensor * ggml_rwkv_wkv7(
         struct ggml_context * ctx,
         struct ggml_tensor  * r,
