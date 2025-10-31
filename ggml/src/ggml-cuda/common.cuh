@@ -224,6 +224,10 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
+#if defined(GGML_USE_HIP) && defined(RDNA4) && !defined(GGML_HIP_NO_WMMA)
+#define AMD_WMMA_AVAILABLE
+#endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
+
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define TURING_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
@@ -276,6 +280,14 @@ static bool amd_mfma_available(const int cc) {
 #else
     return false;
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)
+}
+
+static bool amd_wmma_available(const int cc) {
+#if !defined(GGML_HIP_NO_WMMA)
+    return GGML_CUDA_CC_IS_RDNA4(cc);
+#else
+    return false;
+#endif  //!defined(AMD_WMMA_AVAILABLE)
 }
 
 // Volta technically had FP16 tensor cores but they work very differently compared to Turing and later.
