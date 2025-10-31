@@ -306,7 +306,9 @@ static void ggml_cpy_flt_cuda(
         // printf("c %zu, %zu, %zu, %zu, \n", nb00, nb01, nb02, nb03);
         // printf("d %zu, %zu, %zu, %zu, \n", nb10, nb11, nb12, nb13);
         // GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
-        if( nb00 < nb02 && nb02 < nb03) {
+        if( nb00 < nb02 && nb02 <= nb03 ) {
+            // printf("a %zu, %zu, %zu, %zu, \n", ne, ne00, ne01, ne02);
+            // printf("c %zu, %zu, %zu, %zu, \n", nb00, nb01, nb02, nb03);
             dim3 dimGrid( (ne01 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
                           (ne00 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
                            (ne/(ne01*ne00) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM);
@@ -314,6 +316,8 @@ static void ggml_cpy_flt_cuda(
             cpy_flt_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>
             (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
         } else{
+            // printf("b %zu, %zu, %zu, %zu, \n", ne, ne00, ne01, ne02);
+            // printf("d %zu, %zu, %zu, %zu, \n", nb00, nb01, nb02, nb03);
             std::vector<std::tuple<int, int, int>> v;
             v.emplace_back(std::make_tuple(nb00, ne00, 0));
             v.emplace_back(std::make_tuple(nb01, ne01, 1));
@@ -535,7 +539,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     const bool contiguous_srcs = ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
     const bool can_be_transposed = src0->op == GGML_OP_TRANSPOSE && !ggml_is_contiguous(src0) &&
-        (src0->ne[3] == 1 || (src0->nb[2] < src0->nb[3] && src0->nb[0] < src0->nb[2]));
+        (src0->ne[3] == 1 || (src0->nb[2] <= src0->nb[3] && src0->nb[0] < src0->nb[2]));
 
     if (src0->type == src1->type && contiguous_srcs) {
         GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(src1));
