@@ -40,7 +40,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 
         uint ibi = first_row*p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            const uint a_block_idx = (ibi + col)/QUANT_K + a_offset;
+            const uint a_block_idx = (ibi + col)/32 + a_offset;
             ibi += p.ncols;
 
             temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx);
