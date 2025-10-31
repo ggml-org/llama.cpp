@@ -243,7 +243,53 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
 
 #if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
 // 4-byte loads for Q4_K blocks (144 bytes) and Q5_K blocks (176 bytes)
-FLOAT_TYPE mul_q8_1(const int32_t q_sum, const vec2 dma, const vec2 dsb, const int32_t sum_divisor) {
-    return FLOAT_TYPE(dsb.x * dma.x * float(q_sum) - dma.y * dsb.y);
+i32vec2 repack2(uint ib, uint iqs) {
+    const uint ib_k = ib / 8;
+    const uint iqs_k = (ib % 8) * 8 + iqs;
+
+    const uint qs_idx = (iqs_k / 16) * 8 + (iqs_k % 8);
+    const uint qs_shift = ((iqs_k % 16) / 8) * 4;
+
+#if defined(DATA_A_Q4_K)
+    const uint32_t vals0 = (data_a_packed32[ib_k].qs[qs_idx    ] >> qs_shift) & 0x0F0F0F0F;
+    const uint32_t vals1 = (data_a_packed32[ib_k].qs[qs_idx + 1] >> qs_shift) & 0x0F0F0F0F;
+
+    return i32vec2(vals0, vals1);
+#else // defined(DATA_A_Q5_K)
+    const uint qh_idx = iqs;
+    const uint qh_shift = iqs_k / 8;
+
+    return i32vec2(((data_a_packed32[ib_k].qs[qs_idx    ] >> qs_shift) & 0x0F0F0F0F) |
+                  (((data_a_packed32[ib_k].qh[qh_idx    ] >> qh_shift) & 0x01010101) << 4),
+                   ((data_a_packed32[ib_k].qs[qs_idx + 1] >> qs_shift) & 0x0F0F0F0F) |
+                  (((data_a_packed32[ib_k].qh[qh_idx + 1] >> qh_shift) & 0x01010101) << 4));
+#endif
+}
+
+vec2 get_dm_scale(uint ib, uint iqs) {
+    const uint ib_k = ib / 8;
+    const uint iqs_k = (ib % 8) * 8 + iqs;
+    const uint is = iqs_k / 8;
+    u8vec2 scale_dm;
+    if (is < 4) {
+        scale_dm = u8vec2(data_a[ib_k].scales[is] & 0x3F, data_a[ib_k].scales[is + 4] & 0x3F);
+    } else {
+        scale_dm = u8vec2((data_a[ib_k].scales[is+4] & 0xF) | ((data_a[ib_k].scales[is-4] & 0xC0) >> 2),
+                          (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
+    }
+
+    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+}
+
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    int32_t q_sum = 0;
+
+    const i32vec2 qs_a = repack2(ib_a, iqs * 2);
+    const vec2 dm_scale = get_dm_scale(ib_a, iqs * 2);
+
+    q_sum += dotPacked4x8EXT(qs_a.x, cache_b_qs[0]);
+    q_sum += dotPacked4x8EXT(qs_a.y, cache_b_qs[1]);
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * float(dm_scale.x) * float(q_sum) - float(dm_scale.y) * float(cache_b_ds.y / 4));
 }
 #endif

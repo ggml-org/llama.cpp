@@ -323,7 +323,6 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
                                    (((data_a_packed32[ib_k].qh[qh_idx] >> qh_shift) & 0x01010101) << 4));
 #endif
 
-
     if (iqs == 0) {
         // Scale index
         const uint is = iqs_k / 8;
