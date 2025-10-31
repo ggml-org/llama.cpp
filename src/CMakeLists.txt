@@ -48,6 +48,7 @@ add_library(llama
             models/chameleon.cpp
             models/chatglm.cpp
             models/codeshell.cpp
+            models/cogvlm.cpp
             models/cohere2-iswa.cpp
             models/command-r.cpp
             models/dbrx.cpp
@@ -108,6 +109,8 @@ add_library(llama
             models/qwen2moe.cpp
             models/qwen2vl.cpp
             models/qwen3.cpp
+            models/qwen3vl.cpp
+            models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
             models/refact.cpp
             models/rwkv6-base.cpp
