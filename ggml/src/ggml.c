@@ -5629,7 +5629,6 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     return result;
 }
 
-
 // ggml_unary
 
 static struct ggml_tensor * ggml_unary_impl(
