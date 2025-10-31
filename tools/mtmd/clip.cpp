@@ -1509,6 +1509,45 @@ struct clip_graph {
         return gf;
     }
 
+    ggml_cgraph * build_janus_pro() {
+        GGML_ASSERT(model.class_embedding == nullptr); // No CLS token
+
+        ggml_tensor * inp = build_inp();
+
+        const int n_pos = n_patches;
+        ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+        ggml_set_name(positions, "positions");
+        ggml_set_input(positions);
+
+        ggml_tensor * learned_pos_embd = ggml_get_rows(ctx0, model.position_embeddings, positions);
+
+        ggml_tensor * cur = build_vit(
+                                inp, n_patches,
+                                NORM_TYPE_NORMAL,
+                                hparams.ffn_op,
+                                learned_pos_embd,
+                                nullptr);
+
+        cur = ggml_mul_mat(ctx0, model.mm_0_w, cur);
+        if (model.mm_0_b) {
+            cur = ggml_add(ctx0, cur, model.mm_0_b);
+        }
+        cb(cur, "aligner_0", -1);
+
+        cur = ggml_gelu(ctx0, cur);
+
+        cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
+        if (model.mm_1_b) {
+            cur = ggml_add(ctx0, cur, model.mm_1_b);
+        }
+        cb(cur, "aligner_1", -1);
+
+        // build the graph
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
+    }
+
     // whisper encoder with custom projector
     ggml_cgraph * build_whisper_enc() {
         const int n_frames = img.nx;
@@ -2126,6 +2165,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_kimivl();
             } break;
+        case PROJECTOR_TYPE_JANUS_PRO:
+            {
+                res = graph.build_janus_pro();
+            } break;
         default:
             {
                 res = graph.build_llava();
@@ -2441,6 +2484,14 @@ struct clip_model_loader {
                         }
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf"; // temporary solution for logging
+                    } break;
+                case PROJECTOR_TYPE_JANUS_PRO:
+                    {
+                        // Janus Pro uses mean = std = [0.5, 0.5, 0.5]
+                        // ref: https://huggingface.co/deepseek-community/Janus-Pro-1B/blob/main/preprocessor_config.json
+                        // ref: https://huggingface.co/deepseek-community/Janus-Pro-7B/blob/main/preprocessor_config.json
+                        hparams.image_mean[0] = hparams.image_mean[1] = hparams.image_mean[2] = 0.5f;
+                        hparams.image_std[0] = hparams.image_std[1] = hparams.image_std[2] = 0.5f;
                     } break;
                 default:
                     break;
@@ -2776,6 +2827,13 @@ struct clip_model_loader {
                     model.mm_model_proj    = get_tensor(TN_MM_PROJECTOR);
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_JANUS_PRO:
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3637,6 +3695,17 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
 
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_JANUS_PRO) {
+        // Janus Pro preprocessing: pad to square with gray(127), resize to 384x384
+        const std::array<uint8_t, 3> pad_color = {127, 127, 127};
+        clip_image_u8 resized_image;
+        int sz = params.image_size;  // 384
+        image_manipulation::resize_and_pad_image(*img, resized_image, {sz, sz}, pad_color);
+        clip_image_f32_ptr img_f32(clip_image_f32_init());
+        normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+        res_imgs->entries.push_back(std::move(img_f32));
+        return true;
+
     } else if (ctx->proj_type() == PROJECTOR_TYPE_PIXTRAL
             || ctx->proj_type() == PROJECTOR_TYPE_LIGHTONOCR
     ) {
@@ -3817,6 +3886,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
     switch (proj) {
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
+        case PROJECTOR_TYPE_JANUS_PRO:
             {
                 // do nothing
             } break;
@@ -4286,6 +4356,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("pos_w", pos_data);
             } break;
         case PROJECTOR_TYPE_GLM_EDGE:
+        case PROJECTOR_TYPE_JANUS_PRO:
         {
             // llava and other models
             std::vector<int32_t> positions(n_pos);
@@ -4427,6 +4498,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_JANUS_PRO:
+            return ctx->model.mm_1_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }

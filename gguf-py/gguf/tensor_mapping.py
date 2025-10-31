@@ -1154,6 +1154,7 @@ class TensorNameMap:
             "model.mm_projector.mlp.mlp.{bid}",
             "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
             "mlp1.{bid}", # InternVL
+            "model.aligner.fc1.hidden_layers.{bid}", # Janus Pro
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -1170,7 +1171,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.patch_embedding",
             "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
             "vpm.embeddings.patch_embedding",
-            "model.vision_model.embeddings.patch_embedding", # SmolVLM
+            "model.vision_model.embeddings.patch_embedding", # SmolVLM, Janus Pro
             "vision_tower.patch_conv", # pixtral-hf
             "vision_encoder.patch_conv", # pixtral
             "vision_model.patch_embedding.linear", # llama 4
@@ -1182,7 +1183,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.position_embedding",
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
             "vpm.embeddings.position_embedding",
-            "model.vision_model.embeddings.position_embedding", # SmolVLM
+            "model.vision_model.embeddings.position_embedding", # SmolVLM, Janus Pro
             "vision_model.positional_embedding_vlm", # llama 4
             "vision_tower.patch_embed.pos_emb", # kimi-vl
         ),
@@ -1252,6 +1253,7 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "model.vision_model.encoder.layers.{bid}.self_attn.projection_layer", # Janus Pro
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
