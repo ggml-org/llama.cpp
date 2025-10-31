@@ -813,6 +813,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_llama4>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                builder = std::make_unique<clip_graph_jinaclip2>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_QWEN2A:
@@ -1199,6 +1203,11 @@ struct clip_model_loader {
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         set_llava_uhd_res_candidates(model, 3);
+                    } break;
+                case PROJECTOR_TYPE_JINACLIP2:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_f32(KEY_VISION_ROPE_THETA, hparams.rope_theta, /*required=*/false);
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
@@ -1784,6 +1793,10 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                } break;
+            case PROJECTOR_TYPE_JINACLIP2:
+                {
+                    // JinaCLIP2 is a pure vision encoder without additional projection layers.
                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
@@ -3020,6 +3033,44 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->grid_y = inst.grid_size.height;
             } break;
 
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                clip_image_u8 processed_image;
+                const int sz = params.image_size;
+
+                // 1) Preserve aspect ratio: resize so that the shorter side == sz (bicubic).
+                const int in_w = img->nx;
+                const int in_h = img->ny;
+                if (in_w <= 0 || in_h <= 0) {
+                    LOG_ERR("%s: invalid input image size %dx%d\n", __func__, in_w, in_h);
+                    return false;
+                }
+
+                int out_w = 0, out_h = 0;
+                if (in_w < in_h) {
+                    out_w = sz;
+                    out_h = std::max(1, (int) std::round((double) in_h * sz / in_w));
+                } else {
+                    out_h = sz;
+                    out_w = std::max(1, (int) std::round((double) in_w * sz / in_h));
+                }
+
+                clip_image_u8 resized_keep_ratio;
+                img_tool::resize(*img, resized_keep_ratio, clip_image_size{out_w, out_h}, img_tool::RESIZE_ALGO_BICUBIC);
+
+                // 2) Center-crop to sz x sz.
+                const int x0 = std::max(0, (resized_keep_ratio.nx - sz) / 2);
+                const int y0 = std::max(0, (resized_keep_ratio.ny - sz) / 2);
+                const int crop_w = std::min(sz, resized_keep_ratio.nx);
+                const int crop_h = std::min(sz, resized_keep_ratio.ny);
+                img_tool::crop(resized_keep_ratio, processed_image, x0, y0, crop_w, crop_h);
+
+                // 3) Normalize.
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(processed_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             {
@@ -3182,6 +3233,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_JANUS_PRO:
             {
                 // do nothing
+            } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                n_patches = 1;
             } break;
         case PROJECTOR_TYPE_LDP:
         case PROJECTOR_TYPE_LDPV2:
@@ -3613,6 +3668,57 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
             set_input_i32("positions", positions);
         } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                std::vector<int32_t> positions(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i] = i;
+                }
+                set_input_i32("positions", positions);
+
+                const int n_patches = model.class_embedding ? (n_pos - 1) : n_pos;
+                const int n_patches_per_col = image_size_width / patch_size;
+                std::vector<int32_t> pos_data(n_pos, 0);
+
+                for (int i = 0; i < n_patches; ++i) {
+                    const int idx = model.class_embedding ? (i + 1) : i;
+                    pos_data[idx] = i / n_patches_per_col;
+                }
+                set_input_i32("pos_h", pos_data);
+
+                std::fill(pos_data.begin(), pos_data.end(), 0);
+                for (int i = 0; i < n_patches; ++i) {
+                    const int idx = model.class_embedding ? (i + 1) : i;
+                    pos_data[idx] = i % n_patches_per_col;
+                }
+                set_input_i32("pos_w", pos_data);
+
+                int pt_seq_len = 16;
+                if (patch_size > 0) {
+                    const int cand = (int) llroundf(224.0f / (float) patch_size);
+                    if (cand > 0) {
+                        pt_seq_len = cand;
+                    }
+                }
+                const float s = (float) pt_seq_len / (float) n_patches_per_col;
+                const int d_head_local = hparams.n_embd / hparams.n_head;
+                const int half_local = d_head_local / 2;
+                std::vector<float> rope_c_first(half_local);
+                std::vector<float> rope_c_second(half_local);
+                const float odd = std::pow(hparams.rope_theta, (float) -2.0f / (float) d_head_local);
+
+                for (int k = 0; k < half_local; ++k) {
+                    rope_c_first[k]  = 1.0f / s;
+                    rope_c_second[k] = 1.0f / (s * odd);
+                }
+
+                ggml_tensor * t1 = ggml_graph_get_tensor(gf, "rope_c_first");
+                ggml_tensor * t2 = ggml_graph_get_tensor(gf, "rope_c_second");
+                GGML_ASSERT(t1 && (t1->flags & GGML_TENSOR_FLAG_INPUT));
+                GGML_ASSERT(t2 && (t2->flags & GGML_TENSOR_FLAG_INPUT));
+                ggml_backend_tensor_set(t1, rope_c_first.data(), 0, ggml_nbytes(t1));
+                ggml_backend_tensor_set(t2, rope_c_second.data(), 0, ggml_nbytes(t2));
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -3737,6 +3843,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_JINACLIP2:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:

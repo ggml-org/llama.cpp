@@ -1,6 +1,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "mtmd-audio.h"
 
 #include "llama.h"
@@ -423,6 +424,112 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 void mtmd_free(mtmd_context * ctx) {
     delete ctx;
+}
+
+// ------------------------------
+// Projector-only (mmproj-only) utilities
+// ------------------------------
+
+struct mtmd_mmproj_context {
+    clip_ctx * ctx_v = nullptr;
+};
+
+mtmd_mmproj_context * mtmd_mmproj_init(const char * mmproj_fname,
+                                        const struct mtmd_context_params ctx_params) {
+    clip_context_params clip_params;
+    clip_params.use_gpu   = ctx_params.use_gpu;
+    clip_params.verbosity = ctx_params.verbosity;
+    auto res = clip_init(mmproj_fname, clip_params);
+    if (!res.ctx_v) {
+        return nullptr;
+    }
+    auto * ctx = new mtmd_mmproj_context();
+    ctx->ctx_v = res.ctx_v;
+    return ctx;
+}
+
+void mtmd_mmproj_free(struct mtmd_mmproj_context * ctx) {
+    if (!ctx) return;
+    clip_free(ctx->ctx_v);
+    delete ctx;
+}
+
+int mtmd_mmproj_get_image_size(struct mtmd_mmproj_context * ctx) {
+    return ctx && ctx->ctx_v ? clip_get_image_size(ctx->ctx_v) : -1;
+}
+
+int mtmd_mmproj_get_patch_size(struct mtmd_mmproj_context * ctx) {
+    return ctx && ctx->ctx_v ? clip_get_patch_size(ctx->ctx_v) : -1;
+}
+
+int mtmd_mmproj_get_hidden_size(struct mtmd_mmproj_context * ctx) {
+    return ctx && ctx->ctx_v ? clip_get_hidden_size(ctx->ctx_v) : -1;
+}
+
+bool mtmd_mmproj_is_jinaclip(struct mtmd_mmproj_context * ctx) {
+    return ctx && ctx->ctx_v ? clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_JINACLIP2 : false;
+}
+
+bool mtmd_mmproj_is_supported(struct mtmd_mmproj_context * ctx) {
+    if (!ctx || !ctx->ctx_v) return false;
+    projector_type proj = clip_get_projector_type(ctx->ctx_v);
+    // extendable: list of projectors supported by this mmproj-only path
+    switch (proj) {
+        case PROJECTOR_TYPE_JINACLIP2: return true;
+        default: return false;
+    }
+}
+
+int mtmd_mmproj_encode_bitmap(struct mtmd_mmproj_context * ctx,
+                              const mtmd_bitmap * bmp,
+                              int n_threads,
+                              float ** out_data,
+                              size_t * out_count) {
+    if (!ctx || !ctx->ctx_v || !bmp || !out_data || !out_count) {
+        LOG_ERR("%s: invalid args: ctx=%p ctx_v=%p bmp=%p out_data=%p out_count=%p\n",
+                __func__, (void*) ctx, ctx ? (void*) ctx->ctx_v : (void*) nullptr,
+                (void*) bmp, (void*) out_data, (void*) out_count);
+        return 1;
+    }
+    // convert mtmd_bitmap to clip_image_u8
+    clip_image_u8_ptr img_u8(clip_image_u8_init());
+    img_u8->nx = bmp->nx;
+    img_u8->ny = bmp->ny;
+    img_u8->buf.resize(bmp->data.size());
+    std::memcpy(img_u8->buf.data(), bmp->data.data(), img_u8->nx * img_u8->ny * 3);
+
+    clip_image_f32_batch batch_f32;
+    bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &batch_f32);
+    if (!ok) {
+        LOG_ERR("%s: image preprocess failed (nx=%u ny=%u proj=%d)\n",
+                __func__, img_u8->nx, img_u8->ny, (int) clip_get_projector_type(ctx->ctx_v));
+        return 1;
+    }
+    clip_image_f32 * processed_img = clip_image_f32_get_img(&batch_f32, 0);
+    if (!processed_img) {
+        LOG_ERR("%s: preprocessed image is null\n", __func__);
+        return 1;
+    }
+
+    const int n_tok   = clip_n_output_tokens(ctx->ctx_v, processed_img);
+    const int n_embd  = clip_n_mmproj_embd(ctx->ctx_v);
+    const size_t n_el = (size_t) n_tok * (size_t) n_embd;
+    std::vector<float> buf(n_el);
+    if (!clip_image_encode(ctx->ctx_v, n_threads, processed_img, buf.data())) {
+        LOG_ERR("%s: image encode failed (threads=%d tokens=%d embd=%d)\n",
+                __func__, n_threads, n_tok, n_embd);
+        return 1;
+    }
+
+    float * out = (float *) std::malloc(n_el * sizeof(float));
+    if (!out) {
+        LOG_ERR("%s: malloc failed (elements=%zu bytes=%zu)\n", __func__, n_el, n_el * sizeof(float));
+        return 1;
+    }
+    std::memcpy(out, buf.data(), n_el * sizeof(float));
+    *out_data  = out;
+    *out_count = n_el;
+    return 0;
 }
 
 struct mtmd_tokenizer {
