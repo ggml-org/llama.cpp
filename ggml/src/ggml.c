@@ -5960,7 +5960,7 @@ struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
-    
+
     // A must be square and lower diagonal
     GGML_ASSERT(a->ne[0] == a->ne[1]);
     // B must have same outer dimension as A
