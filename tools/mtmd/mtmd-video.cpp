@@ -319,7 +319,7 @@ mtmd_bitmap* init_video_bitmap_from_path(mtmd_context * ctx,
         }
     }
 
-    // minicpm normal speed
+    // minicpm frames sample method
     const int32_t minicpmv_max_video_frames = 64;
     opts.max_frames = minicpmv_max_video_frames;
     if(info.total_frames > minicpmv_max_video_frames) {

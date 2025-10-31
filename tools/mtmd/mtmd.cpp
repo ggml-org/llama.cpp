@@ -14,17 +14,28 @@
 #include <limits>
 #include <vector>
 
-// represents raw image data, layout is RGBRGBRGB...
-// length of data must be nx * ny * 3
+enum class mtmd_bitmap_type {
+    IMAGE,
+    AUDIO,
+    VIDEO,
+}; 
+
+// if bitmap is image:
+//     length of data must be nx * ny * 3
+//     the data is in RGBRGBRGB... format
+// if bitmap is audio:
+//     length of data must be n_samples * sizeof(float)
+//     the data is in float format (PCM F32)
+// if bitmap is video:
+//     length of data must be nx * ny * nframes * 3
+//     the data is in RGBRGBRGB... format for each frame, frames are stored sequentially
 struct mtmd_bitmap {
+    mtmd_bitmap_type type;
     uint32_t nx;
-    uint32_t ny;
+    uint32_t ny; // for audio, ny=1
+    uint32_t nz; // for video: number of frames
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
-    bool is_audio = false; // true if the bitmap is audio
-
-    bool is_video = false; // true if the bitmap is video
-    uint32_t nz; // for video: number of frames
 };
 
 struct mtmd_image_tokens {
@@ -901,8 +912,7 @@ mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
     bitmap->nx = nx;
     bitmap->ny = ny;
     bitmap->nz = 1;
-    bitmap->is_audio = false;
-    bitmap->is_video = false;
+    bitmap->type = mtmd_bitmap_type::IMAGE;
     size_t data_size = (size_t)nx * ny * 3;
     bitmap->data.resize(data_size);
     std::memcpy(bitmap->data.data(), data, data_size);
@@ -915,8 +925,7 @@ mtmd_bitmap * mtmd_bitmap_init_from_audio(size_t n_samples,
     bitmap->nx = n_samples;
     bitmap->ny = 1;
     bitmap->nz = 1;
-    bitmap->is_audio = true;
-    bitmap->is_video = false;
+    bitmap->type = mtmd_bitmap_type::AUDIO;
     size_t data_size = n_samples * sizeof(float);
     bitmap->data.resize(data_size);
     std::memcpy(bitmap->data.data(), data, data_size);
@@ -928,8 +937,7 @@ mtmd_bitmap * mtmd_bitmap_init_from_video(uint32_t nx, uint32_t ny, uint32_t nfr
     bitmap->nx = nx;
     bitmap->ny = ny;
     bitmap->nz = nframes;
-    bitmap->is_audio = false;
-    bitmap->is_video = true;
+    bitmap->type = mtmd_bitmap_type::VIDEO;
     size_t data_size = (size_t)nx * ny * nframes * 3;
     bitmap->data.resize(data_size);
     if(data != nullptr){
@@ -960,11 +968,11 @@ size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
 }
 
 bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
-    return bitmap->is_audio;
+    return bitmap->type == mtmd_bitmap_type::AUDIO;
 }
 
 bool mtmd_bitmap_is_video(const mtmd_bitmap * bitmap) {
-    return bitmap->is_video;
+    return bitmap->type == mtmd_bitmap_type::VIDEO;
 }
 
 const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap) {
