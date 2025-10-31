@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
 #include <vector>
 #include <cctype>
+#include <regex>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -597,6 +599,51 @@ void ggml_backend_load_all() {
     ggml_backend_load_all_from_path(nullptr);
 }
 
+#ifdef __ANDROID__
+namespace {
+// Parses adreno version from gpu description or returns -1 if its not Adreno GPU or -3 if failed to parse the version
+int adrenoVersion(const std::string & gpuDescription) {
+    std::regex  adrenoRegex(R"((\d+))");
+    std::smatch matches;
+    if (gpuDescription.find("dreno") != std::string::npos && std::regex_search(gpuDescription, matches, adrenoRegex) && matches.size() > 1) {
+        try {
+            int adrenoVersion = std::stoi(matches[1].str());
+            return adrenoVersion;
+        } catch (std::invalid_argument & e) {
+            GGML_LOG_ERROR("%s: failed to parse adreno version from %s: %s\n", __func__, gpuDescription.c_str(),
+                           e.what());
+            return -3;
+        }
+    }
+    return -1;
+}
+
+// Returns smallest Adreno version among GPU devices or -1 if there is no adreno GPU
+int minAdrenoVersion(ggml_backend_reg_t vulkanBackend) {
+    if (!vulkanBackend) {
+        return -2;
+    }
+    int minFoundVersion = std::numeric_limits<int>::max();
+    for (size_t i = 0; i < vulkanBackend->iface.get_device_count(vulkanBackend); i++) {
+        ggml_backend_dev_t dev = vulkanBackend->iface.get_device(vulkanBackend, i);
+        if (!dev) {
+            continue;
+        }
+        auto description = std::string(dev->iface.get_description(dev));
+        GGML_LOG_INFO("%s: found device description: %s\n", __func__, description.c_str());
+        int devAdrenoVersion = adrenoVersion(description);
+        if (devAdrenoVersion > 0) {
+            minFoundVersion = std::min(minFoundVersion, devAdrenoVersion);
+        }
+    }
+    if (minFoundVersion < std::numeric_limits<int>::max()) {
+        return minFoundVersion;
+    }
+    return -1;
+}
+}  // namespace
+#endif
+
 void ggml_backend_load_all_from_path(const char * dir_path) {
 #ifdef NDEBUG
     bool silent = true;
@@ -612,7 +659,34 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("rpc", silent, dir_path);
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
-    ggml_backend_load_best("opencl", silent, dir_path);
+
+    bool useOpencl = true;
+
+#ifdef __ANDROID__
+    // Logic for buggy backends on Adreno GPUs
+    // Use Vulkan backend to obtain GPU information
+    ggml_backend_reg_t vulkanBackend           = ggml_backend_reg_by_name("vulkan");
+    int                devicesMinAdrenoVersion = minAdrenoVersion(vulkanBackend);
+    if (devicesMinAdrenoVersion <= 0) {
+        GGML_LOG_INFO(
+            "%s: no adreno GPU version found (%d) removing OpenCL backend (if any) to rely on Vulkan/cpu only\n",
+            __func__, devicesMinAdrenoVersion);
+        useOpencl = false;
+    } else if (devicesMinAdrenoVersion > 700) {
+        GGML_LOG_INFO("%s: Adreno GPU version %d found keeping OpenCL backend\n", __func__, devicesMinAdrenoVersion);
+    } else if (devicesMinAdrenoVersion > 600) {
+        GGML_LOG_INFO("%s: Adreno GPU version %d should rely on cpu only\n", __func__, devicesMinAdrenoVersion);
+        if (vulkanBackend) {
+            ggml_backend_unload(vulkanBackend);
+            GGML_LOG_INFO("%s: Vulkan backend removed\n", __func__);
+        }
+        useOpencl = false;
+    }
+#endif
+
+    if(useOpencl) {
+        ggml_backend_load_best("opencl", silent, dir_path);
+    }
     ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
@@ -621,4 +695,5 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     if (backend_path) {
         ggml_backend_load(backend_path);
     }
+
 }
