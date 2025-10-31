@@ -47,6 +47,7 @@
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_sign.h>
 #include <aclnnop/aclnn_norm.h>
+#include <aclnnop/aclnn_logsoftmax.h>
 #include "acl_tensor.h"
 #include "common.h"
 
@@ -210,6 +211,43 @@ void ggml_cann_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
  *            input tensor by default.
  */
 void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Computes the Cross Entropy Loss for a ggml tensor using the CANN
+ *          backend.
+ *
+ * @details This function computes the cross entropy loss between the predicted
+ *          logits and target probability distributions. The operation follows
+ *          the same computation pattern as the CPU implementation:
+ *          1. Applies log_softmax to the logits along the class dimension
+ *          2. Element-wise multiplication with target distributions
+ *          3. Summation along the class dimension to get per-sample losses
+ *          4. Global summation and scaling by -1/nr to get final loss
+ *
+ *          The computation can be expressed as:
+ *          \f[
+ *              \text{loss} = -\frac{1}{N} \sum_{i=1}^{N} \sum_{j=1}^{C} y_{ij} \cdot \log(\text{softmax}(x_{ij}))
+ *          \f]
+ *          where \f$N\f$ is the total number of samples, \f$C\f$ is the number
+ *          of classes, \f$x\f$ are the logits, and \f$y\f$ are the target
+ *          probability distributions.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the computed loss will be stored.
+ *            This should be a scalar tensor containing the final loss value.
+ *
+ * @note This implementation computes cross entropy between probability
+ *       distributions, not the typical classification cross entropy that
+ *       expects class indices as targets. Both input tensors (src0 and src1)
+ *       should have the same shape and represent probability distributions
+ *       over the class dimension.
+ * @note The function expects two source tensors:
+ *       - dst->src[0]: Logits tensor (before softmax)
+ *       - dst->src[1]: Target probability distributions tensor
+ * @note The computation is performed using CANN backend operators including
+ *       LogSoftmax, Mul, ReduceSum, and Muls for the final scaling.
+ */
+void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief  Computes the Group Normalization for a ggml tensor using the CANN
