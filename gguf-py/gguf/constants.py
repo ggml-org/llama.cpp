@@ -425,6 +425,7 @@ class MODEL_ARCH(IntEnum):
     GROVEMOE         = auto()
     APERTUS          = auto()
     COGVLM           = auto()
+    MINIMAXM2        = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -790,6 +791,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.SEED_OSS:         "seed_oss",
     MODEL_ARCH.GROVEMOE:         "grovemoe",
     MODEL_ARCH.APERTUS:          "apertus",
+    MODEL_ARCH.MINIMAXM2:        "minimax-m2",
     MODEL_ARCH.COGVLM:           "cogvlm",
 }
 
@@ -2920,6 +2922,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_CHEXP,
         MODEL_TENSOR.FFN_DOWN_CHEXP,
         MODEL_TENSOR.FFN_UP_CHEXP,
+    ],
+    MODEL_ARCH.MINIMAXM2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
     MODEL_ARCH.COGVLM: [
         MODEL_TENSOR.TOKEN_EMBD,
