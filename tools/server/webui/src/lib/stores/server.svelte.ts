@@ -150,13 +150,8 @@ class ServerStore {
 			const currentConfig = config();
 			const apiKey = currentConfig.apiKey?.toString().trim();
 
-			// Avoid cached responses so slot availability reflects the restarted backend.
-			const cacheBuster = Date.now().toString();
-			const response = await fetch(`./slots?cb=${cacheBuster}`, {
-				cache: 'no-store',
+			const response = await fetch(`./slots`, {
 				headers: {
-					'Cache-Control': 'no-cache',
-					Pragma: 'no-cache',
 					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
 				}
 			});
