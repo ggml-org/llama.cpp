@@ -190,8 +190,8 @@ static __global__ void mul_mat_vec_q(
 
     const uint32_t channel_bias = ids ? channel_x : channel_dst;
 
-    float x_biases[ncols_dst]    = { { 0.0f } };
-    float gate_biases[ncols_dst] = { { 0.0f } };
+    float x_biases[ncols_dst]    = { 0.0f };
+    float gate_biases[ncols_dst] = { 0.0f };
     if constexpr (has_fusion) {
         if (use_bias) {
             x_bias = x_bias + sample_dst*stride_sample_dst + channel_bias*stride_channel_dst + row0;
