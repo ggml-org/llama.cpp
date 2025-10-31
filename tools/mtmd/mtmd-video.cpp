@@ -561,8 +561,13 @@ static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoIn
     opts.stride     = 1;
     opts.recursive  = false;
 
-    // minicpm frames sample method
+#ifdef MTMD_MAX_VIDEO_FRAMES_SMALL
+    // set a small number of frames for fast test locally
     const int32_t minicpmv_max_video_frames = 4;
+#else
+    // minicpm frames sample method
+    const int32_t minicpmv_max_video_frames = 64;
+#endif
     opts.max_frames = minicpmv_max_video_frames;
     if(info.total_frames > minicpmv_max_video_frames) {
         // uniform sample
