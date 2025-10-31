@@ -24,7 +24,7 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
         inp_attn = build_attn_inp_kv_iswa();
     } else {
         inp_attn = build_attn_inp_kv();
-    };
+    }
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
@@ -63,7 +63,7 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
 
                 Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base,
                                      freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            };
+            }
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
@@ -72,11 +72,11 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
-        };
+        }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        };
+        }
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);
 
@@ -101,7 +101,7 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

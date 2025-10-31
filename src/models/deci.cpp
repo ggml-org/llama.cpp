@@ -36,7 +36,7 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
             // norm
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
-        };
+        }
         if (n_head > 0 && n_head_kv == 0) {
             // "linear attention" of Llama-3_1-Nemotron-51B
             cur = build_lora_mm(model.layers[il].wo, cur);
@@ -52,19 +52,19 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
             if (model.layers[il].bq) {
                 Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                 cb(Qcur, "Qcur", il);
-            };
+            }
             ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
             cb(Kcur, "Kcur", il);
             if (model.layers[il].bk) {
                 Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                 cb(Kcur, "Kcur", il);
-            };
+            }
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Vcur, "Vcur", il);
             if (model.layers[il].bv) {
                 Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 cb(Vcur, "Vcur", il);
-            };
+            }
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -82,21 +82,21 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-        };
+        }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        };
+        }
         // FFN-free layer of Llama-3_1-Nemotron-Ultra-253B
         if (n_ff == 0) {
             continue;
-        };
+        }
         // modified to support attention-free layer of Llama-3_1-Nemotron-51B
         ggml_tensor * ffn_inp = cur;
         if (n_head > 0) {
             ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
-        };
+        }
         // feed-forward network
         if (model.layers[il].ffn_gate_inp == nullptr) {
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
@@ -108,7 +108,7 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
                 model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
-        };
+        }
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "ffn_out", il);
 
@@ -117,7 +117,7 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

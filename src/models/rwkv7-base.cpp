@@ -21,7 +21,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_channel_mix(const llama_layer * 
             break;
         default:
             GGML_ABORT("fatal error");
-    };
+    }
     return cur;
 }
 
@@ -79,11 +79,11 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
                                                           ggml_mul_mat(ctx0, layer.time_mix_v2,
                                                                        ggml_mul_mat(ctx0, layer.time_mix_v1, xv)),
                                                           layer.time_mix_v0))));
-    };
+    }
     ggml_tensor * g = nullptr;
     if (layer.time_mix_g1 && layer.time_mix_g2) {
         g = ggml_mul_mat(ctx0, layer.time_mix_g2, ggml_sigmoid(ctx0, ggml_mul_mat(ctx0, layer.time_mix_g1, xg)));
-    };
+    }
     ggml_tensor * a = ggml_sigmoid(
         ctx0, ggml_add(ctx0, ggml_mul_mat(ctx0, layer.time_mix_a2, ggml_mul_mat(ctx0, layer.time_mix_a1, xa)),
                        layer.time_mix_a0));
@@ -121,7 +121,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
         cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.time_mix_ln), layer.time_mix_ln_b);
     } else {
         cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
-    };
+    }
     ggml_tensor * rk = ggml_sum_rows(
         ctx0, ggml_mul(ctx0, ggml_mul(ctx0, k, r), ggml_reshape_2d(ctx0, layer.time_mix_r_k, head_size, head_count)));
     cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, ggml_mul(ctx0, v, rk), n_embd, n_tokens));

@@ -73,7 +73,7 @@ llm_build_falcon_h1::llm_build_falcon_h1(const llama_model & model, const llm_gr
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        };
+        }
         ggml_tensor * ffn_inp = inpSA;
         cb(ffn_inp, "ffn_inp", il);
 
@@ -95,7 +95,7 @@ llm_build_falcon_h1::llm_build_falcon_h1(const llama_model & model, const llm_gr
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

@@ -22,7 +22,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_channel_mix(const llama_layer * 
             break;
         default:
             GGML_ABORT("fatal error");
-    };
+    }
     return cur;
 }
 
@@ -86,7 +86,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
         xv = ggml_add(ctx0, ggml_mul(ctx0, ggml_add(ctx0, xv, layer.time_mix_lerp_v), sx), cur);
         xr = ggml_add(ctx0, ggml_mul(ctx0, ggml_add(ctx0, xr, layer.time_mix_lerp_r), sx), cur);
         xg = ggml_add(ctx0, ggml_mul(ctx0, ggml_add(ctx0, xg, layer.time_mix_lerp_g), sx), cur);
-    };
+    }
     ggml_tensor * r = build_lora_mm(layer.time_mix_receptance, xr);
     ggml_tensor * k = build_lora_mm(layer.time_mix_key, xk);
     ggml_tensor * v = build_lora_mm(layer.time_mix_value, xv);
@@ -98,13 +98,13 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
     }
     if (layer.time_mix_value_b) {
         v = ggml_add(ctx0, v, layer.time_mix_value_b);
-    };
+    }
     ggml_tensor * g = build_lora_mm(layer.time_mix_gate, xg);
     if (is_qrwkv) {
         g = ggml_sigmoid(ctx0, g);
     } else {
         g = ggml_silu(ctx0, g);
-    };
+    }
     if (n_head_kv != 0 && n_head_kv != n_head) {
         GGML_ASSERT(n_head % n_head_kv == 0);
         k                 = ggml_reshape_4d(ctx0, k, head_size, 1, n_head_kv, n_tokens);
@@ -112,7 +112,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
         ggml_tensor * tmp = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, head_size, n_head / n_head_kv, n_head_kv, n_tokens);
         k                 = ggml_repeat(ctx0, k, tmp);
         v                 = ggml_repeat(ctx0, v, tmp);
-    };
+    }
     k = ggml_reshape_3d(ctx0, k, head_size, n_head, n_tokens);
     v = ggml_reshape_3d(ctx0, v, head_size, n_head, n_tokens);
     r = ggml_reshape_3d(ctx0, r, head_size, n_head, n_tokens);
@@ -127,7 +127,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
     if (is_qrwkv) {
         // k = k * (1 - w)
         k = ggml_sub(ctx0, k, ggml_mul(ctx0, k, w));
-    };
+    }
     ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
 
     ggml_tensor * wkv_output;
@@ -154,7 +154,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
         cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.time_mix_ln), layer.time_mix_ln_b);
     } else {
         cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
-    };
+    }
     cur = ggml_mul(ctx0, cur, g);
     cur = build_lora_mm(layer.time_mix_output, cur);
 

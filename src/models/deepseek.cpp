@@ -42,19 +42,19 @@ llm_build_deepseek::llm_build_deepseek(const llama_model & model, const llm_grap
             if (model.layers[il].bq) {
                 Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                 cb(Qcur, "Qcur", il);
-            };
+            }
             ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
             cb(Kcur, "Kcur", il);
             if (model.layers[il].bk) {
                 Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                 cb(Kcur, "Kcur", il);
-            };
+            }
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Vcur, "Vcur", il);
             if (model.layers[il].bv) {
                 Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 cb(Vcur, "Vcur", il);
-            };
+            }
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -72,11 +72,11 @@ llm_build_deepseek::llm_build_deepseek(const llama_model & model, const llm_grap
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-        };
+        }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        };
+        }
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
@@ -118,7 +118,7 @@ llm_build_deepseek::llm_build_deepseek(const llama_model & model, const llm_grap
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);
                 cb(cur, "ffn_out", il);
             }
-        };
+        }
         cur = ggml_add(ctx0, cur, ffn_inp);
 
         cur = build_cvec(cur, il);
@@ -126,7 +126,7 @@ llm_build_deepseek::llm_build_deepseek(const llama_model & model, const llm_grap
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);

@@ -37,19 +37,19 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
             if (model.layers[il].bq) {
                 Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                 cb(Qcur, "Qcur", il);
-            };
+            }
             ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
             cb(Kcur, "Kcur", il);
             if (model.layers[il].bk) {
                 Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                 cb(Kcur, "Kcur", il);
-            };
+            }
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Vcur, "Vcur", il);
             if (model.layers[il].bv) {
                 Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 cb(Vcur, "Vcur", il);
-            };
+            }
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -57,14 +57,14 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
             if (model.layers[il].attn_q_norm) {
                 Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM, il);
                 cb(Qcur, "Qcur", il);
-            };
+            }
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
 
             if (model.layers[il].attn_k_norm) {
                 Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM, il);
                 cb(Kcur, "Kcur", il);
-            };
+            }
             Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
 
@@ -75,12 +75,12 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-        };
+        }
         if (il == n_layer - 1 && inp_out_ids) {
             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
             ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
-        };
+        }
         ggml_tensor * attn_out = cur;
 
         // feed-forward network
@@ -91,7 +91,7 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
                     model.layers[il].ffn_down, NULL, NULL,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
-        };
+        }
         // add together residual + FFN + self-attention
         cur = ggml_add(ctx0, cur, inpL);
         cur = ggml_add(ctx0, cur, attn_out);
@@ -101,7 +101,7 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM, -1);
@@ -114,7 +114,7 @@ llm_build_command_r::llm_build_command_r(const llama_model & model, const llm_gr
 
     if (f_logit_scale) {
         cur = ggml_scale(ctx0, cur, f_logit_scale);
-    };
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 

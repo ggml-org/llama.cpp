@@ -62,7 +62,7 @@ llm_build_glm4::llm_build_glm4(const llama_model & model, const llm_graph_params
                                     cur->nb[1], 1 * sizeof(float) * (n_embd));
                 Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
                                     cur->nb[1], 1 * sizeof(float) * (n_embd + n_embd_gqa));
-            };
+            }
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
 
@@ -76,11 +76,11 @@ llm_build_glm4::llm_build_glm4(const llama_model & model, const llm_graph_params
             cur = build_attn(inp_attn,
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-        };
+        }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        };
+        }
         // Post-attention norm (new!)
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "post_attn_norm", il);
@@ -106,11 +106,11 @@ llm_build_glm4::llm_build_glm4(const llama_model & model, const llm_graph_params
             // Post-MLP norm
             cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "post_mlp_norm", il);
-        };
+        }
         // Add residual connection after post-MLP norm
         inpL = ggml_add(ctx0, cur, ffn_inp);
         cb(inpL, "l_out", il);
-    };
+    }
     // Final norm
     cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
 

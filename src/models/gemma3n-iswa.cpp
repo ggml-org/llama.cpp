@@ -18,7 +18,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
     if (ubatch.token) {
         inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
         cb(inpL, "inp_scaled", -1);
-    };
+    }
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
@@ -39,7 +39,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
         altup_added                 = ggml_div(ctx0, ggml_mul(ctx0, altup_added, target_magnitude), new_magnitude);
         inpL                        = ggml_concat(ctx0, inpL, altup_added, 2);  // shape: [n_embd, n_tokens, n_altup]
         cb(inpL, "inp_stacked", -1);
-    };
+    }
     // inpL now has shape:          [n_embd,       n_tokens, n_altup]
     // inp_per_layer now has shape: [n_embd_altup, n_tokens, n_layer]
 
@@ -115,7 +115,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             cur = build_attn(inp_attn,
                     model.layers[il].wo, NULL,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
-        };
+        }
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);
 
@@ -143,7 +143,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             cur = ggml_mul(ctx0, up_proj, gate_proj);
             cur = build_lora_mm(model.layers[il].ffn_down, cur);
             cb(cur, "ffn_out", il);
-        };
+        }
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "ffn_post_norm", il);
 
@@ -167,7 +167,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             first_prediction =
                 build_norm(first_prediction, model.layers[il].per_layer_post_norm, NULL, LLM_NORM_RMS, il);
             cb(first_prediction, "first_prediction_out", il);
-        };
+        }
         // equivalent to python code: corrected_predictions[1:] += first_prediction
         {
             ggml_tensor * slice_first = view_2d_slice(corrected, 0);
@@ -176,14 +176,14 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
                 ggml_row_size(corrected->type, n_embd * n_tokens), n_embd * n_tokens * ggml_element_size(corrected));
             ggml_tensor * tmp = ggml_add(ctx0, slice_rest, first_prediction);  // [n_embd, n_tokens, n_altup - 1]
             corrected         = ggml_concat(ctx0, slice_first, tmp, 2);        // [n_embd, n_tokens, n_altup]
-        };
+        }
         cur = corrected;                                                       // [n_embd, n_tokens, n_altup]
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer
         inpL = cur;
-    };
+    }
     cur = inpL;  // [n_embd, n_tokens, n_altup]
 
     // cur now has multiple altup(s), we want to merge them back to 1 altup
@@ -206,7 +206,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
         }
         cur = ggml_scale(ctx0, cur, 1.0f / float(n_altup));  // [n_embd, n_tokens]
         cb(cur, "unembd_merged", -1);
-    };
+    }
     // cur now has shape: [n_embd, n_tokens]
 
     // TODO: move this to right after the last KV layer
@@ -214,7 +214,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
         // skip computing output for unused tokens
         ggml_tensor * inp_out_ids = build_inp_out_ids();
         cur                       = ggml_get_rows(ctx0, cur, inp_out_ids);
-    };
+    }
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 
     cb(cur, "result_norm", -1);
@@ -227,7 +227,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
         cur = ggml_tanh(ctx0, cur);
         cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
-    };
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
