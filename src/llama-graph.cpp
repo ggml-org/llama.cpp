@@ -1595,12 +1595,12 @@ ggml_tensor * llm_graph_context::build_attn(
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
 
     const auto * mctx_cur = inp->mctx;
 
     // store to KV cache
     {
-        ggml_build_forward_expand(gf, k_cur);
         const auto & k_idxs = inp->get_k_idxs();
         const auto & v_idxs = inp->get_v_idxs();
 
