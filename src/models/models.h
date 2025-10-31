@@ -405,6 +405,15 @@ struct llm_build_qwen3moe : public llm_graph_context {
     llm_build_qwen3moe(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_qwen3vl : public llm_graph_context {
+    llm_build_qwen3vl(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_qwen3vlmoe : public llm_graph_context {
+    llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params);
+};
+
+
 struct llm_build_qwen : public llm_graph_context {
     llm_build_qwen(const llama_model & model, const llm_graph_params & params);
 };
