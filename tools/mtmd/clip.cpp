@@ -10,6 +10,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#if defined(ENABLE_COREML)
+#include "coreml/mtmd_coreml.h"
+#endif
 
 #include <cassert>
 #include <cmath>
@@ -414,6 +417,9 @@ struct clip_ctx {
     // for debugging
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
+
+    // CoreML model path for iOS
+    std::string coreml_model_path;
 
     clip_ctx(clip_context_params & ctx_params) {
         debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
@@ -4366,13 +4372,144 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
     return pos_embed_2d;
 }
 
+#if defined(ENABLE_COREML)
+static bool clip_image_encode_coreml(float * pixel_values, int32_t * position_ids, float * pos_embed, float * vec, const char* coreml_model_path) {
+
+    static int flag = 0;
+    static const void* coremlEncoder = NULL;
+    static std::string cached_model_path = "";
+
+    // Check if we need to load a new model
+    if (flag == 0 || (coreml_model_path && cached_model_path != coreml_model_path)) {
+        if (coremlEncoder) {
+            closeModel(coremlEncoder);
+        }
+        coremlEncoder = loadModel(coreml_model_path);
+        if (!coremlEncoder) {
+            printf("Failed to load CoreML model from: %s\n", coreml_model_path ? coreml_model_path : "null");
+            return false;
+        }
+        cached_model_path = coreml_model_path ? coreml_model_path : "";
+        flag = 1;
+    }
+    predictWith(coremlEncoder, pixel_values, position_ids, pos_embed, vec);
+    return true;
+}
+#endif
+
 bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
     clip_image_f32_batch imgs;
     clip_image_f32_ptr img_copy(clip_image_f32_init());
     *img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
+#if defined(ENABLE_COREML)
+    const bool can_use_coreml =
+        !ctx->coreml_model_path.empty() &&
+        ctx->model.modality == CLIP_MODALITY_VISION &&
+        ctx->proj_type() == PROJECTOR_TYPE_MINICPMV;
+    if (can_use_coreml){
+        printf("clip use coreml\n");
+        return clip_image_batch_encode_coreml(ctx, &imgs, vec);
+    }
+#endif
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
+}
+
+bool clip_image_batch_encode_coreml(clip_ctx * ctx, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+
+    const clip_image_f32_batch & imgs = *imgs_c_ptr;
+    int batch_size = imgs.entries.size();
+
+    if (batch_size != 1) {
+        return false; // only support batch size of 1
+    }
+     // set inputs
+     const auto & model   = ctx->model;
+     const auto & hparams = model.hparams;
+
+     const int image_size_width  = imgs.entries[0]->nx;
+     const int image_size_height = imgs.entries[0]->ny;
+     const int patch_size    = hparams.patch_size;
+     const int pos_w = image_size_width  / patch_size;
+     const int pos_h = image_size_height / patch_size;
+
+    switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_MINICPMV:
+            {
+                std::vector<float> inp_raw;
+                std::vector<int32_t> positions;
+                std::vector<float> pos_embed;
+
+                // prepare inp_raw
+                {
+                    const int max_patches = 1024;
+                    const int nx = max_patches * patch_size;
+                    const int ny = patch_size;
+                    const int n = nx * ny;
+                    inp_raw.assign(3 * n, 0.0f);
+
+                    int patch_index = 0;
+                    for (int i = 0; i < image_size_height && patch_index < max_patches; i += patch_size) {
+                        for (int j = 0; j < image_size_width && patch_index < max_patches; j += patch_size) {
+                            for (int pi = 0; pi < patch_size; ++pi) {
+                                for (int pj = 0; pj < patch_size; ++pj) {
+                                    int src_index = ((i + pi) * image_size_width + (j + pj)) * 3;
+                                    int dst_index = nx * pi + patch_index * patch_size + pj;
+                                    inp_raw[dst_index]         = imgs.entries[0]->buf[src_index];
+                                    inp_raw[n + dst_index]     = imgs.entries[0]->buf[src_index + 1];
+                                    inp_raw[2 * n + dst_index] = imgs.entries[0]->buf[src_index + 2];
+                                }
+                            }
+                            patch_index++;
+                        }
+                    }
+                }
+                // prepare position_ids
+                {
+                    // inspired from siglip:
+                    //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
+                    //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
+                    positions.assign(std::max(pos_h * pos_w, 1024),0);
+                    int bucket_coords_h[1024];
+                    int bucket_coords_w[1024];
+                    for (int i = 0; i < pos_h; i++){
+                        bucket_coords_h[i] = std::floor(70.0*i/pos_h);
+                    }
+                    for (int i = 0; i < pos_w; i++){
+                        bucket_coords_w[i] = std::floor(70.0*i/pos_w);
+                    }
+                    for (int i = 0, id = 0; i < pos_h; i++){
+                        for (int j = 0; j < pos_w; j++){
+                            positions[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
+                        }
+                    }
+                }
+                // prepare pos_embed
+                {
+                    // inspired from resampler of Qwen-VL:
+                    //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
+                    //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
+                    int embed_dim = clip_n_mmproj_embd(ctx);
+
+                    // TODO @ngxson : this is very inefficient, can we do this using ggml_sin and ggml_cos?
+                    auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
+
+                    pos_embed.assign(embed_dim * std::max(pos_w * pos_h, 1024), 0.0f);
+                    for(int i = 0; i < pos_w * pos_h; ++i){
+                        for(int j = 0; j < embed_dim; ++j){
+                            pos_embed[i * embed_dim + j] = pos_embed_t[i][j];
+                        }
+                    }
+                }
+
+#if defined(ENABLE_COREML)
+                return clip_image_encode_coreml(inp_raw.data(), positions.data(), pos_embed.data(), vec, ctx->coreml_model_path.c_str());
+#endif
+            }
+        default:
+            GGML_ABORT("Unknown projector type");
+    }
 }
 
 bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
@@ -4866,4 +5003,10 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+void clip_set_coreml_model_path(struct clip_ctx * ctx, const char * coreml_model_path) {
+    if (ctx && coreml_model_path) {
+        ctx->coreml_model_path = coreml_model_path;
+    }
 }
