@@ -2456,7 +2456,6 @@ extern "C" {
             struct ggml_tensor  * state,
             float scale);
 
-
     GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
             struct ggml_context * ctx,
             struct ggml_tensor  * r,
