@@ -61,10 +61,10 @@ llm_build_cogvlm::llm_build_cogvlm(const llama_model & model, const llm_graph_pa
             Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, rope_type);
             Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
-            cur = build_attn(inp_attn, 
-                wo, nullptr, 
-                Qcur, Kcur, Vcur, 
-                nullptr, nullptr, nullptr, 
+            cur = build_attn(inp_attn,
+                wo, nullptr,
+                Qcur, Kcur, Vcur,
+                nullptr, nullptr, nullptr,
                 kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -75,10 +75,10 @@ llm_build_cogvlm::llm_build_cogvlm(const llama_model & model, const llm_graph_pa
         cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        cur = build_ffn(cur, 
-                ffn_up, NULL, NULL, 
-                ffn_gate, NULL, NULL, 
-                ffn_down, NULL, NULL, 
+        cur = build_ffn(cur,
+                ffn_up, NULL, NULL,
+                ffn_gate, NULL, NULL,
+                ffn_down, NULL, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
