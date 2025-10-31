@@ -3,8 +3,6 @@ import { SERVER_PROPS_LOCALSTORAGE_KEY } from '$lib/constants/localstorage-keys'
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
-const SLOTS_CHECK_THROTTLE_MS = 30_000;
-
 /**
  * ServerStore - Server state management and capability detection
  *
@@ -55,7 +53,6 @@ class ServerStore {
 	private _serverWarning = $state<string | null>(null);
 	private _slotsEndpointAvailable = $state<boolean | null>(null);
 	private fetchServerPropsPromise: Promise<void> | null = null;
-	private lastSlotsCheck = 0;
 
 	private readCachedServerProps(): ApiLlamaCppServerProps | null {
 		if (!browser) return null;
@@ -138,15 +135,7 @@ class ServerStore {
 	/**
 	 * Check if slots endpoint is available based on server properties and endpoint support
 	 */
-	private async checkSlotsEndpointAvailability(force = false): Promise<void> {
-		const now = Date.now();
-
-		if (!force && this.lastSlotsCheck && now - this.lastSlotsCheck < SLOTS_CHECK_THROTTLE_MS) {
-			return;
-		}
-
-		this.lastSlotsCheck = now;
-
+	private async checkSlotsEndpointAvailability(): Promise<void> {
 		if (!this._serverProps) {
 			this._slotsEndpointAvailable = false;
 			return;
@@ -211,8 +200,7 @@ class ServerStore {
 				this.persistServerProps(props);
 				this._error = null;
 				this._serverWarning = null;
-				this.lastSlotsCheck = 0;
-				await this.checkSlotsEndpointAvailability(true);
+				await this.checkSlotsEndpointAvailability();
 			} catch (error) {
 				if (isSilent && hadProps) {
 					console.warn('Silent server props refresh failed, keeping cached data:', error);
@@ -327,7 +315,6 @@ class ServerStore {
 		this._loading = false;
 		this._slotsEndpointAvailable = null;
 		this.fetchServerPropsPromise = null;
-		this.lastSlotsCheck = 0;
 		this.persistServerProps(null);
 	}
 }
