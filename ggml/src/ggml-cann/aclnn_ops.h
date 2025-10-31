@@ -253,6 +253,18 @@ void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
+ * @brief   Computes the Gated Linear Attention for a ggml tensor using the CANN
+ *          backend.
+ *
+ * @details ...
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the normalized values will be stored.
+ * @attention ...
+ */
+void ggml_cann_gated_linear_attn(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
  * @brief  Computes the Group Normalization for a ggml tensor using the CANN
  *         backend.
  *
@@ -674,6 +686,10 @@ void aclnn_cos(ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor *
  * @param acl_dst The destination tensor where the sine results will be stored.
  */
 void aclnn_sin(ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor * acl_dst);
+
+static void cann_copy(ggml_backend_cann_context& ctx, aclTensor* acl_src, aclTensor* acl_dst);
+static void aclnn_permute(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+                          aclTensor* acl_dst, int64_t* new_dim, uint64_t dims);
 
 /**
  * @brief Prepares broadcast-compatible ACL tensors for two input tensors and one
