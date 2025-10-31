@@ -1333,38 +1333,6 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
-    void * buf_pd = ggml_aligned_malloc(row_size_pd);
-    GGML_ASSERT(buf_pd != NULL);
-
-    void * buf_rp = ggml_aligned_malloc(row_size_rp);
-    GGML_ASSERT(buf_rp != NULL);
-
-    HEX_VERBOSE("ggml-hex: repack-mxfp4-mxfp4x4x2 %s : data %p size %zu dims %ldx%ld row-size %zu\n", t->name, data,
-                size, t->ne[0], nrows, row_size);
-
-    init_row_mxfp4x4x2((block_mxfp4 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
-
-    for (int64_t i = 0; i < nrows; i++) {
-        const uint8_t * src = (const uint8_t *) data + (i * row_size);
-        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
-
-        memcpy(buf_pd, src, row_size);
-        repack_row_mxfp4x4x2((uint8_t *) buf_rp, (const block_mxfp4 *) buf_pd, t->ne[0]);
-        memcpy(dst, buf_rp, row_size);
-    }
-
-    ggml_aligned_free(buf_pd, row_size_pd);
-    ggml_aligned_free(buf_rp, row_size_rp);
-}
-
-// repack mxfp4 data into mxfp4x4x2 tensor
-static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t size) {
-    int64_t nrows = ggml_nrows(t);
-
-    size_t row_size    = ggml_row_size(t->type, t->ne[0]);
-    size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
-
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
     const size_t total_tensor_size = (size_t)nrows * row_size;
