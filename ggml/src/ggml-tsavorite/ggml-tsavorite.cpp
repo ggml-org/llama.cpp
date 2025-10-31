@@ -741,10 +741,11 @@ tsi_cleanup() {
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
-    std::cout << "\nOPU Profiling Results:" << std::endl;
-    std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
-                 /*truncateFuncNames*/ true)
-              << std::endl;
+    // Profiling results already printed during first cleanup
+    // std::cout << "\nOPU Profiling Results:" << std::endl;
+    // std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
+    //              /*truncateFuncNames*/ true)
+    //           << std::endl;
     sleep(2);
     GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
     return;
