@@ -147,6 +147,9 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
+    struct ggml_tensor * create_contiguous_tensor(struct ggml_context * ctx, const std::string & fused_name, const std::initializer_list<int64_t> & ne
+        , std::vector<ggml_tensor**> tensors, int flags = 0);
+
     void done_getting_tensors() const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);

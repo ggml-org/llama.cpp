@@ -24,6 +24,8 @@ class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
 
+struct llama_layer;
+
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
@@ -603,6 +605,18 @@ struct llm_graph_context {
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur) const;
+
+    void build_qkv(const llama_layer & layer,
+            ggml_tensor       * cur,
+            int64_t             n_embd_head_q,
+            int64_t             n_embd_head_k,
+            int64_t             n_embd_head_v,
+            int32_t             n_head,
+            int32_t             n_head_kv,
+            ggml_tensor      ** q_out,
+            ggml_tensor      ** k_out,
+            ggml_tensor      ** v_out,
+            int                 il) const;
 
     // do mat_mul_id, while optionally apply lora
     ggml_tensor * build_lora_mm_id(

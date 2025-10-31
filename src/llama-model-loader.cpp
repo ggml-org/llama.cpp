@@ -840,6 +840,40 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
     return tensor;
 }
 
+struct ggml_tensor * llama_model_loader::create_contiguous_tensor(struct ggml_context * ctx, const std::string & fused_name, const std::initializer_list<int64_t> & ne
+    , std::vector<ggml_tensor**> tensors, int flags) {
+
+    (void)flags;
+
+    if (weights_map.find(fused_name) != weights_map.end()) {
+        return nullptr;
+    }
+
+    if (ggml_get_tensor(ctx, fused_name.c_str()) != nullptr) {
+        return nullptr;
+    }
+
+    const ggml_type type = (*tensors[0])->type;
+
+    struct ggml_tensor * fused = ggml_new_tensor(ctx, type, ne.size(), ne.begin());
+
+    if (!fused) {
+        return nullptr;
+    }
+
+    ggml_set_name(fused, fused_name.c_str());
+
+    size_t offset = 0;
+    for (ggml_tensor **tensor : tensors) {
+        std::initializer_list<int64_t> ne = { (*tensor)->ne[0], (*tensor)->ne[1], (*tensor)->ne[2], (*tensor)->ne[3] };
+        struct ggml_tensor * view = create_tensor_as_view(ctx, fused, ggml_get_name(*tensor), ne, offset, false);
+        *tensor = view;
+        offset += ggml_nbytes(*tensor);
+    }
+
+    return fused;
+}
+
 void llama_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
         throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
