@@ -11955,7 +11955,7 @@ struct llm_build_gemma_embedding : public llm_graph_context {
             cb(cur, "attn_post_norm", il);
 
             ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
-            cb(sa_out, "sa_out", il);
+            cb(sa_out, "emGemma_sa_out", il);
 
             cur = build_norm(sa_out,
                     model.layers[il].ffn_norm, NULL,
@@ -11981,7 +11981,7 @@ struct llm_build_gemma_embedding : public llm_graph_context {
             cur = ggml_add(ctx0, cur, sa_out);
 
             cur = build_cvec(cur, il);
-            cb(cur, "l_out", il);
+            cb(cur, "emGemma_l_out", il);
 
             // input for next layer
             inpL = cur;
