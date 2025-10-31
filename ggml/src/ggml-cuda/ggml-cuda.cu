@@ -3237,17 +3237,10 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
-                        ggml_tensor * src3 = cgraph->nodes[i + 2]->src[1];
                         ggml_tensor * rope = cgraph->nodes[i];
-                        ggml_tensor * dst  = cgraph->nodes[i + 2];
+                        ggml_tensor * set_rows = cgraph->nodes[i + 2];
 
-                        rope->src[3] = src3;
-                        rope->data   = dst->data;
-                        rope->type   = dst->type;
-
-                        const size_t set_rows_stride = dst->nb[1] / ggml_type_size(dst->type);
-                        ggml_set_op_params_i32(rope, 15, set_rows_stride);
-                        ggml_cuda_op_rope(*cuda_ctx, rope);
+                        ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
                         i += 2;
                         continue;
                     }
