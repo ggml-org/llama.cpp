@@ -25,12 +25,11 @@ bool is_video_file(const std::string & path){
            lower.rfind(".webm") != std::string::npos;
 }
 
-static bool get_video_info_from_dir(const std::string &path, VideoInfo &info){
+static void get_video_info_from_dir(const std::string &path, VideoInfo &info){
     info.fps = 1; // do not care
     std::vector<std::string> files;
     mtmd_helper::list_files(path, files, true); // recursive
     info.total_frames = files.size();
-    return true;
 }
 // untested
 static mtmd_bitmap* load_frames_from_dir(mtmd_context * ctx,
@@ -79,6 +78,32 @@ struct DecodedFrameRGBA {
     int height;
     std::vector<unsigned char> rgba; // size = width * height * 4
 };
+
+static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoInfo info){
+    mtmd_video::LoadVideoOptions opts;
+    opts.max_frames = 32;
+    opts.stride     = 1;
+    opts.recursive  = false;
+
+    /* MiniCPM-V normal-speed video frames sample method */
+
+#ifdef MTMD_MAX_VIDEO_FRAMES_SMALL
+    // set a small number of frames for fast test locally
+    const int32_t minicpmv_max_video_frames = 4;
+#else
+    const int32_t minicpmv_max_video_frames = 64;
+#endif
+    opts.max_frames = minicpmv_max_video_frames;
+    if(info.total_frames > minicpmv_max_video_frames) {
+        // uniform sample
+        opts.stride = (int)std::ceil((double)info.total_frames / minicpmv_max_video_frames);
+    } else {
+        // 1 frame per second
+        opts.stride = (info.fps > 1.0) ? (int)std::ceil(info.fps) : 1;
+    }
+    
+    return opts;
+}
 
 // --- FFmpeg-based file decoding (optional) ---
 
@@ -165,11 +190,10 @@ static int64_t seek_packet(void* opaque, int64_t offset, int whence) {
 
 static bool create_format_context_from_buffer(const uint8_t* buffer, size_t size,
                                        AVFormatContext*& fmt,
-                                       AVIOContext*& avio_ctx,
-                                       uint8_t*& avio_ctx_buffer) {
+                                       AVIOContext*& avio_ctx) {
     fmt = nullptr;
     avio_ctx = nullptr;
-    avio_ctx_buffer = nullptr;
+    uint8_t* avio_ctx_buffer = nullptr;
 
     if (!buffer || size == 0) return false;
 
@@ -312,39 +336,13 @@ static bool get_video_info_from_format_ctx(AVFormatContext *fmt, VideoInfo &info
     return true;
 }
 
-// from buffer
-bool get_video_info(const uint8_t* buffer, size_t size, VideoInfo &info) {
-    AVFormatContext* fmt = nullptr;
-    AVIOContext* avio_ctx = nullptr;
-    uint8_t* avio_ctx_buffer = nullptr;
-
-    GGML_ASSERT(create_format_context_from_buffer(buffer, size, fmt, avio_ctx, avio_ctx_buffer));
-    bool ok = get_video_info_from_format_ctx(fmt, info);
-    free_format_context_from_buffer(fmt, avio_ctx);
-    return ok;
-}
-
-// from file
-bool get_video_info(const std::string &path, VideoInfo &info) {
-    if(mtmd_helper::is_dir(path)) return get_video_info_from_dir(path, info);
-
-    AVFormatContext* fmt = nullptr;
-    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0)
-        return false;
-
-    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext* f){
-        if (f) avformat_close_input(&f);
-    });
-
-    return get_video_info_from_format_ctx(fmt, info);
-}
-
 static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
     AVFormatContext* fmt,
     std::vector<DecodedFrameRGBA>& frames,
-    int max_frames,
-    int stride) 
+    mtmd_video::LoadVideoOptions opts) 
 {
+    const auto stride = opts.stride;
+    const auto max_frames = opts.max_frames;
     if(!fmt || stride <= 0 || max_frames <= 0) return false;
     if (avformat_find_stream_info(fmt, nullptr) < 0) return false;
     int vstream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
@@ -364,8 +362,8 @@ static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
     std::unique_ptr<AVPacket, void(*)(AVPacket*)> pkt_guard(pkt, [](AVPacket *p){ if (p) av_packet_free(&p); });
 
     SwsContext * sws = nullptr;
-    int idx = 0;
-    int taken = 0;
+    uint32_t idx = 0;
+    uint32_t taken = 0;
     while (av_read_frame(fmt, pkt) >= 0) {
         if (pkt->stream_index != vstream) { av_packet_unref(pkt); continue; }
         if (avcodec_send_packet(ctx, pkt) < 0) { av_packet_unref(pkt); break; }
@@ -394,77 +392,6 @@ static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
     return taken > 0;
 }
 
-// from file
-static bool decode_video_ffmpeg_to_rgba(
-    const std::string& file,
-    std::vector<DecodedFrameRGBA>& frames,
-    int max_frames,
-    int stride)
-{
-    AVFormatContext* fmt = nullptr;
-    if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0)
-        return false;
-
-    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext* f){
-        if (f) avformat_close_input(&f);
-    });
-
-    return decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, max_frames, stride);
-}
-
-// from buffer
-static bool decode_video_ffmpeg_to_rgba(
-    const uint8_t* buffer,
-    size_t size,
-    std::vector<DecodedFrameRGBA>& frames,
-    int max_frames,
-    int stride)
-{
-    if (!buffer || size == 0) return false;
-    AVFormatContext* fmt = nullptr;
-    AVIOContext* avio_ctx = nullptr;
-    uint8_t* avio_ctx_buffer = nullptr;
-
-    GGML_ASSERT(create_format_context_from_buffer(buffer, size, fmt, avio_ctx, avio_ctx_buffer));
-    
-    bool ok = decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, max_frames, stride);
-
-    free_format_context_from_buffer(fmt, avio_ctx);
-    return ok;
-}
-#else
-bool get_video_info(const std::string &path, VideoInfo &info){
-    if(mtmd_helper::is_dir(path)) return get_video_info_from_dir(path, info);
-    LOG_ERR("FFmpeg support is not enabled in this build\n");
-    return false;
-}
-bool get_video_info(const uint8_t* /*buffer*/, size_t /*size*/, VideoInfo &/*info*/){
-    LOG_ERR("FFmpeg support is not enabled in this build\n");
-    return false;
-}
-bool is_video_buffer(const uint8_t */*data*/, size_t /*size*/){
-    LOG_ERR("FFmpeg support is not enabled in this build\n");
-    return false;
-}
-static bool decode_video_ffmpeg_to_rgba(
-    const std::string& /*file*/,
-    std::vector<DecodedFrameRGBA>& /*frames*/,
-    int /*max_frames*/,
-    int /*stride*/)
-{
-    return false;   
-}
-static bool decode_video_ffmpeg_to_rgba(
-    const uint8_t* /*buffer*/,
-    size_t /*size*/,
-    std::vector<DecodedFrameRGBA>& /*frames*/,
-    int /*max_frames*/,
-    int /*stride*/)
-{
-    return false;   
-}
-#endif
-
 static mtmd_bitmap* convert_frames_to_bitmap(mtmd_context * ctx, const std::vector<DecodedFrameRGBA>& decoded) {
     if (!ctx) return nullptr;
     if(decoded.empty()) return nullptr;
@@ -492,70 +419,83 @@ static mtmd_bitmap* convert_frames_to_bitmap(mtmd_context * ctx, const std::vect
     return out_frames;
 }
 
-static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoInfo info){
-    mtmd_video::LoadVideoOptions opts;
-    opts.max_frames = 32;
-    opts.stride     = 1;
-    opts.recursive  = false;
+mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const uint8_t* buffer, size_t size){
+    auto info = mtmd_video::VideoInfo{};
+    AVFormatContext* fmt = nullptr;
+    AVIOContext* avio_ctx = nullptr;
+    GGML_ASSERT(create_format_context_from_buffer(buffer, size, fmt, avio_ctx));
 
-    /* MiniCPM-V normal-speed video frames sample method */
-
-#ifdef MTMD_MAX_VIDEO_FRAMES_SMALL
-    // set a small number of frames for fast test locally
-    const int32_t minicpmv_max_video_frames = 4;
-#else
-    const int32_t minicpmv_max_video_frames = 64;
-#endif
-    opts.max_frames = minicpmv_max_video_frames;
-    if(info.total_frames > minicpmv_max_video_frames) {
-        // uniform sample
-        opts.stride = (int)std::ceil((double)info.total_frames / minicpmv_max_video_frames);
-    } else {
-        // 1 frame per second
-        opts.stride = (info.fps > 1.0) ? (int)std::ceil(info.fps) : 1;
+    if(!get_video_info_from_format_ctx(fmt, info)) {
+        LOG_ERR("Unable to get video info from buffer\n");
+        free_format_context_from_buffer(fmt, avio_ctx);
+        return nullptr;
     }
-    
-    return opts;
+
+    const auto opts = get_video_sample_options(info);
+
+    std::vector<DecodedFrameRGBA> frames;
+    if(!decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, opts)){
+        LOG_ERR("Unable to decode video from buffer\n");
+        free_format_context_from_buffer(fmt, avio_ctx);
+        return nullptr;
+    }
+
+    auto * res = convert_frames_to_bitmap(ctx, frames);
+    free_format_context_from_buffer(fmt, avio_ctx);
+    return res;
 }
+#else
+bool is_video_buffer(const uint8_t */*data*/, size_t /*size*/){
+    LOG_WRN("FFmpeg support is not enabled in this build, can not check it\n");
+    return false;
+}
+mtmd_bitmap* init_video_bitmap(mtmd_context * /*ctx*/, const uint8_t* /*buffer*/, size_t /*size*/){
+    LOG_ERR("FFmpeg support is not enabled in this build, can not load video from buffer\n");
+    return nullptr;
+}
+#endif
 
 mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const std::string & path) {
     auto info = mtmd_video::VideoInfo{};
-    if(!mtmd_video::get_video_info(path, info)) {
-        LOG_ERR("Unable to get video info from path: %s\n", path.c_str());
-        return nullptr;
-    }
-
-    const auto opts = get_video_sample_options(info);
-
-    if (mtmd_helper::is_dir(path)) {
+    
+    if(mtmd_helper::is_dir(path)){
+        get_video_info_from_dir(path, info);
+        const auto opts = get_video_sample_options(info);
         return load_frames_from_dir(ctx, path, opts);
     }
 
-    std::vector<DecodedFrameRGBA> frames;
-    if(!decode_video_ffmpeg_to_rgba(path, frames, opts.max_frames, std::max(1u, opts.stride))){
-        LOG_ERR("Unable to decode video from path: %s\n", path.c_str());
+    // handle file otherwise
+
+    #ifdef MTMD_WITH_FFMPEG
+    AVFormatContext* fmt = nullptr;
+
+    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0){
+        LOG_ERR("Unable to open video from path: %s\n", path.c_str());
+        if(fmt) avformat_close_input(&fmt);
         return nullptr;
     }
-
-    return convert_frames_to_bitmap(ctx, frames);
-}
-
-mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const uint8_t* buffer, size_t size){
-    auto info = mtmd_video::VideoInfo{};
-    if(!mtmd_video::get_video_info(buffer, size, info)) {
-        LOG_ERR("Unable to get video info from buffer\n");
+    if(!get_video_info_from_format_ctx(fmt, info)) {
+        LOG_ERR("Unable to get video info from path: %s\n", path.c_str());
+        if(fmt) avformat_close_input(&fmt);
         return nullptr;
     }
 
     const auto opts = get_video_sample_options(info);
 
     std::vector<DecodedFrameRGBA> frames;
-    if(!decode_video_ffmpeg_to_rgba(buffer, size, frames, opts.max_frames, std::max(1u, opts.stride))){
-        LOG_ERR("Unable to decode video from buffer\n");
+    if(!decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, opts)){
+        LOG_ERR("Unable to decode video from path: %s\n", path.c_str());
+        if(fmt) avformat_close_input(&fmt);
         return nullptr;
     }
 
-    return convert_frames_to_bitmap(ctx, frames);
+    auto * res = convert_frames_to_bitmap(ctx, frames);
+    if(fmt) avformat_close_input(&fmt);
+    return res;
+    #else
+    LOG_ERR("FFmpeg support is not enabled in this build, can not load video from file\n");
+    return nullptr;
+    #endif
 }
 
 } // namespace mtmd_video
