@@ -210,6 +210,33 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 
+
+struct mtmd_mmproj_context;
+
+// initialize a minimal context that only loads the projector (vision) from a GGUF file
+// returns nullptr on failure
+MTMD_API struct mtmd_mmproj_context * mtmd_mmproj_init(const char * mmproj_fname,
+                                                       const struct mtmd_context_params ctx_params);
+
+// free projector-only context
+MTMD_API void mtmd_mmproj_free(struct mtmd_mmproj_context * ctx);
+
+// basic queries
+MTMD_API int  mtmd_mmproj_get_image_size (struct mtmd_mmproj_context * ctx);
+MTMD_API int  mtmd_mmproj_get_patch_size (struct mtmd_mmproj_context * ctx);
+MTMD_API int  mtmd_mmproj_get_hidden_size(struct mtmd_mmproj_context * ctx);
+MTMD_API bool mtmd_mmproj_is_jinaclip    (struct mtmd_mmproj_context * ctx);
+// generic support check for projector-only encode path
+MTMD_API bool mtmd_mmproj_is_supported   (struct mtmd_mmproj_context * ctx);
+
+// encode a bitmap (RGB) to projector embeddings; on success, *out_data points to malloc()'d buffer of size (*out_count)
+// caller must free(*out_data)
+MTMD_API int mtmd_mmproj_encode_bitmap(struct mtmd_mmproj_context * ctx,
+                                       const mtmd_bitmap * bmp,
+                                       int n_threads,
+                                       float ** out_data,
+                                       size_t * out_count);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c
