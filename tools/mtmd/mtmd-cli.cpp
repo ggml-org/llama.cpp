@@ -40,7 +40,12 @@ static void show_additional_info(int /*argc*/, char ** argv) {
     LOG(
         "Experimental CLI for multimodal\n\n"
         "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --audio <audio> -p <prompt>\n\n"
-        "  -m and --mmproj are required\n"
+        "  -m and --mmproj are required in chat/generation modes\n"
+        "  Special case: when only --mmproj and --image are provided and projector is JinaCLIP,\n"
+        "  run the projector-only embedding path (no -m needed)\n"
+        "  Embedding output options (projector-only):\n"
+        "    --embd-output-format {array|json|json+|''}  print embedding to stdout; empty to disable\n"
+        "    --embd-normalize {…}                        normalization uses common --embd-normalize\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
         "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
         "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
@@ -174,6 +179,106 @@ struct mtmd_cli_context {
     }
 };
 
+static int run_mmproj_only(common_params & params) {
+    if (params.mmproj.path.empty() || params.image.empty()) return -1;
+    mtmd_context_params ctx_params = mtmd_context_params_default();
+    ctx_params.use_gpu   = params.mmproj_use_gpu;
+    ctx_params.verbosity = (params.verbosity > 0) ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+    mtmd_mmproj_context * mctx = mtmd_mmproj_init(params.mmproj.path.c_str(), ctx_params);
+    if (!mctx) {
+        LOG_ERR("[ERROR] Failed to load vision mmproj: %s\n", params.mmproj.path.c_str());
+        return 1;
+    }
+    if (!mtmd_mmproj_is_supported(mctx)) {
+        mtmd_mmproj_free(mctx);
+        return -1;
+    }
+    const std::string fmt = params.embd_out; // "array" | "json" | "json+" | ""
+    const bool silent_json = !fmt.empty();
+    if (!silent_json) {
+        LOG("VISION(projector-only auto): image_size=%d patch=%d hidden=%d\n", mtmd_mmproj_get_image_size(mctx), mtmd_mmproj_get_patch_size(mctx), mtmd_mmproj_get_hidden_size(mctx));
+    }
+
+    bool printed_any = false;
+    if (fmt == "array" || fmt == "json" || fmt == "json+") {
+        if (fmt == "array") {
+            LOG("[");
+        } else {
+            LOG("{\n  \"object\": \"list\",\n  \"data\": [\n");
+        }
+    }
+    for (size_t i = 0; i < params.image.size(); ++i) {
+        const char * image_path = params.image[i].c_str();
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file_noctx(image_path));
+        if (!bmp.ptr) { LOG_ERR("[ERROR] Failed to load image %s\n", image_path); continue; }
+        float * emb = nullptr; size_t n_el = 0;
+        auto enc_start = std::chrono::high_resolution_clock::now();
+        int enc_rc = mtmd_mmproj_encode_bitmap(mctx, bmp.ptr.get(), params.cpuparams.n_threads, &emb, &n_el);
+        auto enc_end = std::chrono::high_resolution_clock::now();
+        auto enc_ms = std::chrono::duration_cast<std::chrono::microseconds>(enc_end - enc_start).count() / 1000.0;
+        if (enc_rc != 0) {
+            LOG_ERR("[ERROR] Image encoding failed: %s\n", image_path);
+            continue;
+        }
+        std::vector<float> image_embd(emb, emb + n_el);
+        std::free(emb);
+        if (!silent_json) {
+            LOG("IMAGE %zu/%zu: %s encode_ms=%.3f out_dim=%zu\n", i+1, params.image.size(), image_path, enc_ms, image_embd.size());
+        }
+
+        {
+            const int truncate = 512;
+            if (truncate > 0 && image_embd.size() > (size_t) truncate) image_embd.resize(truncate);
+        }
+        {
+            const int embd_norm = params.embd_normalize;
+            if (embd_norm != -1) {
+                common_embd_normalize(image_embd.data(), image_embd.data(), (int) image_embd.size(), embd_norm);
+            }
+        }
+
+        if (fmt == "array") {
+            if (printed_any) LOG(",");
+            LOG("[");
+            for (size_t k = 0; k < image_embd.size(); ++k) {
+                if (k) LOG(",");
+                LOG("%.7f", image_embd[k]);
+            }
+            LOG("]");
+            printed_any = true;
+        } else if (fmt == "json" || fmt == "json+") {
+            if (printed_any) LOG(",\n");
+            LOG("    {\n      \"object\": \"embedding\",\n      \"index\": %zu,\n      \"embedding\": ", i);
+            LOG("[");
+            for (size_t k = 0; k < image_embd.size(); ++k) {
+                if (k) LOG(",");
+                LOG("%.7f", image_embd[k]);
+            }
+            LOG("]\n    }");
+            printed_any = true;
+        }
+    }
+    if (fmt == "array") {
+        LOG("]\n");
+    } else if (fmt == "json" || fmt == "json+") {
+        if (fmt == "json+" && params.image.size() > 1) {
+            LOG(",\n  \"cosineSimilarity\": [\n");
+            for (size_t i = 0; i < params.image.size(); ++i) {
+                LOG("    [");
+                for (size_t j = 0; j < params.image.size(); ++j) {
+                    LOG("%6.2f", 0.0f);
+                    if (j + 1 < params.image.size()) LOG(", ");
+                }
+                LOG(" ]%s\n", (i + 1 < params.image.size() ? "," : ""));
+            }
+            LOG("  ]\n");
+        }
+        LOG("\n}\n");
+    }
+    mtmd_mmproj_free(mctx);
+    return 0;
+}
+
 static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
@@ -280,6 +385,12 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
+    }
+
+    // try projector-only path for JinaCLIP first (otherwise return -1 and continue normal flow)
+    {
+        int rc = run_mmproj_only(params);
+        if (rc >= 0) return rc; // 0 success; 1 failure; -1 not JinaCLIP
     }
 
     common_init();
