@@ -1060,6 +1060,7 @@ struct vk_op_rope_push_constants {
     uint32_t s1;
     uint32_t s2;
     int32_t sections[4];
+    uint32_t is_imrope;
     uint32_t is_back;
     uint32_t set_rows_stride;
 };
@@ -1086,6 +1087,7 @@ struct vk_op_soft_max_push_constants {
 
 struct vk_op_argsort_push_constants {
     uint32_t ncols;
+    uint32_t nrows;
     int32_t order;
 };
 
@@ -8713,6 +8715,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     case GGML_OP_ARGSORT:
         elements = { (uint32_t)ne00, (uint32_t)ggml_nrows(src0), 1 };
+        elements[1] = std::min(elements[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
         break;
     case GGML_OP_IM2COL:
         {
@@ -9930,6 +9933,8 @@ static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, cons
         memcpy(sections, (int32_t *) dst->op_params + 11, sizeof(int)*4);
     }
 
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+
     float corr_dims[2];
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
@@ -9951,7 +9956,7 @@ static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, cons
         (uint32_t)src0->ne[0], (uint32_t)n_dims, freq_scale, (uint32_t)src0->ne[1],
         freq_base, ext_factor, attn_factor, {corr_dims[0], corr_dims[1]}, theta_scale,
         src2 != nullptr, (uint32_t)src0->ne[2], s1, s2,
-        { sections[0], sections[1], sections[2], sections[3] }, backprop, set_rows_stride,
+        { sections[0], sections[1], sections[2], sections[3] }, is_imrope, backprop, set_rows_stride,
     }, dryrun);
 }
 
@@ -9959,9 +9964,11 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
     int32_t * op_params = (int32_t *)dst->op_params;
 
     uint32_t ncols = src0->ne[0];
+    uint32_t nrows = ggml_nrows(src0);
 
     ggml_vk_op_f32<vk_op_argsort_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_ARGSORT, {
         ncols,
+        nrows,
         op_params[0],
     }, dryrun);
 }

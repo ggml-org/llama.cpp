@@ -27,6 +27,7 @@ layout (push_constant) uniform parameter {
     uint s1;
     uint s2;
     int sections[4];
+    uint is_imrope;
     uint is_back;
     uint set_rows_stride;
 } p;
