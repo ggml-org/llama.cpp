@@ -84,6 +84,7 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     add_test_vision "ggml-org/Qwen2-VL-7B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen3-VL-2B-Instruct-GGUF:Q8_0"
     add_test_vision "ggml-org/InternVL3-8B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/InternVL3-14B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
@@ -139,7 +140,10 @@ for i in "${!arr_hf[@]}"; do
 
     echo "$output" > $SCRIPT_DIR/output/$bin-$(echo "$hf" | tr '/' '-').log
 
-    if echo "$output" | grep -iq "new york"; then
+    # either contains "new york" or both "men" and "walk"
+    if echo "$output" | grep -iq "new york" \
+            || (echo "$output" | grep -iq "men" && echo "$output" | grep -iq "walk")
+    then
         result="$prefix \033[32mOK\033[0m:   $bin $hf"
     else
         result="$prefix \033[31mFAIL\033[0m: $bin $hf"

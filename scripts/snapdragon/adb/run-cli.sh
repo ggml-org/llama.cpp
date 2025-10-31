@@ -45,8 +45,9 @@ adb $adbserial shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $experimental $sched $opmask $profile $nhvx $ndev           \
-      ./$branch/bin/llama-cli --no-mmap -m $basedir/../gguf/$model       \
-         -t 4 --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on \
+    $verbose $experimental $sched $opmask $profile $nhvx $ndev       \
+      ./$branch/bin/llama-cli --no-mmap -m $basedir/../gguf/$model   \
+         --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1             \
+         --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on \
          -ngl 99 --device $device $cli_opts $@ \
 "
