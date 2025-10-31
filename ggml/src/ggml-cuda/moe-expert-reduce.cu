@@ -1,6 +1,6 @@
 #include "moe-expert-reduce.cuh"
 
-// This kernel is fusion of the expert weight reduce, common in MoE models
+// This kernel is a fusion of the expert weight reduce, common in MoE models
 
 template <int n_expert_used_template>
 __global__ void moe_expert_reduce_cuda(const float * __restrict__ experts,
@@ -8,9 +8,7 @@ __global__ void moe_expert_reduce_cuda(const float * __restrict__ experts,
                                        float * __restrict__ dst,
                                        const int n_expert_used,
                                        const int n_cols) {
-    const int row             = blockIdx.x;
-    const int n_expert_used_t = n_expert_used_template == 0 ? n_expert_used : n_expert_used_template;
-
+    const int row = blockIdx.x;
     const int col = blockIdx.y * blockDim.x + threadIdx.x;
     if (col >= n_cols) {
         return;
@@ -22,7 +20,7 @@ __global__ void moe_expert_reduce_cuda(const float * __restrict__ experts,
 
     float acc = 0.f;
     if constexpr (n_expert_used_template == 0) {
-        for (int expert = 0; expert < n_expert_used_t; ++expert) {
+        for (int expert = 0; expert < n_expert_used; ++expert) {
             ggml_cuda_mad(acc, experts[col], weights[expert]);
             experts += n_cols;
         }
@@ -98,20 +96,20 @@ static void launch_moe_expert_reduce(ggml_backend_cuda_context & ctx,
 }
 
 bool ggml_cuda_should_use_moe_expert_reduce(const ggml_cgraph * cgraph, int start_index, int end_index) {
-    const ggml_tensor * experts = cgraph->nodes[start_index];
-    if (experts->op != GGML_OP_MUL) {
+    const ggml_tensor * mul = cgraph->nodes[start_index];
+
+    if (mul->op != GGML_OP_MUL || !ggml_is_contiguous(mul->src[0]) || !ggml_is_contiguous(mul->src[1])) {
         return false;
     }
 
     int    current_node   = start_index + 1;
     size_t current_offset = 0;
 
-    const ggml_tensor * view_nodes[32];
-    int                 num_views = 0;
+    std::vector<const ggml_tensor *> view_nodes;
     //check if all are views of the expert in increasing order
     while (current_node < end_index && cgraph->nodes[current_node]->op == GGML_OP_VIEW) {
         const ggml_tensor * node = cgraph->nodes[current_node];
-        if (node->view_src != experts) {
+        if (node->view_src != mul) {
             return false;
         }
         if (node->view_offs < current_offset) {
@@ -119,16 +117,13 @@ bool ggml_cuda_should_use_moe_expert_reduce(const ggml_cgraph * cgraph, int star
         }
         current_offset = node->view_offs;
         current_node++;
-        view_nodes[num_views++] = node;
-
-        if (num_views >= 32) {
-            return false;
-        }
+        view_nodes.push_back(node);
     }
 
     //check if all the adds are in increasing order
-    const ggml_tensor * prev_add_src = view_nodes[0];
+    const ggml_tensor * prev_add_src = view_nodes.size() ? view_nodes[0] : nullptr;
     int                 num_adds     = 0;
+    int                 num_views    = view_nodes.size();
     while (current_node < end_index && cgraph->nodes[current_node]->op == GGML_OP_ADD) {
         const ggml_tensor * add_node = cgraph->nodes[current_node];
 

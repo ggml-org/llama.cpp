@@ -3180,7 +3180,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         }
 
                         while (current_node < cgraph->n_nodes && cgraph->nodes[current_node]->op == GGML_OP_ADD &&
-                            num_adds < num_views - 1) {
+                                num_adds < num_views - 1) {
                             num_adds++;
                             current_node++;
                         }
