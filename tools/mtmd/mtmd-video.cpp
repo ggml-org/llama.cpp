@@ -1,6 +1,6 @@
 #include "mtmd-video.h"
+#include "clip-impl.h"
 #include "mtmd-helper.h"
-#include "clip.h"
 
 #include <algorithm>
 #include <string>
@@ -156,21 +156,193 @@ extern "C" {
 }
 #pragma GCC diagnostic pop
 
+bool is_video_buffer(const uint8_t *data, size_t size){
+    if (!data || size < 16) return false; // too short
+
+    AVProbeData probe;
+    probe.buf = const_cast<uint8_t*>(data);
+    probe.buf_size = (int)size;
+    probe.filename = "";
+
+    // ffmpeg requires that the last AVPROBE_PADDING_SIZE bytes of the buffer must be 0
+    std::vector<uint8_t> padded(size + AVPROBE_PADDING_SIZE);
+    memcpy(padded.data(), data, size);
+    memset(padded.data() + size, 0, AVPROBE_PADDING_SIZE);
+    probe.buf = padded.data();
+    probe.buf_size = (int)size;
+
+    const AVInputFormat *fmt = av_probe_input_format(&probe, 1);
+    if (!fmt) return false;
+    if (fmt->flags & AVFMT_NOFILE) return false;
+
+    return true;
+}
+
 struct DecodedFrameRGBA {
     int width;
     int height;
     std::vector<unsigned char> rgba; // size = width * height * 4
 };
 
-bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info) {
-    AVFormatContext *fmt = nullptr;
-    if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0) {
+struct BufferData {
+    const uint8_t* base;
+    size_t size;
+    size_t pos;
+    BufferData(const uint8_t* b, size_t s) : base(b), size(s), pos(0) {}
+};
+
+static int read_packet(void* opaque, uint8_t* buf, int buf_size) {
+    BufferData* bd = static_cast<BufferData*>(opaque);
+    if (!bd || !bd->base) return AVERROR(EIO);
+    if (bd->pos >= bd->size) return AVERROR_EOF;
+    size_t rem = bd->size - bd->pos;
+    int to_read = (int)(rem < (size_t)buf_size ? rem : (size_t)buf_size);
+    if (to_read == 0) return AVERROR_EOF;
+    memcpy(buf, bd->base + bd->pos, to_read);
+    bd->pos += to_read;
+    return to_read;
+}
+
+static int64_t seek_packet(void* opaque, int64_t offset, int whence) {
+    BufferData* bd = static_cast<BufferData*>(opaque);
+    if (!bd) return -1;
+    if (whence == AVSEEK_SIZE) return (int64_t)bd->size;
+    size_t newpos = bd->pos;
+    if (whence == SEEK_SET) {
+        if (offset < 0 || (size_t)offset > bd->size) return -1;
+        newpos = (size_t)offset;
+    } else if (whence == SEEK_CUR) {
+        if (offset < 0 && (size_t)(-offset) > bd->pos) return -1;
+        newpos = bd->pos + (size_t)offset;
+        if (newpos > bd->size) return -1;
+    } else if (whence == SEEK_END) {
+        if (offset > 0 || (size_t)(-offset) > bd->size) return -1;
+        newpos = bd->size + (size_t)offset;
+    } else return -1;
+    bd->pos = newpos;
+    return (int64_t)bd->pos;
+}
+
+static bool create_format_context_from_buffer(const uint8_t* buffer, size_t size,
+                                       AVFormatContext*& fmt,
+                                       AVIOContext*& avio_ctx,
+                                       uint8_t*& avio_ctx_buffer) {
+    fmt = nullptr;
+    avio_ctx = nullptr;
+    avio_ctx_buffer = nullptr;
+
+    if (!buffer || size == 0) return false;
+
+    // allocate BufferData
+    BufferData* bd = new (std::nothrow) BufferData(buffer, size);
+    if (!bd) return false;
+
+    const int AVIO_BUF_SIZE = 4096;
+    avio_ctx_buffer = static_cast<uint8_t*>(av_malloc(AVIO_BUF_SIZE));
+    if (!avio_ctx_buffer) {
+        delete bd;
         return false;
     }
 
-    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, 
-        [](AVFormatContext *f){ if (f) {avformat_close_input(&f);} });
+    avio_ctx = avio_alloc_context(
+        avio_ctx_buffer, AVIO_BUF_SIZE,
+        0, // read only
+        bd,
+        &read_packet,
+        nullptr,
+        &seek_packet
+    );
 
+    if (!avio_ctx) {
+        av_free(avio_ctx_buffer);
+        delete bd;
+        avio_ctx_buffer = nullptr;
+        return false;
+    }
+
+    fmt = avformat_alloc_context();
+    if (!fmt) {
+        // avio_context_free frees ctx->buffer but NOT opaque
+        if (avio_ctx->opaque) delete static_cast<BufferData*>(avio_ctx->opaque);
+        avio_context_free(&avio_ctx);
+        avio_ctx_buffer = nullptr;
+        return false;
+    }
+
+    fmt->pb = avio_ctx;
+    fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+
+    // increase probing - optional but helpful for truncated/streamed files
+    AVDictionary* opts = nullptr;
+    av_dict_set(&opts, "probesize", "5000000", 0);
+    av_dict_set(&opts, "analyzeduration", "5000000", 0);
+
+    int ret = avformat_open_input(&fmt, "stream", nullptr, &opts);
+    av_dict_free(&opts);
+
+    if (ret < 0) {
+        // Clean up carefully
+        // If fmt exists and has pb, free pb and opaque appropriately
+        if (fmt) {
+            AVIOContext* pb = fmt->pb;
+            BufferData* bd_from_fmt = pb ? static_cast<BufferData*>(pb->opaque) : nullptr;
+            avformat_free_context(fmt);
+            if (pb) {
+                if (bd_from_fmt) delete bd_from_fmt;
+                avio_context_free(&pb); // frees pb->buffer
+            }
+            fmt = nullptr;
+        } else {
+            // fmt null: free avio_ctx and opaque
+            if (avio_ctx) {
+                if (avio_ctx->opaque) delete static_cast<BufferData*>(avio_ctx->opaque);
+                avio_context_free(&avio_ctx);
+                avio_ctx = nullptr;
+            }
+        }
+        avio_ctx_buffer = nullptr;
+        return false;
+    }
+
+    // success: avformat_open_input succeeded, fmt and pb are owned by caller,
+    // but opaque (BufferData) must be deleted by us later (avformat_close_input won't delete opaque).
+    return true;
+}
+
+static void free_format_context_from_buffer(AVFormatContext* fmt,
+                                     AVIOContext* avio_ctx) {
+    if (fmt) {
+        // capture pb->opaque BEFORE closing
+        AVIOContext* pb = fmt->pb;
+        BufferData* bd = nullptr;
+        if (pb) bd = static_cast<BufferData*>(pb->opaque);
+
+        // this closes fmt and frees pb (and pb->buffer)
+        avformat_close_input(&fmt);
+
+        // avformat_close_input does not free opaque, so free it now
+        if (bd) {
+            delete bd;
+            bd = nullptr;
+        }
+        // do NOT av_free(avio_ctx_buffer) here - it was freed with pb->buffer
+        return;
+    }
+
+    // partial failure case: fmt is null but avio_ctx may still be valid
+    if (avio_ctx) {
+        BufferData* bd = static_cast<BufferData*>(avio_ctx->opaque);
+        if (bd) delete bd;
+        avio_context_free(&avio_ctx); // frees avio_ctx->buffer
+        // avio_ctx_buffer already freed by avio_context_free
+        return;
+    }
+}
+
+
+static bool get_video_info_from_format_ctx(AVFormatContext *fmt, VideoInfo &info) {
+    if (!fmt) return false;
+    
     if (avformat_find_stream_info(fmt, nullptr) < 0) {
         return false;
     }
@@ -200,14 +372,45 @@ bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info) {
     return true;
 }
 
-static bool decode_video_ffmpeg_to_rgba(const std::string & file,
-                                        std::vector<DecodedFrameRGBA> & frames,
-                                        int max_frames,
-                                        int stride) {
-    if(stride <= 0 || max_frames <= 0) return false;
-    AVFormatContext * fmt = nullptr;
-    if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0) return false;
-    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext *f){ if (f) avformat_close_input(&f); });
+// from buffer
+bool get_video_info(const uint8_t* buffer, size_t size, VideoInfo &info) {
+    AVFormatContext* fmt = nullptr;
+    AVIOContext* avio_ctx = nullptr;
+    uint8_t* avio_ctx_buffer = nullptr;
+
+    GGML_ASSERT(create_format_context_from_buffer(buffer, size, fmt, avio_ctx, avio_ctx_buffer));
+    bool ok = get_video_info_from_format_ctx(fmt, info);
+    free_format_context_from_buffer(fmt, avio_ctx);
+    return ok;
+}
+
+// from file
+bool get_video_info(const std::string &path, VideoInfo &info) {
+    if(is_dir(path)) {
+        info.fps = 1; // do not care
+        std::vector<std::string> files;
+        list_files(path, files, true); // recursive
+        info.total_frames = files.size();
+        return true;
+    }
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0)
+        return false;
+
+    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext* f){
+        if (f) avformat_close_input(&f);
+    });
+
+    return get_video_info_from_format_ctx(fmt, info);
+}
+
+static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
+    AVFormatContext* fmt,
+    std::vector<DecodedFrameRGBA>& frames,
+    int max_frames,
+    int stride) 
+{
+    if(!fmt || stride <= 0 || max_frames <= 0) return false;
     if (avformat_find_stream_info(fmt, nullptr) < 0) return false;
     int vstream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vstream < 0) return false;
@@ -257,14 +460,48 @@ static bool decode_video_ffmpeg_to_rgba(const std::string & file,
     return taken > 0;
 }
 
-static mtmd_bitmap* load_frames_from_file(mtmd_context * ctx,
-                           const std::string & file_path,
-                           const LoadVideoOptions & opts) {
+// from file
+static bool decode_video_ffmpeg_to_rgba(
+    const std::string& file,
+    std::vector<DecodedFrameRGBA>& frames,
+    int max_frames,
+    int stride)
+{
+    AVFormatContext* fmt = nullptr;
+    if (avformat_open_input(&fmt, file.c_str(), nullptr, nullptr) < 0)
+        return false;
+
+    std::unique_ptr<AVFormatContext, void(*)(AVFormatContext*)> fmt_guard(fmt, [](AVFormatContext* f){
+        if (f) avformat_close_input(&f);
+    });
+
+    return decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, max_frames, stride);
+}
+
+// from buffer
+static bool decode_video_ffmpeg_to_rgba(
+    const uint8_t* buffer,
+    size_t size,
+    std::vector<DecodedFrameRGBA>& frames,
+    int max_frames,
+    int stride)
+{
+    if (!buffer || size == 0) return false;
+    AVFormatContext* fmt = nullptr;
+    AVIOContext* avio_ctx = nullptr;
+    uint8_t* avio_ctx_buffer = nullptr;
+
+    GGML_ASSERT(create_format_context_from_buffer(buffer, size, fmt, avio_ctx, avio_ctx_buffer));
+    
+    bool ok = decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, max_frames, stride);
+
+    free_format_context_from_buffer(fmt, avio_ctx);
+    return ok;
+}
+
+static mtmd_bitmap* convert_frames_to_bitmap(mtmd_context * ctx, const std::vector<DecodedFrameRGBA>& decoded) {
     if (!ctx) return nullptr;
-    std::vector<DecodedFrameRGBA> decoded;
-    if (!decode_video_ffmpeg_to_rgba(file_path, decoded, opts.max_frames, std::max(1u, opts.stride))) {
-        return nullptr;
-    }
+    if(decoded.empty()) return nullptr;
     const size_t nframes = decoded.size();
     if(nframes < 1){
         return nullptr;
@@ -294,33 +531,28 @@ static mtmd_bitmap* load_frames_from_file(mtmd_context * /*ctx*/,
                            const LoadVideoOptions & /*opts*/) {
     return nullptr;
 }
-bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info) {
+bool get_video_info(const std::string &path, VideoInfo &info){
+    LOG_ERR("FFmpeg support is not enabled in this build\n");
+    return false;
+}
+bool get_video_info(const uint8_t* buffer, size_t size, VideoInfo &info){
+    LOG_ERR("FFmpeg support is not enabled in this build\n");
+    return false;
+}
+bool is_video_buffer(const uint8_t *data, size_t size){
     LOG_ERR("FFmpeg support is not enabled in this build\n");
     return false;
 }
 #endif
 
-mtmd_bitmap* init_video_bitmap_from_path(mtmd_context * ctx,
-                               const std::string & path) {
+static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoInfo info){
     mtmd_video::LoadVideoOptions opts;
     opts.max_frames = 32;
     opts.stride     = 1;
     opts.recursive  = false;
 
-    auto info = mtmd_video::VideoInfo{};
-    if(is_dir(path)) {
-        info.fps = 1;
-        std::vector<std::string> files;
-        list_files(path, files, opts.recursive);
-        info.total_frames = files.size();
-    } else {
-        if(!mtmd_video::get_video_info_ffmpeg(path, info)) {
-            return nullptr;
-        }
-    }
-
     // minicpm frames sample method
-    const int32_t minicpmv_max_video_frames = 64;
+    const int32_t minicpmv_max_video_frames = 4;
     opts.max_frames = minicpmv_max_video_frames;
     if(info.total_frames > minicpmv_max_video_frames) {
         // uniform sample
@@ -329,12 +561,49 @@ mtmd_bitmap* init_video_bitmap_from_path(mtmd_context * ctx,
         // 1 frame per second
         opts.stride = (info.fps > 1.0) ? (int)std::ceil(info.fps) : 1;
     }
+    return opts;
+}
+
+mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const std::string & path) {
+    auto info = mtmd_video::VideoInfo{};
+    if(!mtmd_video::get_video_info(path, info)) {
+        LOG_ERR("Unable to get video info from path: %s\n", path.c_str());
+        return nullptr;
+    }
+
+    const auto opts = get_video_sample_options(info);
 
     if (is_dir(path)) {
         return load_frames_from_dir(ctx, path, opts);
     }
 
-    return load_frames_from_file(ctx, path, opts);
+    std::vector<DecodedFrameRGBA> frames;
+    if(!decode_video_ffmpeg_to_rgba(path, frames, opts.max_frames, std::max(1u, opts.stride))){
+        LOG_ERR("Unable to decode video from path: %s\n", path.c_str());
+        return nullptr;
+    }
+
+    return convert_frames_to_bitmap(ctx, frames);
+}
+
+mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const uint8_t* buffer, size_t size){
+    auto info = mtmd_video::VideoInfo{};
+    if(!mtmd_video::get_video_info(buffer, size, info)) {
+        LOG_ERR("Unable to get video info from buffer\n");
+        return nullptr;
+    }
+    printf("get info\n");
+
+    const auto opts = get_video_sample_options(info);
+
+    std::vector<DecodedFrameRGBA> frames;
+    if(!decode_video_ffmpeg_to_rgba(buffer, size, frames, opts.max_frames, std::max(1u, opts.stride))){
+        LOG_ERR("Unable to decode video from buffer\n");
+        return nullptr;
+    }
+    printf("decoded\n");
+
+    return convert_frames_to_bitmap(ctx, frames);
 }
 
 } // namespace mtmd_video

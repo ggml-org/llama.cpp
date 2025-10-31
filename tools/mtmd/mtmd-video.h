@@ -28,14 +28,22 @@ struct VideoInfo {
 // Check if a path is a video file based on its extension
 bool is_video_file(const std::string & path);
 
+// Check if a buffer contains video file data via FFmpeg
+// Notice: audio containers may also be recognized as valid media
+bool is_video_buffer(const uint8_t *data, size_t size);
+
 // get video info (fps, total frames) via FFmpeg (mp4/mov/mkv/avi/webm...).
 // Returns true on success, false otherwise.
-bool get_video_info_ffmpeg(const std::string &file, VideoInfo &info);
+bool get_video_info(const std::string &path, VideoInfo &info);
+bool get_video_info(const uint8_t* buffer, size_t size, VideoInfo &info);
 
 // Append frames loaded from a file or directory (auto-detect).
 // Returns a mtmd_bitmap containing all frames in RGB format.
-mtmd_bitmap* init_video_bitmap_from_path(mtmd_context * ctx,
+mtmd_bitmap* init_video_bitmap(mtmd_context * ctx,
                                const std::string & path);
+mtmd_bitmap* init_video_bitmap(mtmd_context * ctx,
+                                 const uint8_t* buffer,
+                                 size_t size);
 
 } // namespace mtmd_video
 

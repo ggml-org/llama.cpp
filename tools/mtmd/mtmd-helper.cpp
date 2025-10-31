@@ -423,6 +423,10 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
         return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
     }
 
+    if(mtmd_video::is_video_buffer(buf, len)) {
+        return mtmd_video::init_video_bitmap(ctx, buf, len);
+    }
+
     // otherwise, we assume it's an image
     mtmd_bitmap * result = nullptr;
     {
@@ -439,11 +443,12 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
 }
 
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
+    // although we could read the file into memory and call mtmd_helper_bitmap_init_from_buf,
+    // but for video files, it's better to let ffmpeg read from file
     if(mtmd_video::is_video_file(fname)){
-        return mtmd_video::init_video_bitmap_from_path(ctx, fname);
+        return mtmd_video::init_video_bitmap(ctx, fname);
     }
 
-    std::vector<unsigned char> buf;
     FILE * f = fopen(fname, "rb");
     if (!f) {
         LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
@@ -453,14 +458,16 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    buf.resize(file_size);
+    auto * buf = new unsigned char[file_size]; 
 
-    size_t n_read = fread(buf.data(), 1, file_size, f);
+    size_t n_read = fread(buf, 1, file_size, f);
     fclose(f);
     if (n_read != (size_t)file_size) {
         LOG_ERR("Failed to read entire file %s", fname);
         return nullptr;
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
+    auto * res = mtmd_helper_bitmap_init_from_buf(ctx, buf, file_size);
+    delete [] buf;
+    return res;
 }
