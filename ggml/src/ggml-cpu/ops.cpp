@@ -9,6 +9,7 @@
 
 #include <float.h>
 #include <algorithm>
+#include <cmath>
 
 // ggml_compute_forward_dup
 
@@ -1394,6 +1395,57 @@ void ggml_compute_forward_sum(
     }
 }
 
+// ggml_compute_forward_cumsum
+
+static void ggml_compute_forward_cumsum_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == ne00);
+    GGML_ASSERT(ne1 == ne01);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    for (int64_t i3 = 0; i3 < ne03; i3++) {
+        for (int64_t i2 = 0; i2 < ne02; i2++) {
+            for (int64_t i1 = 0; i1 < ne01; i1++) {
+                float * src_row = (float *) ((char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+                float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+                ggml_vec_cumsum_f32(ne00, dst_row, src_row);
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_cumsum(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_cumsum_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_sum_rows
 
 static void ggml_compute_forward_sum_rows_f32(
@@ -2132,6 +2184,49 @@ static void ggml_compute_forward_gelu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_gelu_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_tri
+
+static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    ggml_tri_type ttype = (ggml_tri_type) dst->op_params[0];
+    float c = ggml_get_op_params_f32(dst, 1);
+    bool keep_org_val = isnan(c);
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(src0->ne[0] == src0->ne[1]);
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const auto [ir0, ir1] = get_thread_range(params, src0);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+        const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+        float        * dst_ptr  = (float  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+        float        * src  = (float  *)           ((char *)       src0->data  + i03*nb03  + i02*nb02  + i01*nb01 );
+        ggml_vec_tri_f32(ne0, i01, dst_ptr, src, keep_org_val, c, ttype);
+    }
+
+}
+
+void ggml_compute_forward_tri(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_tri_f32(params, dst);
             } break;
         default:
             {
@@ -8721,7 +8816,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const float dA = expf(dt_soft_plus * A[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
@@ -8818,7 +8913,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                 // n_head
                 for (int h = ih0; h < ih1; ++h) {
                     // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
-                    const float dt_soft_plus = ggml_softplus(dt[h]);
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
                     const int g = h / (nh / ng); // repeat_interleave
 
                     // dim
@@ -9100,6 +9195,14 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_XIELU:
             {
                 ggml_compute_forward_xielu(params, dst);
+            } break;
+        case GGML_UNARY_OP_EXPM1:
+            {
+                ggml_compute_forward_expm1(params, dst);
+            } break;
+        case GGML_UNARY_OP_SOFTPLUS:
+            {
+                ggml_compute_forward_softplus(params, dst);
             } break;
         default:
             {
@@ -9697,8 +9800,79 @@ void ggml_compute_forward_gla(
     }
 }
 
-// ggml_compute_forward_rwkv_wkv7
+static void ggml_compute_forward_solve_tri_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];  // A (lower triangular)
+    const struct ggml_tensor * src1 = dst->src[1];  // B (RHS)
 
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    // --- Dimension validation ---
+    GGML_ASSERT(ne00 == ne01); // A must be square
+    GGML_ASSERT(ne0  == ne00); // solution rows == A rows
+    GGML_ASSERT(ne1  == ne11); // solution cols == B cols
+
+    // Batch dimensions must match
+    GGML_ASSERT(ne02 == ne12 && ne12 == ne2);
+    GGML_ASSERT(ne03 == ne13 && ne13 == ne3);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t n = ne00;   // system size (A is n x n)
+    const int64_t k = ne11;   // number of RHS columns
+    const int64_t nr = ne02 * ne03 * k; // we're parallelizing on columns here, so seq x token x column will be the unit
+
+    // chunks per thread
+    const int64_t dr = (nr + nth - 1)/nth;
+
+    // chunk range for this thread
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    // here be pointers
+    const float * A = (const float *) src0->data;  // [n, n, B1, B2]
+    const float * B = (const float *) src1->data;  // [n, k, B1, B2]
+    float * X = (float *) dst->data;               // [n, k, B1, B2]
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne02*k);
+        const int64_t i02 = (ir - i03*ne02*k)/k;
+        const int64_t i01 = (ir - i03*ne02*k - i02*k);
+
+        const float * A_batch = A + i02 * nb02 / sizeof(float) + i03 * nb03 / sizeof(float);
+        const float * B_batch = B + i02 * nb12 / sizeof(float) + i03 * nb13 / sizeof(float);
+        float * X_batch = X + i02 * nb2 / sizeof(float) + i03 * nb3 / sizeof(float);
+
+        for (int64_t i00 = 0; i00 < n; ++i00) {
+            float sum = 0.0f;
+            for (int64_t t = 0; t < i00; ++t) {
+                sum += A_batch[i00 * n + t] * X_batch[t * k + i01];
+            }
+            float diag = A_batch[i00 * n + i00];
+            GGML_ASSERT(diag != 0.0f && "Zero diagonal in triangular matrix");
+            X_batch[i00 * k + i01] = (B_batch[i00 * k + i01] - sum) / diag;
+        }
+    }
+}
+
+void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
+        return ggml_compute_forward_solve_tri_f32(params, dst);
+    } else {
+        GGML_ABORT("fatal error");
+    }
+
+}
+
+// ggml_compute_forward_rwkv_wkv7
 static void ggml_compute_forward_rwkv_wkv7_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {

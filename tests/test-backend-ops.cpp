@@ -3809,6 +3809,150 @@ struct test_cos : public test_case {
     }
 };
 
+// GGML_OP_EXPM1
+struct test_expm1 : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_expm1(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 3, 3, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_expm1(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // Use small values to avoid overflow in expm1
+            init_tensor_uniform(t, -2.0f, 2.0f);
+        }
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_SOFTPLUS
+struct test_softplus : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_softplus(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 3, 3, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_softplus(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // Use values around the threshold (20) to test both branches of softplus
+            init_tensor_uniform(t, -25.0f, 25.0f);
+        }
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_EXPM1_INPLACE
+struct test_expm1_inplace : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_expm1_inplace(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 3, 3, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_expm1_inplace(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // Use small values to avoid overflow in expm1
+            init_tensor_uniform(t, -2.0f, 2.0f);
+        }
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_SOFTPLUS_INPLACE
+struct test_softplus_inplace : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_softplus_inplace(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 3, 3, 2})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_softplus_inplace(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // Use values around the threshold (20) to test both branches of softplus
+            init_tensor_uniform(t, -25.0f, 25.0f);
+        }
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
 // GGML_OP_CLAMP
 struct test_clamp : public test_case {
     const ggml_type type;
@@ -7006,6 +7150,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_sqr       (type));
         test_cases.emplace_back(new test_sqrt      (type));
         test_cases.emplace_back(new test_log       (type));
+        test_cases.emplace_back(new test_expm1     (type));
+        test_cases.emplace_back(new test_softplus  (type));
+        test_cases.emplace_back(new test_expm1_inplace     (type));
+        test_cases.emplace_back(new test_softplus_inplace  (type));
         test_cases.emplace_back(new test_sin       (type));
         test_cases.emplace_back(new test_cos       (type));
         test_cases.emplace_back(new test_clamp     (type));
@@ -7017,6 +7165,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_expm1     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_softplus  (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_expm1_inplace     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_softplus_inplace  (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_sin       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_cos       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_clamp     (type, {7, 1, 5, 3}));

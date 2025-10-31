@@ -475,6 +475,7 @@ extern "C" {
         GGML_OP_COS,
         GGML_OP_SUM,
         GGML_OP_SUM_ROWS,
+        GGML_OP_CUMSUM,
         GGML_OP_MEAN,
         GGML_OP_ARGMAX,
         GGML_OP_COUNT_EQUAL,
@@ -530,6 +531,7 @@ extern "C" {
         GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
+        GGML_OP_TRI,
 
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
@@ -542,6 +544,7 @@ extern "C" {
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
+        GGML_OP_SOLVE_TRI,
 
         GGML_OP_UNARY,
 
@@ -576,6 +579,8 @@ extern "C" {
         GGML_UNARY_OP_HARDSWISH,
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_EXP,
+        GGML_UNARY_OP_EXPM1,
+        GGML_UNARY_OP_SOFTPLUS,
         GGML_UNARY_OP_GELU_ERF,
         GGML_UNARY_OP_XIELU,
         GGML_UNARY_OP_FLOOR,
@@ -618,6 +623,13 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT =  2, // ...is an output for the GGML compute graph
         GGML_TENSOR_FLAG_PARAM  =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS   =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+    };
+
+    enum ggml_tri_type {
+        GGML_TRI_TYPE_UPPER_DIAG        = 0,
+        GGML_TRI_TYPE_UPPER             = 1,
+        GGML_TRI_TYPE_LOWER_DIAG        = 2,
+        GGML_TRI_TYPE_LOWER             = 3
     };
 
     struct ggml_init_params {
@@ -957,6 +969,22 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_expm1(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_expm1_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_softplus_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     GGML_API struct ggml_tensor * ggml_sin(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -982,6 +1010,10 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_sum_rows(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_cumsum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a);
 
     // mean along rows
     GGML_API struct ggml_tensor * ggml_mean(
@@ -1153,6 +1185,74 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_exp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_floor(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_floor_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+     /**
+     * Truncates the fractional part of each element in the tensor (towards zero).
+     * For example: trunc(3.7) = 3.0, trunc(-2.9) = -2.0
+     * Similar to std::trunc in C/C++.
+     */
+
+    GGML_API struct ggml_tensor * ggml_trunc(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_trunc_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+
+
+    // xIELU activation function
+    // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)
+    // where c_a = softplus and c_b(a, b) = softplus(a) + b are constraining functions
+    // that constrain the positive and negative source alpha values respectively
+    GGML_API struct ggml_tensor * ggml_xielu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float alpha_n,
+            float alpha_p,
+            float beta,
+            float eps);
+
+    GGML_API struct ggml_tensor * ggml_expm1(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_expm1_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_softplus_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -1682,6 +1782,13 @@ extern "C" {
             float                 scale,
             float                 max_bias);
 
+    GGML_API struct ggml_tensor * ggml_soft_max_ext_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias);
+
     GGML_API void ggml_soft_max_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
@@ -2186,6 +2293,17 @@ extern "C" {
             int                   shift2,
             int                   shift3);
 
+    // Make matrix into a triangular one (upper, upper + diagonal, lower or lower + diagonal) with constant value
+    GGML_API struct ggml_tensor * ggml_tri(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 constant,
+            enum ggml_tri_type    tritype);
+
+    GGML_API struct ggml_tensor * ggml_tri_keep(
+            struct ggml_context * ctx,
+            struct ggml_tensor * a,
+            enum ggml_tri_type tritype);
 
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
     // timesteps: [N,]
@@ -2345,6 +2463,7 @@ extern "C" {
             struct ggml_tensor  * state,
             float scale);
 
+
     GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
             struct ggml_context * ctx,
             struct ggml_tensor  * r,
@@ -2354,6 +2473,33 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             struct ggml_tensor  * state);
+
+    GGML_API struct ggml_tensor * ggml_delta_net(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        bool                  use_qk_l2norm,
+        float                 eps_norm);
+
+    GGML_API struct ggml_tensor * ggml_delta_net_recurrent(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        bool                  use_qk_l2norm,
+        float                 eps_norm);
+
+    GGML_API struct ggml_tensor * ggml_solve_tri(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * x);
 
     // custom operators
 

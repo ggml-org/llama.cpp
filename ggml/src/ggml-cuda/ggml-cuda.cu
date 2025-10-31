@@ -2499,6 +2499,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_XIELU:
                     ggml_cuda_op_xielu(ctx, dst);
                     break;
+                case GGML_UNARY_OP_EXPM1:
+                    ggml_cuda_op_expm1(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SOFTPLUS:
+                    ggml_cuda_op_softplus(ctx, dst);
+                    break;
                 default:
                     return false;
             }
@@ -3768,6 +3774,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_EXPM1:
+                case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_ELU:
                     return ggml_is_contiguous(op->src[0]);
                 default:

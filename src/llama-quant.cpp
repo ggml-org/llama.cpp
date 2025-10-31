@@ -667,6 +667,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::map<int, std::string> mapped;
     int blk_id = 0;
     int pruned_attention_w = 0;
+    int linear_layers = 0;
 
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
@@ -684,6 +685,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         } else if (remapped_name != it.first) {
             ggml_set_name(it.second.tensor, remapped_name.c_str());
             LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
+        } else if (it.first.find("ssm_conv") != std::string::npos) {
+            linear_layers++;
         }
         tensors.push_back(&it.second);
     }
@@ -732,7 +735,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // for each decoder block, there are 2 attention layers
             n_attn_layer += 2 * model.hparams.dec_n_layer;
         }
-        GGML_ASSERT((qs.n_attention_wv == n_attn_layer - pruned_attention_w) && "n_attention_wv is unexpected");
+        GGML_ASSERT((qs.n_attention_wv == n_attn_layer - pruned_attention_w - linear_layers) && "n_attention_wv is unexpected");
     }
 
     size_t total_size_org = 0;
