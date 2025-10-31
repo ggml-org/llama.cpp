@@ -160,20 +160,30 @@ bool is_video_buffer(const uint8_t *data, size_t size){
     if (!data || size < 16) return false; // too short
 
     AVProbeData probe;
-    probe.buf = const_cast<uint8_t*>(data);
-    probe.buf_size = (int)size;
     probe.filename = "";
 
     // ffmpeg requires that the last AVPROBE_PADDING_SIZE bytes of the buffer must be 0
-    std::vector<uint8_t> padded(size + AVPROBE_PADDING_SIZE);
-    memcpy(padded.data(), data, size);
-    memset(padded.data() + size, 0, AVPROBE_PADDING_SIZE);
-    probe.buf = padded.data();
+    auto * padded = new uint8_t[size + AVPROBE_PADDING_SIZE];
+    memcpy(padded, data, size);
+    memset(padded + size, 0, AVPROBE_PADDING_SIZE);
+    probe.buf = padded;
     probe.buf_size = (int)size;
 
-    const AVInputFormat *fmt = av_probe_input_format(&probe, 1);
-    if (!fmt) return false;
+    int score = 0;
+    const AVInputFormat *fmt = av_probe_input_format2(&probe, 1, &score);
+
+    delete [] padded;
+    
+    if (!fmt || score < 25) return false;
     if (fmt->flags & AVFMT_NOFILE) return false;
+
+    static const char *image_formats[] = {
+        "jpeg_pipe", "png_pipe", "bmp_pipe", "gif_pipe", "webp_pipe",
+        "tiff_pipe", "image2", "image2pipe", "mjpeg"
+    };
+    for (auto name : image_formats)
+        if (fmt->name && strstr(fmt->name, name))
+            return false;
 
     return true;
 }
@@ -592,7 +602,6 @@ mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const uint8_t* buffer, size_t
         LOG_ERR("Unable to get video info from buffer\n");
         return nullptr;
     }
-    printf("get info\n");
 
     const auto opts = get_video_sample_options(info);
 

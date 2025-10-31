@@ -3638,21 +3638,21 @@ struct server_context {
                     // remove the non-common part from the cache
                     slot.cache_tokens.keep_first(slot.n_past);
 
-                    // check if we should process the image
+                    // check if we should process the media chunk (image, audio, video, ...)
                     if (slot.n_past < slot.n_prompt_tokens && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
-                        // process the image
+                        // process the media chunk
                         int32_t new_n_past;
                         int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past);
                         int32_t n_pos = new_n_past - slot.n_past;
 
                         if (res != 0) {
-                            SLT_ERR(slot, "failed to process image, res = %d\n", res);
+                            SLT_ERR(slot, "failed to process media, res = %d\n", res);
                             slot.release();
-                            send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
+                            send_error(slot, "failed to process media", ERROR_TYPE_SERVER);
                             continue;
                         }
 
-                        // add the image chunk to cache
+                        // add the media chunk to cache
                         {
                             const auto & chunk = slot.prompt_tokens.find_chunk(slot.n_past);
                             slot.cache_tokens.push_back(chunk.get()); // copy

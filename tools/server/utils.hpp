@@ -677,7 +677,53 @@ static json oaicompat_chat_params_parse(
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
 
-            } else if (type != "text") {
+            } else if (type == "video_url") {
+                if (!opt.allow_image) { // TODO: separate video flag?
+                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json video_url  = json_value(p, "video_url", json::object());
+                std::string url = json_value(video_url, "url", std::string());
+                if (string_starts_with(url, "http")) {
+                    // download remote image
+                    // TODO @ngxson : maybe make these params configurable
+                    common_remote_params params;
+                    params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+                    params.max_size = 1024 * 1024 * 100; // 100MB
+                    params.timeout  = 100; // seconds
+                    SRV_INF("downloading video from '%s'\n", url.c_str());
+                    auto res = common_remote_get_content(url, params);
+                    if (200 <= res.first && res.first < 300) {
+                        SRV_INF("downloaded %ld bytes\n", res.second.size());
+                        raw_buffer data;
+                        data.insert(data.end(), res.second.begin(), res.second.end());
+                        out_files.push_back(data);
+                    } else {
+                        throw std::runtime_error("Failed to download video");
+                    }
+
+                } else {
+                    // try to decode base64 video
+                    std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+                    if (parts.size() != 2) {
+                        throw std::runtime_error("Invalid video_url.url value");
+                    } else if (!string_starts_with(parts[0], "data:video/")) {
+                        throw std::runtime_error("Invalid video_url.url format: " + parts[0]);
+                    } else if (!string_ends_with(parts[0], "base64")) {
+                        throw std::runtime_error("video_url.url must be base64 encoded");
+                    } else {
+                        auto base64_data = parts[1];
+                        auto decoded_data = base64_decode(base64_data);
+                        out_files.push_back(decoded_data);
+                    }
+                }
+
+                // replace this chunk with a marker
+                p["type"] = "text";
+                p["text"] = mtmd_default_marker();
+                p.erase("video_url");
+
+            }else if (type != "text") {
                 throw std::runtime_error("unsupported content[].type");
             }
         }
@@ -1401,7 +1447,7 @@ static server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt
     for (auto & file : files) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
         if (!bmp.ptr) {
-            throw std::runtime_error("Failed to load image or audio file");
+            throw std::runtime_error("Failed to load media file");
         }
         // calculate bitmap hash (for KV caching)
         std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
