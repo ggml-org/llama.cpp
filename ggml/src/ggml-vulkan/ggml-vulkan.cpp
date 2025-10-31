@@ -145,10 +145,11 @@ static void ggml_vk_destroy_pipeline(vk::Device& device, vk_pipeline& pipeline);
 struct vk_matmul_pipeline_struct {
     vk_pipeline l, m, s;
     vk_pipeline a_l, a_m, a_s;
-    // Returns true when all member pipelines are null
+    // Returns true when all unaligned pipelines are null.
+    // We only check for unaligned variants since one of the unaligned pipelines must exist
+    // while aligned pipelines are optional
     bool is_empty() const {
-        return l == nullptr && m == nullptr && s == nullptr &&
-            a_l == nullptr && a_m == nullptr && a_s == nullptr;
+        return l == nullptr && m == nullptr && s == nullptr;
     }
 };
 typedef std::shared_ptr<vk_matmul_pipeline_struct> vk_matmul_pipeline;
