@@ -58,6 +58,7 @@
 #include <aclnnop/aclnn_mean.h>
 #include <aclnnop/aclnn_mm.h>
 #include <aclnnop/aclnn_mul.h>
+#include <aclnnop/aclnn_mv.h>
 #include <aclnnop/aclnn_permute.h>
 #include <aclnnop/aclnn_pow.h>
 #include <aclnnop/aclnn_pow_tensor_tensor.h>
@@ -429,6 +430,92 @@ void ggml_cann_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, LayerNorm, acl_src.get(), norm.get(), nullptr, nullptr, eps, acl_dst.get(), nullptr,
                             nullptr);
 }
+
+void ggml_cann_gated_linear_attn(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    ggml_tensor * k  = dst->src[0];
+    ggml_tensor * v  = dst->src[1];
+    ggml_tensor * q  = dst->src[2];
+    ggml_tensor * g = dst->src[3];
+    ggml_tensor * s  = dst->src[4];
+
+    int64_t B = dst->src[4]->ne[1];
+    int64_t T = dst->src[0]->ne[2];
+    int64_t H = dst->src[0]->ne[1];
+    int64_t C = dst->ne[0];
+    int64_t D = C / H;
+    int64_t L = T / B;
+
+    int64_t ne_qkg[2] = {1, D};
+    // int64_t ne_qkg[2] = {D, 1};
+    int64_t ne_s[2] = {D, D};
+    int64_t ne_vo[2] = {D, 1};
+    // int64_t ne_vo[2] = {1, D};
+    int64_t ne_q[1] = {D};
+    size_t nb_base = ggml_type_size(k->type);
+    size_t nb_qkg[2] = {nb_base, nb_base};
+    size_t nb_s[2] = {nb_base, D * nb_base};
+    size_t nb_vo[2] = {nb_base, D * nb_base};
+    size_t nb_q[1] = {nb_base};
+
+    float scale;
+    memcpy(&scale, dst->op_params, sizeof(float));
+
+    for (int64_t b = 0; b < B; b++) {
+        for (int64_t h = 0; h < H; h++) {
+            size_t s_offset = (b * (H * D * D) + h * (D * D)) * nb_base;
+            // D * D
+            acl_tensor_ptr acl_s = ggml_cann_create_tensor(s, ne_s, nb_s, 2, ACL_FORMAT_ND, s_offset);
+            acl_tensor_ptr acl_s_new = ggml_cann_create_tensor(dst, ne_s, nb_s, 2, ACL_FORMAT_ND, (B * L * H * D) * nb_base + s_offset);
+            cann_copy(ctx, acl_s.get(), acl_s_new.get());
+            for (int64_t l = 0; l < L; l++) {
+                size_t qkvgo_offset = (b * (L * H * D) + l * (H * D) + h * (D)) * nb_base;
+                // D * 1
+                acl_tensor_ptr acl_k = ggml_cann_create_tensor(k, ne_qkg, nb_qkg, 2, ACL_FORMAT_ND, qkvgo_offset);
+                acl_tensor_ptr acl_g = ggml_cann_create_tensor(g, ne_qkg, nb_qkg, 2, ACL_FORMAT_ND, qkvgo_offset);
+                // D
+                acl_tensor_ptr acl_q = ggml_cann_create_tensor(q, ne_q, nb_q, 1, ACL_FORMAT_ND, qkvgo_offset);
+                // 1 * D
+                acl_tensor_ptr acl_v = ggml_cann_create_tensor(v, ne_vo, nb_vo, 2, ACL_FORMAT_ND, qkvgo_offset);
+                // D
+                acl_tensor_ptr acl_o = ggml_cann_create_tensor(dst, ne_q, nb_q, 1, ACL_FORMAT_ND, qkvgo_offset);
+                // repeat k and v
+                // buffer for repeated k
+                size_t buf_size = D * D * sizeof(float);
+                ggml_cann_pool_alloc state_buf1(ctx.pool(), buf_size);
+                void* buf1_ptr = state_buf1.get();
+                acl_tensor_ptr acl_buf_k = ggml_cann_create_tensor(buf1_ptr, ggml_cann_type_mapping(k->type), ggml_type_size(k->type), ne_s, nb_s, 2);
+                // buffer for repeated v
+                ggml_cann_pool_alloc state_buf2(ctx.pool(), buf_size);
+                void* buf2_ptr = state_buf2.get();
+                acl_tensor_ptr acl_buf_v = ggml_cann_create_tensor(buf2_ptr, ggml_cann_type_mapping(k->type), ggml_type_size(k->type), ne_s, nb_s, 2);
+                // repeat
+                int64_t k_rep[2] = {1, D};
+                int64_t v_rep[2] = {D, 1};
+                // int64_t k_rep[2] = {D, 1};
+                // int64_t v_rep[2] = {1, D};
+                acl_int_array_ptr acl_k_rep = ggml_cann_create_int_array(k_rep, 2);
+                acl_int_array_ptr acl_v_rep = ggml_cann_create_int_array(v_rep, 2);
+                GGML_CANN_CALL_ACLNN_OP(ctx, Repeat, acl_k.get(), acl_k_rep.get(), acl_buf_k.get());
+                GGML_CANN_CALL_ACLNN_OP(ctx, Repeat, acl_v.get(), acl_v_rep.get(), acl_buf_v.get());
+                // inplace mul, saved in acl_buf_k
+                aclnn_mul(ctx, acl_buf_k.get(), acl_buf_v.get(), nullptr);
+                // apply g to s
+                // reuse acl_buf_v to store repeated g
+                GGML_CANN_CALL_ACLNN_OP(ctx, Repeat, acl_g.get(), acl_k_rep.get(), acl_buf_v.get());
+                aclnn_mul(ctx, acl_s_new.get(), acl_buf_v.get(), nullptr);
+                // add kv
+                aclnn_add(ctx, acl_s_new.get(), acl_buf_k.get(), nullptr);
+                // compute output
+                // permute state and store in acl_buf k
+                int64_t newdim[2] = {1, 0};
+                aclnn_permute(ctx, acl_s_new.get(), acl_buf_k.get(), newdim, 2);
+                GGML_CANN_CALL_ACLNN_OP(ctx, Mv, acl_buf_k.get(), acl_q.get(), acl_o.get(), 1);
+                aclnn_muls(ctx, acl_o.get(), scale, nullptr, true);
+            }
+        }
+    }
+}
+
 
 void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_tensor * src = dst->src[0];
