@@ -100,6 +100,7 @@ mtmd_context_params mtmd_context_params_default() {
     params.verbosity = GGML_LOG_LEVEL_INFO;
     params.image_marker = MTMD_DEFAULT_IMAGE_MARKER;
     params.media_marker = mtmd_default_marker();
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
     return params;
 }
 
@@ -164,6 +165,7 @@ struct mtmd_context {
         clip_context_params ctx_clip_params;
         ctx_clip_params.use_gpu   = ctx_params.use_gpu;
         ctx_clip_params.verbosity = ctx_params.verbosity;
+        ctx_clip_params.flash_attn_type = ctx_params.flash_attn_type;
         auto res = clip_init(mmproj_fname, ctx_clip_params);
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;

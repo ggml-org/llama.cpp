@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "mtmd.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,7 @@ enum clip_modality {
 struct clip_context_params {
     bool use_gpu;
     enum ggml_log_level verbosity;
+    llama_flash_attn_type flash_attn_type;
 };
 
 struct clip_init_result {
