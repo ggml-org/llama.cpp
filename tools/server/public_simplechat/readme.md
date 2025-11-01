@@ -88,7 +88,8 @@ remember to
 
 * use a GenAi/LLM model which supports tool calling.
 
-* if fetch web page or web search tool call is needed remember to run bundled local.tools/simpleproxy.py
+* if fetch web page, web search or pdf-to-text tool call is needed remember to run bundled
+  local.tools/simpleproxy.py
   helper along with its config file, before using/loading this client ui through a browser
 
   * cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
@@ -258,6 +259,10 @@ It is attached to the document object. Some of these can also be updated using t
 
     * searchUrl - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
 
+    * iResultMaxDataLength - specify what amount of any tool call result should be sent back to the ai engine server.
+
+      * specifying 0 disables this truncating of the results.
+
     * toolCallResponseTimeoutMS - specifies the time (in msecs) for which the logic should wait for a tool call to respond
     before a default timed out error response is generated and control given back to end user, for them to decide whether
     to submit the error response or wait for actual tool call response further.
@@ -369,11 +374,11 @@ Given that browsers provide a implicit env for not only showing ui, but also run
 simplechat client ui allows use of tool calling support provided by the newer ai models by
 end users of llama.cpp's server in a simple way without needing to worry about seperate mcp
 host / router, tools etal, for basic useful tools/functions like calculator, code execution
-(javascript in this case).
+(javascript in this case), data store.
 
-Additionally if users want to work with web content as part of their ai chat session, Few
-functions related to web access which work with a included python based simple proxy server
-have been implemented.
+Additionally if users want to work with web content or pdf content as part of their ai chat
+session, Few functions related to web access as well as pdf access which work with a included
+python based simple proxy server have been implemented.
 
 This can allow end users to use some basic yet useful tool calls to enhance their ai chat
 sessions to some extent. It also provides for a simple minded exploration of tool calling
@@ -390,6 +395,8 @@ needed to help generate better responses. this can also be used for
   organising and summarising the same
   * searching for specific topics and summarising the results
   * or so
+
+* one could also augment additional data / info by accessing text content from pdf files
 
 * save collated data or generated analysis or more to the provided data store and retrieve
 them later to augment the analysis / generation then. Also could be used to summarise chat
@@ -441,6 +448,17 @@ the above set of web related tool calls work by handshaking with a bundled simpl
 (/caching in future) server logic, this helps bypass the CORS restrictions applied if trying to
 directly fetch from the browser js runtime environment.
 
+* pdf2text - fetch/read specified pdf file and extract its textual content
+
+  * local file access is enabled for this feature, so be careful as to where and under which user id
+  the simple proxy will be run.
+
+  * this depends on the pypdf python based open source library
+
+Implementing some of the tool calls through the simpleproxy.py server and not directly in the browser
+js env, allows one to isolate the core of these logic within a discardable VM or so, by running the
+simpleproxy.py in such a vm.
+
 Depending on the path specified wrt the proxy server, it executes the corresponding logic. Like if
 urltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
 tries to convert html content into equivalent plain text content to some extent in a simple minded
@@ -463,6 +481,8 @@ The bundled simple proxy
   user-agent, accept and accept-language from the got request to the generated request during proxying
   so that websites will hopefully respect the request rather than blindly rejecting it as coming from
   a non-browser entity.
+
+* allows getting specified local or web based pdf files and extract their text content for ai to use
 
 In future it can be further extended to help with other relatively simple yet useful tool calls like
 fetch_rss and so.
@@ -552,6 +572,8 @@ users) own data or data of ai model.
 
 Trap http response errors and inform user the specific error returned by ai server.
 
+Initial go at a pdf2text tool call. For now it allows local pdf files to be read and their text content
+extracted and passed to ai model for further processing, as decided by ai and end user.
 
 #### ToDo
 
