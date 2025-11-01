@@ -76,8 +76,8 @@
 	let displayedModel = $derived((): string | null => {
 		if (!currentConfig.showModelInfo) return null;
 
-		if (currentConfig.modelSelectorEnabled) {
-			return message.model ?? null;
+		if (message.model) {
+			return message.model;
 		}
 
 		return serverModel;
