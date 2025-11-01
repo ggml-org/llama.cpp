@@ -1093,7 +1093,9 @@ class MultiChatUI {
             let chat = this.simpleChats[cid];
             let limitedData = data
             if (gMe.tools.iResultMaxDataLength > 0) {
-                limitedData = data.slice(0, gMe.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+                if (data.length > gMe.tools.iResultMaxDataLength) {
+                    limitedData = data.slice(0, gMe.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+                }
             }
             chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData)))
             if (this.chat_show(cid)) {

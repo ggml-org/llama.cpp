@@ -261,7 +261,7 @@ It is attached to the document object. Some of these can also be updated using t
 
     * iResultMaxDataLength - specify what amount of any tool call result should be sent back to the ai engine server.
 
-      * specifying 0 disables this truncating of the results.
+      * specifying 0 disables this truncating of the results, and inturn full result will be sent to the ai engine server.
 
     * toolCallResponseTimeoutMS - specifies the time (in msecs) for which the logic should wait for a tool call to respond
     before a default timed out error response is generated and control given back to end user, for them to decide whether
