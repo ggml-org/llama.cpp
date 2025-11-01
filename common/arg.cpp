@@ -2768,6 +2768,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image.emplace_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD}));
+    add_opt(common_arg(
+        {"--image-min-tokens"}, "N",
+        "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)",
+        [](common_params & params, int value) {
+            params.image_min_tokens = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MIN_TOKENS"));
+    add_opt(common_arg(
+        {"--image-max-tokens"}, "N",
+        "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)",
+        [](common_params & params, int value) {
+            params.image_max_tokens = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
