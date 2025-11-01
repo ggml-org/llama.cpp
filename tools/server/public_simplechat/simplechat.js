@@ -1042,7 +1042,6 @@ class MultiChatUI {
                 let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
-                this.ui_reset_userinput();
             });
         });
 
@@ -1111,7 +1110,32 @@ class MultiChatUI {
 
 
     /**
+     * @param {SimpleChat} chat
+     * @param {string} apiEP
+     */
+    async handle_chat_hs(chat, apiEP) {
+        let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
+        let theBody = chat.request_jsonstr(apiEP);
+        console.debug(`DBUG:SimpleChat:MCUI:${chat.chatId}:HandleUserSubmit:${theUrl}:ReqBody:${theBody}`);
+
+        let theHeaders = chat.fetch_headers(apiEP);
+        let resp = await fetch(theUrl, {
+            method: "POST",
+            headers: theHeaders,
+            body: theBody,
+        });
+
+        if (resp.status >= 300) {
+            
+        }
+
+        return chat.handle_response(resp, apiEP, this.elDivChat);
+    }
+
+
+    /**
      * Handle user query submit request, wrt specified chat session.
+     *
      * NOTE: Currently the user query entry area is used for
      * * showing and allowing edits by user wrt tool call results
      *   in a predfined simple xml format,
@@ -1120,6 +1144,7 @@ class MultiChatUI {
      * Based on presence of the predefined xml format data at beginning
      * the logic will treat it has a tool result and if not then as a
      * normal user query.
+     *
      * @param {string} chatId
      * @param {string} apiEP
      */
@@ -1151,30 +1176,23 @@ class MultiChatUI {
         }
         this.chat_show(chat.chatId);
 
-        let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
-        let theBody = chat.request_jsonstr(apiEP);
-
         this.elInUser.value = "working...";
         this.elInUser.disabled = true;
-        console.debug(`DBUG:SimpleChat:MCUI:${chatId}:HandleUserSubmit:${theUrl}:ReqBody:${theBody}`);
-        let theHeaders = chat.fetch_headers(apiEP);
-        let resp = await fetch(theUrl, {
-            method: "POST",
-            headers: theHeaders,
-            body: theBody,
-        });
 
-        let theResp = await chat.handle_response(resp, apiEP, this.elDivChat);
-        if (chatId == this.curChatId) {
-            this.chat_show(chatId);
-            if (theResp.trimmedContent.length > 0) {
-                let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
-                p.className="role-trim";
+        try {
+            let theResp = await this.handle_chat_hs(chat, apiEP)
+            if (chatId == this.curChatId) {
+                this.chat_show(chatId);
+                if (theResp.trimmedContent.length > 0) {
+                    let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
+                    p.className="role-trim";
+                }
+            } else {
+                console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
             }
-        } else {
-            console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
+        } finally {
+            this.ui_reset_userinput();
         }
-        this.ui_reset_userinput();
     }
 
     /**
