@@ -2288,6 +2288,78 @@ Hey there!<|im_end|>
         // above verify edge cases and format variations for the tool call output format.
     }
 
+    {
+        auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
+        std::vector<std::string> end_tokens{ "[e~[" };
+
+        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}
+            ));
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "Hello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true
+        );
+
+    }
+
 }
 
 static void test_msg_diffs_compute() {
