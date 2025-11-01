@@ -2228,7 +2228,7 @@ private:
               }
             }
           }
-
+  
           if ((has_first_colon || has_second_colon)) {
             index = std::make_shared<SliceExpr>(slice_loc, std::move(start), std::move(end), std::move(step));
           } else {

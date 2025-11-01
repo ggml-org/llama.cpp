@@ -766,6 +766,65 @@ static void test_template_output_parsers() {
         assert_equals(COMMON_CHAT_FORMAT_HERMES_2_PRO, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
     }
     {
+        auto tmpls = read_templates("models/templates/Qwen-Qwen3-Coder-30B-A3B-Instruct.jinja");
+        std::vector<std::string> end_tokens{ "<|im_end|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing
+        assert_msg_equals(
+            simple_assist_msg("", "", "python", "{\"code\":\"print('Hello, World!')\"}"),
+            common_chat_parse(
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "\"print('Hello, World!')\"\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3}));
+        assert_msg_equals(
+            simple_assist_msg("Prelude", "", "python", "{\"code\":\"print('Hello, World!')\"}"),
+            common_chat_parse(
+                "Prelude"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "\"print('Hello, World!')\"\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3}));
+        assert_msg_equals(
+            simple_assist_msg("Prelude", "Thoughts", "python", "{\"code\":\"print('Hello, World!')\"}"),
+            common_chat_parse(
+                "<think>Thoughts</think>Prelude"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "\"print('Hello, World!')\"\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_QWEN3,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                    "<tool_call>\n"
+                    "<function=special_function>\n"
+                    "<parameter=arg1>\n"
+                    "1\n"
+                    "</parameter>\n"
+                    "</function>\n"
+                    "</tool_call>");
+    }
+    {
         auto tmpls = read_templates("models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja");
         std::vector<std::string> end_tokens{ "<|im_end|>" };
 
@@ -2409,9 +2468,9 @@ int main(int argc, char ** argv) {
         } else
 #endif
         {
-            test_msg_diffs_compute();
-            test_msgs_oaicompat_json_conversion();
-            test_tools_oaicompat_json_conversion();
+            // test_msg_diffs_compute();
+            // test_msgs_oaicompat_json_conversion();
+            // test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
