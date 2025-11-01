@@ -16,7 +16,7 @@
 
 #ifndef LOG_MIN_LEVEL
 #if defined(NDEBUG)
-#define LOG_MIN_LEVEL ANDROID_LOG_WARN
+#define LOG_MIN_LEVEL ANDROID_LOG_INFO
 #else
 #define LOG_MIN_LEVEL ANDROID_LOG_VERBOSE
 #endif
