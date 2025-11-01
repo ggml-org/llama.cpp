@@ -54,6 +54,7 @@ export class ChatService {
 			onError,
 			onReasoningChunk,
 			onModel,
+			onFirstValidChunk,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -201,6 +202,7 @@ export class ChatService {
 					onError,
 					onReasoningChunk,
 					onModel,
+					onFirstValidChunk,
 					conversationId,
 					abortController.signal
 				);
@@ -267,6 +269,7 @@ export class ChatService {
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
+		onFirstValidChunk?: () => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -283,6 +286,7 @@ export class ChatService {
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
+		let firstValidChunkEmitted = false;
 
 		try {
 			let chunk = '';
@@ -311,16 +315,24 @@ export class ChatService {
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 
-							const chunkModel = this.extractModelName(parsed);
-							if (chunkModel && !modelEmitted) {
-								modelEmitted = true;
-								onModel?.(chunkModel);
+							if (!firstValidChunkEmitted && parsed.object === 'chat.completion.chunk') {
+								firstValidChunkEmitted = true;
+
+								if (!abortSignal?.aborted) {
+									onFirstValidChunk?.();
+								}
 							}
 
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
+
+							const chunkModel = this.extractModelName(parsed);
+							if (chunkModel && !modelEmitted) {
+								modelEmitted = true;
+								onModel?.(chunkModel);
+							}
 
 							if (timings || promptProgress) {
 								this.updateProcessingState(timings, promptProgress, conversationId);
