@@ -148,6 +148,20 @@ export function preprocessLaTeX(content: string): string {
 	// See also:
 	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
 
+	// Step 0: Temporarily remove blockquote markers (>) to process LaTeX correctly
+	// Store the structure so we can restore it later
+	const blockquoteMarkers: Map<number, string> = new Map();
+	const lines = content.split('\n');
+	const processedLines = lines.map((line, index) => {
+		const match = line.match(/^(>\s*)/);
+		if (match) {
+			blockquoteMarkers.set(index, match[1]);
+			return line.slice(match[1].length);
+		}
+		return line;
+	});
+	content = processedLines.join('\n');
+
 	// Step 1: Protect code blocks
 	const codeBlocks: string[] = [];
 
@@ -238,6 +252,16 @@ export function preprocessLaTeX(content: string): string {
 				return `${prefix}$$${content}$$`;
 			}
 		);
+
+	// Step 7: Restore blockquote markers
+	if (blockquoteMarkers.size > 0) {
+		const finalLines = content.split('\n');
+		const restoredLines = finalLines.map((line, index) => {
+			const marker = blockquoteMarkers.get(index);
+			return marker ? marker + line : line;
+		});
+		content = restoredLines.join('\n');
+	}
 
 	return content;
 }

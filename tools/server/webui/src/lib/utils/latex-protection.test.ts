@@ -318,4 +318,38 @@ $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
 		// mhchem-escape would insert a backslash here.
 		expect(output).toBe('mchem pu:\n$\\pu{-572 kJ mol^{-1}}$');
 	});
+
+	test('LaTeX in blockquotes with display math', () => {
+		const input =
+			'> **Definition (limit):**  \n>  \\[\n>  \\lim_{x\\to a} f(x) = L\n>  \\]\n>  means that as \\(x\\) gets close to \\(a\\).';
+		const output = preprocessLaTeX(input);
+
+		// Blockquote markers should be preserved, LaTeX should be converted
+		expect(output).toContain('> **Definition (limit):**');
+		expect(output).toContain('$$');
+		expect(output).toContain('$x$');
+		expect(output).not.toContain('\\[');
+		expect(output).not.toContain('\\]');
+		expect(output).not.toContain('\\(');
+		expect(output).not.toContain('\\)');
+	});
+
+	test('LaTeX in blockquotes with inline math', () => {
+		const input =
+			"> The derivative \\(f'(x)\\) at point \\(x=a\\) measures slope.\n> Formula: \\(f'(a)=\\lim_{h\\to 0}\\frac{f(a+h)-f(a)}{h}\\)";
+		const output = preprocessLaTeX(input);
+
+		// Blockquote markers should be preserved, inline LaTeX converted to $...$
+		expect(output).toContain("> The derivative $f'(x)$ at point $x=a$ measures slope.");
+		expect(output).toContain("> Formula: $f'(a)=\\lim_{h\\to 0}\\frac{f(a+h)-f(a)}{h}$");
+	});
+
+	test('Mixed content with blockquotes and regular text', () => {
+		const input =
+			'Regular text with \\(x^2\\).\n\n> Quote with \\(y^2\\).\n\nMore text with \\(z^2\\).';
+		const output = preprocessLaTeX(input);
+
+		// All LaTeX should be converted, blockquote markers preserved
+		expect(output).toBe('Regular text with $x^2$.\n\n> Quote with $y^2$.\n\nMore text with $z^2$.');
+	});
 });
