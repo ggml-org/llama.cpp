@@ -1091,7 +1091,11 @@ class MultiChatUI {
             clearTimeout(this.timers.toolcallResponseTimeout)
             this.timers.toolcallResponseTimeout = undefined
             let chat = this.simpleChats[cid];
-            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, data)))
+            let limitedData = data
+            if (gMe.tools.iResultMaxDataLength > 0) {
+                limitedData = data.slice(0, gMe.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+            }
+            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData)))
             if (this.chat_show(cid)) {
                 if (gMe.tools.auto > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
@@ -1336,6 +1340,11 @@ class Me {
             proxyAuthInsecure: "NeverSecure",
             searchUrl: SearchURLS.duckduckgo,
             toolNames: /** @type {Array<string>} */([]),
+            /**
+             * Control the length of the tool call result data returned to ai after tool call.
+             * A value of 0 is treated as unlimited data.
+             */
+            iResultMaxDataLength: 2048,
             /**
              * Control how many milliseconds to wait for tool call to respond, before generating a timed out
              * error response and giving control back to end user.
