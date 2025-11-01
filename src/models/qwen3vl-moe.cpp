@@ -1,9 +1,9 @@
 #include "models.h"
 
 llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_full = hparams.n_embd; // main embd + deepstack embds
     const size_t n_deepstack_layers = hparams.n_deepstack_layers;
-    const int64_t n_embd = n_embd_full / (n_deepstack_layers + 1);
+    const int64_t n_embd_full = hparams.n_embd * (n_deepstack_layers + 1); // main embd + deepstack embds
+    const int64_t n_embd = hparams.n_embd;
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -21,9 +21,9 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
 
     if (ubatch.embd) {
         // Image input: split main embd and deepstack embds
-        ggml_tensor * inpL_main = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], 0);
+        ggml_tensor * inpL_main = ggml_view_2d(ctx0, inpL, n_embd_full, n_tokens, inpL->nb[1], 0);
         for (size_t i = 0; i < n_deepstack_layers; i++) {
-            deepstack_features[i] = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], (i + 1) * n_embd * sizeof(float));
+            deepstack_features[i] = ggml_view_2d(ctx0, inpL, n_embd_full, n_tokens, inpL->nb[1], (i + 1) * n_embd * sizeof(float));
         }
         inpL = inpL_main;
     }
