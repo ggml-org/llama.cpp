@@ -742,6 +742,13 @@ class SimpleChat {
      * @param {HTMLDivElement} elDivChat - used to show chat response as it is being generated/recieved in streaming mode
      */
     async handle_chat_hs(baseURL, apiEP, elDivChat) {
+        class ChatHSError extends Error {
+            constructor(/** @type {string} */message) {
+                super(message);
+                this.name = 'ChatHSError'
+            }
+        }
+
         let theUrl = ApiEP.Url(baseURL, apiEP);
         let theBody = this.request_jsonstr(apiEP);
         console.debug(`DBUG:SimpleChat:${this.chatId}:HandleChatHS:${theUrl}:ReqBody:${theBody}`);
@@ -754,7 +761,7 @@ class SimpleChat {
         });
 
         if (resp.status >= 300) {
-            
+            throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}`);
         }
 
         return this.handle_response(resp, apiEP, elDivChat);
