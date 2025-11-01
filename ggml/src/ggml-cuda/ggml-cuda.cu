@@ -27,6 +27,7 @@
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
+#include "ggml-cuda/moe-expert-reduce.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
 #include "ggml-cuda/opt-step-sgd.cuh"
@@ -3167,6 +3168,31 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                                               /*delayed_softmax*/ true);
                         i += 5;
                         continue;
+                    }
+
+                    if (node->op == GGML_OP_MUL) {
+                        int current_node = i + 1;
+                        int num_views    = 0;
+                        int num_adds     = 0;
+                        while (current_node < cgraph->n_nodes && cgraph->nodes[current_node]->op == GGML_OP_VIEW) {
+                            num_views++;
+                            current_node++;
+                        }
+
+                        while (current_node < cgraph->n_nodes && cgraph->nodes[current_node]->op == GGML_OP_ADD &&
+                                num_adds < num_views - 1) {
+                            num_adds++;
+                            current_node++;
+                        }
+
+                        if (num_adds == num_views - 1 && num_views > 0) {
+                            ggml_tensor * dst_node = cgraph->nodes[current_node - 1];
+                            if (ggml_cuda_should_use_moe_expert_reduce(cgraph, i, current_node)) {
+                                ggml_cuda_op_moe_expert_reduce(*cuda_ctx, node->src[0], node->src[1], dst_node);
+                                i += num_views + num_adds;
+                                continue;
+                            }
+                        }
                     }
 
                     if (node->op == GGML_OP_ADD) {
