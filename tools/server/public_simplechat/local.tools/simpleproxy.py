@@ -378,7 +378,7 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
 
 
-def process_pdf2text(url: str):
+def process_pdf2text(url: str, startPN: int, endPN: int):
     import pypdf
     import io
     urlParts = url.split('://',1)
@@ -388,7 +388,12 @@ def process_pdf2text(url: str):
     dPdf = fPdf.read()
     tPdf = ""
     oPdf = pypdf.PdfReader(io.BytesIO(dPdf))
-    for (pn, pd) in enumerate(oPdf.pages):
+    if (startPN < 0):
+        startPN = 0
+    if (endPN < 0) or (endPN >= len(oPdf.pages)):
+        endPN = len(oPdf.pages)-1
+    for i in range(startPN, endPN+1):
+        pd = oPdf.pages[i]
         tPdf = tPdf + pd.extract_text()
     return { 'status': 200, 'msg': "Pdf2Text Response follows", 'data': tPdf }
 
@@ -407,8 +412,18 @@ def handle_pdf2text(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     if (not url) or (len(url) == 0):
         ph.send_error(400, f"WARN:HandlePdf2Text:MissingUrl!")
         return
+    startP = queryParams['startPageNumber'][0]
+    if startP:
+        startP = int(startP)
+    else:
+        startP = -1
+    endP = queryParams['endPageNumber'][0]
+    if endP:
+        endP = int(endP)
+    else:
+        endP = -1
     print(f"INFO:HandlePdf2Text:Processing:{url}...")
-    gotP2T = process_pdf2text(url)
+    gotP2T = process_pdf2text(url, startP, endP)
     if (gotP2T['status'] != 200):
         ph.send_error(gotP2T['status'], gotP2T['msg'] )
         return
