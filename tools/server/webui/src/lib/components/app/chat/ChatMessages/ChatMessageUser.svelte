@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, X } from '@lucide/svelte';
+	import { Check, X, Send } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
@@ -22,6 +22,7 @@
 		} | null;
 		onCancelEdit: () => void;
 		onSaveEdit: () => void;
+		onSaveEditOnly?: () => void;
 		onEditKeydown: (event: KeyboardEvent) => void;
 		onEditedContentChange: (content: string) => void;
 		onCopy: () => void;
@@ -43,6 +44,7 @@
 		deletionInfo,
 		onCancelEdit,
 		onSaveEdit,
+		onSaveEditOnly,
 		onEditKeydown,
 		onEditedContentChange,
 		onCopy,
@@ -100,15 +102,26 @@
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="ghost">
 					<X class="mr-1 h-3 w-3" />
-
 					Cancel
 				</Button>
 
-				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
-					<Check class="mr-1 h-3 w-3" />
+				{#if onSaveEditOnly}
+					<Button
+						class="h-8 px-3"
+						onclick={onSaveEditOnly}
+						disabled={!editedContent.trim()}
+						size="sm"
+						variant="outline"
+					>
+						<Check class="mr-1 h-3 w-3" />
+						Save
+					</Button>
+				{/if}
 
+				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
+					<Send class="mr-1 h-3 w-3" />
 					Send
 				</Button>
 			</div>

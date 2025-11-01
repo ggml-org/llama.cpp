@@ -39,6 +39,7 @@
 		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
+		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
 		onEditKeydown?: (event: KeyboardEvent) => void;
@@ -65,6 +66,7 @@
 		messageContent,
 		onCancelEdit,
 		onConfirmDelete,
+		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
@@ -335,6 +337,7 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
+			{onContinue}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
