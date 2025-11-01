@@ -28,6 +28,7 @@
 #include <numeric>
 #include <functional>
 
+// TODO: allow to pass callback from user code
 struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
 
 enum ffn_op_type {
@@ -2260,28 +2261,16 @@ private:
         ggml_tensor * k = ggml_permute(ctx0, k_cur, 0, 2, 1, 3);
         //cb(k, "k", il);
 
-        ggml_tensor * v = ggml_permute(ctx0, v_cur, 1, 2, 0, 3);
-        v = ggml_cont(ctx0, v);
+        ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
         //cb(k, "v", il);
 
-        ggml_tensor * cur;
+        k = ggml_cast(ctx0, k, GGML_TYPE_F16);
+        v = ggml_cast(ctx0, v, GGML_TYPE_F16);
 
-        // TODO @ngxson : support flash attention
-        {
-            const auto n_tokens = q->ne[1];
-            const auto n_head   = q->ne[2];
-            // const auto n_kv     = k->ne[1]; // for flash attention
+        ggml_tensor * cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
-            ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-            // F32 may not needed for vision encoders?
-            // ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-            kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
-
-            ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-            cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-            cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens);
-        }
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
 
         cb(cur, "kqv_out", il);
 
@@ -3223,6 +3212,11 @@ struct clip_model_loader {
                         size / 1024.0 / 1024.0);
             }
         }
+
+        const int n_splits = ggml_backend_sched_get_n_splits(ctx_clip.sched.get());
+        const int n_nodes  = ggml_graph_n_nodes(gf);
+
+        LOG_INF("%s: graph splits = %d, nodes = %d\n", __func__,  n_splits, n_nodes);
     }
 
     void get_bool(const std::string & key, bool & output, bool required = true) {
@@ -4483,6 +4477,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     //                we don't need true batching support because the cgraph will gonna be big anyway
     if (batch_size != 1) {
         return false; // only support batch size of 1
+    }
+
+    if (ggml_backend_sched_get_n_splits(ctx->sched.get()) > 1) {
+        LOG_WRN("%s: *****************************************************************\n", __func__);
+        LOG_WRN("%s: WARNING: the CLIP graph uses unsupported operators by the backend\n", __func__);
+        LOG_WRN("%s:          the performance will be suboptimal                      \n", __func__);
+        LOG_WRN("%s:                                                                  \n", __func__);
+        LOG_WRN("%s: ref: https://github.com/ggml-org/llama.cpp/pull/16837#issuecomment-3461676118\n", __func__);
+        LOG_WRN("%s: *****************************************************************\n", __func__);
     }
 
     // build the inference graph
