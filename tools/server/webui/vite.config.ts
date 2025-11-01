@@ -18,6 +18,15 @@ const GUIDE_FOR_FRONTEND = `
 
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
+/**
+ * the maximum size of an embedded asset in bytes,
+ * e.g. maximum size of embedded font (see node_modules/katex/dist/fonts/*.woff2)
+ */
+const MAX_ASSET_SIZE = 32000;
+
+/** public/index.html.gz minified flag */
+const ENABLE_JS_MINIFICATION = true;
+
 function llamaCppBuildPlugin() {
 	return {
 		name: 'llamacpp:build',
@@ -34,6 +43,16 @@ function llamaCppBuildPlugin() {
 					}
 
 					let content = readFileSync(indexPath, 'utf-8');
+
+					// A non-embedded KaTeX-font (/src:(?:,?url\(.\/KaTeX_[^)]+\) format\("[a-z0-9]+"\))+/)
+					// will be mentionend by a 404 error, see MAX_ASSET_SIZE.
+
+					// Remove embedded ttf- and woff-fonts.
+					// See ./node_modules/katex/src/styles/fonts.scss.
+					content = content.replace(
+						new RegExp(/,?url\(data:font\/(?:ttf|woff);base64,[^)]+\) format\("[a-z0-9]+"\)/, 'g'),
+						''
+					);
 
 					const faviconPath = resolve('static/favicon.svg');
 					if (existsSync(faviconPath)) {
@@ -76,11 +95,11 @@ function llamaCppBuildPlugin() {
 
 export default defineConfig({
 	build: {
-		chunkSizeWarningLimit: 3072
+		assetsInlineLimit: MAX_ASSET_SIZE,
+		chunkSizeWarningLimit: 3072,
+		minify: ENABLE_JS_MINIFICATION
 	},
-
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
-
 	test: {
 		projects: [
 			{

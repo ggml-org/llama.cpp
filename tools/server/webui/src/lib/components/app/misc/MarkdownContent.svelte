@@ -8,6 +8,7 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
+	import { preprocessLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
 	import 'katex/dist/katex.min.css';
 
@@ -154,19 +155,9 @@
 		return mutated ? tempDiv.innerHTML : html;
 	}
 
-	function normalizeMathDelimiters(text: string): string {
-		return text
-			.replace(/(^|[^\\])\\\[((?:\\.|[\s\S])*?)\\\]/g, (_, prefix: string, content: string) => {
-				return `${prefix}$$${content}$$`;
-			})
-			.replace(/(^|[^\\])\\\(((?:\\.|[\s\S])*?)\\\)/g, (_, prefix: string, content: string) => {
-				return `${prefix}$${content}$`;
-			});
-	}
-
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const normalized = normalizeMathDelimiters(text);
+			let normalized = preprocessLaTeX(text);
 			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
