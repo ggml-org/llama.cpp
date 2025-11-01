@@ -278,13 +278,13 @@ let pdf2text_meta = {
         "type": "function",
         "function": {
             "name": "pdf2text",
-            "description": "Fetch pdf from requested web / file url through a proxy server and return its text content after converting pdf to text, in few seconds",
+            "description": "Fetch pdf from requested web / file path url through a proxy server and return its text content after converting pdf to text, in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"url of the pdf that will be got and inturn converted to text to some extent"
+                        "description":"local file / web (http/https) based url of the pdf that will be got and inturn converted to text to an extent"
                     }
                 },
                 "required": ["url"]
