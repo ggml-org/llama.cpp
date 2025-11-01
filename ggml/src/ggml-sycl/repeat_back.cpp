@@ -71,7 +71,6 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                 j2 -= carry * nr2;
                 j3 += carry;
             }
-            
             dst_dd[i] = acc;
         });
 }
