@@ -380,10 +380,17 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
 
 def process_pdf2text(url: str):
     import pypdf
+    import io
     urlParts = url.split('://',1)
     if not (urlParts[0] in gAllowedPdfUrlTypes):
         return { 'status': 403, 'msg': f"WARN:HandlePdf2Text:ForbiddedUrlType:{urlParts[0]}:AllowedUrlTypes:{gAllowedPdfUrlTypes}" }
-    return { 'status': 500, 'msg': 'Not yet implemented' }
+    fPdf = open(urlParts[1], 'rb')
+    dPdf = fPdf.read()
+    tPdf = ""
+    oPdf = pypdf.PdfReader(io.BytesIO(dPdf))
+    for (pn, pd) in enumerate(oPdf.pages):
+        tPdf = tPdf + pd.extract_text()
+    return { 'status': 200, 'msg': "Pdf2Text Response follows", 'data': tPdf }
 
 
 gAllowedPdfUrlTypes = [ "file", "http", "https" ]
@@ -405,8 +412,9 @@ def handle_pdf2text(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     if (gotP2T['status'] != 200):
         ph.send_error(gotP2T['status'], gotP2T['msg'] )
         return
-    ph.send_response_only(200, "Pdf2Text Response follows")
+    ph.send_response_only(gotP2T['status'], gotP2T['msg'])
     ph.end_headers()
+    ph.wfile.write(gotP2T['data'])
 
 
 
