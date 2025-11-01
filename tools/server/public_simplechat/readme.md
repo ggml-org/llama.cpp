@@ -417,15 +417,14 @@ The following tools/functions are currently provided by default
 
 * simple_calculator - which can solve simple arithmatic expressions
 
-* run_javascript_function_code - which can be used to run some javascript code in the browser
-  context.
+* run_javascript_function_code - which can be used to run ai generated or otherwise javascript code using browser's js capabilities.
 
 * data_store_get/set/delete/list - allows for a basic data store to be used.
 
-Currently the ai generated code / expression is run through a simple minded eval inside a web worker
-mechanism. Use of WebWorker helps avoid exposing browser global scope to the generated code directly.
-However any shared web worker scope isnt isolated. Either way always remember to cross check the tool
-requests and generated responses when using tool calling.
+All of the above are run from inside web worker contexts. Currently the ai generated code / expression
+is run through a simple minded eval inside a web worker mechanism. Use of WebWorker helps avoid exposing
+browser global scope to the generated code directly. However any shared web worker scope isnt isolated.
+Either way always remember to cross check the tool requests and generated responses when using tool calling.
 
 ##### using bundled simpleproxy.py (helps bypass browser cors restriction, ...)
 
@@ -551,11 +550,12 @@ A builtin data store related tool calls, inturn built on browser's indexedDB, wi
 proxy / additional helper to handle the store. One could use the ai assistant to store ones (ie end
 users) own data or data of ai model.
 
+Trap http response errors and inform user the specific error returned by ai server.
+
+
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
-
-Trap error responses.
 
 Handle multimodal handshaking with ai models.
 
@@ -567,6 +567,8 @@ same when saved chat is loaded.
 
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
 
+Provide tool to allow for specified pdf files to be converted to equivalent plain text form, so that ai
+can be used to work with the content in those PDFs.
 
 ### Debuging the handshake and beyond
 
