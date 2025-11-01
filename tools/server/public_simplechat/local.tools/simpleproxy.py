@@ -46,7 +46,7 @@ gConfigType = {
 
 gConfigNeeded = [ '--allowed.domains', '--bearer.insecure' ]
 
-gAllowedCalls = [ "urltext", "urlraw" ]
+gAllowedCalls = [ "urltext", "urlraw", "pdf2text" ]
 
 
 def bearer_transform():
@@ -128,6 +128,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error(400, f"WARN:{acGot['Msg']}")
                 else:
                     handle_urltext(self, pr)
+            case '/pdf2text':
+                acGot = self.auth_check()
+                if not acGot['AllOk']:
+                    self.send_error(400, f"WARN:{acGot['Msg']}")
+                else:
+                    handle_pdf2text(self, pr)
             case '/aum':
                 handle_aum(self, pr)
             case _:
@@ -370,6 +376,35 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         debug_dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
+
+
+def do_pdf2text(fUrl: str):
+    import pypdf
+
+
+
+gAllowedPdfUrlTypes = [ "file", "http", "https" ]
+
+def handle_pdf2text(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+    """
+    Handle requests to pdf2text path, which is used to extract plain text
+    from the specified pdf file.
+    """
+    queryParams = urllib.parse.parse_qs(pr.query)
+    url = queryParams['url']
+    print(f"DBUG:HandlePdf2Text:Url:{url}")
+    url = url[0]
+    if (not url) or (len(url) == 0):
+        ph.send_error(400, f"WARN:HandlePdf2Text:MissingUrl!")
+        return
+    urlParts = url.split('://',1)
+    if not (urlParts[0] in gAllowedPdfUrlTypes):
+        ph.send_error(403, f"WARN:HandlePdf2Text:ForbiddedUrlType:{urlParts[0]}:AllowedUrlTypes:{gAllowedPdfUrlTypes}")
+        return
+    print(f"INFO:HandlePdf2Text:Processing:{url}")
+    ph.send_response_only(200, "Pdf2Text Response follows")
+    ph.end_headers()
+
 
 
 def load_config():
