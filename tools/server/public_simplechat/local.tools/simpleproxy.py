@@ -46,6 +46,8 @@ gConfigType = {
 
 gConfigNeeded = [ '--allowed.domains', '--bearer.insecure' ]
 
+gAllowedCalls = [ "urltext", "urlraw" ]
+
 
 def bearer_transform():
     """
@@ -146,6 +148,18 @@ def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     Handle requests to aum path, which is used in a simple way to
     verify that one is communicating with this proxy server
     """
+    queryParams = urllib.parse.parse_qs(pr.query)
+    url = queryParams['url']
+    print(f"DBUG:HandleAUM:Url:{url}")
+    url = url[0]
+    if (not url) or (len(url) == 0):
+        ph.send_error(400, f"WARN:HandleAUM:MissingUrl/UnknownQuery?!")
+        return
+    urlParts = url.split('.',1)
+    if not (urlParts[0] in gAllowedCalls):
+        ph.send_error(403, f"WARN:HandleAUM:Forbidded:{urlParts[0]}")
+        return
+    print(f"INFO:HandleAUM:Availability ok for:{urlParts[0]}")
     ph.send_response_only(200, "bharatavarshe")
     ph.send_header('Access-Control-Allow-Origin', '*')
     ph.end_headers()
