@@ -81,13 +81,11 @@ static void print_raw_embeddings(const float * emb,
     const bool is_rank = (pooling_type == LLAMA_POOLING_TYPE_RANK);
     const int cols = is_rank ? std::min<int>(n_embd, (int) n_cls_out) : n_embd;
 
+    const char *fmt = embd_normalize == 0 ? "%1.0f%s" : "%1.7f%s";
+
     for (int j = 0; j < n_embd_count; ++j) {
         for (int i = 0; i < cols; ++i) {
-            if (embd_normalize == 0) {
-                LOG("%1.0f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
-            } else {
-                LOG("%1.7f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
-            }
+            LOG(fmt, emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
         }
         LOG("\n");
     }
