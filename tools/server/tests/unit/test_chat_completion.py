@@ -433,21 +433,21 @@ def test_context_size_exceeded_stream():
 @pytest.mark.parametrize(
     "n_batch,batch_count,reuse_cache",
     [
-        (64, 15, False),
+        (64, 3, False),
         (64, 1, True),
     ]
 )
-def test_return_progresssss(n_batch, batch_count, reuse_cache):
+def test_return_progress(n_batch, batch_count, reuse_cache):
     global server
     server.n_batch = n_batch
-    server.n_ctx = 2048
+    server.n_ctx = 256
     server.n_slots = 1
     server.start()
     def make_cmpl_request():
         return server.make_stream_request("POST", "/chat/completions", data={
             "max_tokens": 10,
             "messages": [
-                {"role": "user", "content": "This is a test" * 100},
+                {"role": "user", "content": "This is a test" * 10},
             ],
             "stream": True,
             "return_progress": True,
