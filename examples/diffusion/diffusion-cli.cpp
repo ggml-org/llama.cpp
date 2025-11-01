@@ -408,7 +408,8 @@ static void diffusion_generate(llama_context *          ctx,
                             false,
                         };
 
-                        llama_sampler_apply(sampler, &cur_p);
+                        float n_remain = params.max_length - pos;
+                        llama_sampler_apply(sampler, &cur_p, n_remain);
                         output_tokens[pos] = cur_p.data[cur_p.selected].id;
                     }
                 }
@@ -433,7 +434,8 @@ static void diffusion_generate(llama_context *          ctx,
                         false,
                     };
 
-                    llama_sampler_apply(sampler, &cur_p);
+                    float n_remain = params.max_length - i;
+                    llama_sampler_apply(sampler, &cur_p, n_remain);
                     llama_token sampled_token = cur_p.data[cur_p.selected].id;
 
                     float conf = calculate_confidence(cur_p, params.algorithm, rng);
@@ -477,7 +479,8 @@ static void diffusion_generate(llama_context *          ctx,
                         };
 
                         for (int32_t i = 0; i < std::min(transfer_count, (int32_t) confidences.size()); i++) {
-                            llama_sampler_apply(dist_sampler, &conf_array);
+                            float n_remain = params.max_length - i;
+                            llama_sampler_apply(dist_sampler, &conf_array, n_remain);
                             int32_t selected_idx = conf_array.selected;
                             int32_t mask_idx     = selected_idx;
                             int32_t pos          = mask_positions[mask_idx];
