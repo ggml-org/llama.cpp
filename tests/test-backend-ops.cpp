@@ -1778,6 +1778,7 @@ struct test_example : public test_case {
 };
 
 
+
 // GGML_OP_UNARY
 struct test_unary : public test_case {
     const ggml_unary_op op;
@@ -5481,7 +5482,46 @@ struct test_leaky_relu : public test_case {
     }
 };
 
-// GGML_OP_FLASH_ATTN_EXT
+// GGML_OP_SPARSEK_ATTN
+struct test_sparsek_attn : public test_case {
+    const int64_t d_qk;
+    const int64_t d_v;
+    const int64_t n_head;
+    const int64_t n_tokens;
+    const int64_t batch;
+    const int32_t k_top;
+    const int32_t win_local;
+    const int32_t stride_global;
+
+    std::string vars() override {
+        return VARS_TO_STR9(d_qk, d_v, n_head, n_tokens, batch, k_top, win_local, stride_global, 0);
+    }
+
+    test_sparsek_attn(int64_t d_qk = 128, int64_t d_v = 128, int64_t n_head = 8,
+                      int64_t n_tokens = 256, int64_t batch = 4,
+                      int32_t k_top = 32, int32_t win_local = 64, int32_t stride_global = 128)
+        : d_qk(d_qk), d_v(d_v), n_head(n_head), n_tokens(n_tokens), batch(batch),
+          k_top(k_top), win_local(win_local), stride_global(stride_global) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_q = n_tokens;
+        ggml_tensor * Q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_qk, n_q, n_head, batch);
+        ggml_set_name(Q, "Q");
+        ggml_tensor * K = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_qk, n_tokens, n_head, batch);
+        ggml_set_name(K, "K");
+        ggml_tensor * V = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_v, n_tokens, n_head, batch);
+        ggml_set_name(V, "V");
+
+        ggml_tensor * out = ggml_sparsek_attn(ctx, Q, K, V, k_top, win_local, stride_global);
+        ggml_set_name(out, "SPARSEK_ATTN_out");
+
+        return out;
+    }
+};
+
+
+
+// GGML_OP_FLAsH_ATTN_EXT
 struct test_flash_attn_ext : public test_case {
     const int64_t hsk; // K head size
     const int64_t hsv; // V head size
@@ -7269,6 +7309,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    // ---- SPARSEK_ATTN --------------------------------------------------
+    for (int64_t d_qk : {64, 128}) {
+        for (int64_t d_v : {64, 128}) {
+            for (int64_t n_head : {4, 8}) {
+                for (int64_t kv : {113, 512}) {
+                    for (int64_t b : {1, 4}) {
+                        for (int32_t k_top : {16, 32}) {
+                            for (int32_t win_local : {32, 64}) {
+                                test_cases.emplace_back(new test_sparsek_attn(
+                                    d_qk, d_v, n_head, kv, b, k_top, win_local, /*stride_global*/128));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
@@ -7333,16 +7390,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
-
     // Conv2d: K=CRS=NPQ=4096 matmul performance
-    uint32_t                        iwh_idx  = 0;
-    uint32_t                        kwh_idx  = 1;
-    uint32_t                        Cout_idx = 2;
-    uint32_t                        Cin_idx  = 3;
-    uint32_t                        B_idx    = 4;
-    std::vector<std::array<int, 5>> cases    = {
-  //{IWH, KWH, Cout, Cin, B}
-  // K=CRS=NPQ=4096 conv2d matmul performance
+    uint32_t iwh_idx = 0;
+    uint32_t kwh_idx = 1;
+    uint32_t Cout_idx = 2;
+    uint32_t Cin_idx = 3;
+    uint32_t B_idx = 4;
+    std::vector<std::array<int, 5>> cases = {
+// {IWH, KWH, Cout, Cin, B}
+// K=CRS=NPQ=4096 conv2d matmul performance
         {19,   4, 4096, 256, 16},
  // K=128, CRS=128, NPQ=4096
         { 19,  4, 128,  8,   16},

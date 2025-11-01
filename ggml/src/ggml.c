@@ -990,7 +990,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "LEAKY_RELU",
-
+    "SPARSEK_ATTN",
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
     "SSM_CONV",
@@ -1019,7 +1019,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1094,7 +1094,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
     "leaky_relu(x)",
-
+    "sparsek_attn(x)",
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
     "ssm_conv(x)",
@@ -1123,7 +1123,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5062,6 +5062,52 @@ struct ggml_tensor * ggml_top_k(
 
     return result;
 }
+
+// ggml_sparsek_attn
+struct ggml_tensor * ggml_sparsek_attn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * Q,
+        struct ggml_tensor  * K,
+        struct ggml_tensor  * V,
+        int32_t               k_top,
+        int32_t               win_local,
+        int32_t               stride_global) {
+
+    GGML_ASSERT(ggml_can_mul_mat(K, Q));
+    GGML_ASSERT(Q->ne[3] == K->ne[3] && Q->ne[3] == V->ne[3]);
+
+    int64_t ne[4] = { V->ne[0], Q->ne[2], Q->ne[1], Q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+
+    int32_t params_i32[3] = { k_top, win_local, stride_global };
+    ggml_set_op_params(result, params_i32, sizeof(params_i32));
+
+    result->op     = GGML_OP_SPARSEK_ATTN;
+    result->src[0] = Q;
+    result->src[1] = K;
+    result->src[2] = V;
+
+    return result;
+}
+
+
+void ggml_sparsek_attn_set_params(struct ggml_tensor * a,
+                                  int32_t k_top,
+                                  int32_t win_local,
+                                  int32_t stride_global) {
+    GGML_ASSERT(a->op == GGML_OP_SPARSEK_ATTN);
+    ggml_set_op_params_i32(a, 0, k_top);
+    ggml_set_op_params_i32(a, 1, win_local);
+    ggml_set_op_params_i32(a, 2, stride_global);
+}
+
+int32_t ggml_sparsek_attn_get_param(const struct ggml_tensor * a, int index) {
+    GGML_ASSERT(a->op == GGML_OP_SPARSEK_ATTN);
+    return ggml_get_op_params_i32(a, index);
+}
+
+
 
 // ggml_flash_attn_ext
 

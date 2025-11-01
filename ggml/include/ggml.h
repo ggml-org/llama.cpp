@@ -530,7 +530,7 @@ extern "C" {
         GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
-
+        GGML_OP_SPARSEK_ATTN,
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
@@ -2232,6 +2232,26 @@ extern "C" {
     //   n_head % ne32      == 0
     //   ne3    % ne33      == 0
     //
+
+    GGML_API struct ggml_tensor * ggml_sparsek_attn(
+              struct ggml_context * ctx,
+              struct ggml_tensor  * Q,
+              struct ggml_tensor  * K,
+              struct ggml_tensor  * V,
+              int32_t               k_top,
+              int32_t               win_local,
+              int32_t               stride_global);
+
+    GGML_API void ggml_sparsek_attn_set_params(
+             struct ggml_tensor * a,
+             int32_t k_top,
+             int32_t win_local,
+             int32_t stride_global);
+
+    GGML_API int32_t ggml_sparsek_attn_get_param(
+             const struct ggml_tensor * a,
+             int index);
+
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
