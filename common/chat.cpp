@@ -2800,7 +2800,7 @@ static common_chat_params common_chat_params_init_minimax_m2(
     common_chat_params data;
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
-    if (string_ends_with(data.prompt, "<think>")) {
+    if (string_ends_with(data.prompt, "<think>\n")) { // Minimax adds a new line at the start of reasoning content
         if (!inputs.enable_thinking) {
             data.prompt += "</think>";
         } else {
