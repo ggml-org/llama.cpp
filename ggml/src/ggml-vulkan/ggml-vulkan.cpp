@@ -4274,8 +4274,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->multi_add = vk12_props.shaderRoundingModeRTEFloat16 &&
                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&
-                            vk12_features.runtimeDescriptorArray &&
-                            device->vendor_id != VK_VENDOR_ID_INTEL &&
                             getenv("GGML_VK_DISABLE_MULTI_ADD") == nullptr;
 
         device->shader_int64 = device_features2.features.shaderInt64;
