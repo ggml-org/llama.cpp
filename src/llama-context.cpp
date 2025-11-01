@@ -620,7 +620,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
-        return embd + j*model.hparams.n_embd;
+        return embd + j*model.hparams.n_embd_full;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -808,7 +808,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_full;
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -977,7 +977,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_full;
 
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
@@ -1276,7 +1276,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const auto n_batch = cparams.n_batch;
     const auto n_vocab = vocab.n_tokens();
-    const auto n_embd  = hparams.n_embd;
+    const auto n_embd  = hparams.n_embd_full;
 
     bool has_logits = true;
     bool has_embd   = cparams.embeddings;
@@ -1340,7 +1340,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
 void llama_context::output_reorder() {
     const uint64_t n_vocab = model.vocab.n_tokens();
-    const uint64_t n_embd  = model.hparams.n_embd;
+    const uint64_t n_embd  = model.hparams.n_embd_full;
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
@@ -1883,7 +1883,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     {
         LLAMA_LOG_DEBUG("%s: - writing embeddings\n", __func__);
 
-        const uint64_t embd_size = std::min((uint64_t) this->embd_size, (uint64_t) n_outputs * model.hparams.n_embd);
+        const uint64_t embd_size = std::min((uint64_t) this->embd_size, (uint64_t) n_outputs * model.hparams.n_embd_full);
 
         io.write(&embd_size, sizeof(embd_size));
 
@@ -2135,7 +2135,7 @@ void llama_context::opt_epoch_iter(
             batch.logits  [pos_batch]    = true;
         }
 
-        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
+        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd_full, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
             LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
             return;
         }

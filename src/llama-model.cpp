@@ -276,7 +276,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_IM2COL:
             {
-                const int n_embd = hparams.n_embd;
+                const int n_embd = hparams.n_embd_full;
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd, w->ne[1], 1, 1);
                 op_tensor = ggml_im2col(ctx, w, b, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
             } break;
@@ -505,6 +505,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
+    hparams.n_embd_full = hparams.n_embd;
 
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH, hparams.n_embd_features);
@@ -1041,7 +1042,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
                 // since vision model stacks deepstack features along feature dim
                 // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd *= hparams.n_deepstack_layers + 1;
+                hparams.n_embd_full *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
@@ -1067,7 +1068,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
                 // since vision model stacks deepstack features along feature dim
                 // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd *= hparams.n_deepstack_layers + 1;
+                hparams.n_embd_full *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_PHI2:
             {
@@ -3332,10 +3333,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_QWEN3:
             case LLM_ARCH_QWEN3VL:
                 {
-                    // for model loading, the weights only have the main embd
-                    // so we need to divide by the number of deepstack layers + 1
-                    // n_embd is const int so we declare a new variable
-                    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
@@ -3371,10 +3368,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_QWEN3MOE:
             case LLM_ARCH_QWEN3VLMOE:
                 {
-                    // for model loading, the weights only have the main embd
-                    // so we need to divide by the number of deepstack layers + 1
-                    // n_embd is const int so we declare a new variable
-                    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
@@ -6681,8 +6674,8 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
     return ::select_buft(
             *pimpl->dev_layer.at(il).buft_list,
             [&](ggml_context * ctx) {
-                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
-                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
+                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd_full);
+                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd_full);
                 return ggml_add(ctx, cur, layer_dir);
             });
 }
@@ -7327,6 +7320,10 @@ int32_t llama_model_n_ctx_train(const llama_model * model) {
 
 int32_t llama_model_n_embd(const llama_model * model) {
     return model->hparams.n_embd;
+}
+
+int32_t llama_model_n_embd_full(const llama_model * model) {
+    return model->hparams.n_embd_full;
 }
 
 int32_t llama_model_n_layer(const llama_model * model) {
