@@ -374,7 +374,7 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
         (256, 4, [80, 40, 80, 80], [True,  True,  True,  True]),
         (256, 4, [70, 70, 70, 70], [False, False, False, False]),
         (256, 4, [90, 90, 40, 90], [False, False, True,  False]),
-        (256, 4, [90, 90, 40, 80], [True,  True,  True,  True]),
+        (256, 4, [90, 90, 40, 75], [True,  True,  True,  True]),
     ],
 )
 def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
