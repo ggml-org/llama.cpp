@@ -13,10 +13,12 @@
 
 #include "types.glsl"
 
-#ifndef MMQ
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
-#else
-layout (binding = 0) readonly buffer A {A_TYPE_PACKED16 data_a[];};
+#if defined(A_TYPE_PACKED16)
+layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
+#endif
+#if defined(A_TYPE_PACKED32)
+layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
 #endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
@@ -34,8 +36,6 @@ layout (binding = 3) readonly buffer Bias {D_TYPE data_bias[];};
 #ifdef MUL_MAT_ID
 layout (binding = 4) readonly buffer IDS {int data_ids[];};
 #endif
-
-#include "dequant_funcs.glsl"
 
 layout (push_constant) uniform parameter
 {
