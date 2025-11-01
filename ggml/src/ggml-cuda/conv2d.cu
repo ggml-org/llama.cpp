@@ -1,3 +1,4 @@
+#include "conv2d-tensor-core.cuh"
 #include "conv2d.cuh"
 #include "convert.cuh"
 
@@ -94,8 +95,8 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
             for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
                 const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
 
-                const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
-                const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
+                const float input_val  = input[Layout::input_index(n, c_in, in_y, in_x, P)];
+                const T     kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
                 acc += (input_val * ggml_cuda_cast<float>(kernel_val));
             }
         }
@@ -111,9 +112,9 @@ static void conv2d_cuda(const float * X_D, const T * K_D, float * Y_D, const con
     conv2d_kernel<T, whcn_layout><<<blocks, CUDA_CONV2D_BLOCK_SIZE, 0, st>>>(X_D, K_D, Y_D, P);
 }
 
-static void conv2d_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const conv_params P, cudaStream_t st) {
-    conv2d_cuda<half>(X_D, K_D, Y_D, P, st);
-}
+// static void conv2d_cuda_f16(const float * X_D, const half * K_D, float * Y_D, const conv_params P, cudaStream_t st) {
+//     conv2d_cuda<half>(X_D, K_D, Y_D, P, st);
+// }
 
 static void conv2d_cuda_f32(const float * X_D, const float * K_D, float * Y_D, const conv_params P, cudaStream_t st) {
     conv2d_cuda<float>(X_D, K_D, Y_D, P, st);
@@ -159,7 +160,9 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     conv_params   params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
 
     if (kernel->type == GGML_TYPE_F16) {
-        conv2d_cuda_f16(X_D, (half *) K_D, Y_D, params, st);
+        ggml_cuda_op_conv2d_tensor_core(IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, X_D,
+                                        (const half *) K_D, Y_D, st);
+        // conv2d_cuda_f16(X_D, (const half *) K_D, Y_D, params, st);
     } else {
         conv2d_cuda_f32(X_D, K_D, Y_D, params, st);
     }
