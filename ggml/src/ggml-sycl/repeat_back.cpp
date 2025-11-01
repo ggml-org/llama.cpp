@@ -42,36 +42,36 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     queue_ptr stream = ctx.stream();
 
-    stream->parallel_for(sycl::nd_range<1>(sycl::range<1>(num_blocks * BLOCK_SIZE), sycl::range<1>(BLOCK_SIZE)),
-                         [=](sycl::nd_item<1> item_ct1) {
-                             const size_t i = item_ct1.get_global_linear_id();
+    stream->parallel_for(
+        sycl::nd_range<1>(sycl::range<1>(num_blocks * BLOCK_SIZE), sycl::range<1>(BLOCK_SIZE)),
+        [=](sycl::nd_item<1> item_ct1) {
+            const size_t i = item_ct1.get_global_linear_id();
+            if (i >= total) {
+                return;
+            }
 
-                             if (i >= total) {
-                                 return;
-                             }
+            const int i3 = (int) (i * inv_ne_012);
+            const int i2 = (int) (i * inv_ne_01) - i3 * ne2;
+            const int i1 = (int) (i * inv_ne0) - (int) (i * inv_ne_01) * ne1;
+            const int i0 = i - (int) (i * inv_ne0) * ne0;
 
-                             const int i3 = (int) (i * inv_ne_012);
-                             const int i2 = (int) (i * inv_ne_01) - i3 * ne2;
-                             const int i1 = (int) (i * inv_ne0) - (int) (i * inv_ne_01) * ne1;
-                             const int i0 = i - (int) (i * inv_ne0) * ne0;
+            int   j0 = 0, j1 = 0, j2 = 0, j3 = 0;
+            float acc = 0.0f;
 
-                             int   j0 = 0, j1 = 0, j2 = 0, j3 = 0;
-                             float acc = 0.0f;
+            for (int j = 0; j < repeat_count; ++j) {
+                const float * ptr = (const float *) (base + (i0 + j0 * ne0) * nb0 + (i1 + j1 * ne1) * nb1 +
+                    (i2 + j2 * ne2) * nb2 + (i3 + j3 * ne3) * nb3);
+                acc += *ptr;
 
-                             for (int j = 0; j < repeat_count; ++j) {
-                                 const float * ptr =
-                                     (const float *) (base + (i0 + j0 * ne0) * nb0 + (i1 + j1 * ne1) * nb1 +
-                                                      (i2 + j2 * ne2) * nb2 + (i3 + j3 * ne3) * nb3);
-                                 acc += *ptr;
-
-                                 int carry = (++j0 >= nr0);
-                                 j0 -= carry * nr0;
-                                 carry = (carry && (++j1 >= nr1));
-                                 j1 -= carry * nr1;
-                                 carry = (carry && (++j2 >= nr2));
-                                 j2 -= carry * nr2;
-                                 j3 += carry;
-                             }
-                             dst_dd[i] = acc;
-                         });
+                int carry = (++j0 >= nr0);
+                j0 -= carry * nr0;
+                carry = (carry && (++j1 >= nr1));
+                j1 -= carry * nr1;
+                carry = (carry && (++j2 >= nr2));
+                j2 -= carry * nr2;
+                j3 += carry;
+            }
+            
+            dst_dd[i] = acc;
+        });
 }
