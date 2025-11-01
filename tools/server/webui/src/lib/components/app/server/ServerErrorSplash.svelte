@@ -64,7 +64,7 @@
 			updateConfig('apiKey', apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch('/props', {
+			const response = await fetch('./props', {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`
@@ -77,7 +77,7 @@
 
 				// Show success state briefly, then navigate to home
 				setTimeout(() => {
-					goto('/');
+					goto(`#/`);
 				}, 1000);
 			} else {
 				// API key is invalid - User Story A

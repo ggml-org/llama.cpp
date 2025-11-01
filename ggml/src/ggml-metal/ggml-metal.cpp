@@ -193,9 +193,9 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                if (ggml_metal_op_flash_attn_ext_use_vec(tensor)) {
-                    res += ggml_metal_op_flash_attn_ext_extra_tmp(tensor);
-                }
+                res += ggml_metal_op_flash_attn_ext_extra_pad(tensor);
+                res += ggml_metal_op_flash_attn_ext_extra_blk(tensor);
+                res += ggml_metal_op_flash_attn_ext_extra_tmp(tensor);
             } break;
         default:
             break;

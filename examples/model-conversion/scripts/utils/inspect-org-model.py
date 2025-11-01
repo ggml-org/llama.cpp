@@ -40,7 +40,7 @@ if os.path.exists(index_path):
         file_path = os.path.join(model_path, file_name)
         print(f"\n--- From {file_name} ---")
 
-        with safe_open(file_path, framework="pt") as f:  # type: ignore
+        with safe_open(file_path, framework="pt") as f:
             for tensor_name in sorted(tensor_names):
                 tensor = f.get_tensor(tensor_name)
                 print(f"- {tensor_name} : shape = {tensor.shape}, dtype = {tensor.dtype}")
@@ -49,7 +49,7 @@ elif os.path.exists(single_file_path):
     # Single file model (original behavior)
     print("Single-file model detected")
 
-    with safe_open(single_file_path, framework="pt") as f:  # type: ignore
+    with safe_open(single_file_path, framework="pt") as f:
         keys = f.keys()
         print("Tensors in model:")
         for key in sorted(keys):

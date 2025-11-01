@@ -58,3 +58,63 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
           cmake --build build --config Release -j $(nproc)
+
+  # debian-13-riscv64-spacemit-ime-native: # Bianbu 2.2
+  #   runs-on: [self-hosted, RISCV64]
+
+  #   steps:
+  #     - name: Install prerequisites
+  #       run: |
+  #         sudo apt-get update || true
+  #         sudo apt-get install -y libatomic1
+  #     - uses: actions/checkout@v4
+  #     - name: Setup Riscv
+  #       run: |
+  #         sudo apt-get update || true
+  #         sudo apt-get install -y --no-install-recommends \
+  #                 build-essential \
+  #                 gcc-14-riscv64-linux-gnu \
+  #                 g++-14-riscv64-linux-gnu \
+  #                 ccache \
+  #                 cmake
+  #         sudo apt-get upgrade binutils -y
+
+  #     - name: Setup ccache
+  #       run: |
+  #         mkdir -p $HOME/.ccache
+  #         ccache -M 5G -d $HOME/.ccache
+  #         export CCACHE_LOGFILE=/home/runneruser/ccache_debug/ccache.log
+  #         export CCACHE_DEBUGDIR="/home/runneruser/ccache_debug"
+  #         echo "$GITHUB_WORKSPACE"
+  #         echo "CCACHE_LOGFILE=$CCACHE_LOGFILE" >> $GITHUB_ENV
+  #         echo "CCACHE_DEBUGDIR=$CCACHE_DEBUGDIR" >> $GITHUB_ENV
+  #         echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+  #         echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+  #     - name: Build
+  #       run: |
+  #         cmake -B build \
+  #           -DLLAMA_CURL=OFF \
+  #           -DCMAKE_BUILD_TYPE=Release \
+  #           -DGGML_OPENMP=OFF \
+  #           -DLLAMA_BUILD_EXAMPLES=ON \
+  #           -DLLAMA_BUILD_TOOLS=ON \
+  #           -DLLAMA_BUILD_TESTS=OFF \
+  #           -DCMAKE_SYSTEM_NAME=Linux \
+  #           -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+  #           -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+  #           -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+  #           -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  #           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  #           -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  #           -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
+  #           -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+  #           -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+  #           -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+  #           -DGGML_RVV=ON \
+  #           -DGGML_RV_ZFH=ON \
+  #           -DGGML_RV_ZICBOP=ON \
+  #           -DGGML_CPU_RISCV64_SPACEMIT=ON \
+  #           -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1
+
+  #         cmake --build build --config Release -j $(nproc)

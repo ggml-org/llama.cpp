@@ -51,7 +51,7 @@
 	{:else}
 		<Button
 			class="w-full justify-between hover:[&>kbd]:opacity-100"
-			href="/?new_chat=true"
+			href="?new_chat=true#/"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>

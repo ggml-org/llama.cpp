@@ -112,7 +112,7 @@ static bool ggml_mem_ranges_add_dst(ggml_mem_ranges_t mrs, const ggml_tensor * t
 }
 
 bool ggml_mem_ranges_add(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (tensor->src[i]) {
             ggml_mem_ranges_add_src(mrs, tensor->src[i]);
         }
@@ -173,7 +173,7 @@ static bool ggml_mem_ranges_check_dst(ggml_mem_ranges_t mrs, const ggml_tensor *
 }
 
 bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const ggml_tensor * tensor) {
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (tensor->src[i]) {
             if (!ggml_mem_ranges_check_src(mrs, tensor->src[i])) {
                 return false;
@@ -256,8 +256,6 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
     // perform reorders only across these types of ops
     // can be expanded when needed
-    // IMPORTANT: do not add ops such as GGML_OP_CPY or GGML_OP_SET_ROWS
-    //            the dependencies from such ops are not always represented in the graph
     const auto & h_safe = [](ggml_op op) {
         switch (op) {
             case GGML_OP_MUL_MAT:
@@ -273,6 +271,8 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
             case GGML_OP_GLU:
             case GGML_OP_SCALE:
             case GGML_OP_GET_ROWS:
+            case GGML_OP_CPY:
+            case GGML_OP_SET_ROWS:
                 return true;
             default:
                 return ggml_op_is_empty(op);
@@ -383,6 +383,7 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
         // fuse only ops that start with these operations
         // can be expanded when needed
         if (node.op() == GGML_OP_ADD ||
+            node.op() == GGML_OP_NORM ||
             node.op() == GGML_OP_RMS_NORM) {
             ops[0] = node.op();
 
@@ -392,6 +393,7 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
                 // can be expanded when needed
                 if (gf->nodes[f]->op != GGML_OP_ADD &&
                     gf->nodes[f]->op != GGML_OP_MUL &&
+                    gf->nodes[f]->op != GGML_OP_NORM &&
                     gf->nodes[f]->op != GGML_OP_RMS_NORM) {
                     break;
                 }

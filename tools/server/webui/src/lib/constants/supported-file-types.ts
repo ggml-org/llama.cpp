@@ -176,5 +176,13 @@ export const TEXT_FILE_TYPES = {
 	[FileTypeText.SVELTE]: {
 		extensions: [FileExtensionText.SVELTE],
 		mimeTypes: [MimeTypeText.SVELTE]
+	},
+	[FileTypeText.LATEX]: {
+		extensions: [FileExtensionText.TEX],
+		mimeTypes: [MimeTypeText.LATEX]
+	},
+	[FileTypeText.BIBTEX]: {
+		extensions: [FileExtensionText.BIB],
+		mimeTypes: [MimeTypeText.BIBTEX]
 	}
 } as const;
