@@ -407,14 +407,18 @@ def handle_pdf2text(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     if (not url) or (len(url) == 0):
         ph.send_error(400, f"WARN:HandlePdf2Text:MissingUrl!")
         return
-    print(f"INFO:HandlePdf2Text:Processing:{url}")
+    print(f"INFO:HandlePdf2Text:Processing:{url}...")
     gotP2T = process_pdf2text(url)
     if (gotP2T['status'] != 200):
         ph.send_error(gotP2T['status'], gotP2T['msg'] )
         return
-    ph.send_response_only(gotP2T['status'], gotP2T['msg'])
+    ph.send_response(gotP2T['status'], gotP2T['msg'])
+    ph.send_header('Content-Type', 'text/text')
+    # Add CORS for browser fetch, just in case
+    ph.send_header('Access-Control-Allow-Origin', '*')
     ph.end_headers()
-    ph.wfile.write(gotP2T['data'])
+    print(f"INFO:HandlePdf2Text:ExtractedText:{url}...")
+    ph.wfile.write(gotP2T['data'].encode('utf-8'))
 
 
 
