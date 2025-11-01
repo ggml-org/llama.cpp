@@ -110,6 +110,9 @@ endif()
 
 if (GGML_HIP_ROCWMMA_FATTN)
     add_compile_definitions(GGML_HIP_ROCWMMA_FATTN)
+    if (GGML_HIP_ROCWMMA_PATH)
+        target_include_directories(ggml-hip PRIVATE ${GGML_HIP_ROCWMMA_PATH}/include)
+    endif()
 endif()
 
 if (NOT GGML_HIP_MMQ_MFMA)
