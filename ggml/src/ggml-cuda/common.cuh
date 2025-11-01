@@ -972,6 +972,32 @@ struct ggml_cuda_graph {
 #endif
 };
 
+struct ggml_cuda_concurrent_event {
+    std::vector<cudaEvent_t> per_stream_events;
+    cudaEvent_t              fork_event;
+    cudaEvent_t              join_event;
+
+    int                                          n_streams = 0;
+    std::unordered_map<const ggml_tensor *, int> stream_mapping;
+
+    const ggml_tensor * join_node;
+
+    ggml_cuda_concurrent_event() = default;
+
+    explicit ggml_cuda_concurrent_event(int n_streams) : n_streams(n_streams) {
+        per_stream_events.resize(n_streams);
+
+        for (size_t i = 0; i < per_stream_events.size(); ++i) {
+            cudaEventCreateWithFlags(&per_stream_events[i], cudaEventDisableTiming);
+        }
+
+        cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming);
+        cudaEventCreateWithFlags(&join_event, cudaEventDisableTiming);
+    }
+};
+
+using ggml_cuda_stream_context = std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event>;
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -982,10 +1008,14 @@ struct ggml_backend_cuda_context {
 
     std::unique_ptr<ggml_cuda_graph> cuda_graph;
 
+    int curr_stream_no = 0;
+
     explicit ggml_backend_cuda_context(int device) :
         device(device),
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
+
+    ggml_cuda_stream_context concurrent_stream_context;
 
     ~ggml_backend_cuda_context();
 
@@ -997,9 +1027,9 @@ struct ggml_backend_cuda_context {
         return streams[device][stream];
     }
 
-    cudaStream_t stream() {
-        return stream(device, 0);
-    }
+    cudaStream_t stream() { return stream(device, curr_stream_no); }
+
+    ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
     cublasHandle_t cublas_handle(int device) {
         if (cublas_handles[device] == nullptr) {
@@ -1015,15 +1045,15 @@ struct ggml_backend_cuda_context {
     }
 
     // pool
-    std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES];
+    std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
 
-    static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(int device);
+    static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(int device, int stream_no);
 
     ggml_cuda_pool & pool(int device) {
-        if (pools[device] == nullptr) {
-            pools[device] = new_pool_for_device(device);
+        if (pools[device][curr_stream_no] == nullptr) {
+            pools[device][curr_stream_no] = new_pool_for_device(device, curr_stream_no);
         }
-        return *pools[device];
+        return *pools[device][curr_stream_no];
     }
 
     ggml_cuda_pool & pool() {
