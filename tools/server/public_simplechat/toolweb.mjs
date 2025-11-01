@@ -1,6 +1,6 @@
 //@ts-check
 // ALERT - Simple Stupid flow - Using from a discardable VM is better
-// Helpers to handle tools/functions calling related to web access
+// Helpers to handle tools/functions calling related to web access, pdf, etal
 // which work in sync with the bundled simpleproxy.py server logic.
 // by Humans for All
 //
@@ -27,6 +27,9 @@ function get_gme() {
 }
 
 
+/**
+ * For now hash the shared secret with the year.
+ */
 function bearer_transform() {
     let data = `${new Date().getUTCFullYear()}${get_gme().tools.proxyAuthInsecure}`
     return crypto.subtle.digest('sha-256', new TextEncoder().encode(data)).then(ab=>{
