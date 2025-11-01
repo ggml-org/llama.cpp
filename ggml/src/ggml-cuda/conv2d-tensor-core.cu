@@ -3,13 +3,8 @@
 #include "convert.cuh"
 #include "mma.cuh"
 
-#define CEIL_DIV(M, N) (((M) + (N) - 1) / (N))
-
-static uint32_t ceil_div(uint32_t M, uint32_t N);
-static int      get_sm_count();
-
-uint32_t ceil_div(uint32_t M, uint32_t N) {
-    return (M + N - 1) / N;
+constexpr static size_t ceil_div(const size_t m, const size_t n) {
+    return (m + n - 1) / n;
 }
 
 __align__(16) struct Params {
@@ -25,22 +20,14 @@ __align__(16) struct Params {
     uint32_t IC_KH_KW, N_OH_OW;
     uint32_t IK_TOTAL, IN_TOTAL;
 
-    uint32_t KWmp;
-    uint32_t KWL;
-    uint32_t KWKHmp;
-    uint32_t KWKHL;
-    uint32_t OWmp;
-    uint32_t OWL;
-    uint32_t OWOHmp;
-    uint32_t OWOHL;
+    // fastdiv
+    uint3 KW_fastdiv;
+    uint3 KWKH_fastdiv;
+    uint3 OW_fastdiv;
+    uint3 OWOH_fastdiv;
 };
 
 __constant__ __device__ Params P;
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-__inline__ __device__ uint fastdiv(uint n, uint mp, uint L) {
-    return (__umulhi(n, mp) + n) >> L;
-}
 
 __device__ struct T_ICKHKW {
     const uint32_t ic, kh, kw;
@@ -82,20 +69,20 @@ struct whcn_layout {
 
     __device__ __forceinline__ static T_ICKHKW unpack_ickhkw(const uint32_t & idx) {
         // const uint32_t ic = idx / (P.KW * P.KH);
-        const uint32_t ic = fastdiv(idx, P.KWKHmp, P.KWKHL);
+        const uint32_t ic = fastdiv(idx, P.KWKH_fastdiv);
         const uint32_t r  = idx - ic * (P.KW * P.KH);
         // const uint32_t kh = r / P.KW;
-        const uint32_t kh = fastdiv(r, P.KWmp, P.KWL);
+        const uint32_t kh = fastdiv(r, P.KW_fastdiv);
         const uint32_t kw = r - kh * P.KW;
         return T_ICKHKW{ ic, kh, kw };
     }
 
     __device__ __forceinline__ static T_NOHOW unpack_nohow(const uint32_t & idx) {
         // const uint32_t n  = idx / (P.OH * P.OW);
-        const uint32_t n  = fastdiv(idx, P.OWOHmp, P.OWOHL);
+        const uint32_t n  = fastdiv(idx, P.OWOH_fastdiv);
         const uint32_t r  = idx - n * (P.OH * P.OW);
         // const uint32_t oh = r / P.OW;
-        const uint32_t oh = fastdiv(r, P.OWmp, P.OWL);
+        const uint32_t oh = fastdiv(r, P.OW_fastdiv);
         const uint32_t ow = r - oh * P.OW;
         return T_NOHOW{ n, oh, ow };
     }
@@ -113,7 +100,6 @@ template <typename layout,
           const uint32_t BS_NOHOW,
           const uint32_t BS_ICKHKW,
           const uint32_t NUM_TILES_PER_WARP,
-          const uint32_t NUM_WARPS_NEED,
           const uint32_t NUM_WARPS_NOHOW,
           const uint32_t NUM_WARPS,
           const uint32_t WG_SIZE>
@@ -222,43 +208,18 @@ __global__ void __launch_bounds__(NUM_WARPS * WARP_SIZE) conv2d_tensor_cores_ker
     }
 }
 
-// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
-// Precompute mp (m' in the paper) and L such that division
-// can be computed using a multiply (high 32b of 64b result)
-// and a shift:
-//
-// n/d = (mulhi(n, mp) + n) >> L;
-static void init_fastdiv_values(uint32_t d, uint32_t & mp, uint32_t & L) {
-    // compute L = ceil(log2(d));
-    L = 0;
-    while (L < 32 && (uint32_t{ 1 } << L) < d) {
-        L++;
-    }
-
-    mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
-}
-
 constexpr int conv_shapes[][NUM_VARIANTS] = {
     { 128, 64, 32  }, // BS_OC
     { 16,  32, 16  }, // BS_ICKHKW
     { 128, 32, 256 }, // BS_NOHOW
 };
 
-int get_sm_count() {
-    int device;
-    cudaGetDevice(&device);
-
-    int sm_count;
-    cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
-    return sm_count;
-}
-
 template <uint CONV_SHAPE>
-void conv_2d_tensor_core(const float *        src0,
-                         const half *         src1,
-                         float *              dst,
-                         const Params &       p,
-                         const cudaStream_t & st) {
+static void conv_2d_tensor_core(const float *        src0,
+                                const half *         src1,
+                                float *              dst,
+                                const Params &       p,
+                                const cudaStream_t & st) {
     constexpr uint32_t WG_SIZE = 256;
     static_assert(WG_SIZE % WARP_SIZE == 0);
 
@@ -270,24 +231,24 @@ void conv_2d_tensor_core(const float *        src0,
 
     static_assert(BS_OC % WMMA_M == 0 && BS_NOHOW % WMMA_N == 0);
 
-    constexpr uint32_t NUM_WARPS_NEED  = (BS_OC * BS_NOHOW) / (WMMA_M * WMMA_N);
+    constexpr uint32_t NUM_TILES_TOTAL = (BS_OC * BS_NOHOW) / (WMMA_M * WMMA_N);
     constexpr uint32_t NUM_WARPS_NOHOW = BS_NOHOW / WMMA_N;
 
-    static_assert(NUM_WARPS_NEED % NUM_WARPS == 0);
+    static_assert(NUM_TILES_TOTAL % NUM_WARPS == 0);
 
-    constexpr uint32_t NUM_TILES_PER_WARP = NUM_WARPS_NEED / NUM_WARPS;
+    constexpr uint32_t NUM_TILES_PER_WARP = NUM_TILES_TOTAL / NUM_WARPS;
 
     const int64_t  NOHOW    = p.B * p.OW * p.OH;
-    const uint32_t NB_OC    = CEIL_DIV(p.Cout, BS_OC);
-    const uint32_t NB_NOHOW = CEIL_DIV(NOHOW, BS_NOHOW);
+    const uint32_t NB_OC    = ceil_div(p.Cout, BS_OC);
+    const uint32_t NB_NOHOW = ceil_div(NOHOW, BS_NOHOW);
 
     cudaMemcpyToSymbolAsync(P, &p, sizeof(Params), 0, cudaMemcpyHostToDevice, st);
 
     dim3           gridDim(NB_OC, NB_NOHOW);
     constexpr dim3 blockDim(WARP_SIZE, NUM_WARPS);
 
-    conv2d_tensor_cores_kernel<whcn_layout, BS_OC, BS_NOHOW, BS_ICKHKW, NUM_TILES_PER_WARP, NUM_WARPS_NEED,
-                               NUM_WARPS_NOHOW, NUM_WARPS, WG_SIZE><<<gridDim, blockDim, 0, st>>>(src0, src1, dst);
+    conv2d_tensor_cores_kernel<whcn_layout, BS_OC, BS_NOHOW, BS_ICKHKW, NUM_TILES_PER_WARP, NUM_WARPS_NOHOW, NUM_WARPS,
+                               WG_SIZE><<<gridDim, blockDim, 0, st>>>(src0, src1, dst);
 }
 
 void ggml_cuda_op_conv2d_tensor_core(const uint32_t &     IW,
@@ -341,15 +302,15 @@ void ggml_cuda_op_conv2d_tensor_core(const uint32_t &     IW,
     p.N_OH_OW  = B * OH * OW;
     p.IN_TOTAL = B * IC * IH * IW;
 
-    init_fastdiv_values(p.KW, p.KWmp, p.KWL);
-    init_fastdiv_values(p.KW * p.KH, p.KWKHmp, p.KWKHL);
-    init_fastdiv_values(p.OW, p.OWmp, p.OWL);
-    init_fastdiv_values(p.OW * p.OH, p.OWOHmp, p.OWOHL);
+    p.KW_fastdiv   = init_fastdiv_values(p.KW);
+    p.KWKH_fastdiv = init_fastdiv_values(p.KW * p.KH);
+    p.OW_fastdiv   = init_fastdiv_values(p.OW);
+    p.OWOH_fastdiv = init_fastdiv_values(p.OW * p.OH);
 
     // Problem size (Cout x NOHOW)
-    std::array<uint32_t, 3> elements = { p.Cout, p.B * p.OW * p.OH, 1 };
+    std::array<uint32_t, 2> elements = { p.Cout, p.B * p.OW * p.OH };
 
-    const uint32_t sm_count = get_sm_count();
+    const uint32_t sm_count = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
 
     uint32_t variant_ntiles[NUM_VARIANTS];
 
