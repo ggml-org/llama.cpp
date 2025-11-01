@@ -5,8 +5,8 @@
 //
 
 /**
- * Expects to get a message with id, name and code to run
- * Posts message with id, name and data captured from console.log outputs
+ * Expects to get a message with id (session and toolcall), name and code to run
+ * Posts message with id (session and toolcall), name and data captured from console.log outputs
  */
 
 
