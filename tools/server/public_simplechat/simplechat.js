@@ -867,15 +867,16 @@ class MultiChatUI {
     /**
      * Reset/Setup Tool Call UI parts as needed
      * @param {ChatMessageEx} ar
+     * @param {boolean} bAuto
      */
-    ui_reset_toolcall_as_needed(ar) {
+    ui_reset_toolcall_as_needed(ar, bAuto = false) {
         if (ar.has_toolcall()) {
             this.elDivTool.hidden = false
             this.elInToolName.value = ar.ns.tool_calls[0].function.name
             this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
-            if (gMe.tools.auto > 0) {
+            if ((gMe.tools.auto > 0) && (bAuto)) {
                 this.timers.toolcallTriggerClick = setTimeout(()=>{
                     this.elBtnTool.click()
                 }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
@@ -976,16 +977,18 @@ class MultiChatUI {
         }
         // Handle tool call ui, if reqd
         let bTC = false
+        let bAuto = false
         if (msg.ns.role === Roles.Assistant) {
             if (iFromLast == 0) {
                 bTC = true
+                bAuto = true
             } else if ((iFromLast == 1) && (nextMsg != undefined)) {
                 if (nextMsg.ns.role == Roles.ToolTemp) {
                     bTC = true
                 }
             }
             if (bTC) {
-                this.ui_reset_toolcall_as_needed(msg);
+                this.ui_reset_toolcall_as_needed(msg, bAuto);
             }
         }
         // Handle tool call non ui
