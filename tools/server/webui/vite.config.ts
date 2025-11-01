@@ -44,16 +44,6 @@ function llamaCppBuildPlugin() {
 
 					let content = readFileSync(indexPath, 'utf-8');
 
-					// A non-embedded KaTeX-font (/src:(?:,?url\(.\/KaTeX_[^)]+\) format\("[a-z0-9]+"\))+/)
-					// will be mentionend by a 404 error, see MAX_ASSET_SIZE.
-
-					// Remove embedded ttf- and woff-fonts.
-					// See ./node_modules/katex/src/styles/fonts.scss.
-					content = content.replace(
-						new RegExp(/,?url\(data:font\/(?:ttf|woff);base64,[^)]+\) format\("[a-z0-9]+"\)/, 'g'),
-						''
-					);
-
 					const faviconPath = resolve('static/favicon.svg');
 					if (existsSync(faviconPath)) {
 						const faviconContent = readFileSync(faviconPath, 'utf-8');
@@ -94,10 +84,26 @@ function llamaCppBuildPlugin() {
 }
 
 export default defineConfig({
+	resolve: {
+		alias: {
+			'katex-fonts': resolve('node_modules/katex/dist/fonts')
+		}
+	},
 	build: {
 		assetsInlineLimit: MAX_ASSET_SIZE,
 		chunkSizeWarningLimit: 3072,
 		minify: ENABLE_JS_MINIFICATION
+	},
+	css: {
+		preprocessorOptions: {
+			scss: {
+				additionalData: `
+					$use-woff2: true;
+					$use-woff: false;
+					$use-ttf: false;
+				`
+			}
+		}
 	},
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
 	test: {

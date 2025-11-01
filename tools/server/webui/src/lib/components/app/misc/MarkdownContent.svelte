@@ -10,7 +10,7 @@
 	import { copyCodeToClipboard } from '$lib/utils/copy';
 	import { preprocessLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
-	import 'katex/dist/katex.min.css';
+	import '$styles/katex-custom.scss';
 
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
