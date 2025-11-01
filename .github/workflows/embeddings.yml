@@ -1,0 +1,59 @@
+# Embedding CLI build and tests
+name: Embedding CLI
+
+on:
+    workflow_dispatch:
+    push:
+        branches:
+            - feature/*
+            - master
+        paths:
+            - '.github/workflows/embeddings.yml'
+            - 'examples/embedding/**'
+            - 'examples/tests/**'
+    pull_request:
+        types: [opened, synchronize, reopened]
+        paths:
+            - '.github/workflows/embeddings.yml'
+            - 'examples/embedding/**'
+            - 'examples/tests/**'
+
+jobs:
+    embedding-cli-tests:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Install system deps
+              run: |
+                  sudo apt-get update
+                  sudo apt-get -y install \
+                    build-essential \
+                    cmake \
+                    curl \
+                    libcurl4-openssl-dev \
+                    python3-pip
+
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
+
+            - name: Install Python deps
+              run: |
+                  pip install -r requirements.txt || echo "No extra requirements found"
+                  pip install pytest
+
+            - name: Build llama-embedding
+              run: |
+                  cmake -B build \
+                    -DCMAKE_BUILD_TYPE=Release
+                  cmake --build build --target llama-embedding -j $(nproc)
+
+            - name: Run embedding tests
+              run: |
+                  pytest -v examples/tests
