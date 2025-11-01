@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sampling.h>
 
+#include "logging.h"
 #include "chat.h"
 #include "common.h"
 #include "llama.h"
@@ -19,16 +20,6 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
     }
     return str.str();
 }
-
-/**
- * Logging utils
- */
-#define TAG "ai-chat"
-#define LOGv(...) __android_log_print(ANDROID_LOG_VERBOSE,  TAG, __VA_ARGS__)
-#define LOGd(...) __android_log_print(ANDROID_LOG_DEBUG,    TAG, __VA_ARGS__)
-#define LOGi(...) __android_log_print(ANDROID_LOG_INFO,     TAG, __VA_ARGS__)
-#define LOGw(...) __android_log_print(ANDROID_LOG_WARN,     TAG, __VA_ARGS__)
-#define LOGe(...) __android_log_print(ANDROID_LOG_ERROR,    TAG, __VA_ARGS__)
 
 /**
  * LLama resources: context, model, batch and sampler
@@ -48,33 +39,11 @@ static llama_batch                        g_batch;
 static common_chat_templates_ptr          g_chat_templates;
 static common_sampler                   * g_sampler;
 
-static void log_callback(ggml_log_level level, const char *fmt, void *data) {
-    int priority;
-    switch (level) {
-        case GGML_LOG_LEVEL_ERROR:
-            priority = ANDROID_LOG_ERROR;
-            break;
-        case GGML_LOG_LEVEL_WARN:
-            priority = GGML_LOG_LEVEL_WARN;
-            break;
-        case GGML_LOG_LEVEL_INFO:
-            priority = GGML_LOG_LEVEL_INFO;
-            break;
-        case GGML_LOG_LEVEL_DEBUG:
-            priority = GGML_LOG_LEVEL_DEBUG;
-            break;
-        default:
-            priority = ANDROID_LOG_DEFAULT;
-            break;
-    }
-    __android_log_print(priority, TAG, fmt, data);
-}
-
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
     // Set llama log handler to Android
-    llama_log_set(log_callback, nullptr);
+    llama_log_set(aichat_android_log_callback, nullptr);
 
     // Loading all CPU backend variants
     const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
