@@ -9498,11 +9498,8 @@ class KimiVLModel(MmprojModel):
 class JanusProModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA  # reuse Llama arch
     
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-    
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision, aligner, and generation tensors as they will be handled by `JanusProVisionModel`
+        # Skip vision, aligner, and generation tensors
         skip_prefixes = (
             'model.vision_model.',
             'model.aligner.',
