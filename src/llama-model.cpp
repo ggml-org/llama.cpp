@@ -1039,9 +1039,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 64: type = LLM_TYPE_32B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-                // since vision model stacks deepstack features along feature dim
-                // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
@@ -1065,9 +1062,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 94: type = LLM_TYPE_235B_A22B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-                // since vision model stacks deepstack features along feature dim
-                // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_PHI2:
             {
@@ -3332,10 +3326,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_QWEN3:
             case LLM_ARCH_QWEN3VL:
                 {
-                    // for model loading, the weights only have the main embd
-                    // so we need to divide by the number of deepstack layers + 1
-                    // n_embd is const int so we declare a new variable
-                    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
+                    int64_t n_embd = hparams.n_embd;
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
@@ -3371,10 +3362,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_QWEN3MOE:
             case LLM_ARCH_QWEN3VLMOE:
                 {
-                    // for model loading, the weights only have the main embd
-                    // so we need to divide by the number of deepstack layers + 1
-                    // n_embd is const int so we declare a new variable
-                    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
+                    int64_t n_embd = hparams.n_embd;
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
