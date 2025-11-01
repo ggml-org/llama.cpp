@@ -27,8 +27,13 @@ void main() {
     }
 
     if (i0 >= p.n_dims) {
+        #ifdef ROPE_SAME_TYPE
+        data_d[idst + i0/2 + 0] = data_a[ix + i0/2 + 0];
+        data_d[idst + i0/2 + 1] = data_a[ix + i0/2 + 1];
+        #else
         data_d[idst + i0/2 + 0] = D_TYPE(data_a[ix + i0/2 + 0]);
         data_d[idst + i0/2 + 1] = D_TYPE(data_a[ix + i0/2 + 1]);
+        #endif
 
         return;
     }
