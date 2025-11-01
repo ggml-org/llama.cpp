@@ -736,6 +736,31 @@ class SimpleChat {
     }
 
     /**
+     * Handle the chat handshake with the ai server
+     * @param {string} baseURL
+     * @param {string} apiEP
+     * @param {HTMLDivElement} elDivChat - used to show chat response as it is being generated/recieved in streaming mode
+     */
+    async handle_chat_hs(baseURL, apiEP, elDivChat) {
+        let theUrl = ApiEP.Url(baseURL, apiEP);
+        let theBody = this.request_jsonstr(apiEP);
+        console.debug(`DBUG:SimpleChat:${this.chatId}:HandleChatHS:${theUrl}:ReqBody:${theBody}`);
+
+        let theHeaders = this.fetch_headers(apiEP);
+        let resp = await fetch(theUrl, {
+            method: "POST",
+            headers: theHeaders,
+            body: theBody,
+        });
+
+        if (resp.status >= 300) {
+            
+        }
+
+        return this.handle_response(resp, apiEP, elDivChat);
+    }
+
+    /**
      * Call the requested tool/function.
      * Returns undefined, if the call was placed successfully
      * Else some appropriate error message will be returned.
@@ -1110,30 +1135,6 @@ class MultiChatUI {
 
 
     /**
-     * @param {SimpleChat} chat
-     * @param {string} apiEP
-     */
-    async handle_chat_hs(chat, apiEP) {
-        let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
-        let theBody = chat.request_jsonstr(apiEP);
-        console.debug(`DBUG:SimpleChat:MCUI:${chat.chatId}:HandleUserSubmit:${theUrl}:ReqBody:${theBody}`);
-
-        let theHeaders = chat.fetch_headers(apiEP);
-        let resp = await fetch(theUrl, {
-            method: "POST",
-            headers: theHeaders,
-            body: theBody,
-        });
-
-        if (resp.status >= 300) {
-            
-        }
-
-        return chat.handle_response(resp, apiEP, this.elDivChat);
-    }
-
-
-    /**
      * Handle user query submit request, wrt specified chat session.
      *
      * NOTE: Currently the user query entry area is used for
@@ -1180,7 +1181,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await this.handle_chat_hs(chat, apiEP)
+            let theResp = await chat.handle_chat_hs(gMe.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
                 this.chat_show(chatId);
                 if (theResp.trimmedContent.length > 0) {
