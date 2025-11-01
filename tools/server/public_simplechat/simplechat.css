@@ -21,6 +21,9 @@
 .role-user {
     background-color: lightgray;
 }
+.role-tool {
+    background-color: lightyellow;
+}
 .role-trim {
     background-color: lightpink;
 }
@@ -66,9 +69,19 @@ button {
     padding-inline-start: 2vw;
 }
 
+
+.DivObjPropsInfoL0 {
+    margin: 0%;
+}
+[class^=SectionObjPropsInfoL] {
+    margin-left: 2vmin;
+}
+
+
 * {
     margin: 0.6vmin;
 }
+
 
 @media print {
 
