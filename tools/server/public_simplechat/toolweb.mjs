@@ -51,12 +51,11 @@ function bearer_transform() {
  * @param {string} toolname
  * @param {any} obj
  * @param {string} path
- * @param {string} qkey
- * @param {string} qvalue
  */
-async function proxyserver_get_1arg(chatid, toolcallid, toolname, obj, path, qkey, qvalue) {
+async function proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, path) {
     if (gToolsWorker.onmessage != null) {
-        let newUrl = `${get_gme().tools.proxyUrl}/${path}?${qkey}=${qvalue}`
+        let params = new URLSearchParams(obj)
+        let newUrl = `${get_gme().tools.proxyUrl}/${path}?${params}`
         let btoken = await bearer_transform()
         fetch(newUrl, { headers: { 'Authorization': `Bearer ${btoken}` }}).then(resp => {
             if (!resp.ok) {
@@ -132,7 +131,8 @@ let fetchweburlraw_meta = {
  * @param {any} obj
  */
 function fetchweburlraw_run(chatid, toolcallid, toolname, obj) {
-    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urlraw', 'url', encodeURIComponent(obj.url));
+    // maybe filter out any key other than 'url' in obj
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urlraw');
 }
 
 
@@ -190,7 +190,8 @@ let fetchweburltext_meta = {
  * @param {any} obj
  */
 function fetchweburltext_run(chatid, toolcallid, toolname, obj) {
-    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(obj.url));
+    // maybe filter out any key other than 'url' in obj
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext');
 }
 
 
@@ -253,7 +254,9 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
         /** @type {string} */
         let searchUrl = get_gme().tools.searchUrl;
         searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
-        return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'urltext', 'url', encodeURIComponent(searchUrl));
+        delete(obj.words)
+        obj['url'] = searchUrl
+        return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext');
     }
 }
 
@@ -311,7 +314,7 @@ let pdf2text_meta = {
  * @param {any} obj
  */
 function pdf2text_run(chatid, toolcallid, toolname, obj) {
-    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'pdf2text', 'url', encodeURIComponent(obj.url));
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'pdf2text');
 }
 
 
