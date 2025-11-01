@@ -1183,7 +1183,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.position_embedding",
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
             "vpm.embeddings.position_embedding",
-            "model.vision_model.embeddings.position_embedding", # SmolVLM, Janus Pro
+            "model.vision_model.embeddings.position_embedding", # SmolVLM
             "vision_model.positional_embedding_vlm", # llama 4
             "vision_tower.patch_embed.pos_emb", # kimi-vl
         ),
