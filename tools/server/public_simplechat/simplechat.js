@@ -1344,7 +1344,7 @@ class Me {
              * Control the length of the tool call result data returned to ai after tool call.
              * A value of 0 is treated as unlimited data.
              */
-            iResultMaxDataLength: 2048,
+            iResultMaxDataLength: 1024*128,
             /**
              * Control how many milliseconds to wait for tool call to respond, before generating a timed out
              * error response and giving control back to end user.
