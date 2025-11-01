@@ -539,9 +539,6 @@ struct vk_device_struct {
     bool mul_mat_id_m[GGML_TYPE_COUNT];
     bool mul_mat_id_s[GGML_TYPE_COUNT];
 
-    // set to true to indicate that some shaders need to be compiled after the dryrun
-    bool need_compiles {};
-
     vk::DescriptorSetLayout dsl;
 
     vk_matmul_pipeline pipeline_matmul_f32 {};
@@ -1408,6 +1405,10 @@ struct ggml_vk_garbage_collector {
     std::vector<vk_context> contexts;
 };
 
+static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
+static void ggml_vk_load_shaders(vk_device& device);
+static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
+
 #if defined(GGML_VULKAN_MEMORY_DEBUG) || defined(GGML_VULKAN_DEBUG)
 #define VK_LOG_MEMORY(msg) std::cerr << "ggml_vulkan memory: " << msg << std::endl
 
@@ -1561,7 +1562,10 @@ struct ggml_backend_vk_context {
     bool almost_ready_fence_pending {};
     // Set before op_add and unset after op_rms_norm to indicate that the add should
     // write partial sums to accumulate the square of the vector components
+    bool do_add_rms_partials_offset_calculation;
     bool do_add_rms_partials;
+
+    uint64_t last_total_mul_mat_bytes {};
 
     // Cache most recent tensor that was converted into prealloc_y, and what pipeline it used to convert.
     vk_pipeline_struct * prealloc_y_last_pipeline_used {};
@@ -1865,8 +1869,9 @@ static void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, 
     ctx->pipeline_descriptor_set_requirements += n;
     if (!pipeline->compiled) {
         pipeline->needed = true;
-        ctx->device->need_compiles = true;
+        ggml_vk_load_shaders(ctx->device);
     }
+    ggml_pipeline_allocate_descriptor_sets(ctx);
 }
 
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
@@ -1878,7 +1883,9 @@ static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx
 
     vk_device& device = ctx->device;
 
-    uint32_t to_alloc = ctx->pipeline_descriptor_set_requirements - ctx->descriptor_sets.size();
+    // Grow by 50% to avoid frequent allocations
+    uint32_t needed = std::max(3 * ctx->descriptor_sets.size() / 2, size_t{ctx->pipeline_descriptor_set_requirements});
+    uint32_t to_alloc = needed - ctx->descriptor_sets.size();
     uint32_t pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE - ctx->descriptor_sets.size() % VK_DEVICE_DESCRIPTOR_POOL_SIZE;
     uint32_t pool_idx = ctx->descriptor_sets.size() / VK_DEVICE_DESCRIPTOR_POOL_SIZE;
 
@@ -3916,7 +3923,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
     for (auto &c : compiles) {
         c.wait();
     }
-    device->need_compiles = false;
 }
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
@@ -5020,6 +5026,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
     ctx->prealloc_size_split_k = 0;
+    ctx->prealloc_size_add_rms_partials = 0;
 
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
@@ -6322,7 +6329,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true);
     }
 
-    if (dryrun) {
+    {
         const uint64_t x_sz_upd = x_sz * ne02 * ne03;
         uint64_t y_sz_upd = y_sz * ne12 * ne13;
         if (quantize_y) {
@@ -6337,12 +6344,15 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
             ctx->prealloc_size_x = x_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
             ctx->prealloc_size_y = y_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if (split_k > 1 && ctx->prealloc_size_split_k < split_k_size) {
             ctx->prealloc_size_split_k = split_k_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
         // Request descriptor sets
@@ -6359,7 +6369,6 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         if (split_k > 1) {
             ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, 1);
         }
-        return;
     }
 
     vk_buffer d_D = dst_buf_ctx->dev_buffer;
@@ -6619,7 +6628,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     const uint64_t y_sz = quantize_y ? (y_ne * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (f16_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
     const uint64_t d_sz = sizeof(float) * d_ne;
 
-    if (dryrun) {
+    {
         const uint64_t x_sz_upd = x_sz * ne02 * ne03;
         uint64_t y_sz_upd = y_sz * ne12 * ne13;
         if (quantize_y) {
@@ -6632,9 +6641,11 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
         }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
             ctx->prealloc_size_x = x_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
             ctx->prealloc_size_y = y_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
         // Request descriptor sets
@@ -6648,7 +6659,6 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
             ggml_pipeline_request_descriptor_sets(ctx, to_q8_1, 1);
         }
         ggml_pipeline_request_descriptor_sets(ctx, dmmv, 1);
-        return;
     }
 
     vk_buffer d_D;
@@ -6859,10 +6869,9 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
         gqa_ratio = 1;
     }
 
-    if (dryrun) {
+    {
         // Request descriptor sets
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mat_vec_p021_f16_f32[gqa_ratio - 1], 1);
-        return;
     }
 
     vk_buffer d_D;
@@ -6995,10 +7004,9 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const uint64_t qy_sz = ggml_nbytes(src1);
     const uint64_t d_sz = sizeof(float) * d_ne;
 
-    if (dryrun) {
+    {
         // Request descriptor sets
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mat_vec_nc_f16_f32, 1);
-        return;
     }
 
     vk_buffer d_D;
@@ -7251,7 +7259,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true);
     }
 
-    if (dryrun) {
+    {
         const uint64_t x_sz_upd = x_sz * ne02 * ne03;
         uint64_t y_sz_upd = y_sz * ne12 * ne13;
         if (quantize_y) {
@@ -7264,9 +7272,11 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
             ctx->prealloc_size_x = x_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
             ctx->prealloc_size_y = y_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
         // Request descriptor sets
@@ -7280,7 +7290,6 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         if (quantize_y) {
             ggml_pipeline_request_descriptor_sets(ctx, to_q8_1, 1);
         }
-        return;
     }
 
     vk_buffer d_D = dst_buf_ctx->dev_buffer;
@@ -7493,7 +7502,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     GGML_ASSERT(!qy_needs_dequant || to_fp16_vk_1 != nullptr);  // NOLINT
     GGML_ASSERT(dmmv != nullptr);
 
-    if (dryrun) {
+    {
         const uint64_t x_sz_upd = x_sz * ne02 * ne03;
         const uint64_t y_sz_upd = y_sz * ne12 * ne13;
         if (
@@ -7503,9 +7512,11 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
         }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
             ctx->prealloc_size_x = x_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if (qy_needs_dequant && ctx->prealloc_size_y < y_sz_upd) {
             ctx->prealloc_size_y = y_sz_upd;
+            ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
         // Request descriptor sets
@@ -7516,7 +7527,6 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
             ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_1, 1);
         }
         ggml_pipeline_request_descriptor_sets(ctx, dmmv, 1);
-        return;
     }
 
     vk_buffer d_D;
@@ -7915,15 +7925,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
     if (ctx->prealloc_size_split_k < split_k_size) {
         ctx->prealloc_size_split_k = split_k_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
     }
 
-    if (dryrun) {
+    {
         // Request descriptor sets
         ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         if (split_k > 1) {
             ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
         }
-        return;
     }
 
     float scale         = 1.0f;
@@ -8790,10 +8800,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         GGML_ABORT("fatal error");
     }
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     const bool op_supports_incontiguous = ggml_vk_op_supports_incontiguous(op);
 
@@ -9254,10 +9261,7 @@ static void ggml_vk_multi_add(ggml_backend_vk_context * ctx, vk_context& subctx,
         GGML_ABORT("fatal error");
     }
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     ggml_backend_vk_buffer_context * buf_ctx[MAX_PARAMETER_COUNT];
     vk_buffer buf[MAX_PARAMETER_COUNT];
@@ -9407,10 +9411,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
     GGML_ASSERT(pipeline != nullptr);
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     ggml_backend_vk_buffer_context * dst_buf_ctx = (ggml_backend_vk_buffer_context *)dst->buffer->context;
     ggml_backend_vk_buffer_context * src_buf_ctxs[7] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
@@ -9540,10 +9541,7 @@ static void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, 
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, dst->op);
     GGML_ASSERT(pipeline != nullptr);
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 
@@ -9655,10 +9653,7 @@ static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_cont
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, g, gm, gv, dst, GGML_OP_OPT_STEP_ADAMW);
     GGML_ASSERT(pipeline != nullptr);
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     ggml_backend_vk_buffer_context * x_buf_ctx = (ggml_backend_vk_buffer_context *)x->buffer->context;
     ggml_backend_vk_buffer_context * g_buf_ctx = (ggml_backend_vk_buffer_context *)g->buffer->context;
@@ -9932,9 +9927,10 @@ static void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, 
         op_params[0], 0.0f, (int32_t)param3,
     }, dryrun);
 
-    if (ctx->do_add_rms_partials) {
+    if (ctx->do_add_rms_partials_offset_calculation) {
         ctx->prealloc_size_add_rms_partials_offset += ggml_vk_rms_partials_size(ctx, src0);
         ctx->do_add_rms_partials = false;
+        ctx->do_add_rms_partials_offset_calculation = false;
     }
 }
 
@@ -10050,10 +10046,7 @@ static void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, cgraph->nodes[node_idx], GGML_OP_SOFT_MAX);
 
-    if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        return;
-    }
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
     ggml_backend_vk_buffer_context * logits_buf_ctx = (ggml_backend_vk_buffer_context *)logits->buffer->context;
     ggml_backend_vk_buffer_context * weights_buf_ctx = (ggml_backend_vk_buffer_context *)weights->buffer->context;
@@ -10660,10 +10653,6 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
         }
     }
 
-    if (ctx->device->need_compiles) {
-        ggml_vk_load_shaders(ctx->device);
-    }
-
     ggml_pipeline_allocate_descriptor_sets(ctx);
 
     vk_buffer d_X = ggml_vk_create_buffer_check(ctx->device, sizeof(X_TYPE) * x_ne, {vk::MemoryPropertyFlagBits::eDeviceLocal});
@@ -10910,10 +10899,6 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 
     ggml_pipeline_request_descriptor_sets(ctx, p, 1);
 
-    if (ctx->device->need_compiles) {
-        ggml_vk_load_shaders(ctx->device);
-    }
-
     ggml_pipeline_allocate_descriptor_sets(ctx);
 
     ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
@@ -11010,10 +10995,6 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 //     vk_pipeline p = ggml_vk_get_quantize_pipeline(ctx, quant);
 //
 //     ggml_pipeline_request_descriptor_sets(ctx, p, 1);
-//
-//     if (ctx->device->need_compiles) {
-//         ggml_vk_load_shaders(ctx->device);
-//     }
 //
 //     ggml_pipeline_allocate_descriptor_sets(ctx);
 //
@@ -11185,10 +11166,6 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_quantize_q8_1, num_it);
     }
 
-    if (ctx->device->need_compiles) {
-        ggml_vk_load_shaders(ctx->device);
-    }
-
     ggml_pipeline_allocate_descriptor_sets(ctx);
 
     ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
@@ -11326,7 +11303,7 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
 }
 #endif
 
-static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
+static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 #if defined(GGML_VULKAN_RUN_TESTS)
     const std::vector<size_t> vals {
         512, 512, 128,
@@ -11415,6 +11392,14 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
 
     GGML_ABORT("fatal error");
 #endif
+
+    if (subctx) {
+        // Submit and wait for any pending work before reallocating the buffers
+        ggml_vk_ctx_end(subctx);
+        ggml_vk_submit(subctx, ctx->fence);
+        ggml_vk_wait_for_fence(ctx);
+        ggml_vk_ctx_begin(ctx->device, subctx);
+    }
 
     if (ctx->prealloc_x == nullptr || (ctx->prealloc_size_x > 0 && ctx->prealloc_x->size < ctx->prealloc_size_x)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(x_size: " << ctx->prealloc_size_x << ")");
@@ -11514,10 +11499,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
                 cgraph->nodes[next_node_idx]->src[0] == cgraph->nodes[next_node_idx - 1] &&
                 ggml_nrows(cgraph->nodes[next_node_idx]) == 1 &&
                 ctx->device->add_rms_fusion) {
-                if (dryrun) {
-                    ctx->prealloc_size_add_rms_partials += ggml_vk_rms_partials_size(ctx, cgraph->nodes[node_idx]);
+                uint32_t size = ggml_vk_rms_partials_size(ctx, cgraph->nodes[node_idx]);
+                ctx->do_add_rms_partials_offset_calculation = true;
+                if (ctx->prealloc_size_add_rms_partials_offset + size <= ctx->prealloc_size_add_rms_partials) {
+                    ctx->do_add_rms_partials = true;
                 }
-                ctx->do_add_rms_partials = true;
             }
         } break;
     case GGML_OP_REPEAT:
@@ -11651,6 +11637,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
                 ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
                 if (node->op == GGML_OP_RMS_NORM) {
                     ctx->do_add_rms_partials = false;
+                    ctx->do_add_rms_partials_offset_calculation = false;
                 }
                 return false;
             }
@@ -12919,58 +12906,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
 
-    ctx->prealloc_size_add_rms_partials = 0;
     ctx->prealloc_size_add_rms_partials_offset = 0;
     ctx->do_add_rms_partials = false;
-
-    uint64_t total_mat_mul_bytes = 0;
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (!ctx->device->disable_fusion) {
-            uint32_t num_adds = ggml_vk_fuse_multi_add(ctx, cgraph, i);
-            if (num_adds) {
-                ctx->num_additional_fused_ops = num_adds - 1;
-            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
-                ctx->num_additional_fused_ops = 1;
-            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
-                ctx->num_additional_fused_ops = 1;
-            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID })) {
-                ctx->num_additional_fused_ops = 1;
-            } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 2 }) &&
-                       ggml_check_edges(cgraph, i, rope_view_set_rows_edges) &&
-                       ggml_vk_can_fuse_rope_set_rows(ctx, cgraph, i)) {
-                ctx->num_additional_fused_ops = 2;
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax_norm, { i + 3, i + 9 }) &&
-                       ggml_check_edges(cgraph, i, topk_moe_early_softmax_norm_edges) &&
-                       ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX_NORM)) {
-                ctx->num_additional_fused_ops = topk_moe_early_softmax_norm.size() - 1;
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax, { i + 3, i + 4 }) &&
-                       ggml_check_edges(cgraph, i, topk_moe_early_softmax_edges) &&
-                       ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX)) {
-                ctx->num_additional_fused_ops = topk_moe_early_softmax.size() - 1;
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_late_softmax, { i + 1, i + 5 }) &&
-                       ggml_check_edges(cgraph, i, topk_moe_late_softmax_edges) &&
-                       ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_LATE_SOFTMAX)) {
-                ctx->num_additional_fused_ops = topk_moe_late_softmax.size() - 1;
-            }
-        }
-        ggml_vk_build_graph(ctx, cgraph, i, nullptr, 0, true, false, false, false);
-        if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
-            total_mat_mul_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
-        } else if (cgraph->nodes[i]->op == GGML_OP_CONV_2D || cgraph->nodes[i]->op == GGML_OP_CONV_TRANSPOSE_2D) {
-            // Return CRSxNPQxsizeof(*) to account as many bytes as mul_mat has in im2col->mul_mat mode.
-            auto CRS_size =
-                cgraph->nodes[i]->src[0]->ne[0] * cgraph->nodes[i]->src[0]->ne[1] * cgraph->nodes[i]->src[1]->ne[2];
-            auto NPQ_size = cgraph->nodes[i]->ne[0] * cgraph->nodes[i]->ne[1] * cgraph->nodes[i]->ne[3];
-            total_mat_mul_bytes += NPQ_size * CRS_size * ggml_type_size(cgraph->nodes[i]->type);
-        }
-        i += ctx->num_additional_fused_ops;
-        ctx->num_additional_fused_ops = 0;
-    }
-    if (ctx->device->need_compiles) {
-        ggml_vk_load_shaders(ctx->device);
-    }
-    ggml_vk_preallocate_buffers(ctx);
-    ggml_pipeline_allocate_descriptor_sets(ctx);
+    ctx->do_add_rms_partials_offset_calculation = false;
 
     int last_node = cgraph->n_nodes - 1;
 
@@ -13012,6 +12950,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     ctx->prealloc_y_last_tensor_used = nullptr;
 
     if (ctx->prealloc_size_add_rms_partials) {
+        ggml_vk_preallocate_buffers(ctx, nullptr);
         if (ctx->compute_ctx.expired()) {
             compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
             ctx->compute_ctx = compute_ctx;
@@ -13032,14 +12971,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     int submitted_nodes = 0;
     int submit_count = 0;
     uint64_t mul_mat_bytes = 0;
-    uint64_t mul_mat_bytes_per_submit = std::min(uint64_t(100*1000*1000), total_mat_mul_bytes / 40u);
+    uint64_t total_mul_mat_bytes = 0;
+    uint64_t mul_mat_bytes_per_submit = std::min(uint64_t(100*1000*1000), ctx->last_total_mul_mat_bytes / 40u);
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
         }
 
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
-            mul_mat_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
+            auto bytes = ggml_nbytes(cgraph->nodes[i]->src[0]);
+            mul_mat_bytes += bytes;
+            total_mul_mat_bytes += bytes;
         }
 
         if (!ctx->device->disable_fusion) {
@@ -13081,7 +13023,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
         bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
         bool submit = (submitted_nodes >= nodes_per_submit) ||
-                      (mul_mat_bytes >= mul_mat_bytes_per_submit) ||
+                      (mul_mat_bytes_per_submit != 0 && mul_mat_bytes >= mul_mat_bytes_per_submit) ||
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
@@ -13124,6 +13066,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->num_additional_fused_ops = 0;
         ctx->fused_ops_write_mask = 0;
     }
+
+    ctx->prealloc_size_add_rms_partials = std::max(ctx->prealloc_size_add_rms_partials, ctx->prealloc_size_add_rms_partials_offset);
+    ctx->last_total_mul_mat_bytes = total_mul_mat_bytes;
 
     if (vk_perf_logger_enabled) {
         // End the command buffer and submit/wait
