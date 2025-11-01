@@ -916,6 +916,19 @@ std::string fs_get_cache_file(const std::string & filename) {
 struct common_init_result common_init_from_params(common_params & params) {
     common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
+    auto cparams = common_context_params_to_llama(params);
+
+    if (params.fit_params) {
+        const bool fit_successful = llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_margin, params.fit_params_min_ctx,
+            params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+
+        if (fit_successful) {
+            LOG_INF("%s: successfully fit parameters to device memory\n", __func__);
+        } else {
+            LOG_WRN("%s: failed to fit parameters to device memory, may crash during allocation\n", __func__);
+        }
+    }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
@@ -925,8 +938,6 @@ struct common_init_result common_init_from_params(common_params & params) {
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-
-    auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
