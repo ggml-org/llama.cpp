@@ -297,8 +297,25 @@ bool common_json_parse(
             it = temptative_end;
             return true;
         }
-        // TODO: handle unclosed top-level primitive if the stack was empty but we got an error (e.g. "tru", "\"", etc...)
-        // fprintf(stderr, "Closing: TODO\n");
+        // handle unclosed top-level primitive
+        if (err_loc.position != 0 && !healing_marker.empty() && err_loc.stack.empty()) {
+            std::string str(it, temptative_end);
+            const auto & magic_seed = out.healing_marker.marker = healing_marker;
+            if (can_parse(str + "\"")) {
+                // Was inside an string
+                str += (out.healing_marker.json_dump_marker = magic_seed) + "\"";
+            } else if (str[str.length() - 1] == '\\' && can_parse(str + "\\\"")) {
+                // Was inside an string after an escape
+                str += (out.healing_marker.json_dump_marker = "\\" + magic_seed) + "\"";
+            } else {
+                // TODO: handle more unclosed top-level primitive if the stack was empty but we got an error (e.g. "tru", "\"", etc...)
+                // fprintf(stderr, "Closing: TODO\n");
+                return false;
+            }
+            out.json = json::parse(str);
+            it = temptative_end;
+            return true;
+        }
         return false;
     }
     out.json = json::parse(it, end);
