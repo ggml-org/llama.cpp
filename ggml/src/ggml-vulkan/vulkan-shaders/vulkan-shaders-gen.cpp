@@ -338,6 +338,7 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     for (const auto& define : defines) {
         cmd.push_back("-D" + define.first + "=" + define.second);
     }
+    // disable D_TYPE same as A_TYPE cast for rope shaders https://github.com/ggml-org/llama.cpp/issues/16860
     if (name.find("rope") != std::string::npos && defines["D_TYPE"] == defines["A_TYPE"] ) {
         cmd.push_back("-DROPE_SAME_TYPE");
     }
