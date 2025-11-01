@@ -227,6 +227,11 @@
 					type: 'checkbox'
 				},
 				{
+					key: 'showToolCalls',
+					label: 'Show tool call chunks',
+					type: 'checkbox'
+				},
+				{
 					key: 'custom',
 					label: 'Custom JSON',
 					type: 'textarea'

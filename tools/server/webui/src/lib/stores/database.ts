@@ -154,6 +154,7 @@ export class DatabaseStore {
 			content: '',
 			parent: null,
 			thinking: '',
+			toolCalls: '',
 			children: []
 		};
 
