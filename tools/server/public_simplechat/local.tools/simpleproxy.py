@@ -378,9 +378,12 @@ def handle_urltext(ph: ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
 
 
-def do_pdf2text(fUrl: str):
+def process_pdf2text(url: str):
     import pypdf
-
+    urlParts = url.split('://',1)
+    if not (urlParts[0] in gAllowedPdfUrlTypes):
+        return { 'status': 403, 'msg': f"WARN:HandlePdf2Text:ForbiddedUrlType:{urlParts[0]}:AllowedUrlTypes:{gAllowedPdfUrlTypes}" }
+    return { 'status': 500, 'msg': 'Not yet implemented' }
 
 
 gAllowedPdfUrlTypes = [ "file", "http", "https" ]
@@ -397,11 +400,11 @@ def handle_pdf2text(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     if (not url) or (len(url) == 0):
         ph.send_error(400, f"WARN:HandlePdf2Text:MissingUrl!")
         return
-    urlParts = url.split('://',1)
-    if not (urlParts[0] in gAllowedPdfUrlTypes):
-        ph.send_error(403, f"WARN:HandlePdf2Text:ForbiddedUrlType:{urlParts[0]}:AllowedUrlTypes:{gAllowedPdfUrlTypes}")
-        return
     print(f"INFO:HandlePdf2Text:Processing:{url}")
+    gotP2T = process_pdf2text(url)
+    if (gotP2T['status'] != 200):
+        ph.send_error(gotP2T['status'], gotP2T['msg'] )
+        return
     ph.send_response_only(200, "Pdf2Text Response follows")
     ph.end_headers()
 
