@@ -2497,12 +2497,20 @@ struct server_context {
     void init() {
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
 
+        const int n_ctx_train = llama_model_n_ctx_train(model);
+
+        int n_ctx_slot = llama_n_ctx_seq(ctx);
+        if (n_ctx_slot > n_ctx_train) {
+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
+            n_ctx_slot = n_ctx_train;
+        }
+
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;
 
             slot.id = i;
             slot.ctx = ctx;
-            slot.n_ctx = llama_n_ctx_seq(ctx);
+            slot.n_ctx = n_ctx_slot;
             slot.mctx = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
