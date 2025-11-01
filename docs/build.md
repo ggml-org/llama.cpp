@@ -294,9 +294,27 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   cmake -S . -B build -G Ninja -DGPU_TARGETS=gfx1100 -DGGML_HIP=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
   cmake --build build
   ```
+  Since TheRock (The HIP Environment and ROCm Kit) has been released on https://github.com/ROCm/TheRock/, which is a lightweight open source build platform for HIP and ROCm.
+  There is nightly build from https://therock-nightly-tarball.s3.amazonaws.com/, like therock-dist-windows-gfx1151-7.10.0a20251031.tar.gz for AMD Ryzen AI MAX CPU. 
+  Below is step for building with TheRock HIP backend for Windows. Download therock-dist-windows-gfx1151-xxx.tar.gz and uncompress it to C:\work\therock\. 
+  Also Set RC COMPILER with https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/ installation
+
+  ```bash
+  set HIP_PATH=C:\work\therock
+  set HIP_PATH_70=%HIP_PATH%
+  set LLVM_PATH=%HIP_PATH%
+  set HIP_PLATFORM=amd
+  set CMAKE_C_COMPILER=%HIP_PATH%\lib\llvm\bin\amdclang.exe
+  set CMAKE_CXX_COMPILER=%HIP_PATH%\lib\llvm\bin\amdclang++.exe
+  set CMAKE_RC_COMPILER="C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe"
+  set PATH=%HIP_PATH%\bin;%PATH%
+  cmake -S . -B build -G Ninja -DGPU_TARGETS=gfx1151 -DGGML_HIP=ON -DCMAKE_C_COMPILER=%CMAKE_C_COMPILER% -DCMAKE_CXX_COMPILER=%CMAKE_CXX_COMPILER% -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF  -DCMAKE_RC_COMPILER=%CMAKE_RC_COMPILER%
+  cmake --build build
+  ```
+
   If necessary, adapt `GPU_TARGETS` to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
   Find your gpu version string by matching the most significant version information from `rocminfo | grep gfx | head -1 | awk '{print $2}'` with the list of processors, e.g. `gfx1035` maps to `gfx1030`.
-
+  
 
 The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
 If your GPU is not officially supported you can use the environment variable [`HSA_OVERRIDE_GFX_VERSION`] set to a similar GPU, for example 10.3.0 on RDNA2 (e.g. gfx1030, gfx1031, or gfx1035) or 11.0.0 on RDNA3.
