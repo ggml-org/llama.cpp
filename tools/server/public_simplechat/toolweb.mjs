@@ -269,6 +269,63 @@ async function searchwebtext_setup(tcs) {
 }
 
 
+//
+// Pdf2Text
+//
+
+
+let pdf2text_meta = {
+        "type": "function",
+        "function": {
+            "name": "pdf2text",
+            "description": "Fetch pdf from requested web / file url through a proxy server and return its text content after converting pdf to text, in few seconds",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url":{
+                        "type":"string",
+                        "description":"url of the pdf that will be got and inturn converted to text to some extent"
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the pdf to text logic.
+ * Expects a simple minded proxy server to be running locally
+ * * listening on a configured port
+ * * expecting http requests
+ *   * with a query token named url wrt pdf2text path,
+ *     which gives the actual url to fetch
+ * * gets the requested pdf and converts to text, before returning same.
+ * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function pdf2text_run(chatid, toolcallid, toolname, obj) {
+    return proxyserver_get_1arg(chatid, toolcallid, toolname, obj, 'pdf2text', 'url', encodeURIComponent(obj.url));
+}
+
+
+/**
+ * Setup pdf2text for tool calling
+ * NOTE: Currently the logic is setup for the bundled simpleproxy.py
+ * @param {Object<string, Object<string, any>>} tcs
+ */
+async function pdf2text_setup(tcs) {
+    return proxyserver_tc_setup('Pdf2Text', 'pdf2text', 'pdf2text', {
+        "handler": pdf2text_run,
+        "meta": pdf2text_meta,
+        "result": ""
+    }, tcs);
+}
+
+
 
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
@@ -284,5 +341,6 @@ export async function init(toolsWorker) {
     await fetchweburlraw_setup(tc_switch)
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
+    await pdf2text_setup(tc_switch)
     return tc_switch
 }
