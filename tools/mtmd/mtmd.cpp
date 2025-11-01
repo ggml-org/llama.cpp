@@ -16,20 +16,35 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <vector>
 
-// represents raw image data, layout is RGBRGBRGB...
-// length of data must be nx * ny * 3
+enum class mtmd_bitmap_type {
+    IMAGE,
+    AUDIO,
+    VIDEO,
+}; 
+
+// if bitmap is image:
+//     length of data must be nx * ny * 3
+//     the data is in RGBRGBRGB... format
+// if bitmap is audio:
+//     length of data must be n_samples * sizeof(float)
+//     the data is in float format (PCM F32)
+// if bitmap is video:
+//     length of data must be nx * ny * nframes * 3
+//     the data is in RGBRGBRGB... format for each frame, frames are stored sequentially
 struct mtmd_bitmap {
+    mtmd_bitmap_type type;
     uint32_t nx;
-    uint32_t ny;
+    uint32_t ny; // for audio, ny=1
+    uint32_t nz; // for video: number of frames
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
-    bool is_audio = false; // true if the bitmap is audio
 };
 
 struct mtmd_image_tokens {
@@ -88,6 +103,12 @@ enum mtmd_slice_tmpl {
     MTMD_SLICE_TMPL_IDEFICS3,
 };
 
+// video schema, used to tokenize video frames 
+enum mtmd_video_schema {
+    MTMD_VIDEO_SCHEMA_MINICPMV_2_6, // add overview image only (no slicing)
+    MTMD_VIDEO_SCHEMA_MINICPMV_4_5,
+};
+
 const char * mtmd_default_marker() {
     return "<__media__>";
 }
@@ -123,6 +144,7 @@ struct mtmd_context {
     // for llava-uhd style models, we need special tokens in-between slices
     // minicpmv calls them "slices", llama 4 calls them "tiles"
     mtmd_slice_tmpl slice_tmpl    = MTMD_SLICE_TMPL_NONE;
+    mtmd_video_schema video_sch   = MTMD_VIDEO_SCHEMA_MINICPMV_2_6;
     std::vector<llama_token> tok_ov_img_start;  // overview image
     std::vector<llama_token> tok_ov_img_end;    // overview image
     std::vector<llama_token> tok_slices_start;  // start of all slices
@@ -491,58 +513,61 @@ struct mtmd_tokenizer {
         }
     }
 
-    int32_t add_media(const mtmd_bitmap * bitmap) {
-        if (!bitmap->is_audio) {
-            // handle image
+    int32_t add_image(const mtmd_bitmap * bitmap, bool have_slices=true) {
+        if(mtmd_bitmap_is_audio(bitmap) || mtmd_bitmap_is_video(bitmap)){
+            LOG_ERR("%s: error: bitmap is not an image\n", __func__);
+            return 2;
+        }
+        // handle image
+        if (!ctx->ctx_v) {
+            LOG_ERR("%s: error: model does not support vision input\n", __func__);
+            return 2;
+        }
 
-            if (!ctx->ctx_v) {
-                LOG_ERR("%s: error: model does not support vision input\n", __func__);
-                return 2;
+        if (!ctx->img_beg.empty()) {
+            add_text(ctx->img_beg, true); // add image begin token
+        }
+
+        // convert mtmd_bitmap to clip_image_u8
+        clip_image_u8_ptr img_u8(clip_image_u8_init());
+        img_u8->nx = bitmap->nx;
+        img_u8->ny = bitmap->ny;
+        img_u8->buf.resize(bitmap->data.size());
+        std::memcpy(img_u8->buf.data(), bitmap->data.data(), img_u8->nx * img_u8->ny * 3);
+
+        // preprocess image
+        clip_image_f32_batch batch_f32;
+        bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &batch_f32);
+        if (!ok) {
+            LOG_ERR("Unable to preprocess image\n");
+            return 2;
+        }
+
+        // handle llava-uhd style preprocessing
+        if (
+            ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_5
+            || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
+            || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
+            || ctx->slice_tmpl == MTMD_SLICE_TMPL_IDEFICS3
+        ) {
+            const int n_col = batch_f32.grid_x;
+            const int n_row = batch_f32.grid_y;
+            // split batch into chunks of single images
+            // NOTE: batch_f32 will be invalidated after this call
+            auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
+            GGML_ASSERT(chunks.size() > 0);
+
+            auto ov_chunk = std::move(chunks.front());
+            chunks.erase(chunks.begin());
+
+            // add overview image (first)
+            if (ctx->ov_img_first) {
+                add_text(ctx->tok_ov_img_start);
+                cur.entries.emplace_back(std::move(ov_chunk));
+                add_text(ctx->tok_ov_img_end);
             }
-
-            if (!ctx->img_beg.empty()) {
-                add_text(ctx->img_beg, true); // add image begin token
-            }
-
-            // convert mtmd_bitmap to clip_image_u8
-            clip_image_u8_ptr img_u8(clip_image_u8_init());
-            img_u8->nx = bitmap->nx;
-            img_u8->ny = bitmap->ny;
-            img_u8->buf.resize(bitmap->data.size());
-            std::memcpy(img_u8->buf.data(), bitmap->data.data(), img_u8->nx * img_u8->ny * 3);
-
-            // preprocess image
-            clip_image_f32_batch batch_f32;
-            bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &batch_f32);
-            if (!ok) {
-                LOG_ERR("Unable to preprocess image\n");
-                return 2;
-            }
-
-            // handle llava-uhd style preprocessing
-            if (
-                ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_5
-                || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
-                || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
-                || ctx->slice_tmpl == MTMD_SLICE_TMPL_IDEFICS3
-            ) {
-                const int n_col = batch_f32.grid_x;
-                const int n_row = batch_f32.grid_y;
-                // split batch into chunks of single images
-                // NOTE: batch_f32 will be invalidated after this call
-                auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
-                GGML_ASSERT(chunks.size() > 0);
-
-                auto ov_chunk = std::move(chunks.front());
-                chunks.erase(chunks.begin());
-
-                // add overview image (first)
-                if (ctx->ov_img_first) {
-                    add_text(ctx->tok_ov_img_start);
-                    cur.entries.emplace_back(std::move(ov_chunk));
-                    add_text(ctx->tok_ov_img_end);
-                }
-
+            
+            if(have_slices){
                 // add slices (or tiles)
                 if (!chunks.empty()) {
                     GGML_ASSERT((int)chunks.size() == n_row * n_col);
@@ -571,52 +596,56 @@ struct mtmd_tokenizer {
                     }
                     add_text(ctx->tok_slices_end);
                 }
-
-                // add overview image (last)
-                if (!ctx->ov_img_first) {
-                    add_text(ctx->tok_ov_img_start);
-                    cur.entries.emplace_back(std::move(ov_chunk));
-                    add_text(ctx->tok_ov_img_end);
-                }
-
-            } else {
-                size_t n_tokens = 0;
-                for (const auto & entry : batch_f32.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
-                }
-
-                mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-                if (ctx->use_mrope) {
-                    // for Qwen2VL, we need this information for M-RoPE decoding positions
-                    image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
-                    image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
-                    image_tokens->use_mrope_pos = true;
-                } else {
-                    // other models, we only need the total number of tokens
-                    image_tokens->nx = n_tokens;
-                    image_tokens->ny = 1;
-                }
-                image_tokens->batch_f32 = std::move(batch_f32);
-                image_tokens->id = bitmap->id; // optional
-
-                LOG_DBG("image_tokens->nx = %d\n", image_tokens->nx);
-                LOG_DBG("image_tokens->ny = %d\n", image_tokens->ny);
-                LOG_DBG("batch_f32 size = %d\n", (int)image_tokens->batch_f32.entries.size());
-
-                mtmd_input_chunk chunk{
-                    MTMD_INPUT_CHUNK_TYPE_IMAGE,
-                    {}, // text tokens
-                    std::move(image_tokens),
-                    nullptr, // audio tokens
-                };
-                cur.entries.emplace_back(std::move(chunk));
             }
 
-            if (!ctx->img_end.empty()) {
-                add_text(ctx->img_end, true); // add image end token
+            // add overview image (last)
+            if (!ctx->ov_img_first) {
+                add_text(ctx->tok_ov_img_start);
+                cur.entries.emplace_back(std::move(ov_chunk));
+                add_text(ctx->tok_ov_img_end);
             }
 
         } else {
+            size_t n_tokens = 0;
+            for (const auto & entry : batch_f32.entries) {
+                n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
+            }
+
+            mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+            if (ctx->use_mrope) {
+                // for Qwen2VL, we need this information for M-RoPE decoding positions
+                image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
+                image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
+                image_tokens->use_mrope_pos = true;
+            } else {
+                // other models, we only need the total number of tokens
+                image_tokens->nx = n_tokens;
+                image_tokens->ny = 1;
+            }
+            image_tokens->batch_f32 = std::move(batch_f32);
+            image_tokens->id = bitmap->id; // optional
+
+            LOG_DBG("image_tokens->nx = %d\n", image_tokens->nx);
+            LOG_DBG("image_tokens->ny = %d\n", image_tokens->ny);
+            LOG_DBG("batch_f32 size = %d\n", (int)image_tokens->batch_f32.entries.size());
+
+            mtmd_input_chunk chunk{
+                MTMD_INPUT_CHUNK_TYPE_IMAGE,
+                {}, // text tokens
+                std::move(image_tokens),
+                nullptr, // audio tokens
+            };
+            cur.entries.emplace_back(std::move(chunk));
+        }
+
+        if (!ctx->img_end.empty()) {
+            add_text(ctx->img_end, true); // add image end token
+        }
+        return 0;
+    }
+
+    int32_t add_media(const mtmd_bitmap * bitmap) {
+        if(mtmd_bitmap_is_audio(bitmap)){
             // handle audio
 
             if (!ctx->ctx_a) {
@@ -676,9 +705,39 @@ struct mtmd_tokenizer {
             if (!ctx->aud_end.empty()) {
                 add_text(ctx->aud_end, true); // add audio end token
             }
+
+            return 0;
         }
 
-        return 0;
+        if(mtmd_bitmap_is_video(bitmap)){
+            // handle video
+            if (!ctx->ctx_v) {
+                LOG_ERR("%s: error: model does not support vision input\n", __func__);
+                return 2;
+            }
+
+            if (
+                ctx->video_sch == MTMD_VIDEO_SCHEMA_MINICPMV_4_5
+            ) {
+                // TODO
+                LOG_ERR("%s: error: video schema MINICPMV_4_5 is not implemented yet\n", __func__);
+                return 2;
+            }else{
+                const auto frame_size = bitmap->nx * bitmap->ny * 3;
+                for(uint32_t f = 0; f < bitmap->nz; f++){
+                    // extract frame f
+                    mtmd_bitmap* frame_bitmap = mtmd_bitmap_init(bitmap->nx, bitmap->ny, bitmap->data.data() + f * frame_size);
+                    // minicpmv 2.6 video understanding: disable UHD slicing (overview only)
+                    int32_t res = add_image(frame_bitmap, false /* have_slices */);
+                    mtmd_bitmap_free(frame_bitmap);
+                    if (res != 0) return res;
+                }
+            }
+            return 0;
+        }
+
+        // handle image otherwise
+        return add_image(bitmap);
     }
 
     std::vector<mtmd_input_chunk> split_batch_to_chunk(clip_image_f32_batch && batch_f32, const std::string & id) {
@@ -848,6 +907,11 @@ int mtmd_get_audio_bitrate(mtmd_context * ctx) {
     return 16000; // 16kHz
 }
 
+void mtmd_set_minicpmv_max_slice_nums(mtmd_context * ctx, int n) {
+    if (!ctx || !ctx->ctx_v) return;
+    clip_set_minicpmv_max_slice_nums(ctx->ctx_v, n);
+}
+
 //
 // public API functions
 //
@@ -860,6 +924,8 @@ mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
     mtmd_bitmap * bitmap = new mtmd_bitmap;
     bitmap->nx = nx;
     bitmap->ny = ny;
+    bitmap->nz = 1;
+    bitmap->type = mtmd_bitmap_type::IMAGE;
     size_t data_size = (size_t)nx * ny * 3;
     bitmap->data.resize(data_size);
     std::memcpy(bitmap->data.data(), data, data_size);
@@ -871,12 +937,28 @@ mtmd_bitmap * mtmd_bitmap_init_from_audio(size_t n_samples,
     mtmd_bitmap * bitmap = new mtmd_bitmap;
     bitmap->nx = n_samples;
     bitmap->ny = 1;
-    bitmap->is_audio = true;
+    bitmap->nz = 1;
+    bitmap->type = mtmd_bitmap_type::AUDIO;
     size_t data_size = n_samples * sizeof(float);
     bitmap->data.resize(data_size);
     std::memcpy(bitmap->data.data(), data, data_size);
     return bitmap;
 }
+
+mtmd_bitmap * mtmd_bitmap_init_from_video(uint32_t nx, uint32_t ny, uint32_t nframes, const unsigned char * data){
+    mtmd_bitmap * bitmap = new mtmd_bitmap;
+    bitmap->nx = nx;
+    bitmap->ny = ny;
+    bitmap->nz = nframes;
+    bitmap->type = mtmd_bitmap_type::VIDEO;
+    size_t data_size = (size_t)nx * ny * nframes * 3;
+    bitmap->data.resize(data_size);
+    if(data != nullptr){
+        std::memcpy(bitmap->data.data(), data, data_size);
+    }
+    return bitmap;
+}
+
 
 uint32_t mtmd_bitmap_get_nx(const mtmd_bitmap * bitmap) {
     return bitmap->nx;
@@ -890,12 +972,20 @@ const unsigned char * mtmd_bitmap_get_data(const mtmd_bitmap * bitmap) {
     return bitmap->data.data();
 }
 
+unsigned char * mtmd_bitmap_get_data_mutable(mtmd_bitmap * bitmap) {
+    return bitmap->data.data();
+}
+
 size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
     return bitmap->data.size();
 }
 
 bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
-    return bitmap->is_audio;
+    return bitmap->type == mtmd_bitmap_type::AUDIO;
+}
+
+bool mtmd_bitmap_is_video(const mtmd_bitmap * bitmap) {
+    return bitmap->type == mtmd_bitmap_type::VIDEO;
 }
 
 const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap) {

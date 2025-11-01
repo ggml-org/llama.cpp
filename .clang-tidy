@@ -14,6 +14,8 @@ Checks: >
     -readability-uppercase-literal-suffix,
     -readability-simplify-boolean-expr,
     -readability-math-missing-parentheses,
+    -readability-braces-around-statements,
+    -readability-isolate-declaration,
     clang-analyzer-*,
     -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
     performance-*,

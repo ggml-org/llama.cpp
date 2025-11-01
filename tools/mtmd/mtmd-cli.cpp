@@ -6,12 +6,15 @@
 #include "ggml.h"
 #include "console.h"
 #include "chat.h"
+#include "clip.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-video.h"
 
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <cstdlib>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -154,8 +157,8 @@ struct mtmd_cli_context {
         );
     }
 
-    bool load_media(const std::string & fname) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str()));
+    bool load_media(const std::string & path) {
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), path.c_str()));
         if (!bmp.ptr) {
             return false;
         }
@@ -284,7 +287,7 @@ int main(int argc, char ** argv) {
     mtmd_cli_context ctx(params);
     LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
-    bool is_single_turn = !params.prompt.empty() && !params.image.empty();
+    bool is_single_turn = !params.prompt.empty() && (!params.image.empty() || !params.video.empty());
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
@@ -308,19 +311,34 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
-            for (size_t i = 0; i < params.image.size(); i++) {
-                params.prompt += mtmd_default_marker();
-            }
-        }
-        common_chat_msg msg;
-        msg.role = "user";
-        msg.content = params.prompt;
+
+        // 1) load all media first
+        size_t n_loaded_media = 0;
         for (const auto & image : params.image) {
             if (!ctx.load_media(image)) {
                 return 1; // error is already printed by libmtmd
             }
+            n_loaded_media += 1;
         }
+        for (const auto & vpath : params.video) {
+            if (!ctx.load_media(vpath)) {
+                return 1; // error is already printed by libmtmd
+            }
+            n_loaded_media += 1;
+        }
+
+        // 2) build prompt content with correct number of markers
+        std::string prompt_content = params.prompt;
+        if (prompt_content.find(mtmd_default_marker()) == std::string::npos) {
+            for (size_t i = 0; i < n_loaded_media; i++) {
+                prompt_content += mtmd_default_marker();
+            }
+        }
+
+        // 3) run
+        common_chat_msg msg;
+        msg.role = "user";
+        msg.content = prompt_content;
         if (eval_message(ctx, msg)) {
             return 1;
         }
@@ -335,6 +353,9 @@ int main(int argc, char ** argv) {
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
+        }
+        if (mtmd_support_vision(ctx.ctx_vision.get())) {
+            LOG("\n   /video <path>     load a video");
         }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
@@ -367,14 +388,15 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
-            if (is_image || is_audio) {
+            bool is_video = line == "/video" || line.find("/video ") == 0;
+            if (is_image || is_audio || is_video) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing media filename\n");
                     continue;
                 }
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
-                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
+                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : (is_audio ? "audio" : "video"));
                     content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd

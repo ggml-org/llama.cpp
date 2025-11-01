@@ -5,11 +5,17 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "llama.h"
+
+#include "mtmd-video.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -421,6 +427,10 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
         return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
     }
 
+    if(mtmd_video::is_video_buffer(buf, len)) {
+        return mtmd_video::init_video_bitmap(ctx, buf, len);
+    }
+
     // otherwise, we assume it's an image
     mtmd_bitmap * result = nullptr;
     {
@@ -436,25 +446,97 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
     return result;
 }
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
-    std::vector<unsigned char> buf;
-    FILE * f = fopen(fname, "rb");
+mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * path) {
+    // although we could read the file into memory and call mtmd_helper_bitmap_init_from_buf,
+    // but for video files, it's better to let ffmpeg read from file
+    if(mtmd_video::is_video_file(path) || mtmd_helper::is_dir(path)){
+        return mtmd_video::init_video_bitmap(ctx, path);
+    }
+
+    FILE * f = fopen(path, "rb");
     if (!f) {
-        LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
+        LOG_ERR("Unable to open path %s: %s\n", path, strerror(errno));
         return nullptr;
     }
 
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    buf.resize(file_size);
+    auto * buf = new unsigned char[file_size]; 
 
-    size_t n_read = fread(buf.data(), 1, file_size, f);
+    size_t n_read = fread(buf, 1, file_size, f);
     fclose(f);
     if (n_read != (size_t)file_size) {
-        LOG_ERR("Failed to read entire file %s", fname);
+        LOG_ERR("Failed to read entire path %s", path);
         return nullptr;
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
+    auto * res = mtmd_helper_bitmap_init_from_buf(ctx, buf, file_size);
+    delete [] buf;
+    return res;
+}
+
+namespace mtmd_helper{
+
+bool has_image_ext(const std::string & name) {
+    auto lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    return lower.rfind(".jpg")  != std::string::npos ||
+           lower.rfind(".jpeg") != std::string::npos ||
+           lower.rfind(".png")  != std::string::npos ||
+           lower.rfind(".bmp")  != std::string::npos ||
+           lower.rfind(".gif")  != std::string::npos ||
+           lower.rfind(".webp") != std::string::npos;
+}
+
+bool is_dir(const std::string & path) {
+#if defined(_WIN32)
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    return (attrs != INVALID_FILE_ATTRIBUTES) && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return false;
+    return S_ISDIR(st.st_mode);
+#endif
+}
+
+void list_files(const std::string & dir, std::vector<std::string> & out, bool recursive) {
+#if defined(_WIN32)
+    std::string pattern = dir;
+    if (!pattern.empty() && pattern.back() != '/' && pattern.back() != '\\') pattern += "\\";
+    pattern += "*";
+    WIN32_FIND_DATAA ffd;
+    HANDLE hFind = FindFirstFileA(pattern.c_str(), &ffd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string name = ffd.cFileName;
+        if (name == "." || name == "..") continue;
+        std::string path = dir;
+        if (!path.empty() && path.back() != '/' && path.back() != '\\') path += "\\";
+        path += name;
+        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (recursive) list_files(path, out, recursive);
+        } else {
+            out.push_back(path);
+        }
+    } while (FindNextFileA(hFind, &ffd) != 0);
+    FindClose(hFind);
+#else
+    DIR * dp = opendir(dir.c_str());
+    if (!dp) return;
+    struct dirent * de;
+    while ((de = readdir(dp)) != nullptr) {
+        std::string name = de->d_name;
+        if (name == "." || name == "..") continue;
+        std::string path = dir + "/" + name;
+        if (is_dir(path)) {
+            if (recursive) list_files(path, out, recursive);
+        } else {
+            out.push_back(path);
+        }
+    }
+    closedir(dp);
+#endif
+}
+
 }
