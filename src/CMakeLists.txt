@@ -89,6 +89,7 @@ add_library(llama
             models/mamba.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/pangu_embedded.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp

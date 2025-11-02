@@ -1270,6 +1270,28 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _set_vocab_pangu_embedded(self):
+        tokens, scores, toktypes = self._create_vocab_sentencepiece()
+
+        self.gguf_writer.add_tokenizer_model("pangu_embedded")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        tokenizer_config_file = self.dir_model / "tokenizer_config.json"
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "chat_template" in tokenizer_config_json:
+                    self.gguf_writer.add_chat_template(tokenizer_config_json["chat_template"])
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+
     def _set_vocab_rwkv_world(self):
         assert (self.dir_model / "rwkv_vocab_v20230424.txt").is_file()
         vocab_size = self.hparams.get("vocab_size", 65536)
@@ -7185,6 +7207,48 @@ class MiniMaxM2Model(TextModel):
             return tensors
 
         return super().modify_tensors(data_torch, name, bid)
+
+@ModelBase.register("PanguEmbeddedForCausalLM")
+class PanguEmbeddedModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.PANGU_EMBED
+    
+    def set_vocab(self):
+        try:
+            self._set_vocab_pangu_embedded()
+        except FileNotFoundError:
+            print("pangu vocab set fail, fallback to sentencepiece!")   
+            self._set_vocab_sentencepiece()
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        # PanguEmbedded's hparam loaded from config.json without head_dim
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        if (head_dim := hparams.get("head_dim")) is None:
+            if "hidden_size" in hparams and "num_attention_heads" in hparams:
+                head_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
+        if head_dim is not None:
+            self.gguf_writer.add_key_length(head_dim)
+            self.gguf_writer.add_value_length(head_dim)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid
+        n_head = self.find_hparam(["n_heads", "num_attention_heads"])
+        n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("Dots1ForCausalLM")

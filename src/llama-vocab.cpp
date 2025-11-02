@@ -1805,6 +1805,20 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id = LLAMA_TOKEN_NULL;
             special_pad_id = 3;  // <|plamo:pad|>
             special_mask_id = LLAMA_TOKEN_NULL;
+        } else if (tokenizer_model == "pangu_embedded") {
+            type = LLAMA_VOCAB_TYPE_SPM;
+
+            // default special tokens
+            special_bos_id  = 1;
+            special_eos_id  = 45892;
+            special_unk_id  = 0;
+            special_sep_id  = LLAMA_TOKEN_NULL;
+            special_pad_id  = 0;
+            special_mask_id = LLAMA_TOKEN_NULL;
+
+            add_space_prefix = true;
+            add_bos = true;
+            add_eos = false;
         } else {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
