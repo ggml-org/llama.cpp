@@ -1969,8 +1969,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
+            // TODO: support non-contiguous tensors, e.g. for MOE_EXPERT_REDUCE
+            // see https://github.com/ggml-org/llama.cpp/pull/16857
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type) &&
-                          (src1->type == op->type);
+                          (src1->type == op->type) && ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
             break;
         case GGML_OP_CPY:
         case GGML_OP_CONT:
