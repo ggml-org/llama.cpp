@@ -1,10 +1,11 @@
+{# Unsloth template fixes #}
 {# ----------‑‑‑ special token variables ‑‑‑---------- #}
 {%- set toolcall_begin_token   = '<minimax:tool_call>'         -%}
 {%- set toolcall_end_token     = '</minimax:tool_call>'        -%}
 {#- Tool Rendering Functions ============================================== -#}
 {%- macro render_tool_namespace(namespace_name, tool_list) -%}
 {%- for tool in tool_list -%}
-<tool>{{ tool.function | tojson() }}</tool>
+<tool>{{ tool.function | tojson | string }}</tool>
 {% endfor -%}
 {%- endmacro -%}
 {%- macro visible_text(content) -%}
@@ -76,20 +77,31 @@
 {{- '\n' ~ toolcall_end_token }}
 {%- endif -%}
 {{- '[e~[\n' }}
+
 {#- Render messages -#}
 {%- set last_tool_call = namespace(name=none) -%}
 {%- for message in conversation_messages -%}
     {%- if message.role == 'assistant' -%}
         {#- Only render reasoning_content if no user message follows -#}
         {{- ']~b]ai' ~ '\n' }}
+
         {%- set reasoning_content = '' %}
         {%- set content = visible_text(message.content) %}
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
             {%- if '</think>' in content %}
-                {%- set reasoning_content = content.split('</think>')[0].strip('\n').split('<think>')[-1].strip('\n') %}
-                {%- set content = content.split('</think>')[-1].strip('\n') %}
+                {# Unsloth template fixes - must change to for loop since llama.cpp will error out if not #}
+                {%- set parts = content.split('</think>') %}
+                {%- for part in parts %}
+                    {%- if loop.index0 == 0 -%}
+                        {%- set reasoning_content = part.strip('\n') %}
+                        {%- set reasoning_content = (reasoning_content.split('<think>')|last) %}
+                        {%- set reasoning_content = reasoning_content.strip('\n') -%}
+                    {%- else -%}
+                        {%- set content = part.strip('\n') %}
+                    {%- endif %}
+                {%- endfor %}
             {%- endif %}
         {%- endif %}
         {%- if reasoning_content and loop.index0 > ns.last_user_index -%}
@@ -99,26 +111,30 @@
             {{- content }}
         {%- endif -%}
         {%- if message.tool_calls -%}
-            {{- toolcall_begin_token ~ '\n' }}
+            {{- '\n' ~ toolcall_begin_token ~ '\n' }}
+
             {%- for tool_call in message.tool_calls -%}
                 {%- if tool_call.function %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {{- '<invoke name="' + tool_call.name + '">' }}
+                {{- '<invoke name="' + tool_call.name + '">\n' }}
+                {%- if tool_call.arguments is defined and tool_call.arguments is mapping -%}
                 {% set _args = tool_call.arguments %}
-                {%- for k, v in _args | items %}
+                {%- for k, v in _args|items %}
                 {{- '<parameter name="' + k + '">' }}
-                {{- v | tojson if v is not string else v }}
+                {{- v | tojson | string if v is not string else v }}
                 {{- '</parameter>' }}
-                {% endfor %}
+                {% endfor %}{%- endif -%}
                 {{- '</invoke>' ~ '\n' }}
             {%- endfor -%}
+            
             {{- toolcall_end_token}}
             {%- set last_tool_call.name = message.tool_calls[-1].name -%}
         {%- else -%}
             {%- set last_tool_call.name = none -%}
         {%- endif -%}
         {{- '[e~[' ~ '\n' }}
+        
     {%- elif message.role == 'tool' -%}
     {%- if last_tool_call.name is none -%}
         {{- raise_exception("Message has tool role, but there was no previous assistant message with a tool call!") }}
@@ -147,7 +163,9 @@
         {{- '[e~[' ~ '\n' }}
     {%- endif -%}
 {%- endfor -%}
+
 {#- Generation prompt -#}
 {%- if add_generation_prompt -%}
 {{- ']~b]ai' ~ '\n' ~ '<think>' ~ '\n' }}
 {%- endif -%}
+{# Copyright 2025-present Unsloth. Apache 2.0 License. #}

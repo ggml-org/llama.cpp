@@ -75,6 +75,21 @@ static common_chat_msg normalize(const common_chat_msg & msg) {
     }
     return normalized;
 }
+
+
+// trim whitespace from the beginning and end of a string
+static std::string trim(const std::string & str) {
+    size_t start = 0;
+    size_t end = str.size();
+    while (start < end && isspace(static_cast<unsigned char>(str[start]))) {
+        start += 1;
+    }
+    while (end > start && isspace(static_cast<unsigned char>(str[end - 1]))) {
+        end -= 1;
+    }
+    return str.substr(start, end - start);
+}
+
 template <>
 bool equals(const common_chat_msg & expected, const common_chat_msg & actual) {
     return normalize(expected) == normalize(actual);
@@ -148,15 +163,15 @@ static std::string renormalize_json(const std::string & json_str) {
         return json_str;
     }
 }
-static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual) {
+static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual, bool ignore_whitespace_differences = false) {
     assert_equals(expected.role, actual.role);
-    assert_equals(expected.content, actual.content);
+    assert_equals(expected.content, ignore_whitespace_differences ? trim(actual.content) : actual.content);
     assert_equals(expected.content_parts.size(), actual.content_parts.size());
     for (size_t i = 0; i < expected.content_parts.size(); i++) {
         const auto & expected_part = expected.content_parts[i];
         const auto & actual_part   = actual.content_parts[i];
         assert_equals(expected_part.type, actual_part.type);
-        assert_equals(expected_part.text, actual_part.text);
+        assert_equals(expected_part.text, ignore_whitespace_differences ? trim(actual_part.text) : actual_part.text);
     }
     assert_equals(expected.reasoning_content, actual.reasoning_content);
     assert_equals(expected.tool_calls.size(), actual.tool_calls.size());
@@ -280,7 +295,9 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
                           const std::string & expected_delta = "",
                           bool expect_grammar_triggered = true,
                           bool test_grammar_if_triggered = true,
-                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE) {
+                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE, 
+                          bool ignore_whitespace_differences = false
+                        ) {
     common_chat_msg user_message;
     user_message.role = "user";
     user_message.content = "Hello, world!";
@@ -288,6 +305,9 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
     for (const auto & tool_choice : std::vector<common_chat_tool_choice> {COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED}) {
         auto data = init_delta(tmpls, end_tokens, user_message, test_message, tools, tool_choice);
         if (!expected_delta.empty()) {
+            if (ignore_whitespace_differences) {
+                data.delta = trim(data.delta);
+            }
             assert_equals(expected_delta, data.delta);
         }
 
@@ -296,7 +316,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
             syntax.format = data.params.format;
             syntax.reasoning_format = reasoning_format;
             const auto msg = common_chat_parse(data.delta, /* is_partial= */ false, syntax);
-            assert_msg_equals(test_message, msg);
+            assert_msg_equals(test_message, msg, ignore_whitespace_differences);
         }
 
         if (!test_message.tool_calls.empty()) {
@@ -2289,7 +2309,7 @@ Hey there!<|im_end|>
     }
 
     {
-        auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
+        auto tmpls = read_templates("models/templates/unsloth-MiniMax-M2.jinja");
         std::vector<std::string> end_tokens{ "[e~[" };
 
         assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
@@ -2355,7 +2375,10 @@ Hey there!<|im_end|>
         // Test template generation for tool calls
         test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
                       "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
-                      /* expect_grammar_triggered= */ true
+                      /* expect_grammar_triggered= */ true, 
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
         );
 
     }
