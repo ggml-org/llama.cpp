@@ -867,7 +867,7 @@ class MultiChatUI {
     /**
      * Reset/Setup Tool Call UI parts as needed
      * @param {ChatMessageEx} ar
-     * @param {boolean} bAuto
+     * @param {boolean} bAuto - allows caller to explicitly control whether auto triggering should be setup.
      */
     ui_reset_toolcall_as_needed(ar, bAuto = false) {
         if (ar.has_toolcall()) {
