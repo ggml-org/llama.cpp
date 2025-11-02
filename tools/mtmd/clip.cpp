@@ -4121,7 +4121,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 const std::array<uint8_t, 3> pad_color = {127, 127, 127};
                 clip_image_u8 resized_image;
                 int sz = params.image_size;
-                img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BILINEAR);
+                img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BILINEAR, true, pad_color);
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
