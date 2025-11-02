@@ -3270,7 +3270,7 @@ struct clip_model_loader {
                             ggml_type_name(op.op->type),
                             op.op->ne[0], op.op->ne[1], op.op->ne[2], op.op->ne[3]);
                 }
-                LOG_WRN("%s: flash attention is %s\n", __func__, 
+                LOG_WRN("%s: flash attention is %s\n", __func__,
                     (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) ? "enabled" : "disabled");
                 LOG_WRN("%s: please report this on github as an issue\n", __func__);
                 LOG_WRN("%s: ref: https://github.com/ggml-org/llama.cpp/pull/16837#issuecomment-3461676118\n", __func__);
