@@ -296,8 +296,11 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```
   TheRock (The HIP Environment and ROCm Kit) has been released on https://github.com/ROCm/TheRock/, which is a lightweight open source build platform for HIP and ROCm.
   Below is step for building llama.cpp for HIP backend for Windows. 
+
   Download from https://github.com/ROCm/TheRock/releases and uncompress it to %HIP_PATH%. 
+
   Also Set RC COMPILER with https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/ installation, like C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe
+
   Assuming a gfx1151-compatible AMD GPU from https://github.com/ROCm/TheRock/blob/main/RELEASES.md
 
   ```bash
