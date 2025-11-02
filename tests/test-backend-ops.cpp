@@ -1463,11 +1463,6 @@ struct test_case {
             return true;
         }
 
-        // Filter out fusion tests in support mode
-        if (run_whole_graph()) {
-            return true;
-        }
-
         bool supported = ggml_backend_supports_op(backend, out);
 
         std::string device_desc = ggml_backend_dev_description(ggml_backend_get_device(backend));
@@ -7578,6 +7573,15 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     if (mode == MODE_SUPPORT) {
         auto test_cases = make_test_cases_eval();
         filter_test_cases(test_cases, params_filter);
+
+        // Filter out fusion cases
+        test_cases.erase(
+            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case>& tc) {
+                return tc->run_whole_graph();
+            }),
+            test_cases.end()
+        );
+
         for (auto & test : test_cases) {
             test->eval_support(backend, op_names_filter, output_printer);
         }
