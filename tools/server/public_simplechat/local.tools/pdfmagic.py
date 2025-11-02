@@ -3,6 +3,7 @@
 
 import urllib.parse
 import urlvalidator as uv
+import filemagic as mFile
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,11 +26,11 @@ def process_pdf2text(url: str, startPN: int, endPN: int):
     gotVU = uv.validate_url(url, "HandlePdf2Text")
     if not gotVU.callOk:
         return { 'status': gotVU.statusCode, 'msg': gotVU.statusMsg }
-    urlParts = urllib.parse.urlparse(url)
-    fPdf = open(urlParts.path, 'rb')
-    dPdf = fPdf.read()
+    gotFile = mFile.get_file(url, "ProcessPdf2Text", "application/pdf", {})
+    if not gotFile.callOk:
+        return { 'status': gotFile.statusCode, 'msg': gotFile.statusMsg, 'data': gotFile.contentData}
     tPdf = ""
-    oPdf = pypdf.PdfReader(io.BytesIO(dPdf))
+    oPdf = pypdf.PdfReader(io.BytesIO(gotFile.contentData))
     if (startPN <= 0):
         startPN = 1
     if (endPN <= 0) or (endPN > len(oPdf.pages)):

@@ -26,6 +26,7 @@ import urlvalidator as uv
 from typing import Callable
 import pdfmagic as mPdf
 import webmagic as mWeb
+import debug as mDebug
 
 
 gMe = {
@@ -245,7 +246,9 @@ def process_args(args: list[str]):
         if gMe.get(k) == None:
             print(f"ERRR:ProcessArgs:{k}:missing, did you forget to pass the config file...")
             exit(104)
+    mDebug.setup(gMe['--debug'])
     uv.validator_setup(gMe['--allowed.schemes'], gMe['--allowed.domains'])
+
 
 
 def run():
