@@ -10,6 +10,16 @@ if TYPE_CHECKING:
 
 
 def process_pdf2text(url: str, startPN: int, endPN: int):
+    """
+    Extract textual content from given pdf.
+
+    * Validate the got url.
+    * Extract textual contents of the pdf from given start page number to end page number (inclusive).
+        * if -1 | 0 is specified wrt startPN, the actual starting page number (rather 1) will be used.
+        * if -1 | 0 is specified wrt endPN, the actual ending page number will be used.
+
+    NOTE: Page numbers start from 1, while the underlying list data structure index starts from 0
+    """
     import pypdf
     import io
     gotVU = uv.validate_url(url, "HandlePdf2Text")
@@ -20,12 +30,12 @@ def process_pdf2text(url: str, startPN: int, endPN: int):
     dPdf = fPdf.read()
     tPdf = ""
     oPdf = pypdf.PdfReader(io.BytesIO(dPdf))
-    if (startPN < 0):
-        startPN = 0
-    if (endPN < 0) or (endPN >= len(oPdf.pages)):
-        endPN = len(oPdf.pages)-1
+    if (startPN <= 0):
+        startPN = 1
+    if (endPN <= 0) or (endPN > len(oPdf.pages)):
+        endPN = len(oPdf.pages)
     for i in range(startPN, endPN+1):
-        pd = oPdf.pages[i]
+        pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()
     return { 'status': 200, 'msg': "Pdf2Text Response follows", 'data': tPdf }
 
@@ -37,16 +47,12 @@ def handle_pdf2text(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     """
     queryParams = urllib.parse.parse_qs(pr.query)
     url = queryParams['url'][0]
-    startP = queryParams['startPageNumber'][0]
-    if startP:
-        startP = int(startP)
-    else:
-        startP = -1
-    endP = queryParams['endPageNumber'][0]
-    if endP:
-        endP = int(endP)
-    else:
-        endP = -1
+    startP = queryParams.get('startPageNumber', -1)
+    if isinstance(startP, list):
+        startP = int(startP[0])
+    endP = queryParams.get('endPageNumber', -1)
+    if isinstance(endP, list):
+        endP = int(endP[0])
     print(f"INFO:HandlePdf2Text:Processing:{url}:{startP}:{endP}...")
     gotP2T = process_pdf2text(url, startP, endP)
     if (gotP2T['status'] != 200):
