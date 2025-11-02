@@ -295,7 +295,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
                           const std::string & expected_delta = "",
                           bool expect_grammar_triggered = true,
                           bool test_grammar_if_triggered = true,
-                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE, 
+                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE,
                           bool ignore_whitespace_differences = false
                         ) {
     common_chat_msg user_message;
@@ -2375,7 +2375,7 @@ Hey there!<|im_end|>
         // Test template generation for tool calls
         test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
                       "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
-                      /* expect_grammar_triggered= */ true, 
+                      /* expect_grammar_triggered= */ true,
                       /* test_grammar_if_triggered= */ true,
                       /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
                       /* ignore_whitespace_differences= */ true
