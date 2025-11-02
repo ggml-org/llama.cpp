@@ -4,7 +4,10 @@ find_package(OpenMP REQUIRED)
 # Adding backend files
 ggml_add_backend_library(ggml-rknpu2
     ggml-rknpu2.cpp
-    dma-alloc.cpp
+    rknpu2-allocation.cpp
+    rknpu2-quantization.cpp
+    rknpu2-calibration.cpp
+    rknpu2-configuration.cpp
 )
 
 # Linking rknpu2 header files
