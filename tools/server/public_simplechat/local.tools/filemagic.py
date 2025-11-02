@@ -20,7 +20,7 @@ class Response:
 
 
 
-def get_from_web(url: str, tag: str, inContentType: str, inHeaders: dict[str, str]):
+def get_from_web(url: str, tag: str, inContentType: str, inHeaders: dict[str, str|None]):
     """
     Get the url specified from web.
 
@@ -67,7 +67,7 @@ def get_from_local(urlParts: urllib.parse.ParseResult, tag: str, inContentType: 
         return Response(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
-def get_file(url: str, tag: str, inContentType: str, inHeaders: dict[str, str]={}):
+def get_file(url: str, tag: str, inContentType: str, inHeaders: dict[str, str|None]={}):
     """
     Based on the scheme specified in the passed url,
     either get from local file system or from the web.
