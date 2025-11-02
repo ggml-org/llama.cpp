@@ -17,6 +17,7 @@
         "^duckduckgo\\.com$",
         ".*\\.google\\.com$",
         "^google\\.com$",
+        ".*\\.arxiv\\.org$",
         "^arxiv\\.org$",
         ".*\\.nature\\.com$",
         ".*\\.science\\.org$",
