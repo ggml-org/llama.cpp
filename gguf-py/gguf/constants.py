@@ -3063,6 +3063,7 @@ class VisionProjectorType:
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
     LIGHTONOCR = "lightonocr"
+    JANUS_PRO = "janus_pro"
 
 
 # Items here are (block size, type size)
