@@ -597,7 +597,7 @@ struct clip_graph {
                 model.mm_1_w, model.mm_1_b,
                 hparams.ffn_op,
                 -1);
-                
+
         } else {
             GGML_ABORT("SigLIP: Unsupported projector type");
         }
