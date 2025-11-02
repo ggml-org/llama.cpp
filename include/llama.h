@@ -1111,8 +1111,6 @@ extern "C" {
     //        // sample from the logits of the last token in the batch
     //        const llama_token id = llama_sampler_sample(smpl, ctx, -1);
     //
-    //        // accepting the token updates the internal state of certain samplers (e.g. grammar, repetition, etc.)
-    //        llama_sampler_accept(smpl, id);
     //        ...
     //    }
     //
