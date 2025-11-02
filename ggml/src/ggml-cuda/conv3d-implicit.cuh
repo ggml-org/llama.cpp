@@ -29,7 +29,11 @@ typedef struct{
     uint3 RS_fastdiv;
     uint3 S_fastdiv;
     uint3 OHOW_fastdiv;
+    uint3 PQZ_fastdiv;
+    uint3 RSC_fastdiv;
+    uint3 TRS_fastdiv;
 } param_t;
+
 
 
 // same as above, but writes are swizzled to avoid bank conflicts when shared memory is read later in the kernel
@@ -131,14 +135,14 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
         unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
         unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
-        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
-        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
+        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.stride1 - param.padding1;
+        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.stride0 - param.padding0;
         unsigned int inOffset = n * param.c * param.h * param.w;
         const unsigned int curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
         const unsigned int curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         const unsigned int curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        int curH = posh_ori + curR * param.d_h; // input h
-        int curW = posw_ori + curS * param.d_w; // input w
+        int curH = posh_ori + curR * param.dilation1; // input h
+        int curW = posw_ori + curS * param.dilation0; // input w
         // apply swizzle to the dst index
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
@@ -197,14 +201,14 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
         unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
         unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
-        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
-        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
+        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.stride1 - param.padding1;
+        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.stride0 - param.padding0;
         unsigned int inOffset = n * param.c * param.h * param.w;
         const unsigned int curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
         const unsigned int curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        int curH = posh_ori + curR * param.d_h; // input h
-        int curW = posw_ori + curS * param.d_w; // input w
+        int curH = posh_ori + curR * param.dilation1; // input h
+        int curW = posw_ori + curS * param.dilation0; // input w
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
             curR < param.r && curS < param.s && curC < param.c){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
@@ -347,7 +351,6 @@ __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
         : "l"(pointer));
     return address;
 }
-
 
 #define CUDA_CONV3D_IMPLICT_BLOCK_SIZE 256
 void ggml_cuda_op_conv3d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
