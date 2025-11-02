@@ -4846,9 +4846,7 @@ struct test_moe_expert_reduce : public test_case {
 
             std::string name = "expert_view_" + std::to_string(i);
             ggml_set_name(expert_views[i], name.c_str());
-            if (gf) {
-                ggml_build_forward_expand(gf, expert_views[i]);
-            }
+            ggml_build_forward_expand(gf, expert_views[i]);
         }
 
         ggml_tensor * moe_out = expert_views[0];
@@ -7576,7 +7574,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 
         // Filter out fusion cases
         test_cases.erase(
-            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case>& tc) {
+            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
                 return tc->run_whole_graph();
             }),
             test_cases.end()
@@ -7632,6 +7630,14 @@ static void show_test_coverage() {
         all_ops.insert(ggml_glu_op_name((enum ggml_glu_op)i));
     }
     auto test_cases = make_test_cases_eval();
+    // Filter out fusion cases
+    test_cases.erase(
+        std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
+            return tc->run_whole_graph();
+        }),
+        test_cases.end()
+    );
+
     std::set<std::string> tested_ops;
 
     ggml_init_params params = {
