@@ -1663,8 +1663,7 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
-    bool minimax_reasoning_prefix_injected = false;
-    bool minimax_reasoning_prefix_streamed = false;
+    common_chat_stream_state reasoning_stream_state;
 
     stop_type stop;
 
@@ -1735,8 +1734,7 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
-        minimax_reasoning_prefix_injected = false;
-        minimax_reasoning_prefix_streamed  = false;
+        reasoning_stream_state = {};
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -1863,14 +1861,12 @@ struct server_slot {
         GGML_ASSERT(task);
 
         auto previous_msg = chat_msg;
-        std::string text_to_parse = generated_text;
-        if (minimax_reasoning_prefix_injected) {
-            text_to_parse.insert(0, "<think>\n");
-        }
+        const auto text_to_parse = reasoning_stream_state.apply_reasoning_prefix(generated_text);
         SRV_DBG("Parsing chat message: %s\n", text_to_parse.c_str());
-        auto new_msg = common_chat_parse(
-            text_to_parse,
+        auto new_msg = common_chat_parse_stream(
+            generated_text,
             /* is_partial= */ stop != STOP_TYPE_EOS,
+            reasoning_stream_state,
             task->params.oaicompat_chat_syntax);
         if (!new_msg.empty()) {
             new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
@@ -2804,10 +2800,7 @@ struct server_context {
 
         slot.state = SLOT_STATE_STARTED;
 
-        const bool needs_minimax_prefix =
-            slot.task->params.oaicompat_chat_syntax.reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2;
-        slot.minimax_reasoning_prefix_injected = needs_minimax_prefix;
-        slot.minimax_reasoning_prefix_streamed = false;
+        slot.reasoning_stream_state.init(slot.task->params.oaicompat_chat_syntax);
 
         SLT_INF(slot, "%s", "processing task\n");
 
@@ -2869,25 +2862,16 @@ struct server_context {
             slot.add_token(result);
             result.text_to_send = std::move(delta_to_send);
 
-            auto stream_with_minimax_prefix = [&](const completion_token_output & chunk) {
-                if (!slot.task->params.stream) {
-                    return;
-                }
-
-                if (slot.minimax_reasoning_prefix_injected && !slot.minimax_reasoning_prefix_streamed) {
+            if (send_text && slot.task->params.stream) {
+                if (auto prefix = slot.reasoning_stream_state.consume_reasoning_prefix()) {
                     completion_token_output prefix_chunk{};
                     prefix_chunk.tok          = LLAMA_TOKEN_NULL;
                     prefix_chunk.prob         = 0.0f;
-                    prefix_chunk.text_to_send = "<think>\n";
+                    prefix_chunk.text_to_send = *prefix;
                     send_partial_response(slot, prefix_chunk, false);
-                    slot.minimax_reasoning_prefix_streamed = true;
                 }
 
-                send_partial_response(slot, chunk, false);
-            };
-
-            if (send_text) {
-                stream_with_minimax_prefix(result);
+                send_partial_response(slot, result, false);
             }
         }
 
@@ -3058,11 +3042,7 @@ struct server_context {
         return true;
     }
 
-    void send_partial_response(
-            server_slot & slot,
-            const completion_token_output & tkn,
-            bool is_progress,
-            const std::vector<common_chat_msg_diff> * forced_diffs = nullptr) {
+    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress) {
         auto res = std::make_unique<server_task_result_cmpl_partial>();
 
         res->id    = slot.task->id;
@@ -3080,11 +3060,7 @@ struct server_context {
                 res->tokens = { tkn.tok };
             }
 
-            if (forced_diffs) {
-                res->oaicompat_msg_diffs = *forced_diffs;
-            } else {
-                slot.update_chat_msg(res->oaicompat_msg_diffs);
-            }
+            slot.update_chat_msg(res->oaicompat_msg_diffs);
         }
 
         res->n_decoded           = slot.n_decoded;
@@ -3115,12 +3091,8 @@ struct server_context {
         res->id      = slot.task->id;
         res->id_slot = slot.id;
 
-        res->index   = slot.task->index;
-        std::string response_content = slot.generated_text;
-        if (slot.minimax_reasoning_prefix_injected) {
-            response_content.insert(0, "<think>\n");
-        }
-        res->content         = std::move(response_content);
+        res->index           = slot.task->index;
+        res->content         = slot.reasoning_stream_state.apply_reasoning_prefix(slot.generated_text);
         res->tokens          = std::move(slot.generated_tokens);
         res->timings         = slot.get_timings();
         res->prompt          = slot.task->tokens.detokenize(ctx, true);

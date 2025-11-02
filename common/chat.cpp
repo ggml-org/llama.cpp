@@ -676,6 +676,35 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
     throw std::runtime_error("Unknown reasoning format: " + format);
 }
 
+void common_chat_stream_state::init(const common_chat_syntax & syntax) {
+    reasoning_prefix_streamed_ = false;
+
+    if (syntax.reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2) {
+        reasoning_prefix_ = "<think>\n";
+    } else {
+        reasoning_prefix_.clear();
+    }
+}
+
+std::string common_chat_stream_state::apply_reasoning_prefix(const std::string & text) const {
+    if (reasoning_prefix_.empty()) {
+        return text;
+    }
+
+    std::string result(reasoning_prefix_);
+    result += text;
+    return result;
+}
+
+std::optional<std::string> common_chat_stream_state::consume_reasoning_prefix() {
+    if (!reasoning_prefix_pending()) {
+        return std::nullopt;
+    }
+
+    reasoning_prefix_streamed_ = true;
+    return reasoning_prefix_;
+}
+
 static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, const std::string & code) {
     std::string arguments;
     if (builder.is_partial()) {
@@ -3153,4 +3182,13 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
     }
     return msg;
+}
+
+common_chat_msg common_chat_parse_stream(
+    const std::string & input,
+    bool is_partial,
+    common_chat_stream_state & stream_state,
+    const common_chat_syntax & syntax) {
+    const auto text_to_parse = stream_state.apply_reasoning_prefix(input);
+    return common_chat_parse(text_to_parse, is_partial, syntax);
 }
