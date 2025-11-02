@@ -1007,9 +1007,9 @@ static void conv3d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
 
         int id = ggml_cuda_get_device();
 
-        int64_t ne = P.c * P.h * P.w * P.n;
+        int64_t ne = P.c * P.d * P.h * P.w * P.n;
         int64_t ne00 = P.c;
-        int64_t ne01 = P.h * P.w;
+        int64_t ne01 = P.h * P.w * P.d;
         ggml_cuda_pool_alloc<half> input_f16(ctx.pool(id), ne);
 
         dim3 dimGrid( (ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
@@ -1018,8 +1018,8 @@ static void conv3d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         dim3 dimBlock(CUDA_NCHW_2_NHWC_TILE_DIM,CUDA_NCHW_2_NHWC_BLOCK_ROWS, 1);
         NCHW2NHWC<float, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
 
-        ne = P.c * P.r * P.s * P.k;
-        ne01 = P.r * P.s;
+        ne = P.c * P.r * P.s * P.t * P.k;
+        ne01 = P.r * P.s * P.t;
         ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
         dim3 dimGrid1((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
                       (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
