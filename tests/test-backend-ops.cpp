@@ -4840,7 +4840,7 @@ struct test_moe_expert_reduce : public test_case {
 
         std::vector<ggml_tensor *> expert_views(n_expert_used);
         for (int64_t i = 0; i < n_expert_used; ++i) {
-            expert_views[i] = ggml_view_2d(ctx, weighted, n_embd, n_tokens, weighted->nb[1], i * weighted->nb[1]);
+            expert_views[i] = ggml_view_2d(ctx, weighted, n_embd, n_tokens, weighted->nb[2], i * weighted->nb[1]);
 
             std::string name = "expert_view_" + std::to_string(i);
             ggml_set_name(expert_views[i], name.c_str());
