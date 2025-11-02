@@ -3209,6 +3209,7 @@ struct clip_model_loader {
     struct support_info_graph {
         // whether the clip_ctx.backend supports flash attention
         bool fattn = true;
+        ggml_tensor * fattn_op = nullptr; // for debugging
 
         std::vector<support_info_op> ops;
     };
@@ -3220,9 +3221,23 @@ struct clip_model_loader {
             // try to enable flash attention to see if it's supported
             ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_ENABLED;
             info = alloc_compute_meta(ctx_clip);
-            if (!info.fattn) {
-                LOG_WRN("%s: flash attention not supported, memory usage will increase\n", __func__);
-                // TODO: maybe log more details about why flash attention is not supported
+            if (!info.fattn && info.fattn_op) {
+                auto op = info.fattn_op;
+                LOG_WRN("%s: *****************************************************************\n", __func__);
+                LOG_WRN("%s: WARNING: flash attention not supported by %s, memory usage will increase\n", __func__, ggml_backend_name(ctx_clip.backend));
+                LOG_WRN("%s: op params: \n", __func__);
+                static auto print_shape = [](const char * fn, const char * name, ggml_tensor * t) {
+                    LOG_WRN("%s:   %s: type = %s, ne = [%d %d %d %d], nb = [%d %d %d %d]\n", fn,
+                            name, ggml_type_name(t->type),
+                            t->ne[0], t->ne[1], t->ne[2], t->ne[3],
+                            t->nb[0], t->nb[1], t->nb[2], t->nb[3]);
+                };
+                print_shape(__func__, " dst", op);
+                print_shape(__func__, "src0", op->src[0]);
+                print_shape(__func__, "src1", op->src[1]);
+                print_shape(__func__, "src2", op->src[2]);
+                LOG_WRN("%s: please report this on github as an issue\n", __func__);
+                LOG_WRN("%s: *****************************************************************\n", __func__);
                 ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_DISABLED;
                 alloc_compute_meta(ctx_clip);
             }
@@ -3238,13 +3253,28 @@ struct clip_model_loader {
 
         // print ops that are not supported by the GPU backend (if there is one)
         if (ctx_clip.backend && ctx_clip.backend != ctx_clip.backend_cpu) {
+            std::vector<support_info_op> unsupported_ops;
             for (const auto & op : info.ops) {
                 if (!op.is_accel) {
-                    LOG_WRN("%s: op %16s is not supported by the CLIP backend: type = %s, ne = [%d %d %d %d]\n", __func__,
+                    unsupported_ops.push_back(op);
+                }
+            }
+            if (!unsupported_ops.empty()) {
+                LOG_WRN("%s: *****************************************************************\n", __func__);
+                LOG_WRN("%s: WARNING: the CLIP graph uses unsupported operators by the backend\n", __func__);
+                LOG_WRN("%s:          the performance will be suboptimal                      \n", __func__);
+                LOG_WRN("%s:          list of unsupported ops (backend=%s):\n", __func__, ggml_backend_name(ctx_clip.backend));
+                for (const auto & op : unsupported_ops) {
+                    LOG_WRN("%s: %16s: type = %s, ne = [%d %d %d %d]\n", __func__,
                             ggml_op_name(op.op->op),
                             ggml_type_name(op.op->type),
                             op.op->ne[0], op.op->ne[1], op.op->ne[2], op.op->ne[3]);
                 }
+                LOG_WRN("%s: flash attention is %s\n", __func__, 
+                    (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) ? "enabled" : "disabled");
+                LOG_WRN("%s: please report this on github as an issue\n", __func__);
+                LOG_WRN("%s: ref: https://github.com/ggml-org/llama.cpp/pull/16837#issuecomment-3461676118\n", __func__);
+                LOG_WRN("%s: *****************************************************************\n", __func__);
             }
         }
     }
@@ -3287,8 +3317,9 @@ struct clip_model_loader {
         LOG_INF("%s: graph splits = %d, nodes = %d\n", __func__,  n_splits, n_nodes);
 
         support_info_graph res {
-            /*.fattn = */ true,
-            /*.ops   = */ {},
+            /*.fattn    = */ true,
+            /*.fattn_op = */ nullptr,
+            /*.ops      = */ {},
         };
 
         // check op support
@@ -3298,7 +3329,8 @@ struct clip_model_loader {
             if (!ggml_backend_supports_op(ctx_clip.backend, node)) {
                 res.ops.back().is_accel = false;
                 if (node->op == GGML_OP_FLASH_ATTN_EXT) {
-                    res.fattn = false;
+                    res.fattn    = false;
+                    res.fattn_op = node;
                 }
             }
         }
@@ -4574,16 +4606,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     //                we don't need true batching support because the cgraph will gonna be big anyway
     if (batch_size != 1) {
         return false; // only support batch size of 1
-    }
-
-    if (ggml_backend_sched_get_n_splits(ctx->sched.get()) > 1) {
-        LOG_WRN("%s: *****************************************************************\n", __func__);
-        LOG_WRN("%s: WARNING: the CLIP graph uses unsupported operators by the backend\n", __func__);
-        LOG_WRN("%s:          use GGML_SCHED_DEBUG=2 to determine which ops           \n", __func__);
-        LOG_WRN("%s:          the performance will be suboptimal                      \n", __func__);
-        LOG_WRN("%s:                                                                  \n", __func__);
-        LOG_WRN("%s: ref: https://github.com/ggml-org/llama.cpp/pull/16837#issuecomment-3461676118\n", __func__);
-        LOG_WRN("%s: *****************************************************************\n", __func__);
     }
 
     // build the inference graph
