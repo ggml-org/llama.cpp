@@ -1454,10 +1454,17 @@ struct test_case {
         ggml_context_ptr ctx(ggml_init(params)); // smart ptr
         GGML_ASSERT(ctx);
 
+        gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
+
         ggml_tensor * out = build_graph(ctx.get());
         current_op_name   = op_desc(out);
 
         if (!matches_filter(out, op_names_filter)) {
+            return true;
+        }
+
+        // Filter out fusion tests in support mode
+        if (run_whole_graph()) {
             return true;
         }
 
