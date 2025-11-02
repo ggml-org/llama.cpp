@@ -22,6 +22,9 @@ const config = {
 		}),
 		output: {
 			bundleStrategy: 'inline'
+		},
+		alias: {
+			$styles: 'src/styles'
 		}
 	},
 

@@ -61,6 +61,7 @@
 		"prettier-plugin-tailwindcss": "^0.6.11",
 		"rehype-katex": "^7.0.1",
 		"remark-math": "^6.0.0",
+		"sass": "^1.93.3",
 		"storybook": "^9.0.17",
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.0.0",
