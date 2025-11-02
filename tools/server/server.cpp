@@ -2456,6 +2456,7 @@ struct server_context {
             mparams.print_timings = false;
             mparams.n_threads     = params_base.cpuparams.n_threads;
             mparams.verbosity     = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+            mparams.flash_attn_type = params_base.flash_attn_type;
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
