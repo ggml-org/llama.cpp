@@ -550,6 +550,15 @@ struct clip_graph {
             cur = ggml_gelu(ctx0, cur);
             cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
             cur = ggml_add(ctx0, cur, model.mm_2_b);
+
+        } else if (ctx->proj_type() == PROJECTOR_TYPE_JANUS_PRO) {
+            cur = build_ffn(cur,
+                model.mm_0_w, model.mm_0_b,
+                nullptr, nullptr,
+                model.mm_1_w, model.mm_1_b,
+                hparams.ffn_op,
+                -1);
+                
         } else {
             GGML_ABORT("SigLIP: Unsupported projector type");
         }
@@ -1508,35 +1517,6 @@ struct clip_graph {
 
         return gf;
     }
-
-    ggml_cgraph * build_janus_pro() {
-        GGML_ASSERT(model.class_embedding == nullptr); // No CLS token
-
-        ggml_tensor * inp = build_inp();
-
-        ggml_tensor * learned_pos_embd = model.position_embeddings;
-
-        ggml_tensor * cur = build_vit(
-                                inp, n_patches,
-                                NORM_TYPE_NORMAL,
-                                hparams.ffn_op,
-                                learned_pos_embd,
-                                nullptr);
-
-        cur = build_ffn(cur,
-            model.mm_0_w, model.mm_0_b,
-            nullptr, nullptr,
-            model.mm_1_w, model.mm_1_b,
-            hparams.ffn_op,
-            -1);
-        cb(cur, "aligner_1", -1);
-
-        // build the graph
-        ggml_build_forward_expand(gf, cur);
-
-        return gf;
-    }
-
     // whisper encoder with custom projector
     ggml_cgraph * build_whisper_enc() {
         const int n_frames = img.nx;
@@ -2156,7 +2136,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_JANUS_PRO:
             {
-                res = graph.build_janus_pro();
+                res = graph.build_siglip();
             } break;
         default:
             {
