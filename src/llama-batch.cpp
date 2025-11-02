@@ -261,15 +261,29 @@ bool llama_batch_allocr::init(
 
             const llama_pos p0 = memory ? memory->seq_pos_max(s) : -1;
 
-            if (p0 >= 0 && p0 >= seq_pos_min(s)) {
-                LLAMA_LOG_ERROR(
-                        "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
-                        " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
-                        " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
-                        " for M-RoPE, it is required that the position satisfies: X < Y\n",
-                        __func__, s, s, p0, s, seq_pos_min(s));
+            if (batch.token) {
+                if (p0 >= 0 && p0 >= seq_pos_min(s)) {
+                    LLAMA_LOG_ERROR(
+                            "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
+                            " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
+                            " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
+                            " for M-RoPE, it is required that the position satisfies: X < Y\n",
+                            __func__, s, s, p0, s, seq_pos_min(s));
 
-                return false;
+                    return false;
+                }
+            } else {
+                // embedding inputs can have overlapping positions
+                if (p0 >= 0 && p0 > seq_pos_min(s)) {
+                    LLAMA_LOG_ERROR(
+                            "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
+                            " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
+                            " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
+                            " for M-RoPE, it is required that the position satisfies: X <= Y\n",
+                            __func__, s, s, p0, s, seq_pos_min(s));
+
+                    return false;
+                }
             }
         }
     } else {
@@ -669,10 +683,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
     auto udata = std::make_shared<llama_ubatch::data_t>();
 
-    const int32_t n_pos_cur = batch.embd ? n_pos_per_embd : 1;
-
     const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
-    const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_cur;
+    const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
 
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
@@ -694,8 +706,13 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
             memcpy(udata->embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
         }
 
-        for (int j = 0; j < n_pos_cur; ++j) {
-            udata->pos[j*n_tokens + i] = batch.pos[j*batch.n_tokens + idxs[i]];
+        for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
+            // if we are using M-RoPE
+            //     if the current batch is text, we need to broadcast the same position across all RoPE sections
+            //     otherwise, the input batch is image embeddings, we copy the positions as-is
+            // if we are not using M-RoPE, there is only one position per token (this loop runs only once)
+            size_t src_off = batch.token ? 0 : j*batch.n_tokens;
+            udata->pos[j*n_tokens + i] = batch.pos[src_off + idxs[i]];
         }
 
         udata->n_seq_id[i] = batch.n_seq_id[idxs[i]];
