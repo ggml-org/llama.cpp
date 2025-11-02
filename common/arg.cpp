@@ -3442,6 +3442,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- none: leaves thoughts unparsed in `message.content`\n"
         "- deepseek: puts thoughts in `message.reasoning_content`\n"
         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
+        "- minimax-m2: streams a synthetic opening `<think>` and keeps `</think>` tags in `message.content`\n"
         "(default: auto)",
         [](common_params & params, const std::string & value) {
             params.reasoning_format = common_reasoning_format_from_name(value);

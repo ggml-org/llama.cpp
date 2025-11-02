@@ -655,6 +655,7 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
         case COMMON_REASONING_FORMAT_AUTO:     return "auto";
         case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
         case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
+        case COMMON_REASONING_FORMAT_MINIMAX_M2: return "minimax-m2";
         default:
             throw std::runtime_error("Unknown reasoning format");
     }
@@ -669,6 +670,8 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
         return COMMON_REASONING_FORMAT_DEEPSEEK;
     } else if (format == "deepseek-legacy") {
         return COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+    } else if (format == "minimax-m2") {
+        return COMMON_REASONING_FORMAT_MINIMAX_M2;
     }
     throw std::runtime_error("Unknown reasoning format: " + format);
 }
@@ -1790,7 +1793,8 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
         // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
         common_chat_parse_deepseek_v3_1_content(builder);
     } else {
-        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE ||
+            builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2) {
           LOG_DBG("%s: reasoning_format none, adding content\n", __func__);
           common_chat_parse_deepseek_v3_1_content(builder);
           return;
@@ -2001,7 +2005,9 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
         if (regex_match(analysis_regex, header)) {
             builder.move_to(header_start_pos);
-            if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
+            if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE ||
+                builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2 ||
+                builder.syntax().reasoning_in_content) {
                 builder.add_content(consume_end(true));
             } else {
                 builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|end|>");
