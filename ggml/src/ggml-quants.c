@@ -2678,7 +2678,7 @@ void dequantize_row_q8_K(const block_q8_K * GGML_RESTRICT x, float * GGML_RESTRI
 
 //===================================== IFAIRY ==============================================
 
-void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, block_ifairy_q16 * GGML_RESTRICT y, int64_t k) {
+void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16 * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2719,6 +2719,12 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, block_ifairy_q16 * G
         y[i].d_imag = 1.0 / iscale_imag;
         x += QK_K;
     }
+}
+
+size_t quantize_row_ifairy_q16(const float *restrict x, block_ifairy_q16 *restrict y, int64_t k){
+    // todo_tbr
+    quantize_row_ifairy_q16_ref(x, y, k);
+    return k;
 }
 
 void dequantize_row_ifairy_q16(const block_ifairy_q16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
