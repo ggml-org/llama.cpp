@@ -10,6 +10,12 @@ gMe = {
 }
 
 
+def validator_setup(allowedSchemes: list[str], allowedDomains: list[str]):
+    global gMe
+    gMe['--allowed.schemes'] = allowedSchemes
+    gMe['--allowed.domains'] = allowedDomains
+
+
 @dataclass(frozen=True)
 class UrlVResponse:
     """
@@ -21,6 +27,9 @@ class UrlVResponse:
 
 
 def validator_ok(tag: str):
+    """
+    Cross check validator is setup as needed
+    """
     if (not gMe.get('--allowed.domains')):
         return UrlVResponse(False, 400, f"DBUG:{tag}:MissingAllowedDomains")
     if (not gMe.get('--allowed.schemes')):
@@ -29,6 +38,8 @@ def validator_ok(tag: str):
 
 
 def validate_fileurl(urlParts: urllib.parse.ParseResult, tag: str):
+    if urlParts.netloc != '':
+        return UrlVResponse(False, 400, f"WARN:{tag}:Malformed file url")
     return UrlVResponse(True, 100)
 
 
@@ -54,6 +65,8 @@ def validate_url(url: str, tag: str):
     vok = validator_ok(tag)
     if (not vok.callOk):
         return vok
+    if (not url):
+        return UrlVResponse(False, 400, f"WARN:{tag}:Missing url")
     urlParts = urllib.parse.urlparse(url)
     print(f"DBUG:{tag}:{urlParts}, {urlParts.hostname}")
     # Cross check scheme
