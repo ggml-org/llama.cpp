@@ -1,4 +1,9 @@
 {
+    "allowed.schemes": [
+        "file",
+        "http",
+        "https"
+    ],
     "allowed.domains": [
         ".*\\.wikipedia\\.org$",
         ".*\\.bing\\.com$",
