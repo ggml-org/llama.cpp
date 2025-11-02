@@ -278,16 +278,18 @@ class ChatMessageEx {
 
 
 let gUsageMsg = `
-    <p class="role-system">Usage</p>
+    <details>
+    <summary id="UsageNote" class="role-system">Usage Note</summary>
     <ul class="ul1">
-    <li> System prompt above, to try control ai response characteristics.</li>
+    <li> System prompt above, helps control ai response characteristics.</li>
         <ul class="ul2">
         <li> Completion mode - no system prompt normally.</li>
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
-    <li> Enter your query to ai assistant in textarea provided below.</li>
-    <li> If ai assistant requests a tool call, varify same before triggering it.</li>
+    <li> Enter your query/response to ai assistant in textarea provided below.</li>
+    <li> settings-tools-enable should be true to enable tool calling.</li>
         <ul class="ul2">
+        <li> If ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query textarea</li>
         </ul>
     <li> Default ContextWindow = [System, Last9 Query+Resp, Cur Query].</li>
@@ -295,6 +297,7 @@ let gUsageMsg = `
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
     </ul>
+    </details>
 `;
 
 
