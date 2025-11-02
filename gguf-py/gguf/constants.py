@@ -3186,6 +3186,7 @@ class VisionProjectorType:
     KIMIVL = "kimivl"
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
+    JANUS_PRO = "janus_pro"
 
 
 # Items here are (block size, type size)
